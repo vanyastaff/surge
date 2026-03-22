@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/surge-core",
     "crates/surge-acp",
+    "crates/surge-spec",
     "crates/surge-cli",
 ]
 
@@ -39,6 +40,10 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Graph
+petgraph = "0.7"
+
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
+surge-spec = { path = "crates/surge-spec" }

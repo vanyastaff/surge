@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 surge-core = { workspace = true }
 surge-acp = { workspace = true }
+surge-spec = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
