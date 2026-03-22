@@ -1,0 +1,17 @@
+# Surge Configuration
+default_agent = "test-agent"
+
+[agents.test-agent]
+command = "echo"
+args = ["test"]
+transport = "stdio"
+
+[pipeline]
+max_qa_iterations = 10
+max_parallel = 3
+
+[pipeline.gates]
+after_spec = true
+after_plan = true
+after_each_subtask = false
+after_qa = true
