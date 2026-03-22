@@ -146,21 +146,25 @@ impl KanbanScreen {
         let mut card = div()
             .id(SharedString::from(format!("task-{}", task.id)))
             .v_flex()
-            .gap_2()
-            .p_3()
-            .rounded_md()
+            .gap(px(6.0))
+            .p(px(10.0))
+            .w_full()
+            .rounded_lg()
             .bg(theme::BACKGROUND)
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::TEXT_MUTED.opacity(0.08))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::PRIMARY.opacity(0.3)))
+            .hover(|s: StyleRefinement| {
+                s.border_color(theme::PRIMARY.opacity(0.3))
+                    .bg(theme::BACKGROUND)
+            })
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(TaskClicked(id.clone()));
             }))
             // Title
             .child(
                 div()
-                    .text_sm()
+                    .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme::TEXT_PRIMARY)
                     .child(task.title.clone()),
@@ -172,13 +176,13 @@ impl KanbanScreen {
             card = card.child(
                 div()
                     .v_flex()
-                    .gap_1()
+                    .gap_0p5()
                     .child(
                         div()
                             .w_full()
-                            .h(px(4.0))
+                            .h(px(3.0))
                             .rounded_full()
-                            .bg(theme::TEXT_MUTED.opacity(0.15))
+                            .bg(theme::TEXT_MUTED.opacity(0.1))
                             .child(
                                 div()
                                     .h_full()
@@ -189,9 +193,8 @@ impl KanbanScreen {
                     )
                     .child(
                         div()
-                            .text_xs()
                             .text_color(theme::TEXT_MUTED)
-                            .child(format!("{done}/{total} subtasks")),
+                            .child(SharedString::from(format!("{done}/{total}")))
                     ),
             );
         }
@@ -241,25 +244,27 @@ impl KanbanScreen {
         div()
             .flex_1()
             .v_flex()
-            .gap_2()
-            .min_w(px(200.0))
-            // Column header
+            .h_full()
+            .min_w(px(180.0))
+            .gap_0()
+            // Column header — sticky top
             .child(
                 div()
                     .h_flex()
                     .gap_2()
                     .items_center()
-                    .pb_2()
+                    .px_2()
+                    .pb_3()
                     .child(
                         div()
-                            .w(px(10.0))
-                            .h(px(10.0))
+                            .w(px(8.0))
+                            .h(px(8.0))
                             .rounded_full()
                             .bg(col.color()),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::TEXT_PRIMARY)
                             .child(col.label().to_string()),
@@ -267,15 +272,15 @@ impl KanbanScreen {
                     .child(
                         div()
                             .text_xs()
-                            .px_2()
+                            .px(px(6.0))
                             .py_0p5()
                             .rounded_full()
-                            .bg(theme::TEXT_MUTED.opacity(0.15))
+                            .bg(theme::TEXT_MUTED.opacity(0.12))
                             .text_color(theme::TEXT_MUTED)
                             .child(format!("{count}")),
                     ),
             )
-            // Cards
+            // Cards area — fills remaining height
             .child(
                 div()
                     .v_flex()
@@ -283,7 +288,9 @@ impl KanbanScreen {
                     .flex_1()
                     .p_2()
                     .rounded_lg()
-                    .bg(theme::SURFACE.opacity(0.5))
+                    .bg(theme::SURFACE.opacity(0.3))
+                    .border_1()
+                    .border_color(theme::TEXT_MUTED.opacity(0.06))
                     .children(cards),
             )
     }
@@ -299,34 +306,49 @@ impl Render for KanbanScreen {
         div()
             .size_full()
             .v_flex()
-            .gap_4()
-            .p_6()
-            // Header
+            .gap_3()
+            .p_4()
+            .pt_5()
+            // Header row
             .child(
                 div()
                     .h_flex()
                     .justify_between()
                     .items_center()
+                    .px_2()
                     .child(
                         div()
-                            .text_2xl()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
-                            .child("Kanban Board".to_string()),
+                            .h_flex()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child("Kanban Board".to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::TEXT_MUTED)
+                                    .child(format!("{} tasks", self.tasks.len())),
+                            ),
                     )
                     .child(
                         Button::new("kanban-new-task")
                             .primary()
+                            .compact()
                             .label("+ New Task"),
                     ),
             )
-            // Columns
+            // Columns — stretch to fill all available height
             .child(
                 div()
                     .flex_1()
                     .h_flex()
-                    .gap_3()
-                    .overflow_hidden()
+                    .gap_2()
+                    .items_start()
                     .children(columns),
             )
     }
