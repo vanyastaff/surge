@@ -85,36 +85,70 @@ impl SurgeApp {
                 self.open_project(&path, cx);
             }
             WelcomeEvent::BrowseProject => {
-                // TODO: native file dialog
+                // Native directory picker dialog.
+                let receiver = cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Select project directory".into()),
+                });
+                cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Ok(Ok(Some(paths))) = receiver.await {
+                        if let Some(path) = paths.first() {
+                            let path = path.clone();
+                            cx.update(|cx| {
+                                this.update(cx, |this: &mut Self, cx| {
+                                    this.open_project(&path, cx);
+                                })
+                            })
+                            .ok();
+                        }
+                    }
+                })
+                .detach();
             }
             WelcomeEvent::InitProject => {
-                // TODO: open init wizard
+                // For now, open the directory picker and then create a project.
+                // TODO: show full init wizard dialog.
+                let receiver = cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Select project directory".into()),
+                });
+                cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Ok(Ok(Some(paths))) = receiver.await {
+                        if let Some(path) = paths.first() {
+                            let path = path.clone();
+                            cx.update(|cx| {
+                                this.update(cx, |this: &mut Self, cx| {
+                                    this.open_project(&path, cx);
+                                })
+                            })
+                            .ok();
+                        }
+                    }
+                })
+                .detach();
             }
             WelcomeEvent::RemoveProject(path) => {
                 let mut recent = RecentProjects::load();
                 recent.remove(&path);
                 let _ = recent.save();
-                // Refresh welcome screen.
-                let welcome = cx.new(WelcomeScreen::new);
-                cx.subscribe(&welcome, |this: &mut Self, _w, event: &WelcomeEvent, cx| {
-                    this.handle_welcome_event(event.clone(), cx);
-                })
-                .detach();
-                self.mode = AppMode::Welcome(welcome);
-                cx.notify();
+                self.refresh_welcome(cx);
             }
             WelcomeEvent::TogglePin(path) => {
                 let mut recent = RecentProjects::load();
                 recent.toggle_pin(&path);
                 let _ = recent.save();
-                let welcome = cx.new(WelcomeScreen::new);
-                cx.subscribe(&welcome, |this: &mut Self, _w, event: &WelcomeEvent, cx| {
-                    this.handle_welcome_event(event.clone(), cx);
-                })
-                .detach();
-                self.mode = AppMode::Welcome(welcome);
-                cx.notify();
+                self.refresh_welcome(cx);
             }
+        }
+    }
+
+    fn refresh_welcome(&mut self, cx: &mut Context<Self>) {
+        if let AppMode::Welcome(welcome) = &self.mode {
+            welcome.update(cx, |w, cx| w.reload(cx));
         }
     }
 

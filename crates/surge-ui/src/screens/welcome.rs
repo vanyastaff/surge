@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
@@ -10,15 +12,15 @@ use crate::theme;
 #[derive(Clone, PartialEq)]
 pub enum WelcomeEvent {
     /// User selected a project to open.
-    OpenProject(std::path::PathBuf),
+    OpenProject(PathBuf),
     /// User wants to browse for a project.
     BrowseProject,
     /// User wants to init a new project.
     InitProject,
     /// User removed a project from the list.
-    RemoveProject(std::path::PathBuf),
+    RemoveProject(PathBuf),
     /// User toggled pin on a project.
-    TogglePin(std::path::PathBuf),
+    TogglePin(PathBuf),
 }
 
 impl EventEmitter<WelcomeEvent> for WelcomeScreen {}
@@ -33,6 +35,11 @@ impl WelcomeScreen {
         Self {
             recent: RecentProjects::load(),
         }
+    }
+
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.recent = RecentProjects::load();
+        cx.notify();
     }
 
     fn render_logo(&self) -> Div {
@@ -65,10 +72,9 @@ impl WelcomeScreen {
         project: &RecentProject,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let path = project.path.clone();
-        let path_open = path.clone();
-        let path_pin = path.clone();
-        let path_remove = path.clone();
+        let path_open = project.path.clone();
+        let path_pin = project.path.clone();
+        let path_remove = project.path.clone();
         let name = project.name.clone();
         let display_path = project.path.display().to_string();
         let pinned = project.pinned;
@@ -132,29 +138,42 @@ impl WelcomeScreen {
                             .child(display_path),
                     ),
             )
-            // Right: action buttons
+            // Right: action buttons (wrapped in divs with listeners to emit events)
             .child(
                 div()
                     .h_flex()
                     .gap_1()
+                    // Pin button
                     .child(
-                        Button::new(SharedString::from(format!("pin-{}", path.display())))
-                            .ghost()
-                            .label(if pinned { "★" } else { "☆" })
-                            .on_click(move |_event, _window, cx| {
-                                // Note: can't emit from Button directly, need workaround
-                                let _ = &path_pin;
-                                let _ = cx;
-                            }),
+                        div()
+                            .id(SharedString::from(format!("pin-{}", path_pin.display())))
+                            .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(if pinned { theme::WARNING } else { theme::TEXT_MUTED })
+                            .hover(|s: StyleRefinement| s.bg(theme::SURFACE))
+                            .on_click(cx.listener(move |_this, _event: &ClickEvent, _window, cx| {
+                                cx.emit(WelcomeEvent::TogglePin(path_pin.clone()));
+                            }))
+                            .child(if pinned { "★" } else { "☆" }),
                     )
+                    // Remove button
                     .child(
-                        Button::new(SharedString::from(format!("rm-{}", path_remove.display())))
-                            .ghost()
-                            .label("✕")
-                            .on_click(move |_event, _window, cx| {
-                                let _ = &path_remove;
-                                let _ = cx;
-                            }),
+                        div()
+                            .id(SharedString::from(format!("rm-{}", path_remove.display())))
+                            .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_xs()
+                            .text_color(theme::TEXT_MUTED)
+                            .hover(|s: StyleRefinement| s.text_color(theme::ERROR).bg(theme::SURFACE))
+                            .on_click(cx.listener(move |_this, _event: &ClickEvent, _window, cx| {
+                                cx.emit(WelcomeEvent::RemoveProject(path_remove.clone()));
+                            }))
+                            .child("✕"),
                     ),
             )
     }
@@ -165,28 +184,30 @@ impl WelcomeScreen {
             .gap_3()
             .justify_center()
             .pt_4()
+            // Open Project → native directory picker
             .child(
-                Button::new("open-project")
-                    .primary()
-                    .label("Open Project")
-                    .on_click(|_event, _window, _cx| {
-                        // Will trigger native file dialog.
-                    }),
+                div()
+                    .id("btn-open-project")
+                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                        cx.emit(WelcomeEvent::BrowseProject);
+                    }))
+                    .child(
+                        Button::new("open-project")
+                            .primary()
+                            .label("Open Project"),
+                    ),
             )
+            // Init New Project
             .child(
-                Button::new("init-project")
-                    .label("Init New Project")
-                    .on_click(|_event, _window, _cx| {
-                        // Will open init wizard.
-                    }),
-            )
-            .child(
-                Button::new("clone-open")
-                    .ghost()
-                    .label("Clone & Open")
-                    .on_click(|_event, _window, _cx| {
-                        // Will open clone dialog.
-                    }),
+                div()
+                    .id("btn-init-project")
+                    .on_click(cx.listener(|_this, _event, _window, cx| {
+                        cx.emit(WelcomeEvent::InitProject);
+                    }))
+                    .child(
+                        Button::new("init-project")
+                            .label("Init New Project"),
+                    ),
             )
     }
 }
