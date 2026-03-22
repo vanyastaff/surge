@@ -36,10 +36,16 @@ pub struct RegistryEntry {
     pub id: String,
     pub display_name: String,
     pub description: String,
+    /// Longer description with details about the agent.
+    #[serde(default)]
+    pub long_description: String,
     pub command: String,
     pub default_args: Vec<String>,
     pub transport: Transport,
     pub capabilities: Vec<AgentCapability>,
+    /// Models/LLMs this agent can use.
+    #[serde(default)]
+    pub models: Vec<String>,
     pub install_instructions: String,
     pub website: Option<String>,
     pub tags: Vec<String>,
@@ -87,7 +93,8 @@ impl Registry {
             RegistryEntry {
                 id: "claude-code".into(),
                 display_name: "Claude Code".into(),
-                description: "Anthropic's CLI coding agent".into(),
+                description: "Anthropic's autonomous coding agent".into(),
+                long_description: "Full-featured agentic coding tool. Edits files, runs commands, searches codebases, manages git — all autonomously. Best-in-class for complex multi-file tasks. Supports extended thinking and tool use.".into(),
                 command: "claude".into(),
                 default_args: vec![
                     "--print".into(),
@@ -103,18 +110,28 @@ impl Registry {
                     AgentCapability::Refactor,
                     AgentCapability::Chat,
                 ],
+                models: vec![
+                    "Claude Opus 4".into(),
+                    "Claude Sonnet 4".into(),
+                    "Claude Haiku 3.5".into(),
+                ],
                 install_instructions: "npm install -g @anthropic-ai/claude-code".into(),
-                website: Some("https://claude.ai".into()),
-                tags: vec!["anthropic".into(), "claude".into(), "ai".into()],
+                website: Some("https://claude.ai/claude-code".into()),
+                tags: vec!["anthropic".into(), "claude".into(), "ai".into(), "full-featured".into()],
             },
             RegistryEntry {
                 id: "copilot-cli".into(),
                 display_name: "GitHub Copilot CLI".into(),
-                description: "GitHub Copilot in the terminal".into(),
+                description: "GitHub's AI coding assistant in the terminal".into(),
+                long_description: "Code suggestions and completions powered by GitHub Copilot. Integrates with GitHub ecosystem — issues, PRs, repos. Fast completions for common patterns.".into(),
                 command: "gh".into(),
                 default_args: vec!["copilot".into()],
                 transport: Transport::Stdio,
                 capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
+                models: vec![
+                    "GPT-4o".into(),
+                    "Claude Sonnet 3.5".into(),
+                ],
                 install_instructions: "gh extension install github/gh-copilot".into(),
                 website: Some("https://github.com/features/copilot".into()),
                 tags: vec!["github".into(), "copilot".into(), "ai".into()],
@@ -122,7 +139,8 @@ impl Registry {
             RegistryEntry {
                 id: "zed-agent".into(),
                 display_name: "Zed Agent".into(),
-                description: "Zed editor's built-in coding agent".into(),
+                description: "Fast AI agent built into Zed editor".into(),
+                long_description: "Native AI assistant in the Zed editor. Extremely fast, low-latency completions. Great for quick edits and refactoring. Uses structured tool calls for file operations.".into(),
                 command: "zed".into(),
                 default_args: vec!["--agent".into()],
                 transport: Transport::Stdio,
@@ -131,14 +149,20 @@ impl Registry {
                     AgentCapability::Refactor,
                     AgentCapability::Chat,
                 ],
+                models: vec![
+                    "Claude Sonnet 4".into(),
+                    "GPT-4o".into(),
+                    "Gemini 2.5 Pro".into(),
+                ],
                 install_instructions: "Install Zed from https://zed.dev".into(),
                 website: Some("https://zed.dev".into()),
-                tags: vec!["zed".into(), "editor".into(), "ai".into()],
+                tags: vec!["zed".into(), "editor".into(), "ai".into(), "fast".into()],
             },
             RegistryEntry {
                 id: "aider".into(),
                 display_name: "Aider".into(),
-                description: "AI pair programming in the terminal".into(),
+                description: "Open-source AI pair programmer".into(),
+                long_description: "Terminal-based AI pair programming. Works with any LLM provider — OpenAI, Anthropic, local models. Understands git repos, edits multiple files, creates commits automatically.".into(),
                 command: "aider".into(),
                 default_args: vec!["--no-auto-commits".into()],
                 transport: Transport::Stdio,
@@ -147,21 +171,34 @@ impl Registry {
                     AgentCapability::Refactor,
                     AgentCapability::Chat,
                 ],
+                models: vec![
+                    "Claude Opus 4".into(),
+                    "Claude Sonnet 4".into(),
+                    "GPT-4o".into(),
+                    "DeepSeek V3".into(),
+                    "Llama 3.1".into(),
+                ],
                 install_instructions: "pip install aider-chat".into(),
                 website: Some("https://aider.chat".into()),
-                tags: vec!["aider".into(), "python".into(), "ai".into()],
+                tags: vec!["aider".into(), "open-source".into(), "multi-llm".into()],
             },
             RegistryEntry {
                 id: "codex-cli".into(),
                 display_name: "Codex CLI".into(),
-                description: "OpenAI's Codex CLI agent".into(),
+                description: "OpenAI's lightweight coding agent".into(),
+                long_description: "Terminal-based coding agent from OpenAI. Sandboxed execution, code generation and editing. Optimized for fast iteration on small-to-medium tasks.".into(),
                 command: "codex".into(),
                 default_args: vec![],
                 transport: Transport::Stdio,
                 capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
+                models: vec![
+                    "o4-mini".into(),
+                    "o3".into(),
+                    "GPT-4.1".into(),
+                ],
                 install_instructions: "npm install -g @openai/codex".into(),
                 website: Some("https://openai.com".into()),
-                tags: vec!["openai".into(), "codex".into(), "ai".into()],
+                tags: vec!["openai".into(), "codex".into(), "ai".into(), "lightweight".into()],
             },
         ];
 
@@ -301,7 +338,7 @@ mod tests {
     #[test]
     fn test_search_by_tag() {
         let reg = Registry::builtin();
-        let results = reg.search("python");
+        let results = reg.search("open-source");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "aider");
     }

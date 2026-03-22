@@ -11,6 +11,8 @@ pub struct SurgeApp {
     pub detected_agents: Vec<DetectedAgent>,
     /// Agents that are NOT installed.
     pub missing_agents: Vec<surge_acp::registry::RegistryEntry>,
+    /// Agent Hub UI state.
+    pub agent_hub_state: panels::agent_hub::AgentHubState,
 }
 
 impl SurgeApp {
@@ -32,6 +34,7 @@ impl SurgeApp {
             active_panel: ActivePanel::default(),
             detected_agents: detected,
             missing_agents: missing,
+            agent_hub_state: panels::agent_hub::AgentHubState::default(),
         }
     }
 }
@@ -85,7 +88,12 @@ impl eframe::App for SurgeApp {
                 ActivePanel::Dashboard => panels::dashboard::show(ui, &self.detected_agents),
                 ActivePanel::Kanban => panels::kanban::show(ui),
                 ActivePanel::Execution => panels::execution::show(ui),
-                ActivePanel::AgentHub => panels::agent_hub::show(ui, &self.detected_agents, &self.missing_agents),
+                ActivePanel::AgentHub => panels::agent_hub::show(
+                    ui,
+                    &self.detected_agents,
+                    &self.missing_agents,
+                    &mut self.agent_hub_state,
+                ),
                 ActivePanel::DiffViewer => panels::diff_viewer::show(ui),
                 ActivePanel::Terminal => panels::terminal::show(ui),
             });
