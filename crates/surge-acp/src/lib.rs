@@ -4,4 +4,10 @@
 //! access to the filesystem, terminals, and permission management.
 //! It also manages agent connections through `AgentPool`.
 
-// TODO: Phase 0 — implement Client trait, AgentConnection, AgentPool
+pub mod client;
+pub mod connection;
+pub mod pool;
+
+pub use client::{PermissionPolicy, SubtaskContext, SurgeClient, SurgeEvent};
+pub use connection::{AgentConnection, SessionState};
+pub use pool::{AgentPool, SessionHandle};
