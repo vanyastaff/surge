@@ -13,8 +13,9 @@ use surge_spec::{validate_spec, DependencyGraph, SpecFile};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::executor::{ExecutorConfig, SubtaskExecutor, SubtaskResult};
+use crate::executor::ExecutorConfig;
 use crate::gates::{GateAction, GateManager};
+use crate::parallel::ParallelExecutor;
 use crate::phases::Phase;
 use crate::qa::{QaReviewer, QaVerdict};
 
@@ -122,7 +123,7 @@ impl Orchestrator {
         };
         info!("ACP session created");
 
-        // 5. Get topological order
+        // 5. Build dependency graph and get batches
         let graph = match DependencyGraph::from_spec(spec) {
             Ok(g) => g,
             Err(e) => {
@@ -134,19 +135,34 @@ impl Orchestrator {
             }
         };
 
-        let order = match graph.topological_order() {
-            Ok(o) => o,
+        let batch_ids = match graph.topological_batches() {
+            Ok(b) => b,
             Err(e) => {
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
-                    reason: format!("Topological sort failed: {e}"),
+                    reason: format!("Topological batches failed: {e}"),
                 };
             }
         };
 
-        // 6. Create executor and gate manager
-        let mut executor = SubtaskExecutor::new(ExecutorConfig::default());
+        // Resolve SubtaskId batches into Subtask batches
+        let batches: Vec<Vec<_>> = batch_ids
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| spec.subtasks.iter().find(|s| s.id == *id).cloned())
+                    .collect()
+            })
+            .collect();
+
+        let total: usize = batches.iter().map(|b| b.len()).sum();
+
+        // 6. Create parallel executor and gate manager
+        let parallel_exec = ParallelExecutor::new(
+            self.config.surge_config.pipeline.max_parallel,
+            ExecutorConfig::default(),
+        );
 
         let specs_dir = self
             .config
@@ -158,10 +174,7 @@ impl Orchestrator {
             specs_dir,
         );
 
-        // 7. Execute subtasks in topological order
-        let total = order.len();
-        let mut completed = 0usize;
-
+        // 7. Execute subtasks in batches
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Draft,
@@ -171,57 +184,27 @@ impl Orchestrator {
             },
         });
 
-        for subtask_id in &order {
-            // Check circuit breaker
-            if executor.is_circuit_broken() {
+        // Check gate once before batch execution
+        match gate_manager.check_gate(Phase::Executing, spec.id) {
+            GateAction::Pause { reason } => {
                 pool.shutdown().await;
                 return PipelineResult::Paused {
                     phase: Phase::Executing,
-                    reason: "Circuit breaker tripped — too many consecutive failures".into(),
+                    reason,
                 };
             }
+            GateAction::HumanInput { .. } | GateAction::Continue => {}
+        }
 
-            // Check gate
-            match gate_manager.check_gate(Phase::Executing, spec.id) {
-                GateAction::Pause { reason } => {
-                    pool.shutdown().await;
-                    return PipelineResult::Paused {
-                        phase: Phase::Executing,
-                        reason,
-                    };
-                }
-                GateAction::HumanInput { .. } | GateAction::Continue => {}
-            }
+        let batch_results = parallel_exec
+            .execute_all_batches(spec, &batches, task_id, &pool, &session, &git, &self.event_tx)
+            .await;
 
-            // Find the subtask in the spec
-            let subtask = match spec.subtasks.iter().find(|s| s.id == *subtask_id) {
-                Some(s) => s,
-                None => {
-                    warn!(subtask_id = %subtask_id, "subtask not found in spec, skipping");
-                    continue;
-                }
-            };
+        let completed: usize = batch_results.iter().map(|r| r.successes.len()).sum();
+        let failed: usize = batch_results.iter().map(|r| r.failures.len()).sum();
 
-            let result = executor
-                .execute(spec, subtask, task_id, &pool, &session, &git, &self.event_tx)
-                .await;
-
-            match result {
-                SubtaskResult::Success { .. } => {
-                    completed += 1;
-                    let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
-                        task_id,
-                        old_state: TaskState::Executing {
-                            completed: completed - 1,
-                            total,
-                        },
-                        new_state: TaskState::Executing { completed, total },
-                    });
-                }
-                SubtaskResult::Failed { reason, .. } => {
-                    warn!(subtask_id = %subtask_id, %reason, "subtask failed");
-                }
-            }
+        if failed > 0 {
+            warn!(completed, failed, "some subtasks failed during batch execution");
         }
 
         // 8. QA review

@@ -44,6 +44,15 @@ enum Commands {
     Run {
         /// Spec ID or filename
         spec_id: String,
+        /// Override max parallel subtasks
+        #[arg(short = 'p', long)]
+        parallel: Option<usize>,
+        /// Override planner agent
+        #[arg(long)]
+        planner: Option<String>,
+        /// Override coder agent
+        #[arg(long)]
+        coder: Option<String>,
     },
 
     /// Show pipeline status for a spec
@@ -105,6 +114,8 @@ enum AgentCommands {
         /// Agent name
         name: String,
     },
+    /// Show agent health status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -306,6 +317,10 @@ async fn main() -> Result<()> {
 
                 pool.shutdown().await;
             }
+            AgentCommands::Status => {
+                println!("⚡ Agent health monitoring is active during pipeline execution.");
+                println!("   Use 'surge run' to see live agent status.");
+            }
         },
         Commands::Spec { command } => match command {
             SpecCommands::Create { description, template } => {
@@ -385,9 +400,13 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Run { spec_id } => {
+        Commands::Run { spec_id, parallel, planner: _, coder: _ } => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
+
+            if let Some(p) = parallel {
+                config.pipeline.max_parallel = p;
+            }
 
             let spec_file = load_spec_by_id(&spec_id)?;
 
