@@ -121,6 +121,12 @@ impl SurgeConfig {
         }
     }
 
+    /// Load config by discovering surge.toml, or return default if not found.
+    /// This combines discovery and default fallback in a single convenient method.
+    pub fn load_or_default() -> Result<Self, crate::SurgeError> {
+        Self::discover()
+    }
+
     /// Find surge.toml by walking up from the given directory.
     fn find_config_file(start_dir: &Path) -> Result<PathBuf, crate::SurgeError> {
         let mut current = start_dir;
@@ -200,5 +206,50 @@ command = "test"
         assert!(config.pipeline.gates.after_plan);
         assert!(!config.pipeline.gates.after_each_subtask);
         assert!(config.pipeline.gates.after_qa);
+    }
+
+    #[test]
+    fn test_load_or_default() {
+        // Create a temporary directory structure
+        let temp_dir = std::env::temp_dir().join("surge_test_load_or_default");
+        let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Test 1: When surge.toml exists, it should load it
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(&config_path, r#"
+default_agent = "custom-agent"
+
+[pipeline]
+max_qa_iterations = 5
+max_parallel = 2
+"#).unwrap();
+
+        // Change to the temp directory to test load_or_default
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let config = SurgeConfig::load_or_default().unwrap();
+        assert_eq!(config.default_agent, "custom-agent");
+        assert_eq!(config.pipeline.max_qa_iterations, 5);
+        assert_eq!(config.pipeline.max_parallel, 2);
+
+        // Test 2: When no surge.toml exists, it should return default
+        let no_config_dir = std::env::temp_dir().join("surge_test_load_or_default_no_config");
+        let _ = fs::remove_dir_all(&no_config_dir);
+        fs::create_dir_all(&no_config_dir).unwrap();
+        std::env::set_current_dir(&no_config_dir).unwrap();
+
+        let config = SurgeConfig::load_or_default().unwrap();
+        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.pipeline.max_qa_iterations, 10);
+        assert_eq!(config.pipeline.max_parallel, 3);
+
+        // Restore original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&no_config_dir);
     }
 }
