@@ -1061,4 +1061,13 @@ editor = "rustrover"
         assert_eq!(config.cleanup.keep_branches_days, 7);
         assert!(config.ide.editor.is_none());
     }
+
+    #[test]
+    fn test_example_toml_deserializes() {
+        let content = include_str!("../../../surge.example.toml");
+        let config: SurgeConfig = toml::from_str(content).unwrap();
+        assert_eq!(config.default_agent, "claude");
+        assert!(config.agents.contains_key("claude"));
+        config.validate().unwrap();
+    }
 }
