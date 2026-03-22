@@ -5,6 +5,7 @@ members = [
     "crates/surge-acp",
     "crates/surge-spec",
     "crates/surge-git",
+    "crates/surge-orchestrator",
     "crates/surge-cli",
 ]
 
@@ -52,3 +53,4 @@ surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
 surge-spec = { path = "crates/surge-spec" }
 surge-git = { path = "crates/surge-git" }
+surge-orchestrator = { path = "crates/surge-orchestrator" }
