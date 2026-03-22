@@ -197,6 +197,64 @@ impl SurgeConfig {
         }
     }
 
+    /// Apply environment variable overrides to the configuration.
+    /// Environment variables with the SURGE_* prefix override config values:
+    /// - SURGE_DEFAULT_AGENT
+    /// - SURGE_MAX_QA_ITERATIONS
+    /// - SURGE_MAX_PARALLEL
+    /// - SURGE_GATE_AFTER_SPEC
+    /// - SURGE_GATE_AFTER_PLAN
+    /// - SURGE_GATE_AFTER_EACH_SUBTASK
+    /// - SURGE_GATE_AFTER_QA
+    pub fn apply_env_overrides(&mut self) {
+        // Override default_agent
+        if let Ok(value) = std::env::var("SURGE_DEFAULT_AGENT") {
+            self.default_agent = value;
+        }
+
+        // Override pipeline.max_qa_iterations
+        if let Ok(value) = std::env::var("SURGE_MAX_QA_ITERATIONS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.pipeline.max_qa_iterations = parsed;
+            }
+        }
+
+        // Override pipeline.max_parallel
+        if let Ok(value) = std::env::var("SURGE_MAX_PARALLEL") {
+            if let Ok(parsed) = value.parse::<usize>() {
+                self.pipeline.max_parallel = parsed;
+            }
+        }
+
+        // Override pipeline.gates.after_spec
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_SPEC") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                self.pipeline.gates.after_spec = parsed;
+            }
+        }
+
+        // Override pipeline.gates.after_plan
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_PLAN") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                self.pipeline.gates.after_plan = parsed;
+            }
+        }
+
+        // Override pipeline.gates.after_each_subtask
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_EACH_SUBTASK") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                self.pipeline.gates.after_each_subtask = parsed;
+            }
+        }
+
+        // Override pipeline.gates.after_qa
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_QA") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                self.pipeline.gates.after_qa = parsed;
+            }
+        }
+    }
+
     /// Load config by discovering surge.toml, or return default if not found.
     /// This combines discovery and default fallback in a single convenient method.
     pub fn load_or_default() -> Result<Self, crate::SurgeError> {
@@ -431,5 +489,77 @@ max_parallel = 2
         // Test 9: Empty agents map with default_agent is OK (default config scenario)
         let default_config = SurgeConfig::default();
         assert!(default_config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_env_overrides() {
+        // Test environment variable overrides
+        // Set environment variables
+        unsafe {
+            std::env::set_var("SURGE_DEFAULT_AGENT", "custom-agent");
+            std::env::set_var("SURGE_MAX_QA_ITERATIONS", "20");
+            std::env::set_var("SURGE_MAX_PARALLEL", "5");
+            std::env::set_var("SURGE_GATE_AFTER_SPEC", "false");
+            std::env::set_var("SURGE_GATE_AFTER_PLAN", "false");
+            std::env::set_var("SURGE_GATE_AFTER_EACH_SUBTASK", "true");
+            std::env::set_var("SURGE_GATE_AFTER_QA", "false");
+        }
+
+        // Create config with defaults
+        let mut config = SurgeConfig::default();
+
+        // Verify defaults before override
+        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.pipeline.max_qa_iterations, 10);
+        assert_eq!(config.pipeline.max_parallel, 3);
+        assert!(config.pipeline.gates.after_spec);
+        assert!(config.pipeline.gates.after_plan);
+        assert!(!config.pipeline.gates.after_each_subtask);
+        assert!(config.pipeline.gates.after_qa);
+
+        // Apply environment overrides
+        config.apply_env_overrides();
+
+        // Verify overrides were applied
+        assert_eq!(config.default_agent, "custom-agent");
+        assert_eq!(config.pipeline.max_qa_iterations, 20);
+        assert_eq!(config.pipeline.max_parallel, 5);
+        assert!(!config.pipeline.gates.after_spec);
+        assert!(!config.pipeline.gates.after_plan);
+        assert!(config.pipeline.gates.after_each_subtask);
+        assert!(!config.pipeline.gates.after_qa);
+
+        // Clean up environment variables
+        unsafe {
+            std::env::remove_var("SURGE_DEFAULT_AGENT");
+            std::env::remove_var("SURGE_MAX_QA_ITERATIONS");
+            std::env::remove_var("SURGE_MAX_PARALLEL");
+            std::env::remove_var("SURGE_GATE_AFTER_SPEC");
+            std::env::remove_var("SURGE_GATE_AFTER_PLAN");
+            std::env::remove_var("SURGE_GATE_AFTER_EACH_SUBTASK");
+            std::env::remove_var("SURGE_GATE_AFTER_QA");
+        }
+
+        // Test that invalid values are ignored
+        unsafe {
+            std::env::set_var("SURGE_MAX_QA_ITERATIONS", "invalid");
+            std::env::set_var("SURGE_MAX_PARALLEL", "not-a-number");
+            std::env::set_var("SURGE_GATE_AFTER_SPEC", "not-a-bool");
+        }
+
+        let mut config2 = SurgeConfig::default();
+        config2.apply_env_overrides();
+
+        // Verify invalid values were ignored (defaults remain)
+        assert_eq!(config2.pipeline.max_qa_iterations, 10);
+        assert_eq!(config2.pipeline.max_parallel, 3);
+        assert!(config2.pipeline.gates.after_spec);
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("SURGE_MAX_QA_ITERATIONS");
+            std::env::remove_var("SURGE_MAX_PARALLEL");
+            std::env::remove_var("SURGE_GATE_AFTER_SPEC");
+        }
     }
 }
