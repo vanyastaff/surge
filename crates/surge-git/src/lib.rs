@@ -2,3 +2,6 @@
 
 pub mod cleanup;
 pub mod worktree;
+
+pub use cleanup::LifecycleManager;
+pub use worktree::{GitError, GitManager, WorktreeInfo};
