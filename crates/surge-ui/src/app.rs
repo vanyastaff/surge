@@ -13,6 +13,9 @@ use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
 use crate::screens::dashboard::DashboardScreen;
 use crate::screens::kanban::KanbanScreen;
+use crate::screens::live_execution::LiveExecutionScreen;
+use crate::screens::spec_explorer::SpecExplorerScreen;
+use crate::screens::spec_wizard::SpecWizardScreen;
 use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
@@ -41,6 +44,9 @@ pub struct SurgeApp {
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
+    spec_explorer: Option<Entity<SpecExplorerScreen>>,
+    spec_wizard: Option<Entity<SpecWizardScreen>>,
+    live_execution: Option<Entity<LiveExecutionScreen>>,
 }
 
 impl SurgeApp {
@@ -76,6 +82,9 @@ impl SurgeApp {
             dashboard: None,
             kanban: None,
             agent_hub: None,
+            spec_explorer: None,
+            spec_wizard: None,
+            live_execution: None,
         }
     }
 
@@ -258,6 +267,24 @@ impl SurgeApp {
                     cx.new(AgentHubScreen::new)
                 });
                 agent_hub.clone().into_any_element()
+            }
+            Screen::SpecExplorer => {
+                let spec_explorer = self.spec_explorer.get_or_insert_with(|| {
+                    cx.new(SpecExplorerScreen::new)
+                });
+                spec_explorer.clone().into_any_element()
+            }
+            Screen::SpecWizard => {
+                let spec_wizard = self.spec_wizard.get_or_insert_with(|| {
+                    cx.new(SpecWizardScreen::new)
+                });
+                spec_wizard.clone().into_any_element()
+            }
+            Screen::LiveExecution => {
+                let live_exec = self.live_execution.get_or_insert_with(|| {
+                    cx.new(LiveExecutionScreen::new)
+                });
+                live_exec.clone().into_any_element()
             }
             _ => {
                 // Placeholder for screens not yet implemented.

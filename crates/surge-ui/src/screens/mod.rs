@@ -2,5 +2,8 @@ pub mod agent_hub;
 pub mod dashboard;
 pub mod init_wizard;
 pub mod kanban;
+pub mod live_execution;
+pub mod spec_explorer;
+pub mod spec_wizard;
 pub mod task_detail;
 pub mod welcome;
