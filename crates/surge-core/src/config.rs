@@ -562,4 +562,373 @@ max_parallel = 2
             std::env::remove_var("SURGE_GATE_AFTER_SPEC");
         }
     }
+
+    #[test]
+    fn test_toml_serialization_minimal() {
+        // Test minimal config serialization/deserialization
+        let toml_str = r#"
+default_agent = "test-agent"
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.default_agent, "test-agent");
+        assert!(config.agents.is_empty());
+        assert_eq!(config.pipeline.max_qa_iterations, 10);
+        assert_eq!(config.pipeline.max_parallel, 3);
+    }
+
+    #[test]
+    fn test_toml_serialization_complete() {
+        // Test complete config with all fields
+        let toml_str = r#"
+default_agent = "claude-code"
+
+[agents.claude-code]
+command = "claude"
+args = ["--stdio"]
+transport = "stdio"
+
+[agents.copilot]
+command = "gh"
+args = ["copilot"]
+
+[agents.remote]
+command = "nc"
+transport = { tcp = { host = "localhost", port = 9000 } }
+
+[pipeline]
+max_qa_iterations = 5
+max_parallel = 2
+
+[pipeline.gates]
+after_spec = false
+after_plan = true
+after_each_subtask = true
+after_qa = false
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.agents.len(), 3);
+
+        // Check claude-code agent
+        let claude = config.agents.get("claude-code").unwrap();
+        assert_eq!(claude.command, "claude");
+        assert_eq!(claude.args, vec!["--stdio"]);
+        assert!(matches!(claude.transport, Transport::Stdio));
+
+        // Check copilot agent
+        let copilot = config.agents.get("copilot").unwrap();
+        assert_eq!(copilot.command, "gh");
+        assert_eq!(copilot.args, vec!["copilot"]);
+
+        // Check remote agent with TCP transport
+        let remote = config.agents.get("remote").unwrap();
+        assert_eq!(remote.command, "nc");
+        if let Transport::Tcp { host, port } = &remote.transport {
+            assert_eq!(host, "localhost");
+            assert_eq!(*port, 9000);
+        } else {
+            panic!("Expected TCP transport");
+        }
+
+        // Check pipeline config
+        assert_eq!(config.pipeline.max_qa_iterations, 5);
+        assert_eq!(config.pipeline.max_parallel, 2);
+
+        // Check gates
+        assert!(!config.pipeline.gates.after_spec);
+        assert!(config.pipeline.gates.after_plan);
+        assert!(config.pipeline.gates.after_each_subtask);
+        assert!(!config.pipeline.gates.after_qa);
+    }
+
+    #[test]
+    fn test_toml_deserialization_malformed() {
+        // Test that malformed TOML returns error
+        let bad_toml = r#"
+default_agent =
+command = "test"
+"#;
+        let result: Result<SurgeConfig, _> = toml::from_str(bad_toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_config_file_success() {
+        // Test loading a valid config file
+        let temp_dir = std::env::temp_dir().join("surge_test_load_config");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(&config_path, r#"
+default_agent = "my-agent"
+
+[agents.my-agent]
+command = "agent-binary"
+args = ["--verbose"]
+
+[pipeline]
+max_qa_iterations = 15
+max_parallel = 4
+"#).unwrap();
+
+        let config = SurgeConfig::load(&config_path).unwrap();
+        assert_eq!(config.default_agent, "my-agent");
+        assert_eq!(config.pipeline.max_qa_iterations, 15);
+        assert_eq!(config.pipeline.max_parallel, 4);
+
+        let agent = config.agents.get("my-agent").unwrap();
+        assert_eq!(agent.command, "agent-binary");
+        assert_eq!(agent.args, vec!["--verbose"]);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_config_file_not_found() {
+        // Test loading a non-existent file
+        let path = PathBuf::from("/nonexistent/path/surge.toml");
+        let result = SurgeConfig::load(&path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Failed to read"));
+    }
+
+    #[test]
+    fn test_load_config_file_invalid_toml() {
+        // Test loading a file with invalid TOML
+        let temp_dir = std::env::temp_dir().join("surge_test_invalid_toml");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(&config_path, "this is not valid TOML {{{").unwrap();
+
+        let result = SurgeConfig::load(&config_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Failed to parse"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_config_file_invalid_config() {
+        // Test loading a valid TOML but invalid config (validation fails)
+        let temp_dir = std::env::temp_dir().join("surge_test_invalid_config");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(&config_path, r#"
+default_agent = "missing-agent"
+
+[agents.other-agent]
+command = "test"
+"#).unwrap();
+
+        let result = SurgeConfig::load(&config_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("default_agent 'missing-agent' not found"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_transport_stdio_default() {
+        // Test that Transport::Stdio is the default
+        let transport = Transport::default();
+        assert!(matches!(transport, Transport::Stdio));
+    }
+
+    #[test]
+    fn test_transport_tcp_serialization() {
+        // Test TCP transport serialization via AgentConfig
+        let toml_str = r#"
+command = "test"
+transport = { tcp = { host = "127.0.0.1", port = 8080 } }
+"#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        if let Transport::Tcp { host, port } = agent.transport {
+            assert_eq!(host, "127.0.0.1");
+            assert_eq!(port, 8080);
+        } else {
+            panic!("Expected TCP transport");
+        }
+    }
+
+    #[test]
+    fn test_transport_stdio_serialization() {
+        // Test Stdio transport serialization via AgentConfig
+        let toml_str = r#"
+command = "test"
+transport = "stdio"
+"#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(agent.transport, Transport::Stdio));
+    }
+
+    #[test]
+    fn test_gate_config_defaults() {
+        // Test GateConfig default values
+        let gates = GateConfig::default();
+        assert!(gates.after_spec);
+        assert!(gates.after_plan);
+        assert!(!gates.after_each_subtask);
+        assert!(gates.after_qa);
+    }
+
+    #[test]
+    fn test_pipeline_config_defaults() {
+        // Test PipelineConfig default values
+        let pipeline = PipelineConfig::default();
+        assert_eq!(pipeline.max_qa_iterations, 10);
+        assert_eq!(pipeline.max_parallel, 3);
+        assert!(pipeline.gates.after_spec);
+        assert!(pipeline.gates.after_plan);
+        assert!(!pipeline.gates.after_each_subtask);
+        assert!(pipeline.gates.after_qa);
+    }
+
+    #[test]
+    fn test_agent_config_validation_whitespace_command() {
+        // Test that whitespace-only command fails validation
+        let agent = AgentConfig {
+            command: "   ".to_string(),
+            args: vec![],
+            transport: Transport::Stdio,
+        };
+        let result = agent.validate("test-agent");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("test-agent"));
+        assert!(err_msg.contains("empty command"));
+    }
+
+    #[test]
+    fn test_agent_config_validation_whitespace_tcp_host() {
+        // Test that whitespace-only TCP host fails validation
+        let agent = AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "   ".to_string(),
+                port: 8080,
+            },
+        };
+        let result = agent.validate("test-agent");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("test-agent"));
+        assert!(err_msg.contains("empty host"));
+    }
+
+    #[test]
+    fn test_pipeline_config_validation_success() {
+        // Test that valid pipeline config passes validation
+        let pipeline = PipelineConfig {
+            max_qa_iterations: 5,
+            max_parallel: 10,
+            gates: GateConfig::default(),
+        };
+        assert!(pipeline.validate().is_ok());
+    }
+
+    #[test]
+    fn test_agent_config_with_args() {
+        // Test agent config with multiple arguments
+        let toml_str = r#"
+command = "gh"
+args = ["copilot", "suggest", "--verbose"]
+"#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(agent.command, "gh");
+        assert_eq!(agent.args, vec!["copilot", "suggest", "--verbose"]);
+        assert!(matches!(agent.transport, Transport::Stdio));
+    }
+
+    #[test]
+    fn test_config_clone() {
+        // Test that SurgeConfig can be cloned
+        let mut config = SurgeConfig::default();
+        config.default_agent = "custom".to_string();
+        config.pipeline.max_qa_iterations = 42;
+
+        let cloned = config.clone();
+        assert_eq!(cloned.default_agent, "custom");
+        assert_eq!(cloned.pipeline.max_qa_iterations, 42);
+    }
+
+    #[test]
+    fn test_transport_clone() {
+        // Test that Transport can be cloned
+        let tcp = Transport::Tcp {
+            host: "localhost".to_string(),
+            port: 9000,
+        };
+        let cloned = tcp.clone();
+        if let Transport::Tcp { host, port } = cloned {
+            assert_eq!(host, "localhost");
+            assert_eq!(port, 9000);
+        } else {
+            panic!("Expected TCP transport");
+        }
+    }
+
+    #[test]
+    fn test_toml_partial_pipeline() {
+        // Test TOML with partial pipeline config (uses defaults for missing fields)
+        let toml_str = r#"
+default_agent = "test"
+
+[pipeline]
+max_qa_iterations = 7
+
+[pipeline.gates]
+after_spec = false
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.pipeline.max_qa_iterations, 7);
+        assert_eq!(config.pipeline.max_parallel, 3); // default
+        assert!(!config.pipeline.gates.after_spec);
+        assert!(config.pipeline.gates.after_plan); // default
+    }
+
+    #[test]
+    fn test_empty_agents_map_validation() {
+        // Test that empty agents map with any default_agent is valid
+        let config = SurgeConfig {
+            default_agent: "nonexistent".to_string(),
+            agents: HashMap::new(),
+            pipeline: PipelineConfig::default(),
+        };
+        // Should be valid because agents map is empty
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tcp_transport_valid_port_range() {
+        // Test valid TCP port ranges
+        let agent_min = AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "localhost".to_string(),
+                port: 1,
+            },
+        };
+        assert!(agent_min.validate("test").is_ok());
+
+        let agent_max = AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "localhost".to_string(),
+                port: 65535,
+            },
+        };
+        assert!(agent_max.validate("test").is_ok());
+    }
 }
