@@ -71,6 +71,7 @@ impl ParallelExecutor {
     /// parallelism, this currently uses a sequential loop bounded by the
     /// semaphore. Each subtask builds a prompt, sends it to the agent, and
     /// commits the result via git.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_batch(
         &self,
         spec: &Spec,
@@ -184,6 +185,7 @@ impl ParallelExecutor {
     ///
     /// Each batch is a slice of subtasks that can run concurrently within
     /// the batch. Batches are processed one at a time in order.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_all_batches(
         &self,
         spec: &Spec,

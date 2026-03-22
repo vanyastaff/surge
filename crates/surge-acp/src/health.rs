@@ -97,14 +97,12 @@ impl HealthMonitor {
             };
 
             // Clear rate limit if past reset time
-            if health.rate_limited {
-                if let Some(reset) = health.rate_limit_reset {
-                    if Instant::now() >= reset {
-                        info!(agent, "rate limit reset, clearing");
-                        health.rate_limited = false;
-                        health.rate_limit_reset = None;
-                    }
-                }
+            if health.rate_limited
+                && health.rate_limit_reset.is_some_and(|reset| Instant::now() >= reset)
+            {
+                info!(agent, "rate limit reset, clearing");
+                health.rate_limited = false;
+                health.rate_limit_reset = None;
             }
         }
     }
@@ -136,17 +134,16 @@ impl HealthMonitor {
                 return preferred;
             }
             // Try fallback
-            if let Some(fallback_name) = self.fallback_map.get(preferred) {
-                if let Some(fallback_health) = self.agents.get(fallback_name.as_str()) {
-                    if fallback_health.is_healthy() {
-                        warn!(
-                            preferred,
-                            fallback = fallback_name.as_str(),
-                            "routing to fallback agent"
-                        );
-                        return fallback_name.as_str();
-                    }
-                }
+            if let Some(fallback_name) = self.fallback_map.get(preferred)
+                && let Some(fallback_health) = self.agents.get(fallback_name.as_str())
+                && fallback_health.is_healthy()
+            {
+                warn!(
+                    preferred,
+                    fallback = fallback_name.as_str(),
+                    "routing to fallback agent"
+                );
+                return fallback_name.as_str();
             }
         }
         preferred

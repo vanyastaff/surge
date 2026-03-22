@@ -35,14 +35,14 @@ impl AgentRouter {
 
     /// Route a subtask. Priority: phase override → complexity preference → default.
     pub fn route(&self, subtask: &Subtask, phase: Option<&str>) -> RouteDecision {
-        if let Some(phase) = phase {
-            if let Some(agent) = self.phase_agents.get(phase) {
-                debug!(agent, phase, "routed by phase override");
-                return RouteDecision {
-                    agent_name: agent.clone(),
-                    reason: format!("phase override: {phase}"),
-                };
-            }
+        if let Some(phase) = phase
+            && let Some(agent) = self.phase_agents.get(phase)
+        {
+            debug!(agent, phase, "routed by phase override");
+            return RouteDecision {
+                agent_name: agent.clone(),
+                reason: format!("phase override: {phase}"),
+            };
         }
 
         let complexity_key = format!("{:?}", subtask.complexity).to_lowercase();
