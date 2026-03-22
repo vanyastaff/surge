@@ -1,9 +1,15 @@
 pub mod agent_hub;
 pub mod dashboard;
+pub mod diff_viewer;
+pub mod file_explorer;
+pub mod github_prs;
 pub mod init_wizard;
+pub mod insights;
 pub mod kanban;
 pub mod live_execution;
+pub mod settings;
 pub mod spec_explorer;
 pub mod spec_wizard;
 pub mod task_detail;
 pub mod welcome;
+pub mod worktrees;

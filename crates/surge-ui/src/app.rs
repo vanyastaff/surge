@@ -12,11 +12,17 @@ use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
 use crate::screens::dashboard::DashboardScreen;
+use crate::screens::diff_viewer::DiffViewerScreen;
+use crate::screens::file_explorer::FileExplorerScreen;
+use crate::screens::github_prs::GithubPrsScreen;
+use crate::screens::insights::InsightsScreen;
 use crate::screens::kanban::KanbanScreen;
 use crate::screens::live_execution::LiveExecutionScreen;
+use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
 use crate::screens::spec_wizard::SpecWizardScreen;
 use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
+use crate::screens::worktrees::WorktreesScreen;
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
 use crate::top_bar::TopBar;
@@ -47,6 +53,12 @@ pub struct SurgeApp {
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
     live_execution: Option<Entity<LiveExecutionScreen>>,
+    diff_viewer: Option<Entity<DiffViewerScreen>>,
+    file_explorer: Option<Entity<FileExplorerScreen>>,
+    worktrees: Option<Entity<WorktreesScreen>>,
+    github_prs: Option<Entity<GithubPrsScreen>>,
+    insights: Option<Entity<InsightsScreen>>,
+    settings: Option<Entity<SettingsScreen>>,
 }
 
 impl SurgeApp {
@@ -85,6 +97,12 @@ impl SurgeApp {
             spec_explorer: None,
             spec_wizard: None,
             live_execution: None,
+            diff_viewer: None,
+            file_explorer: None,
+            worktrees: None,
+            github_prs: None,
+            insights: None,
+            settings: None,
         }
     }
 
@@ -285,6 +303,30 @@ impl SurgeApp {
                     cx.new(LiveExecutionScreen::new)
                 });
                 live_exec.clone().into_any_element()
+            }
+            Screen::DiffViewer => {
+                let s = self.diff_viewer.get_or_insert_with(|| cx.new(DiffViewerScreen::new));
+                s.clone().into_any_element()
+            }
+            Screen::FileExplorer => {
+                let s = self.file_explorer.get_or_insert_with(|| cx.new(FileExplorerScreen::new));
+                s.clone().into_any_element()
+            }
+            Screen::Worktrees => {
+                let s = self.worktrees.get_or_insert_with(|| cx.new(WorktreesScreen::new));
+                s.clone().into_any_element()
+            }
+            Screen::GitHubPRs => {
+                let s = self.github_prs.get_or_insert_with(|| cx.new(GithubPrsScreen::new));
+                s.clone().into_any_element()
+            }
+            Screen::Insights => {
+                let s = self.insights.get_or_insert_with(|| cx.new(InsightsScreen::new));
+                s.clone().into_any_element()
+            }
+            Screen::Settings => {
+                let s = self.settings.get_or_insert_with(|| cx.new(SettingsScreen::new));
+                s.clone().into_any_element()
             }
             _ => {
                 // Placeholder for screens not yet implemented.
