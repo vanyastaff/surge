@@ -10,6 +10,9 @@ use crate::command_palette::{CommandPalette, CommandSelected};
 use crate::notifications::SurgeNotification;
 use crate::project::RecentProjects;
 use crate::router::Screen;
+use crate::screens::agent_hub::AgentHubScreen;
+use crate::screens::dashboard::DashboardScreen;
+use crate::screens::kanban::KanbanScreen;
 use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
@@ -34,6 +37,10 @@ pub struct SurgeApp {
     top_bar: Option<Entity<TopBar>>,
     command_palette_open: bool,
     command_palette: Option<Entity<CommandPalette>>,
+    // Screen entities (created on demand).
+    dashboard: Option<Entity<DashboardScreen>>,
+    kanban: Option<Entity<KanbanScreen>>,
+    agent_hub: Option<Entity<AgentHubScreen>>,
 }
 
 impl SurgeApp {
@@ -66,6 +73,9 @@ impl SurgeApp {
             top_bar: None,
             command_palette_open: false,
             command_palette: None,
+            dashboard: None,
+            kanban: None,
+            agent_hub: None,
         }
     }
 
@@ -195,64 +205,78 @@ impl SurgeApp {
         ]);
     }
 
-    fn render_screen_content(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Div {
-        let label = self.active_screen.label();
-        let icon = self.active_screen.icon();
-        div()
-            .flex_1()
-            .p_6()
-            .v_flex()
-            .gap_4()
-            .child(
+    fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        match self.active_screen {
+            Screen::Dashboard => {
+                let dashboard = self.dashboard.get_or_insert_with(|| {
+                    cx.new(DashboardScreen::new)
+                });
+                dashboard.clone().into_any_element()
+            }
+            Screen::Kanban => {
+                let kanban = self.kanban.get_or_insert_with(|| {
+                    cx.new(KanbanScreen::new)
+                });
+                kanban.clone().into_any_element()
+            }
+            Screen::AgentHub => {
+                let agent_hub = self.agent_hub.get_or_insert_with(|| {
+                    cx.new(AgentHubScreen::new)
+                });
+                agent_hub.clone().into_any_element()
+            }
+            _ => {
+                // Placeholder for screens not yet implemented.
+                let label = self.active_screen.label();
+                let icon = self.active_screen.icon();
                 div()
-                    .h_flex()
-                    .gap_3()
-                    .items_center()
+                    .flex_1()
+                    .p_6()
+                    .v_flex()
+                    .gap_4()
                     .child(
                         div()
-                            .text_2xl()
-                            .text_color(theme::PRIMARY)
-                            .child(icon.to_string()),
+                            .h_flex()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .text_color(theme::PRIMARY)
+                                    .child(icon.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child(label.to_string()),
+                            ),
                     )
                     .child(
                         div()
-                            .text_2xl()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
-                            .child(label.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(theme::TEXT_MUTED)
-                    .child(format!("This screen will show {}. Coming soon.", label.to_lowercase())),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .mt_4()
-                    .child(
-                        Button::new("test-notif")
-                            .label("Test Notification")
-                            .on_click(|_event, window, cx| {
-                                window.push_notification(
-                                    SurgeNotification::agent_connected("Claude Code"),
-                                    cx,
-                                );
-                            }),
+                            .text_color(theme::TEXT_MUTED)
+                            .child(format!("{} — coming soon", label)),
                     )
                     .child(
-                        Button::new("test-error")
-                            .label("Test Error")
-                            .on_click(|_event, window, cx| {
-                                window.push_notification(
-                                    SurgeNotification::task_failed("build-auth", "compilation error"),
-                                    cx,
-                                );
-                            }),
-                    ),
-            )
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .mt_4()
+                            .child(
+                                Button::new("test-notif")
+                                    .label("Test Notification")
+                                    .on_click(|_event, window, cx| {
+                                        window.push_notification(
+                                            SurgeNotification::agent_connected("Claude Code"),
+                                            cx,
+                                        );
+                                    }),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        }
     }
 
     fn render_palette_overlay(&self) -> AnyElement {
@@ -314,7 +338,9 @@ impl Render for SurgeApp {
                                     .h_flex()
                                     .overflow_hidden()
                                     .child(self.sidebar.clone())
-                                    .child(self.render_screen_content(window, cx)),
+                                    .child(
+                                        div().flex_1().size_full().child(self.render_screen_content(cx))
+                                    ),
                             ),
                     )
                     .child(self.render_palette_overlay())
