@@ -8,3 +8,4 @@ pub mod pipeline;
 pub mod qa;
 
 pub use phases::Phase;
+pub use pipeline::{Orchestrator, OrchestratorConfig, PipelineResult};

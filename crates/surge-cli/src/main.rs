@@ -40,6 +40,18 @@ enum Commands {
         command: SpecCommands,
     },
 
+    /// Run a spec through the full pipeline
+    Run {
+        /// Spec ID or filename
+        spec_id: String,
+    },
+
+    /// Show pipeline status for a spec
+    Status {
+        /// Spec ID
+        spec_id: String,
+    },
+
     /// Show diff for a spec's worktree
     Diff {
         /// Spec ID
@@ -373,6 +385,69 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Run { spec_id } => {
+            let mut config = SurgeConfig::load_or_default()?;
+            config.apply_env_overrides();
+
+            let spec_file = load_spec_by_id(&spec_id)?;
+
+            println!("⚡ Running spec: {}", spec_file.spec.title);
+            println!("   Subtasks: {}", spec_file.spec.subtasks.len());
+
+            let cwd = std::env::current_dir()?;
+            let orch_config = surge_orchestrator::OrchestratorConfig {
+                surge_config: config,
+                working_dir: cwd,
+            };
+            let orchestrator = surge_orchestrator::Orchestrator::new(orch_config);
+
+            let mut events = orchestrator.subscribe();
+            tokio::spawn(async move {
+                while let Ok(event) = events.recv().await {
+                    match event {
+                        surge_core::SurgeEvent::SubtaskStarted { subtask_id, .. } => {
+                            println!("  ▶ Starting subtask {subtask_id}");
+                        }
+                        surge_core::SurgeEvent::SubtaskCompleted { subtask_id, success, .. } => {
+                            let mark = if success { "✅" } else { "❌" };
+                            println!("  {mark} Subtask {subtask_id}");
+                        }
+                        surge_core::SurgeEvent::TaskStateChanged { new_state, .. } => {
+                            println!("  📊 State: {new_state}");
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            let result = orchestrator.execute(&spec_file).await;
+
+            match result {
+                surge_orchestrator::PipelineResult::Completed => {
+                    println!("\n✅ Pipeline completed successfully!");
+                }
+                surge_orchestrator::PipelineResult::Paused { phase, reason } => {
+                    println!("\n⏸️  Pipeline paused at {phase}: {reason}");
+                }
+                surge_orchestrator::PipelineResult::Failed { reason } => {
+                    println!("\n❌ Pipeline failed: {reason}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Status { spec_id } => {
+            let git = surge_git::GitManager::discover()?;
+            let worktrees = git.list_worktrees()?;
+            let wt = worktrees.iter().find(|w| w.spec_id.contains(&spec_id));
+
+            if let Some(wt) = wt {
+                println!("⚡ Status for '{}':", spec_id);
+                println!("   Worktree: {} {}", if wt.exists_on_disk { "✅" } else { "❌" }, wt.path.display());
+                println!("   Branch: {}", wt.branch);
+            } else {
+                println!("No active worktree for '{spec_id}'");
+            }
+        }
         Commands::Diff { spec_id } => {
             let mgr = surge_git::GitManager::discover()?;
             let diff = mgr.diff(&spec_id)?;
