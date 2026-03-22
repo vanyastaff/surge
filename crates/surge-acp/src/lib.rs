@@ -16,5 +16,5 @@ pub use surge_core::SurgeEvent;
 pub use connection::{AgentConnection, SessionState};
 pub use health::{AgentHealth, HealthMonitor};
 pub use pool::{AgentPool, SessionHandle};
-pub use registry::{AgentCapability, Registry, RegistryEntry};
+pub use registry::{AgentCapability, DetectedAgent, Registry, RegistryEntry};
 pub use router::{AgentRouter, RouteDecision};

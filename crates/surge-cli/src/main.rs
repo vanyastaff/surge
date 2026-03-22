@@ -168,6 +168,8 @@ enum RegistryCommands {
         /// Agent id (e.g. claude-code)
         id: String,
     },
+    /// Detect agents installed on this system
+    Detect,
     /// Add a registry agent to surge.toml
     Add {
         /// Agent id from the registry
@@ -634,6 +636,42 @@ async fn main() -> Result<()> {
                         println!("    capabilities: {}", caps.join(", "));
                         println!();
                     }
+                }
+            }
+            RegistryCommands::Detect => {
+                let registry = surge_acp::Registry::builtin();
+                let detected = registry.detect_installed_with_paths();
+
+                if detected.is_empty() {
+                    println!("No known agents detected on this system.\n");
+                    println!("Install an agent:");
+                    for entry in registry.list() {
+                        println!("  {} — {}", entry.id, entry.install_instructions);
+                    }
+                } else {
+                    println!("⚡ Detected agents:\n");
+                    for agent in &detected {
+                        let caps: Vec<String> = agent.entry.capabilities.iter().map(|c| c.to_string()).collect();
+                        println!("  ✅ {} ({})", agent.entry.display_name, agent.entry.id);
+                        if let Some(path) = &agent.command_path {
+                            println!("     Path: {path}");
+                        }
+                        println!("     Capabilities: {}", caps.join(", "));
+                        println!();
+                    }
+
+                    // Show not installed
+                    let not_installed: Vec<_> = registry.list().iter()
+                        .filter(|e| !e.is_installed())
+                        .collect();
+                    if !not_installed.is_empty() {
+                        println!("  Not installed:");
+                        for entry in not_installed {
+                            println!("    ❌ {} — {}", entry.id, entry.install_instructions);
+                        }
+                    }
+
+                    println!("\nUse 'surge registry add <id>' to add a detected agent to surge.toml.");
                 }
             }
             RegistryCommands::Info { id } => {

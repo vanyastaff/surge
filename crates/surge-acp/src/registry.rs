@@ -56,6 +56,12 @@ impl RegistryEntry {
         }
     }
 
+    /// Check if this agent's command is available on the system PATH.
+    #[must_use]
+    pub fn is_installed(&self) -> bool {
+        which(&self.command)
+    }
+
     /// Return `true` if the entry matches a case-insensitive search query.
     #[must_use]
     pub fn matches(&self, query: &str) -> bool {
@@ -180,6 +186,24 @@ impl Registry {
         self.entries.iter().find(|e| e.id == id)
     }
 
+    /// Return entries for agents that are installed on this system.
+    #[must_use]
+    pub fn detect_installed(&self) -> Vec<&RegistryEntry> {
+        self.entries.iter().filter(|e| e.is_installed()).collect()
+    }
+
+    /// Detect installed agents with their resolved paths.
+    pub fn detect_installed_with_paths(&self) -> Vec<DetectedAgent> {
+        self.entries
+            .iter()
+            .filter(|e| e.is_installed())
+            .map(|e| DetectedAgent {
+                entry: e.clone(),
+                command_path: resolve_command_path(&e.command),
+            })
+            .collect()
+    }
+
     /// Return entries that have the given capability.
     #[must_use]
     pub fn by_capability(&self, cap: &AgentCapability) -> Vec<&RegistryEntry> {
@@ -187,6 +211,61 @@ impl Registry {
             .iter()
             .filter(|e| e.capabilities.contains(cap))
             .collect()
+    }
+}
+
+/// Result of detecting an installed agent.
+#[derive(Debug, Clone)]
+pub struct DetectedAgent {
+    /// Registry entry.
+    pub entry: RegistryEntry,
+    /// Resolved path to the command.
+    pub command_path: Option<String>,
+}
+
+/// Check if a command exists on PATH.
+fn which(command: &str) -> bool {
+    use std::process::Command;
+
+    // On Windows, use `where`; on Unix, use `which`
+    #[cfg(windows)]
+    let result = Command::new("where")
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    #[cfg(not(windows))]
+    let result = Command::new("which")
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    result.is_ok_and(|s| s.success())
+}
+
+/// Try to resolve the full path of a command.
+fn resolve_command_path(command: &str) -> Option<String> {
+    use std::process::Command;
+
+    #[cfg(windows)]
+    let output = Command::new("where")
+        .arg(command)
+        .output()
+        .ok()?;
+
+    #[cfg(not(windows))]
+    let output = Command::new("which")
+        .arg(command)
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout);
+        Some(path.lines().next()?.trim().to_string())
+    } else {
+        None
     }
 }
 
@@ -258,6 +337,32 @@ mod tests {
         let results = reg.search("CLAUDE");
         assert!(!results.is_empty());
         assert_eq!(results[0].id, "claude-code");
+    }
+
+    #[test]
+    fn test_which_finds_git() {
+        // git should be available on any dev machine
+        assert!(which("git"));
+    }
+
+    #[test]
+    fn test_which_not_found() {
+        assert!(!which("nonexistent_binary_12345"));
+    }
+
+    #[test]
+    fn test_detect_installed_returns_subset() {
+        let reg = Registry::builtin();
+        let installed = reg.detect_installed();
+        // We can't know exactly what's installed, but it should be <= total
+        assert!(installed.len() <= reg.list().len());
+    }
+
+    #[test]
+    fn test_resolve_command_path_git() {
+        let path = resolve_command_path("git");
+        assert!(path.is_some());
+        assert!(path.unwrap().contains("git"));
     }
 
     #[test]
