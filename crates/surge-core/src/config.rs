@@ -22,6 +22,37 @@ pub struct AgentConfig {
     pub transport: Transport,
 }
 
+impl AgentConfig {
+    /// Validate the agent configuration.
+    fn validate(&self, agent_name: &str) -> Result<(), crate::SurgeError> {
+        // Validate command is not empty
+        if self.command.trim().is_empty() {
+            return Err(crate::SurgeError::Config(format!(
+                "Agent '{}' has empty command. Command must be a non-empty string",
+                agent_name
+            )));
+        }
+
+        // Validate TCP transport has non-empty host
+        if let Transport::Tcp { host, port } = &self.transport {
+            if host.trim().is_empty() {
+                return Err(crate::SurgeError::Config(format!(
+                    "Agent '{}' TCP transport has empty host. Host must be a non-empty string",
+                    agent_name
+                )));
+            }
+            if *port == 0 {
+                return Err(crate::SurgeError::Config(format!(
+                    "Agent '{}' TCP transport has invalid port 0. Port must be between 1 and 65535",
+                    agent_name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
@@ -54,6 +85,27 @@ impl Default for PipelineConfig {
             max_parallel: default_max_parallel(),
             gates: GateConfig::default(),
         }
+    }
+}
+
+impl PipelineConfig {
+    /// Validate the pipeline configuration.
+    fn validate(&self) -> Result<(), crate::SurgeError> {
+        // Validate max_qa_iterations is positive
+        if self.max_qa_iterations == 0 {
+            return Err(crate::SurgeError::Config(
+                "pipeline.max_qa_iterations must be greater than 0".to_string()
+            ));
+        }
+
+        // Validate max_parallel is positive
+        if self.max_parallel == 0 {
+            return Err(crate::SurgeError::Config(
+                "pipeline.max_parallel must be greater than 0".to_string()
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -105,8 +157,32 @@ impl SurgeConfig {
     pub fn load(path: &PathBuf) -> Result<Self, crate::SurgeError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display())))?;
-        toml::from_str(&content)
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display())))
+        let config: Self = toml::from_str(&content)
+            .map_err(|e| crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display())))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate the configuration and return helpful error messages.
+    pub fn validate(&self) -> Result<(), crate::SurgeError> {
+        // Validate default_agent exists in agents map (when agents are configured)
+        if !self.agents.is_empty() && !self.agents.contains_key(&self.default_agent) {
+            return Err(crate::SurgeError::Config(format!(
+                "default_agent '{}' not found in agents. Available agents: {}",
+                self.default_agent,
+                self.agents.keys().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+            )));
+        }
+
+        // Validate each agent configuration
+        for (name, agent) in &self.agents {
+            agent.validate(name)?;
+        }
+
+        // Validate pipeline configuration
+        self.pipeline.validate()?;
+
+        Ok(())
     }
 
     /// Discover surge.toml by searching current directory and parent directories.
@@ -251,5 +327,109 @@ max_parallel = 2
         // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&no_config_dir);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        // Test 1: Valid configuration passes validation
+        let mut valid_config = SurgeConfig::default();
+        valid_config.agents.insert("claude-code".to_string(), AgentConfig {
+            command: "claude".to_string(),
+            args: vec![],
+            transport: Transport::Stdio,
+        });
+        assert!(valid_config.validate().is_ok());
+
+        // Test 2: default_agent not in agents map fails
+        let mut invalid_config = SurgeConfig::default();
+        invalid_config.default_agent = "nonexistent".to_string();
+        invalid_config.agents.insert("other-agent".to_string(), AgentConfig {
+            command: "other".to_string(),
+            args: vec![],
+            transport: Transport::Stdio,
+        });
+        let result = invalid_config.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("default_agent 'nonexistent' not found"));
+        assert!(err_msg.contains("Available agents: other-agent"));
+
+        // Test 3: Empty command fails
+        let mut config_empty_cmd = SurgeConfig::default();
+        config_empty_cmd.default_agent = "bad-agent".to_string();
+        config_empty_cmd.agents.insert("bad-agent".to_string(), AgentConfig {
+            command: "".to_string(),
+            args: vec![],
+            transport: Transport::Stdio,
+        });
+        let result = config_empty_cmd.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Agent 'bad-agent' has empty command"));
+
+        // Test 4: Empty TCP host fails
+        let mut config_empty_host = SurgeConfig::default();
+        config_empty_host.default_agent = "tcp-agent".to_string();
+        config_empty_host.agents.insert("tcp-agent".to_string(), AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "".to_string(),
+                port: 8080,
+            },
+        });
+        let result = config_empty_host.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Agent 'tcp-agent' TCP transport has empty host"));
+
+        // Test 5: Invalid TCP port 0 fails
+        let mut config_invalid_port = SurgeConfig::default();
+        config_invalid_port.default_agent = "tcp-agent".to_string();
+        config_invalid_port.agents.insert("tcp-agent".to_string(), AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "localhost".to_string(),
+                port: 0,
+            },
+        });
+        let result = config_invalid_port.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Agent 'tcp-agent' TCP transport has invalid port 0"));
+
+        // Test 6: max_qa_iterations = 0 fails
+        let mut config_zero_qa = SurgeConfig::default();
+        config_zero_qa.pipeline.max_qa_iterations = 0;
+        let result = config_zero_qa.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("pipeline.max_qa_iterations must be greater than 0"));
+
+        // Test 7: max_parallel = 0 fails
+        let mut config_zero_parallel = SurgeConfig::default();
+        config_zero_parallel.pipeline.max_parallel = 0;
+        let result = config_zero_parallel.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("pipeline.max_parallel must be greater than 0"));
+
+        // Test 8: Valid TCP configuration passes
+        let mut config_valid_tcp = SurgeConfig::default();
+        config_valid_tcp.default_agent = "tcp-agent".to_string();
+        config_valid_tcp.agents.insert("tcp-agent".to_string(), AgentConfig {
+            command: "test".to_string(),
+            args: vec![],
+            transport: Transport::Tcp {
+                host: "localhost".to_string(),
+                port: 8080,
+            },
+        });
+        assert!(config_valid_tcp.validate().is_ok());
+
+        // Test 9: Empty agents map with default_agent is OK (default config scenario)
+        let default_config = SurgeConfig::default();
+        assert!(default_config.validate().is_ok());
     }
 }
