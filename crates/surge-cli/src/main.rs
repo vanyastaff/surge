@@ -76,14 +76,31 @@ async fn main() -> Result<()> {
 
             let agent_name = agent.as_deref().unwrap_or(&config.default_agent);
 
-            if let Some(agent_config) = config.agents.get(agent_name) {
-                println!("⚡ Pinging agent '{agent_name}'...");
-                println!("   Command: {}", agent_config.command);
-                // TODO: Phase 0 — connect via ACP and ping
-                println!("🚧 Not implemented yet. This is where ACP connection will go.");
-            } else {
+            if !config.agents.contains_key(agent_name) {
                 anyhow::bail!("Agent '{}' not found in configuration", agent_name);
             }
+
+            println!("⚡ Pinging agent '{agent_name}'...");
+
+            let cwd = std::env::current_dir()?;
+            let pool = surge_acp::AgentPool::new(
+                config.agents.clone(),
+                config.default_agent.clone(),
+                cwd,
+                surge_acp::PermissionPolicy::default(),
+            )?;
+
+            match pool.ping(agent_name).await {
+                Ok(()) => {
+                    println!("✅ Agent '{agent_name}' is responsive");
+                }
+                Err(e) => {
+                    println!("❌ Agent '{agent_name}' failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+
+            pool.shutdown().await;
         }
         Commands::Prompt { message, agent } => {
             let mut config = SurgeConfig::load_or_default()?;
