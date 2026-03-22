@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui::*;
 use gpui_component::button::Button;
 use gpui_component::WindowExt as _;
@@ -6,15 +8,30 @@ use gpui_component::StyledExt as _;
 use crate::actions::*;
 use crate::command_palette::{CommandPalette, CommandSelected};
 use crate::notifications::SurgeNotification;
+use crate::project::RecentProjects;
 use crate::router::Screen;
+use crate::screens::welcome::{WelcomeEvent, WelcomeScreen};
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
+use crate::top_bar::TopBar;
+
+/// Application mode — Welcome picker or Main project view.
+enum AppMode {
+    Welcome(Entity<WelcomeScreen>),
+    Project {
+        path: PathBuf,
+        name: String,
+    },
+}
 
 /// Root application view.
 pub struct SurgeApp {
+    mode: AppMode,
+    // Project mode state:
     active_screen: Screen,
     sidebar_collapsed: bool,
     sidebar: Entity<AppSidebar>,
+    top_bar: Option<Entity<TopBar>>,
     command_palette_open: bool,
     command_palette: Option<Entity<CommandPalette>>,
 }
@@ -34,18 +51,94 @@ impl SurgeApp {
         })
         .detach();
 
+        // Start in Welcome mode.
+        let welcome = cx.new(WelcomeScreen::new);
+        cx.subscribe(&welcome, |this: &mut Self, _welcome, event: &WelcomeEvent, cx| {
+            this.handle_welcome_event(event.clone(), cx);
+        })
+        .detach();
+
         Self {
+            mode: AppMode::Welcome(welcome),
             active_screen,
             sidebar_collapsed: false,
             sidebar,
+            top_bar: None,
             command_palette_open: false,
             command_palette: None,
         }
     }
 
+    fn handle_welcome_event(&mut self, event: WelcomeEvent, cx: &mut Context<Self>) {
+        match event {
+            WelcomeEvent::OpenProject(path) => {
+                self.open_project(&path, cx);
+            }
+            WelcomeEvent::BrowseProject => {
+                // TODO: native file dialog
+            }
+            WelcomeEvent::InitProject => {
+                // TODO: open init wizard
+            }
+            WelcomeEvent::RemoveProject(path) => {
+                let mut recent = RecentProjects::load();
+                recent.remove(&path);
+                let _ = recent.save();
+                // Refresh welcome screen.
+                let welcome = cx.new(WelcomeScreen::new);
+                cx.subscribe(&welcome, |this: &mut Self, _w, event: &WelcomeEvent, cx| {
+                    this.handle_welcome_event(event.clone(), cx);
+                })
+                .detach();
+                self.mode = AppMode::Welcome(welcome);
+                cx.notify();
+            }
+            WelcomeEvent::TogglePin(path) => {
+                let mut recent = RecentProjects::load();
+                recent.toggle_pin(&path);
+                let _ = recent.save();
+                let welcome = cx.new(WelcomeScreen::new);
+                cx.subscribe(&welcome, |this: &mut Self, _w, event: &WelcomeEvent, cx| {
+                    this.handle_welcome_event(event.clone(), cx);
+                })
+                .detach();
+                self.mode = AppMode::Welcome(welcome);
+                cx.notify();
+            }
+        }
+    }
+
+    fn open_project(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+
+        // Update recent projects.
+        let mut recent = RecentProjects::load();
+        recent.touch(&name, path);
+        let _ = recent.save();
+
+        // Create top bar.
+        let name_clone = name.clone();
+        let top_bar = cx.new(|cx| TopBar::new(&name_clone, Screen::Dashboard, cx));
+        self.top_bar = Some(top_bar);
+
+        self.mode = AppMode::Project {
+            path: path.to_path_buf(),
+            name,
+        };
+        self.active_screen = Screen::Dashboard;
+        self.sidebar.update(cx, |sb, cx| sb.set_active(Screen::Dashboard, cx));
+        cx.notify();
+    }
+
     fn navigate(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.active_screen = screen;
         self.sidebar.update(cx, |sb, cx| sb.set_active(screen, cx));
+        if let Some(top_bar) = &self.top_bar {
+            top_bar.update(cx, |tb, cx| tb.set_screen(screen, cx));
+        }
         self.close_palette(cx);
         cx.notify();
     }
@@ -162,7 +255,7 @@ impl SurgeApp {
             )
     }
 
-    fn render_palette_overlay(&self) -> impl IntoElement {
+    fn render_palette_overlay(&self) -> AnyElement {
         if let Some(palette) = &self.command_palette {
             div()
                 .absolute()
@@ -183,29 +276,50 @@ impl SurgeApp {
 
 impl Render for SurgeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .key_context("SurgeApp")
-            .size_full()
-            .bg(theme::BACKGROUND)
-            .text_color(theme::TEXT_PRIMARY)
-            .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| this.navigate(Screen::Dashboard, cx)))
-            .on_action(cx.listener(|this, _: &GoToKanban, _w, cx| this.navigate(Screen::Kanban, cx)))
-            .on_action(cx.listener(|this, _: &GoToSpecs, _w, cx| this.navigate(Screen::SpecExplorer, cx)))
-            .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| this.navigate(Screen::AgentHub, cx)))
-            .on_action(cx.listener(|this, _: &GoToTerminals, _w, cx| this.navigate(Screen::AgentTerminals, cx)))
-            .on_action(cx.listener(|this, _: &GoToExecution, _w, cx| this.navigate(Screen::LiveExecution, cx)))
-            .on_action(cx.listener(|this, _: &GoToDiff, _w, cx| this.navigate(Screen::DiffViewer, cx)))
-            .on_action(cx.listener(|this, _: &GoToInsights, _w, cx| this.navigate(Screen::Insights, cx)))
-            .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| this.navigate(Screen::Settings, cx)))
-            .on_action(cx.listener(|this, _: &ToggleSidebarAction, _w, cx| this.toggle_sidebar(cx)))
-            .on_action(cx.listener(|this, _: &ToggleCommandPalette, _w, cx| this.toggle_palette(cx)))
-            .child(
+        match &self.mode {
+            AppMode::Welcome(welcome) => {
                 div()
+                    .key_context("SurgeApp")
                     .size_full()
-                    .h_flex()
-                    .child(self.sidebar.clone())
-                    .child(self.render_screen_content(window, cx)),
-            )
-            .child(self.render_palette_overlay())
+                    .child(welcome.clone())
+                    .into_any_element()
+            }
+            AppMode::Project { .. } => {
+                div()
+                    .key_context("SurgeApp")
+                    .size_full()
+                    .bg(theme::BACKGROUND)
+                    .text_color(theme::TEXT_PRIMARY)
+                    .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| this.navigate(Screen::Dashboard, cx)))
+                    .on_action(cx.listener(|this, _: &GoToKanban, _w, cx| this.navigate(Screen::Kanban, cx)))
+                    .on_action(cx.listener(|this, _: &GoToSpecs, _w, cx| this.navigate(Screen::SpecExplorer, cx)))
+                    .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| this.navigate(Screen::AgentHub, cx)))
+                    .on_action(cx.listener(|this, _: &GoToTerminals, _w, cx| this.navigate(Screen::AgentTerminals, cx)))
+                    .on_action(cx.listener(|this, _: &GoToExecution, _w, cx| this.navigate(Screen::LiveExecution, cx)))
+                    .on_action(cx.listener(|this, _: &GoToDiff, _w, cx| this.navigate(Screen::DiffViewer, cx)))
+                    .on_action(cx.listener(|this, _: &GoToInsights, _w, cx| this.navigate(Screen::Insights, cx)))
+                    .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| this.navigate(Screen::Settings, cx)))
+                    .on_action(cx.listener(|this, _: &ToggleSidebarAction, _w, cx| this.toggle_sidebar(cx)))
+                    .on_action(cx.listener(|this, _: &ToggleCommandPalette, _w, cx| this.toggle_palette(cx)))
+                    .child(
+                        div()
+                            .size_full()
+                            .v_flex()
+                            // Top bar
+                            .children(self.top_bar.clone())
+                            // Main content area: sidebar + screen
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_flex()
+                                    .overflow_hidden()
+                                    .child(self.sidebar.clone())
+                                    .child(self.render_screen_content(window, cx)),
+                            ),
+                    )
+                    .child(self.render_palette_overlay())
+                    .into_any_element()
+            }
+        }
     }
 }

@@ -15,6 +15,7 @@ gpui-component-assets = "0.5"
 surge-core = { path = "../surge-core" }
 surge-acp = { path = "../surge-acp" }
 
+dirs = "6"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

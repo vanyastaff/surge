@@ -2,9 +2,12 @@ mod actions;
 mod app;
 mod command_palette;
 mod notifications;
+mod project;
 mod router;
+mod screens;
 mod sidebar;
 mod theme;
+mod top_bar;
 
 use gpui::*;
 use gpui_component::Root;
