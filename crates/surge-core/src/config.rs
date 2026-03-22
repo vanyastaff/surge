@@ -90,6 +90,16 @@ fn default_true() -> bool {
     true
 }
 
+impl Default for SurgeConfig {
+    fn default() -> Self {
+        Self {
+            default_agent: "claude-code".to_string(),
+            agents: HashMap::new(),
+            pipeline: PipelineConfig::default(),
+        }
+    }
+}
+
 impl SurgeConfig {
     /// Load config from a TOML file at the given path.
     pub fn load(path: &PathBuf) -> Result<Self, crate::SurgeError> {
@@ -100,12 +110,15 @@ impl SurgeConfig {
     }
 
     /// Discover surge.toml by searching current directory and parent directories.
+    /// Returns a default configuration if no file is found.
     pub fn discover() -> Result<Self, crate::SurgeError> {
         let start_dir = std::env::current_dir()
             .map_err(|e| crate::SurgeError::Config(format!("Failed to get current directory: {e}")))?;
 
-        let config_path = Self::find_config_file(&start_dir)?;
-        Self::load(&config_path)
+        match Self::find_config_file(&start_dir) {
+            Ok(config_path) => Self::load(&config_path),
+            Err(_) => Ok(Self::default()),
+        }
     }
 
     /// Find surge.toml by walking up from the given directory.
@@ -172,5 +185,20 @@ command = "test"
         // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&non_existent_dir);
+    }
+
+    #[test]
+    fn test_default_config() {
+        // Test that Default provides sensible values
+        let config = SurgeConfig::default();
+
+        assert_eq!(config.default_agent, "claude-code");
+        assert!(config.agents.is_empty());
+        assert_eq!(config.pipeline.max_qa_iterations, 10);
+        assert_eq!(config.pipeline.max_parallel, 3);
+        assert!(config.pipeline.gates.after_spec);
+        assert!(config.pipeline.gates.after_plan);
+        assert!(!config.pipeline.gates.after_each_subtask);
+        assert!(config.pipeline.gates.after_qa);
     }
 }
