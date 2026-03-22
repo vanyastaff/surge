@@ -3,23 +3,23 @@
   "spec": "001-configuration-system-surge-toml",
   "state": "building",
   "subtasks": {
-    "completed": 3,
+    "completed": 6,
     "total": 9,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Core Configuration",
+    "current": "CLI Integration",
     "id": null,
-    "total": 6
+    "total": 3
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 5,
+    "number": 8,
     "started_at": "2026-03-22T08:17:14.105861"
   },
-  "last_update": "2026-03-22T08:27:27.086766"
+  "last_update": "2026-03-22T08:36:43.147358"
 }
