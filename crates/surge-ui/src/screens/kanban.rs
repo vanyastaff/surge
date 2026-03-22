@@ -95,7 +95,7 @@ pub struct TaskClicked(pub String);
 
 impl EventEmitter<TaskClicked> for KanbanScreen {}
 
-const COLUMN_W: f32 = 260.0;
+const COLUMN_MIN_W: f32 = 300.0;
 
 /// Kanban Board screen.
 pub struct KanbanScreen {
@@ -261,50 +261,38 @@ impl KanbanScreen {
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(TaskClicked(id.clone()));
             }))
-            // Row 1: Title + status tags
+            // Row 1: Title
             .child(
                 div()
-                    .v_flex()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .items_start()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .line_height(relative(1.3))
-                                    .child(task.title.clone()),
-                            )
-                            .when(!task.tags.is_empty(), |el: Div| {
-                                let tags_el: Vec<Div> = task.tags.iter().map(|(label, color)| {
-                                    div()
-                                        .text_xs()
-                                        .px(px(6.0))
-                                        .py(px(1.0))
-                                        .rounded(px(4.0))
-                                        .bg(color.opacity(0.15))
-                                        .text_color(*color)
-                                        .flex_shrink_0()
-                                        .child(label.clone())
-                                }).collect();
-                                el.child(div().h_flex().gap_1().flex_shrink_0().children(tags_el))
-                            }),
-                    )
-                    // Description
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::TEXT_MUTED)
-                            .line_height(relative(1.5))
-                            .max_h(px(36.0))
-                            .overflow_hidden()
-                            .child(task.description.clone()),
-                    ),
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_PRIMARY)
+                    .line_height(relative(1.3))
+                    .child(task.title.clone()),
+            )
+            // Tags row
+            .when(!task.tags.is_empty(), |el: Stateful<Div>| {
+                let tags_el: Vec<Div> = task.tags.iter().map(|(label, color)| {
+                    div()
+                        .text_xs()
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .bg(color.opacity(0.15))
+                        .text_color(*color)
+                        .child(label.clone())
+                }).collect();
+                el.child(div().h_flex().gap_1().flex_wrap().children(tags_el))
+            })
+            // Description (2 lines max)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::TEXT_MUTED)
+                    .line_height(relative(1.5))
+                    .max_h(px(34.0))
+                    .overflow_hidden()
+                    .child(task.description.clone()),
             )
             // Row 2: Progress
             .when(task.subtasks_total > 0, |el: Stateful<Div>| {
@@ -417,8 +405,8 @@ impl KanbanScreen {
         div()
             .v_flex()
             .h_full()
-            .w(px(COLUMN_W))
-            .min_w(px(COLUMN_W))
+            .flex_1()
+            .min_w(px(COLUMN_MIN_W))
             .flex_shrink_0()
             .rounded_lg()
             .bg(theme::BACKGROUND.opacity(0.5))
