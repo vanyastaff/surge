@@ -231,85 +231,85 @@
 
 ---
 
-## Phase 6: GUI (отдельные таски)
+## Phase 6: GUI ✅
 
-### Task 6.1: surge-ui scaffold
+### Task 6.1: surge-ui scaffold ✅
 **Complexity:** Simple
 **Files:** `crates/surge-ui/`
 
-- [ ] Создать крейт `surge-ui` — добавить в workspace, зависимости `eframe`, `egui`
-- [ ] Базовое окно с sidebar навигацией (список из FEATURES.md)
-- [ ] Тема: тёмная, цвета из FEATURES.md
-- [ ] Роутинг между панелями через enum `Panel`
-- [ ] Подключение к `surge-core` для типов
-- [ ] Placeholder для каждой панели
+- [x] Создать крейт `surge-ui` — добавить в workspace, зависимости `eframe`, `egui`
+- [x] Базовое окно с sidebar навигацией (список из FEATURES.md)
+- [x] Тема: тёмная, цвета из FEATURES.md
+- [x] Роутинг между панелями через enum `Panel`
+- [x] Подключение к `surge-core` для типов
+- [x] Placeholder для каждой панели
 
 ---
 
-### Task 6.2: Kanban Board UI
+### Task 6.2: Kanban Board UI ✅
 **Complexity:** Standard
 **Files:** `crates/surge-ui/src/`
 
-- [ ] `kanban.rs` — Kanban board с колонками по `TaskState`
-- [ ] Карточки задач: название, прогресс, agent badge, complexity
-- [ ] Drag-and-drop между колонками (для ручного перемещения)
-- [ ] Клик на карточку → task detail panel
-- [ ] Фильтры: по агенту, сложности, статусу
-- [ ] Кнопка "New Task" → spec creation dialog
+- [x] `kanban.rs` — Kanban board с колонками по `TaskState`
+- [x] Карточки задач: название, прогресс, agent badge, complexity
+- [x] Drag-and-drop между колонками (для ручного перемещения)
+- [x] Клик на карточку → task detail panel
+- [x] Фильтры: по агенту, сложности, статусу
+- [x] Кнопка "New Task" → spec creation dialog
 
 ---
 
-### Task 6.3: Execution Monitor UI
+### Task 6.3: Execution Monitor UI ✅
 **Complexity:** Standard
 **Files:** `crates/surge-ui/src/`
 
-- [ ] `execution.rs` — real-time execution view
-- [ ] Dependency graph visualization (egui canvas)
-- [ ] Subtask states: pending/running/completed/failed с цветами
-- [ ] Streaming log panel
-- [ ] Progress bar
-- [ ] Pause/Resume кнопки
-- [ ] Token counter и cost estimate
+- [x] `execution.rs` — real-time execution view
+- [x] Dependency graph visualization (egui canvas)
+- [x] Subtask states: pending/running/completed/failed с цветами
+- [x] Streaming log panel
+- [x] Progress bar
+- [x] Pause/Resume кнопки
+- [x] Token counter и cost estimate
 
 ---
 
-### Task 6.4: Agent Hub UI
+### Task 6.4: Agent Hub UI ✅
 **Complexity:** Simple
 **Files:** `crates/surge-ui/src/`
 
-- [ ] `agent_hub.rs` — список подключённых агентов
-- [ ] Status indicators: online/offline/rate-limited
-- [ ] Capabilities display для каждого агента
-- [ ] "Add Agent" dialog
-- [ ] "Test Connection" кнопка
-- [ ] Health metrics: latency, error rate
+- [x] `agent_hub.rs` — список подключённых агентов
+- [x] Status indicators: online/offline/rate-limited
+- [x] Capabilities display для каждого агента
+- [x] "Add Agent" dialog
+- [x] "Test Connection" кнопка
+- [x] Health metrics: latency, error rate
 
 ---
 
-### Task 6.5: Diff Viewer и File Explorer
+### Task 6.5: Diff Viewer и File Explorer ✅
 **Complexity:** Standard
 **Files:** `crates/surge-ui/src/`
 
-- [ ] `diff_viewer.rs` — side-by-side diff с syntax highlighting
-- [ ] `file_explorer.rs` — список изменённых файлов с +/- counts
-- [ ] Группировка файлов по подзадачам
-- [ ] Фильтры: Added/Modified/Deleted
-- [ ] "Open in IDE" кнопка для каждого файла и worktree
-- [ ] "Copy path" для worktree
+- [x] `diff_viewer.rs` — side-by-side diff с syntax highlighting
+- [x] `file_explorer.rs` — список изменённых файлов с +/- counts
+- [x] Группировка файлов по подзадачам
+- [x] Фильтры: Added/Modified/Deleted
+- [x] "Open in IDE" кнопка для каждого файла и worktree
+- [x] "Copy path" для worktree
 
 ---
 
-### Task 6.6: Terminal Panel
+### Task 6.6: Terminal Panel ✅
 **Complexity:** Standard
 **Files:** `crates/surge-ui/src/`
 
-- [ ] Добавить `portable-pty` зависимость
-- [ ] `terminal.rs` — встроенный терминал в egui
-- [ ] Split view: несколько терминалов рядом
-- [ ] Автоскролл с toggle
-- [ ] Search в output (Ctrl+F)
-- [ ] Привязка терминала к worktree
-- [ ] Input: отправка команд агенту
+- [x] Добавить `portable-pty` зависимость
+- [x] `terminal.rs` — встроенный терминал в egui
+- [x] Split view: несколько терминалов рядом
+- [x] Автоскролл с toggle
+- [x] Search в output (Ctrl+F)
+- [x] Привязка терминала к worktree
+- [x] Input: отправка команд агенту
 
 ---
 
@@ -333,13 +333,12 @@
 | 4.1 | 4 | Standard | 7 | ✅ |
 | 5.1 | 5 | Simple | 6 | ✅ |
 | 5.2 | 5 | Simple | 6 | ✅ |
-| 6.1 | 6 | Simple | 6 | ⬜ |
-| 6.2 | 6 | Standard | 6 | ⬜ |
-| 6.3 | 6 | Standard | 7 | ⬜ |
-| 6.4 | 6 | Simple | 6 | ⬜ |
-| 6.5 | 6 | Standard | 6 | ⬜ |
-| 6.6 | 6 | Standard | 7 | ⬜ |
+| 6.1 | 6 | Simple | 6 | ✅ |
+| 6.2 | 6 | Standard | 6 | ✅ |
+| 6.3 | 6 | Standard | 7 | ✅ |
+| 6.4 | 6 | Simple | 6 | ✅ |
+| 6.5 | 6 | Standard | 6 | ✅ |
+| 6.6 | 6 | Standard | 7 | ✅ |
 
 **Всего: 22 таска, ~140 подзадач**
-**Phase 0-5: ✅ Завершены (16/22 тасков, 100 тестов, 0 clippy warnings)**
-**Phase 6: ⬜ GUI — отдельный этап**
+**Phase 0-6: ✅ ВСЕ ЗАВЕРШЕНЫ (22/22 тасков, 100 тестов, 0 clippy warnings)**
