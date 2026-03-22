@@ -7,6 +7,7 @@ use gpui_component::StyledExt as _;
 
 use crate::actions::*;
 use crate::command_palette::{CommandPalette, CommandSelected};
+use gpui_component::Icon;
 use crate::notifications::SurgeNotification;
 use crate::project::RecentProjects;
 use crate::router::Screen;
@@ -343,10 +344,7 @@ impl SurgeApp {
                             .gap_3()
                             .items_center()
                             .child(
-                                div()
-                                    .text_2xl()
-                                    .text_color(theme::PRIMARY)
-                                    .child(icon.to_string()),
+                                Icon::new(icon).size_6().text_color(theme::PRIMARY),
                             )
                             .child(
                                 div()

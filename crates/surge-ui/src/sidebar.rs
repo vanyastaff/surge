@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui_component::Icon;
 use gpui_component::StyledExt;
 
 use crate::router::Screen;
@@ -70,8 +71,9 @@ impl AppSidebar {
                 })
         };
 
+        let icon_color = if is_active { theme::PRIMARY } else { theme::TEXT_MUTED };
         let mut row = base.child(
-            div().text_sm().child(screen.icon().to_string()),
+            Icon::new(screen.icon()).size_4().text_color(icon_color),
         );
 
         if !collapsed {
@@ -96,19 +98,23 @@ impl AppSidebar {
     }
 
     fn render_toggle_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let icon = if self.collapsed { "»" } else { "«" };
+        use gpui_component::IconName;
+        let icon_name = if self.collapsed {
+            IconName::PanelLeftOpen
+        } else {
+            IconName::PanelLeftClose
+        };
         div()
             .id("sidebar-toggle")
             .h_flex()
             .justify_center()
             .py_2()
             .cursor_pointer()
-            .text_color(theme::TEXT_MUTED)
             .hover(|s: StyleRefinement| s.text_color(theme::TEXT_PRIMARY))
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.emit(ToggleSidebar);
             }))
-            .child(icon.to_string())
+            .child(Icon::new(icon_name).size_4().text_color(theme::TEXT_MUTED))
     }
 }
 

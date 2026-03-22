@@ -1,3 +1,5 @@
+use gpui_component::IconName;
+
 /// All screens available in Surge UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Screen {
@@ -44,26 +46,26 @@ impl Screen {
         }
     }
 
-    /// Icon name (Lucide icon identifiers).
-    pub fn icon(self) -> &'static str {
+    /// Lucide icon for this screen (from gpui-component IconName).
+    pub fn icon(self) -> IconName {
         match self {
-            Self::Dashboard => "layout-dashboard",
-            Self::Kanban => "columns-3",
-            Self::TaskDetail => "file-text",
-            Self::SpecExplorer => "file-search",
-            Self::SpecWizard => "file-plus",
-            Self::AgentHub => "bot",
-            Self::AgentTerminals => "terminal",
-            Self::LiveExecution => "activity",
-            Self::DiffViewer => "git-compare",
-            Self::FileExplorer => "folder-tree",
-            Self::Insights => "bar-chart-3",
-            Self::Worktrees => "git-branch",
-            Self::GitHubIssues => "circle-dot",
-            Self::GitHubPRs => "git-pull-request",
-            Self::Roadmap => "map",
-            Self::ContextMemory => "brain",
-            Self::Settings => "settings",
+            Self::Dashboard => IconName::LayoutDashboard,
+            Self::Kanban => IconName::Frame,           // columns layout
+            Self::TaskDetail => IconName::File,
+            Self::SpecExplorer => IconName::Search,
+            Self::SpecWizard => IconName::Plus,
+            Self::AgentHub => IconName::Bot,
+            Self::AgentTerminals => IconName::SquareTerminal,
+            Self::LiveExecution => IconName::Loader,   // activity/spinner
+            Self::DiffViewer => IconName::Replace,     // git compare
+            Self::FileExplorer => IconName::Folder,
+            Self::Insights => IconName::ChartPie,
+            Self::Worktrees => IconName::FolderOpen,   // git branch
+            Self::GitHubIssues => IconName::Info,      // circle-dot
+            Self::GitHubPRs => IconName::GitHub,
+            Self::Roadmap => IconName::Map,
+            Self::ContextMemory => IconName::BookOpen,
+            Self::Settings => IconName::Settings,
         }
     }
 
