@@ -11,6 +11,7 @@ use surge_core::SurgeError;
 /// A dependency graph of subtasks.
 pub struct DependencyGraph {
     graph: DiGraph<SubtaskId, ()>,
+    #[allow(dead_code)]
     id_to_node: HashMap<SubtaskId, NodeIndex>,
     node_to_id: HashMap<NodeIndex, SubtaskId>,
 }

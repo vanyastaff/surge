@@ -264,7 +264,7 @@ async fn main() -> Result<()> {
         Commands::Spec { command } => match command {
             SpecCommands::Create { description, template } => {
                 let kind = template.as_deref().unwrap_or("feature");
-                let template_kind = surge_spec::TemplateKind::from_str(kind)?;
+                let template_kind = surge_spec::TemplateKind::parse(kind)?;
                 let spec_file = surge_spec::generate_template(template_kind, &description)?;
 
                 let path = spec_file.save_to_specs_dir()?;

@@ -15,7 +15,7 @@ pub enum TemplateKind {
 
 impl TemplateKind {
     /// Parse from string.
-    pub fn from_str(s: &str) -> Result<Self, SurgeError> {
+    pub fn parse(s: &str) -> Result<Self, SurgeError> {
         match s.to_lowercase().as_str() {
             "feature" => Ok(Self::Feature),
             "bugfix" | "fix" => Ok(Self::Bugfix),
@@ -135,11 +135,11 @@ mod tests {
 
     #[test]
     fn test_template_kind_from_str() {
-        assert_eq!(TemplateKind::from_str("feature").unwrap(), TemplateKind::Feature);
-        assert_eq!(TemplateKind::from_str("bugfix").unwrap(), TemplateKind::Bugfix);
-        assert_eq!(TemplateKind::from_str("fix").unwrap(), TemplateKind::Bugfix);
-        assert_eq!(TemplateKind::from_str("refactor").unwrap(), TemplateKind::Refactor);
-        assert!(TemplateKind::from_str("unknown").is_err());
+        assert_eq!(TemplateKind::parse("feature").unwrap(), TemplateKind::Feature);
+        assert_eq!(TemplateKind::parse("bugfix").unwrap(), TemplateKind::Bugfix);
+        assert_eq!(TemplateKind::parse("fix").unwrap(), TemplateKind::Bugfix);
+        assert_eq!(TemplateKind::parse("refactor").unwrap(), TemplateKind::Refactor);
+        assert!(TemplateKind::parse("unknown").is_err());
     }
 
     #[test]
