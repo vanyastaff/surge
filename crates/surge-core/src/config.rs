@@ -11,6 +11,12 @@ pub struct SurgeConfig {
     pub agents: HashMap<String, AgentConfig>,
     #[serde(default)]
     pub pipeline: PipelineConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+    #[serde(default)]
+    pub cleanup: CleanupPolicy,
+    #[serde(default)]
+    pub ide: IdeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,12 +148,80 @@ fn default_true() -> bool {
     true
 }
 
+/// Strategy for routing tasks to agents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RoutingStrategy {
+    /// Use the default agent for all tasks.
+    #[default]
+    Default,
+    /// Route based on task complexity.
+    Complexity,
+    /// Round-robin across available agents.
+    RoundRobin,
+}
+
+/// Configuration for agent routing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingConfig {
+    /// Routing strategy.
+    #[serde(default)]
+    pub strategy: RoutingStrategy,
+    /// Per-complexity agent preferences (e.g. {"complex": "claude"}).
+    #[serde(default)]
+    pub agent_preferences: HashMap<String, String>,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self {
+            strategy: RoutingStrategy::Default,
+            agent_preferences: HashMap::new(),
+        }
+    }
+}
+
+/// Policy for cleaning up git worktrees and branches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupPolicy {
+    /// Remove worktrees when task completes.
+    #[serde(default = "default_true")]
+    pub remove_worktrees_on_complete: bool,
+    /// Days to keep merged branches before cleanup.
+    #[serde(default = "default_keep_branches_days")]
+    pub keep_branches_days: u32,
+}
+
+impl Default for CleanupPolicy {
+    fn default() -> Self {
+        Self {
+            remove_worktrees_on_complete: true,
+            keep_branches_days: default_keep_branches_days(),
+        }
+    }
+}
+
+fn default_keep_branches_days() -> u32 {
+    7
+}
+
+/// IDE integration configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IdeConfig {
+    /// Editor name (e.g. "vscode", "rustrover", "zed").
+    #[serde(default)]
+    pub editor: Option<String>,
+}
+
 impl Default for SurgeConfig {
     fn default() -> Self {
         Self {
             default_agent: "claude-code".to_string(),
             agents: HashMap::new(),
             pipeline: PipelineConfig::default(),
+            routing: RoutingConfig::default(),
+            cleanup: CleanupPolicy::default(),
+            ide: IdeConfig::default(),
         }
     }
 }
@@ -903,6 +977,9 @@ after_spec = false
             default_agent: "nonexistent".to_string(),
             agents: HashMap::new(),
             pipeline: PipelineConfig::default(),
+            routing: RoutingConfig::default(),
+            cleanup: CleanupPolicy::default(),
+            ide: IdeConfig::default(),
         };
         // Should be valid because agents map is empty
         assert!(config.validate().is_ok());
@@ -930,5 +1007,58 @@ after_spec = false
             },
         };
         assert!(agent_max.validate("test").is_ok());
+    }
+
+    #[test]
+    fn test_routing_config_defaults() {
+        let config = RoutingConfig::default();
+        assert_eq!(config.strategy, RoutingStrategy::Default);
+        assert!(config.agent_preferences.is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_policy_defaults() {
+        let policy = CleanupPolicy::default();
+        assert!(policy.remove_worktrees_on_complete);
+        assert_eq!(policy.keep_branches_days, 7);
+    }
+
+    #[test]
+    fn test_extended_config_toml_roundtrip() {
+        let toml_str = r#"
+default_agent = "claude"
+
+[agents.claude]
+command = "claude"
+
+[pipeline]
+max_qa_iterations = 10
+max_parallel = 3
+
+[routing]
+strategy = "default"
+
+[cleanup]
+remove_worktrees_on_complete = false
+keep_branches_days = 14
+
+[ide]
+editor = "rustrover"
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.routing.strategy, RoutingStrategy::Default);
+        assert!(!config.cleanup.remove_worktrees_on_complete);
+        assert_eq!(config.cleanup.keep_branches_days, 14);
+        assert_eq!(config.ide.editor, Some("rustrover".to_string()));
+    }
+
+    #[test]
+    fn test_extended_config_missing_sections_use_defaults() {
+        let toml_str = r#"default_agent = "test""#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.routing.strategy, RoutingStrategy::Default);
+        assert!(config.cleanup.remove_worktrees_on_complete);
+        assert_eq!(config.cleanup.keep_branches_days, 7);
+        assert!(config.ide.editor.is_none());
     }
 }
