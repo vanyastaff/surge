@@ -15,7 +15,7 @@ use gpui_component::Root;
 use app::SurgeApp;
 
 fn main() {
-    let app = Application::new();
+    let app = Application::new().with_assets(gpui_component_assets::Assets);
 
     app.run(move |cx| {
         gpui_component::init(cx);
