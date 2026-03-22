@@ -213,45 +213,45 @@ impl SurgeConfig {
         }
 
         // Override pipeline.max_qa_iterations
-        if let Ok(value) = std::env::var("SURGE_MAX_QA_ITERATIONS") {
-            if let Ok(parsed) = value.parse::<u32>() {
-                self.pipeline.max_qa_iterations = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_MAX_QA_ITERATIONS")
+            && let Ok(parsed) = value.parse::<u32>()
+        {
+            self.pipeline.max_qa_iterations = parsed;
         }
 
         // Override pipeline.max_parallel
-        if let Ok(value) = std::env::var("SURGE_MAX_PARALLEL") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                self.pipeline.max_parallel = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_MAX_PARALLEL")
+            && let Ok(parsed) = value.parse::<usize>()
+        {
+            self.pipeline.max_parallel = parsed;
         }
 
         // Override pipeline.gates.after_spec
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_SPEC") {
-            if let Ok(parsed) = value.parse::<bool>() {
-                self.pipeline.gates.after_spec = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_SPEC")
+            && let Ok(parsed) = value.parse::<bool>()
+        {
+            self.pipeline.gates.after_spec = parsed;
         }
 
         // Override pipeline.gates.after_plan
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_PLAN") {
-            if let Ok(parsed) = value.parse::<bool>() {
-                self.pipeline.gates.after_plan = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_PLAN")
+            && let Ok(parsed) = value.parse::<bool>()
+        {
+            self.pipeline.gates.after_plan = parsed;
         }
 
         // Override pipeline.gates.after_each_subtask
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_EACH_SUBTASK") {
-            if let Ok(parsed) = value.parse::<bool>() {
-                self.pipeline.gates.after_each_subtask = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_EACH_SUBTASK")
+            && let Ok(parsed) = value.parse::<bool>()
+        {
+            self.pipeline.gates.after_each_subtask = parsed;
         }
 
         // Override pipeline.gates.after_qa
-        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_QA") {
-            if let Ok(parsed) = value.parse::<bool>() {
-                self.pipeline.gates.after_qa = parsed;
-            }
+        if let Ok(value) = std::env::var("SURGE_GATE_AFTER_QA")
+            && let Ok(parsed) = value.parse::<bool>()
+        {
+            self.pipeline.gates.after_qa = parsed;
         }
     }
 
