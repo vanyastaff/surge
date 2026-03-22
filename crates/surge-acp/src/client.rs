@@ -14,6 +14,7 @@ use agent_client_protocol::{
     WriteTextFileResponse,
 };
 use std::path::{Path, PathBuf};
+use surge_core::SurgeEvent;
 use tokio::sync::broadcast;
 use tracing::debug;
 
@@ -51,25 +52,6 @@ impl Default for PermissionPolicy {
             deny_network: false,
         }
     }
-}
-
-/// Events emitted by SurgeClient for monitoring and UI updates.
-#[derive(Debug, Clone)]
-pub enum SurgeEvent {
-    /// Agent requested a permission.
-    PermissionRequested { description: String },
-
-    /// Permission was granted or denied.
-    PermissionResolved { granted: bool },
-
-    /// File operation performed.
-    FileOperation { operation: String, path: PathBuf },
-
-    /// Terminal command executed.
-    TerminalCommand {
-        command: String,
-        exit_code: Option<i32>,
-    },
 }
 
 /// Context for a specific subtask execution.

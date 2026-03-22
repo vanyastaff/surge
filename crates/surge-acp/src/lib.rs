@@ -8,6 +8,7 @@ pub mod client;
 pub mod connection;
 pub mod pool;
 
-pub use client::{PermissionPolicy, SubtaskContext, SurgeClient, SurgeEvent};
+pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
+pub use surge_core::SurgeEvent;
 pub use connection::{AgentConnection, SessionState};
 pub use pool::{AgentPool, SessionHandle};
