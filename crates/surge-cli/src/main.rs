@@ -103,6 +103,12 @@ enum Commands {
 
     /// Initialize surge.toml in current directory
     Init,
+
+    /// Browse and add agents from the built-in registry
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,6 +152,30 @@ enum SpecCommands {
 enum ConfigCommands {
     /// Display effective configuration
     Show,
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
+    /// List all known agents in the registry
+    List,
+    /// Search the registry by query
+    Search {
+        /// Search query (matches id, name, description, tags)
+        query: String,
+    },
+    /// Show detailed info about a registry agent
+    Info {
+        /// Agent id (e.g. claude-code)
+        id: String,
+    },
+    /// Add a registry agent to surge.toml
+    Add {
+        /// Agent id from the registry
+        id: String,
+        /// Optional custom name for the agent in config
+        #[arg(short, long)]
+        name: Option<String>,
+    },
 }
 
 /// Load a spec by ID or filename.
@@ -576,6 +606,106 @@ async fn main() -> Result<()> {
                 println!("    after_plan: {}", config.pipeline.gates.after_plan);
                 println!("    after_each_subtask: {}", config.pipeline.gates.after_each_subtask);
                 println!("    after_qa: {}", config.pipeline.gates.after_qa);
+            }
+        },
+        Commands::Registry { command } => match command {
+            RegistryCommands::List => {
+                let registry = surge_acp::Registry::builtin();
+                println!("⚡ Known agents:\n");
+                for entry in registry.list() {
+                    let caps: Vec<String> = entry.capabilities.iter().map(|c| c.to_string()).collect();
+                    println!("  {} — {}", entry.id, entry.display_name);
+                    println!("    {}", entry.description);
+                    println!("    capabilities: {}", caps.join(", "));
+                    println!();
+                }
+            }
+            RegistryCommands::Search { query } => {
+                let registry = surge_acp::Registry::builtin();
+                let results = registry.search(&query);
+                if results.is_empty() {
+                    println!("No agents matching '{query}'.");
+                } else {
+                    println!("⚡ Agents matching '{query}':\n");
+                    for entry in results {
+                        let caps: Vec<String> = entry.capabilities.iter().map(|c| c.to_string()).collect();
+                        println!("  {} — {}", entry.id, entry.display_name);
+                        println!("    {}", entry.description);
+                        println!("    capabilities: {}", caps.join(", "));
+                        println!();
+                    }
+                }
+            }
+            RegistryCommands::Info { id } => {
+                let registry = surge_acp::Registry::builtin();
+                let entry = registry.find(&id);
+                match entry {
+                    Some(entry) => {
+                        let caps: Vec<String> = entry.capabilities.iter().map(|c| c.to_string()).collect();
+                        println!("⚡ {}\n", entry.display_name);
+                        println!("  ID:           {}", entry.id);
+                        println!("  Command:      {}", entry.command);
+                        if !entry.default_args.is_empty() {
+                            println!("  Args:         {:?}", entry.default_args);
+                        }
+                        match &entry.transport {
+                            surge_core::config::Transport::Stdio => {
+                                println!("  Transport:    stdio");
+                            }
+                            surge_core::config::Transport::Tcp { host, port } => {
+                                println!("  Transport:    tcp ({}:{})", host, port);
+                            }
+                        }
+                        println!("  Capabilities: {}", caps.join(", "));
+                        println!("  Install:      {}", entry.install_instructions);
+                        if let Some(website) = &entry.website {
+                            println!("  Website:      {}", website);
+                        }
+                    }
+                    None => {
+                        anyhow::bail!("Agent '{}' not found in registry. Try: surge registry list", id);
+                    }
+                }
+            }
+            RegistryCommands::Add { id, name } => {
+                let registry = surge_acp::Registry::builtin();
+                let entry = registry.find(&id);
+                match entry {
+                    Some(entry) => {
+                        let config_path = std::env::current_dir()?.join("surge.toml");
+                        if !config_path.exists() {
+                            anyhow::bail!("No surge.toml found. Run 'surge init' first.");
+                        }
+
+                        let agent_name = name.as_deref().unwrap_or(&entry.id);
+                        let contents = std::fs::read_to_string(&config_path)?;
+                        let mut doc: toml::Table = contents.parse()?;
+
+                        let agents = doc
+                            .entry("agents")
+                            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                            .as_table_mut()
+                            .ok_or_else(|| anyhow::anyhow!("'agents' is not a table in surge.toml"))?;
+
+                        if agents.contains_key(agent_name) {
+                            anyhow::bail!("Agent '{}' already exists in surge.toml", agent_name);
+                        }
+
+                        let mut agent_table = toml::Table::new();
+                        agent_table.insert("command".into(), toml::Value::String(entry.command.clone()));
+                        let args: Vec<toml::Value> = entry.default_args.iter().map(|a| toml::Value::String(a.clone())).collect();
+                        agent_table.insert("args".into(), toml::Value::Array(args));
+                        agent_table.insert("transport".into(), toml::Value::String("stdio".into()));
+
+                        agents.insert(agent_name.to_string(), toml::Value::Table(agent_table));
+
+                        std::fs::write(&config_path, doc.to_string())?;
+                        println!("✅ Added agent '{}' to surge.toml", agent_name);
+                    }
+                    None => {
+                        anyhow::bail!("Agent '{}' not found in registry. Try: surge registry list", id);
+                    }
+                }
             }
         },
         Commands::Init => {

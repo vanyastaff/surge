@@ -8,6 +8,7 @@ pub mod client;
 pub mod connection;
 pub mod health;
 pub mod pool;
+pub mod registry;
 pub mod router;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
@@ -15,4 +16,5 @@ pub use surge_core::SurgeEvent;
 pub use connection::{AgentConnection, SessionState};
 pub use health::{AgentHealth, HealthMonitor};
 pub use pool::{AgentPool, SessionHandle};
+pub use registry::{AgentCapability, Registry, RegistryEntry};
 pub use router::{AgentRouter, RouteDecision};
