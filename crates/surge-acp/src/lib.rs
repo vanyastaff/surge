@@ -5,7 +5,9 @@
 //! It also manages agent connections through `AgentPool`.
 
 pub mod client;
+pub mod connection;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient, SurgeEvent};
+pub use connection::{AgentConnection, SessionState};
 
-// TODO: Phase 0 — implement AgentConnection, AgentPool
+// TODO: Phase 0 — implement AgentPool
