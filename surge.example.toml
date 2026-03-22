@@ -1,0 +1,22 @@
+# Surge configuration
+# Copy to your project root as `surge.toml`
+
+default_agent = "claude"
+
+[agents.claude]
+command = "claude"
+transport = "stdio"
+
+[agents.copilot]
+command = "copilot"
+transport = "stdio"
+
+[pipeline]
+max_qa_iterations = 10
+max_parallel = 3
+
+[pipeline.gates]
+after_spec = true           # Wait for user approval after spec generation
+after_plan = true           # Wait for user approval after plan generation
+after_each_subtask = false  # Don't pause between subtasks
+after_qa = true             # Wait for user approval after QA

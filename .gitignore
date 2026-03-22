@@ -1,1 +1,18 @@
 /target
+**/*.rs.bk
+Cargo.lock
+
+# Surge runtime
+.surge/
+*.pid
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

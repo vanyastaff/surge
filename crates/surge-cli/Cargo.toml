@@ -1,0 +1,18 @@
+[package]
+name = "surge-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "surge"
+path = "src/main.rs"
+
+[dependencies]
+surge-core = { workspace = true }
+surge-acp = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
