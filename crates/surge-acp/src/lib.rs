@@ -6,8 +6,8 @@
 
 pub mod client;
 pub mod connection;
+pub mod pool;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient, SurgeEvent};
 pub use connection::{AgentConnection, SessionState};
-
-// TODO: Phase 0 — implement AgentPool
+pub use pool::{AgentPool, SessionHandle};

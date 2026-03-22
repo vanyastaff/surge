@@ -1,0 +1,39 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Write(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Edit(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Glob(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Grep(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Read(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent\\.auto-claude\\specs\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Write(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent\\.auto-claude\\specs\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Edit(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude\\worktrees\\tasks\\002-working-cli-commands-ping-prompt-agent\\.auto-claude\\specs\\002-working-cli-commands-ping-prompt-agent/**)",
+      "Read(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude/**)",
+      "Write(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude/**)",
+      "Edit(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude/**)",
+      "Glob(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude/**)",
+      "Grep(C:\\Users\\vanya\\RustroverProjects\\surge\\.auto-claude/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__query-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}
