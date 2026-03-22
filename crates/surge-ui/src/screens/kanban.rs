@@ -5,7 +5,7 @@ use gpui_component::StyledExt;
 
 use crate::theme;
 
-/// Kanban column state — maps to simplified TaskState groups.
+/// Kanban column state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KanbanColumn {
     Draft,
@@ -23,7 +23,7 @@ impl KanbanColumn {
             Self::Planning => "Planning",
             Self::Executing => "Executing",
             Self::QaReview => "QA Review",
-            Self::HumanReview => "Human Review",
+            Self::HumanReview => "Review",
             Self::Done => "Done",
         }
     }
@@ -58,7 +58,7 @@ pub struct KanbanTask {
     pub title: String,
     pub agent: Option<String>,
     pub complexity: String,
-    pub progress: Option<(usize, usize)>, // (completed, total)
+    pub progress: Option<(usize, usize)>,
     pub column: KanbanColumn,
 }
 
@@ -68,6 +68,9 @@ pub struct TaskClicked(pub String);
 
 impl EventEmitter<TaskClicked> for KanbanScreen {}
 
+/// Column width constant.
+const COLUMN_MIN_W: f32 = 220.0;
+
 /// Kanban Board screen.
 pub struct KanbanScreen {
     tasks: Vec<KanbanTask>,
@@ -75,7 +78,6 @@ pub struct KanbanScreen {
 
 impl KanbanScreen {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        // Demo data.
         Self {
             tasks: vec![
                 KanbanTask {
@@ -126,6 +128,22 @@ impl KanbanScreen {
                     progress: Some((2, 2)),
                     column: KanbanColumn::Done,
                 },
+                KanbanTask {
+                    id: "task-07".into(),
+                    title: "Add WebSocket support for real-time notifications".into(),
+                    agent: Some("claude-code".into()),
+                    complexity: "Complex".into(),
+                    progress: Some((1, 6)),
+                    column: KanbanColumn::Executing,
+                },
+                KanbanTask {
+                    id: "task-08".into(),
+                    title: "Database connection pooling".into(),
+                    agent: None,
+                    complexity: "Standard".into(),
+                    progress: None,
+                    column: KanbanColumn::Draft,
+                },
             ],
         }
     }
@@ -143,20 +161,35 @@ impl KanbanScreen {
             _ => theme::TEXT_MUTED,
         };
 
-        let mut card = div()
+        let has_progress = task.progress.is_some();
+        let progress_done = task.progress.map(|(d, _)| d).unwrap_or(0);
+        let progress_total = task.progress.map(|(_, t)| t).unwrap_or(0);
+        let pct = if progress_total > 0 {
+            progress_done as f32 / progress_total as f32
+        } else {
+            0.0
+        };
+
+        let progress_color = if pct >= 1.0 {
+            theme::SUCCESS
+        } else {
+            theme::PRIMARY
+        };
+
+        div()
             .id(SharedString::from(format!("task-{}", task.id)))
-            .v_flex()
-            .gap(px(6.0))
-            .p(px(10.0))
             .w_full()
+            .v_flex()
+            .gap(px(8.0))
+            .p_3()
             .rounded_lg()
             .bg(theme::BACKGROUND)
             .border_1()
             .border_color(theme::TEXT_MUTED.opacity(0.08))
             .cursor_pointer()
             .hover(|s: StyleRefinement| {
-                s.border_color(theme::PRIMARY.opacity(0.3))
-                    .bg(theme::BACKGROUND)
+                s.border_color(theme::PRIMARY.opacity(0.4))
+                    .shadow_sm()
             })
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(TaskClicked(id.clone()));
@@ -164,72 +197,64 @@ impl KanbanScreen {
             // Title
             .child(
                 div()
-                    .text_xs()
+                    .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme::TEXT_PRIMARY)
+                    .line_height(relative(1.4))
                     .child(task.title.clone()),
-            );
-
-        // Progress bar
-        if let Some((done, total)) = task.progress {
-            let pct = if total > 0 { (done as f32 / total as f32) * 100.0 } else { 0.0 };
-            card = card.child(
-                div()
-                    .v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(3.0))
-                            .rounded_full()
-                            .bg(theme::TEXT_MUTED.opacity(0.1))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .rounded_full()
-                                    .bg(theme::PRIMARY)
-                                    .w(relative(pct / 100.0)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::TEXT_MUTED)
-                            .child(SharedString::from(format!("{done}/{total}")))
-                    ),
-            );
-        }
-
-        // Footer: agent + complexity badges
-        card = card.child(
-            div()
-                .h_flex()
-                .gap_1()
-                .when(task.agent.is_some(), |el: Div| {
-                    let agent = task.agent.as_deref().unwrap_or("");
-                    el.child(
-                        div()
-                            .text_xs()
-                            .px(px(6.0))
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(theme::PRIMARY.opacity(0.1))
-                            .text_color(theme::PRIMARY)
-                            .child(agent.to_string()),
-                    )
-                })
-                .child(
+            )
+            // Progress bar (if has progress)
+            .when(has_progress, |el: Stateful<Div>| {
+                el.child(
                     div()
-                        .text_xs()
-                        .px(px(6.0))
-                        .py_0p5()
-                        .rounded_md()
-                        .bg(complexity_color.opacity(0.1))
-                        .text_color(complexity_color)
-                        .child(task.complexity.clone()),
-                ),
-        );
+                        .w_full()
+                        .v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(4.0))
+                                .rounded_full()
+                                .bg(theme::TEXT_MUTED.opacity(0.1))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(progress_color)
+                                        .w(relative(pct)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::TEXT_MUTED)
+                                .child(format!("{progress_done}/{progress_total} subtasks")),
+                        ),
+                )
+            })
+            // Footer: badges
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(4.0))
+                    .flex_wrap()
+                    .when(task.agent.is_some(), |el: Div| {
+                        let agent = task.agent.as_deref().unwrap_or("");
+                        el.child(self.badge(agent, theme::PRIMARY))
+                    })
+                    .child(self.badge(&task.complexity, complexity_color)),
+            )
+    }
 
-        card
+    fn badge(&self, text: &str, color: Hsla) -> Div {
+        div()
+            .text_xs()
+            .px(px(6.0))
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .bg(color.opacity(0.12))
+            .text_color(color)
+            .child(text.to_string())
     }
 
     fn render_column(&self, col: KanbanColumn, cx: &mut Context<Self>) -> Div {
@@ -242,19 +267,19 @@ impl KanbanScreen {
             .collect();
 
         div()
-            .flex_1()
             .v_flex()
             .h_full()
-            .min_w(px(180.0))
-            .gap_0()
-            // Column header — sticky top
+            .w(px(COLUMN_MIN_W))
+            .min_w(px(COLUMN_MIN_W))
+            .flex_shrink_0()
+            // Column header
             .child(
                 div()
                     .h_flex()
                     .gap_2()
                     .items_center()
                     .px_2()
-                    .pb_3()
+                    .pb_2()
                     .child(
                         div()
                             .w(px(8.0))
@@ -265,7 +290,7 @@ impl KanbanScreen {
                     .child(
                         div()
                             .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(FontWeight::BOLD)
                             .text_color(theme::TEXT_PRIMARY)
                             .child(col.label().to_string()),
                     )
@@ -273,24 +298,38 @@ impl KanbanScreen {
                         div()
                             .text_xs()
                             .px(px(6.0))
-                            .py_0p5()
+                            .py(px(1.0))
                             .rounded_full()
                             .bg(theme::TEXT_MUTED.opacity(0.12))
                             .text_color(theme::TEXT_MUTED)
                             .child(format!("{count}")),
                     ),
             )
-            // Cards area — fills remaining height
+            // Cards area
             .child(
                 div()
                     .v_flex()
                     .gap_2()
                     .flex_1()
-                    .p_2()
+                    .p(px(6.0))
                     .rounded_lg()
-                    .bg(theme::SURFACE.opacity(0.3))
+                    .bg(theme::SURFACE.opacity(0.25))
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.06))
+                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .when(cards.is_empty(), |el: Div| {
+                        el.child(
+                            div()
+                                .py_8()
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::TEXT_MUTED.opacity(0.4))
+                                        .child("No tasks".to_string()),
+                                ),
+                        )
+                    })
                     .children(cards),
             )
     }
@@ -342,13 +381,15 @@ impl Render for KanbanScreen {
                             .label("+ New Task"),
                     ),
             )
-            // Columns — stretch to fill all available height
+            // Columns container — horizontal scroll when columns overflow
             .child(
                 div()
+                    .id("kanban-columns")
                     .flex_1()
                     .h_flex()
-                    .gap_2()
+                    .gap_3()
                     .items_start()
+                    .overflow_x_scroll()
                     .children(columns),
             )
     }
