@@ -352,15 +352,10 @@ impl TaskDetailScreen {
 impl Render for TaskDetailScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .size_full()
             .v_flex()
-            .w(px(650.0))
-            .max_h(px(600.0))
             .gap_4()
             .p_6()
-            .bg(theme::SURFACE)
-            .rounded_xl()
-            .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.15))
             .overflow_hidden()
             .child(self.render_header())
             .child(self.render_tabs(cx))

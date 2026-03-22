@@ -440,7 +440,12 @@ impl Render for SurgeApp {
                                     .overflow_hidden()
                                     .child(self.sidebar.clone())
                                     .child(
-                                        div().flex_1().size_full().child(self.render_screen_content(cx))
+                                        div()
+                                            .flex_1()
+                                            .h_full()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .child(self.render_screen_content(cx)),
                                     ),
                             ),
                     )
