@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
@@ -97,5 +97,80 @@ impl SurgeConfig {
             .map_err(|e| crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display())))?;
         toml::from_str(&content)
             .map_err(|e| crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display())))
+    }
+
+    /// Discover surge.toml by searching current directory and parent directories.
+    pub fn discover() -> Result<Self, crate::SurgeError> {
+        let start_dir = std::env::current_dir()
+            .map_err(|e| crate::SurgeError::Config(format!("Failed to get current directory: {e}")))?;
+
+        let config_path = Self::find_config_file(&start_dir)?;
+        Self::load(&config_path)
+    }
+
+    /// Find surge.toml by walking up from the given directory.
+    fn find_config_file(start_dir: &Path) -> Result<PathBuf, crate::SurgeError> {
+        let mut current = start_dir;
+
+        loop {
+            let candidate = current.join("surge.toml");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Move to parent directory
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => {
+                    return Err(crate::SurgeError::Config(
+                        format!("surge.toml not found in {} or any parent directory", start_dir.display())
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_config_discovery() {
+        // Create a temporary directory structure
+        let temp_dir = std::env::temp_dir().join("surge_test_discovery");
+        let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let nested_dir = temp_dir.join("subdir").join("nested");
+        fs::create_dir_all(&nested_dir).unwrap();
+
+        // Create a surge.toml in the temp_dir
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(&config_path, r#"
+default_agent = "test-agent"
+
+[agents.test-agent]
+command = "test"
+"#).unwrap();
+
+        // Test finding from nested directory
+        let found_path = SurgeConfig::find_config_file(&nested_dir).unwrap();
+        assert_eq!(found_path, config_path);
+
+        // Test finding from the directory containing surge.toml
+        let found_path = SurgeConfig::find_config_file(&temp_dir).unwrap();
+        assert_eq!(found_path, config_path);
+
+        // Test error when not found
+        let non_existent_dir = std::env::temp_dir().join("surge_test_no_config");
+        fs::create_dir_all(&non_existent_dir).unwrap();
+        let result = SurgeConfig::find_config_file(&non_existent_dir);
+        assert!(result.is_err());
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&non_existent_dir);
     }
 }
