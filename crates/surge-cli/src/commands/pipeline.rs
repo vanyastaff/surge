@@ -1,9 +1,19 @@
 use std::io::Write as _;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use surge_core::{SurgeConfig, SurgeEvent};
 
 use super::load_spec_by_id;
+
+/// Accumulated token and cost totals for a pipeline run.
+#[derive(Debug, Clone, Default)]
+struct RunTotals {
+    input_tokens: u64,
+    output_tokens: u64,
+    thought_tokens: u64,
+    total_cost: f64,
+}
 
 /// Run a spec through the full pipeline.
 ///
@@ -36,12 +46,11 @@ pub async fn run(
     };
     let orchestrator = surge_orchestrator::Orchestrator::new(orch_config);
 
+    let totals = Arc::new(Mutex::new(RunTotals::default()));
+    let totals_clone = Arc::clone(&totals);
+
     let mut events = orchestrator.subscribe();
     tokio::spawn(async move {
-        let mut input_tokens: u64 = 0;
-        let mut output_tokens: u64 = 0;
-        let mut thought_tokens: u64 = 0;
-        let mut total_cost: f64 = 0.0;
 
         while let Ok(event) = events.recv().await {
             match event {
@@ -72,25 +81,26 @@ pub async fn run(
                     ..
                 } => {
                     // Update cumulative totals
-                    input_tokens += input;
-                    output_tokens += output;
-                    if let Some(t) = thought {
-                        thought_tokens += t;
+                    let mut t = totals_clone.lock().unwrap();
+                    t.input_tokens += input;
+                    t.output_tokens += output;
+                    if let Some(th) = thought {
+                        t.thought_tokens += th;
                     }
                     if let Some(cost) = estimated_cost_usd {
-                        total_cost += cost;
+                        t.total_cost += cost;
                     }
 
                     // Calculate total tokens
-                    let total = input_tokens + output_tokens + thought_tokens;
+                    let total = t.input_tokens + t.output_tokens + t.thought_tokens;
 
                     // Display live counter on the same line
                     print!(
                         "\r💰 Tokens: {} in / {} out / {} total | Cost: ${:.4}",
-                        format_tokens(input_tokens),
-                        format_tokens(output_tokens),
+                        format_tokens(t.input_tokens),
+                        format_tokens(t.output_tokens),
                         format_tokens(total),
-                        total_cost
+                        t.total_cost
                     );
                     let _ = std::io::stdout().flush();
                 }
@@ -117,6 +127,21 @@ pub async fn run(
             println!("❌ Pipeline failed: {reason}");
             std::process::exit(4);
         }
+    }
+
+    // Display final cost summary
+    let final_totals = totals.lock().unwrap();
+    if final_totals.input_tokens > 0 || final_totals.output_tokens > 0 {
+        println!();
+        println!("💰 Token Usage Summary:");
+        println!("   Input tokens:   {}", format_tokens(final_totals.input_tokens));
+        println!("   Output tokens:  {}", format_tokens(final_totals.output_tokens));
+        if final_totals.thought_tokens > 0 {
+            println!("   Thought tokens: {}", format_tokens(final_totals.thought_tokens));
+        }
+        let total_tokens = final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
+        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Estimated cost: ${:.4}", final_totals.total_cost);
     }
 
     Ok(())
