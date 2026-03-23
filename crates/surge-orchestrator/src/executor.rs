@@ -134,12 +134,15 @@ impl SubtaskExecutor {
         let content = vec![ContentBlock::Text(TextContent::new(prompt_text))];
 
         let mut last_error = String::from("unknown error");
+        let retry_start = std::time::Instant::now();
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
                 info!(
                     subtask_id = %subtask_id,
                     attempt,
+                    max_retries = self.config.max_retries,
+                    elapsed_ms = retry_start.elapsed().as_millis() as u64,
                     "retrying subtask"
                 );
             }
@@ -193,6 +196,9 @@ impl SubtaskExecutor {
                         Err(e) => {
                             warn!(
                                 subtask_id = %subtask_id,
+                                attempt,
+                                max_retries = self.config.max_retries,
+                                elapsed_ms = retry_start.elapsed().as_millis() as u64,
                                 error = %e,
                                 "commit failed after agent prompt"
                             );
@@ -204,6 +210,8 @@ impl SubtaskExecutor {
                     warn!(
                         subtask_id = %subtask_id,
                         attempt,
+                        max_retries = self.config.max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
                         error = %e,
                         "agent prompt failed"
                     );
@@ -213,6 +221,12 @@ impl SubtaskExecutor {
         }
 
         // All retries exhausted
+        warn!(
+            subtask_id = %subtask_id,
+            max_retries = self.config.max_retries,
+            total_elapsed_ms = retry_start.elapsed().as_millis() as u64,
+            "all subtask retries exhausted"
+        );
         self.consecutive_failures += 1;
         let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
             task_id,

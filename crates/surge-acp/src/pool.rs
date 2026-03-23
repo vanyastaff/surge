@@ -562,8 +562,19 @@ async fn prompt(
     };
 
     let mut last_error: Option<SurgeError> = None;
+    let retry_start = Instant::now();
 
     for attempt in 0..=max_retries {
+        if attempt > 0 {
+            info!(
+                session_id = session.session_id.as_str(),
+                attempt,
+                max_retries,
+                elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                "retrying prompt after failure"
+            );
+        }
+
         for agent_name in &candidates {
             if let Err(e) = connect(state, agent_name).await {
                 last_error = Some(e);
@@ -634,13 +645,28 @@ async fn prompt(
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
                     )));
-                    warn!(agent = agent_name.as_str(), attempt, "prompt failed");
+                    warn!(
+                        agent = agent_name.as_str(),
+                        session_id = session.session_id.as_str(),
+                        attempt,
+                        max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                        error = %msg,
+                        "prompt failed"
+                    );
                 }
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
                     health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Timeout(msg));
-                    warn!(agent = agent_name.as_str(), attempt, "prompt timed out");
+                    warn!(
+                        agent = agent_name.as_str(),
+                        session_id = session.session_id.as_str(),
+                        attempt,
+                        max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                        "prompt timed out"
+                    );
                 }
             }
         }
@@ -655,9 +681,22 @@ async fn prompt(
                     &s.resilience.retry_policy.backoff_strategy,
                 )
             };
+            info!(
+                session_id = session.session_id.as_str(),
+                attempt,
+                delay_ms = delay.as_millis() as u64,
+                "backing off before retry"
+            );
             tokio::time::sleep(delay).await;
         }
     }
+
+    warn!(
+        session_id = session.session_id.as_str(),
+        max_retries,
+        total_elapsed_ms = retry_start.elapsed().as_millis() as u64,
+        "all prompt retries exhausted"
+    );
 
     Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
 }
