@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use surge_acp::Registry;
 use surge_core::SurgeConfig;
 
 #[derive(Subcommand)]
@@ -13,6 +14,8 @@ pub enum AgentCommands {
     },
     /// Show agent health status by pinging all configured agents
     Status,
+    /// Refresh agent discovery cache
+    Refresh,
 }
 
 pub async fn run(command: AgentCommands) -> Result<()> {
@@ -21,33 +24,98 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
-            println!("⚡ Configured agents:");
-            println!("\nDefault: {}", config.default_agent);
+            let registry = Registry::builtin();
+            let discovered = registry.detect_runnable_with_paths();
 
-            if config.agents.is_empty() {
-                println!("\n(no agents configured)");
+            println!("⚡ Agent Discovery Report\n");
+            println!("Default: {}\n", config.default_agent);
+
+            // Section 1: Discovered agents (available on system)
+            println!("📦 Available agents ({} discovered):", discovered.len());
+            if discovered.is_empty() {
+                println!("   (no agents discovered on system)");
             } else {
-                println!();
+                for detected in &discovered {
+                    let version = detected
+                        .detected_version
+                        .as_ref()
+                        .or(Some(&detected.entry.version))
+                        .map_or(String::new(), |v| format!(" v{v}"));
+                    let path = detected
+                        .command_path
+                        .as_ref()
+                        .map_or(String::new(), |p| format!(" ({})", p));
+                    println!("   ✓ {}{}{}", detected.entry.display_name, version, path);
+                }
+            }
+
+            println!();
+
+            // Section 2: Configured agents
+            println!("⚙️  Configured agents ({}):", config.agents.len());
+            if config.agents.is_empty() {
+                println!("   (no agents configured)");
+            } else {
                 for (name, agent_config) in &config.agents {
                     let marker = if name == &config.default_agent { "*" } else { " " };
-                    println!("{} {}", marker, name);
-                    println!("    command: {}", agent_config.command);
+
+                    // Check if this configured agent is available
+                    let available = discovered.iter().any(|d| {
+                        // Match by command + args, or by agent kind ID
+                        (d.entry.command == agent_config.command
+                            && d.entry.default_args == agent_config.args)
+                        || d.entry.id == *name
+                    });
+
+                    let status = if available { "✓" } else { "✗" };
+
+                    println!("{} {} {}", marker, status, name);
+                    println!("       command: {}", agent_config.command);
                     if !agent_config.args.is_empty() {
-                        println!("    args: {:?}", agent_config.args);
+                        println!("       args: {:?}", agent_config.args);
                     }
                     match &agent_config.transport {
                         surge_core::config::Transport::Stdio => {
-                            println!("    transport: stdio");
+                            println!("       transport: stdio");
                         }
                         surge_core::config::Transport::Tcp { host, port } => {
-                            println!("    transport: tcp ({}:{})", host, port);
+                            println!("       transport: tcp ({}:{})", host, port);
                         }
                         surge_core::config::Transport::WebSocket { url } => {
-                            println!("    transport: ws ({})", url);
+                            println!("       transport: ws ({})", url);
                         }
                     }
                 }
             }
+
+            println!();
+
+            // Section 3: Missing agents (configured but not available)
+            let missing: Vec<_> = config
+                .agents
+                .iter()
+                .filter(|(name, agent_config)| {
+                    !discovered.iter().any(|d| {
+                        (d.entry.command == agent_config.command
+                            && d.entry.default_args == agent_config.args)
+                        || d.entry.id == **name
+                    })
+                })
+                .collect();
+
+            if !missing.is_empty() {
+                println!("⚠️  Missing agents ({} configured but not available):", missing.len());
+                for (name, _) in missing {
+                    println!("   ✗ {}", name);
+                }
+                println!();
+            }
+
+            // Legend
+            println!("Legend:");
+            println!("  * = default agent");
+            println!("  ✓ = available");
+            println!("  ✗ = missing");
         }
         AgentCommands::Test { name } => {
             let mut config = SurgeConfig::load_or_default()?;
@@ -126,6 +194,11 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             if any_offline {
                 std::process::exit(2);
             }
+        }
+        AgentCommands::Refresh => {
+            println!("⚡ Refreshing agent discovery cache...");
+            Registry::refresh_discovery();
+            println!("✅ Agent discovery cache cleared. Next 'surge agent list' will re-scan.");
         }
     }
     Ok(())

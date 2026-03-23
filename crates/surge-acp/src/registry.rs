@@ -10,12 +10,13 @@
 //!
 //! Remote entries are cached in `~/.surge/registry-cache.json` for 24 hours.
 
+use crate::discovery::AgentDiscovery;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, Transport};
 use tracing::{debug, warn};
 
@@ -302,25 +303,30 @@ impl Registry {
     }
 
     pub fn detect_installed_with_paths(&self) -> Vec<DetectedAgent> {
-        self.entries
-            .iter()
-            .filter(|e| e.is_installed())
-            .map(|e| DetectedAgent {
-                entry: e.clone(),
-                command_path: resolve_command_path(&e.command),
-            })
-            .collect()
+        // Use AgentDiscovery module for enhanced detection via env vars and standard paths
+        let mut discovery = AgentDiscovery::new();
+        discovery.discover_all(&self.entries)
     }
 
     pub fn detect_runnable_with_paths(&self) -> Vec<DetectedAgent> {
-        self.entries
+        // Serve from cache when fresh.
+        if let Some(cached) = load_discovery_cache() {
+            return cached;
+        }
+
+        let agents: Vec<DetectedAgent> = self
+            .entries
             .iter()
             .filter(|e| e.is_runnable())
             .map(|e| DetectedAgent {
                 entry: e.clone(),
                 command_path: resolve_command_path(&e.command),
+                detected_version: None,
             })
-            .collect()
+            .collect();
+
+        save_discovery_cache(agents.clone());
+        agents
     }
 
     #[must_use]
@@ -339,6 +345,18 @@ impl Registry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Invalidate the discovery cache, forcing the next call to
+    /// [`Registry::detect_runnable_with_paths`] to re-scan the system.
+    ///
+    /// Use this when the environment has changed (new agent installed,
+    /// PATH updated, etc.) and you want fresh detection results.
+    pub fn refresh_discovery() {
+        if let Ok(mut cache_guard) = DISCOVERY_CACHE.lock() {
+            *cache_guard = None;
+            debug!("discovery cache invalidated");
+        }
     }
 
     // ── Remote fetching ──────────────────────────────────────────────
@@ -426,6 +444,9 @@ impl Registry {
 pub struct DetectedAgent {
     pub entry: RegistryEntry,
     pub command_path: Option<String>,
+    /// Detected version string from running `--version` command.
+    /// None if version detection failed or was not attempted.
+    pub detected_version: Option<String>,
 }
 
 // ── Hardcoded agents ────────────────────────────────────────────────
@@ -597,6 +618,45 @@ fn save_registry_cache(entries: &[RegistryEntry]) {
 /// Cache for `which`/`resolve_command_path` results.
 static WHICH_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Discovery cache entry with timestamp.
+#[derive(Debug, Clone)]
+struct DiscoveryCacheEntry {
+    agents: Vec<DetectedAgent>,
+    timestamp: Instant,
+}
+
+/// Cache for discovered agents with 5-minute TTL.
+static DISCOVERY_CACHE: LazyLock<Mutex<Option<DiscoveryCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+const DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Load cached discovered agents if cache is still valid.
+fn load_discovery_cache() -> Option<Vec<DetectedAgent>> {
+    if let Ok(cache_guard) = DISCOVERY_CACHE.lock()
+        && let Some(entry) = cache_guard.as_ref()
+    {
+        let age = entry.timestamp.elapsed();
+        if age <= DISCOVERY_CACHE_TTL {
+            debug!("discovery cache hit (age: {age:?})");
+            return Some(entry.agents.clone());
+        }
+        debug!("discovery cache expired (age: {age:?})");
+    }
+    None
+}
+
+/// Save discovered agents to cache with current timestamp.
+fn save_discovery_cache(agents: Vec<DetectedAgent>) {
+    if let Ok(mut cache_guard) = DISCOVERY_CACHE.lock() {
+        *cache_guard = Some(DiscoveryCacheEntry {
+            agents,
+            timestamp: Instant::now(),
+        });
+        debug!("discovery cache updated");
+    }
+}
 
 /// Check if a command exists on PATH (cached).
 fn which(command: &str) -> bool {
@@ -794,5 +854,87 @@ mod tests {
         assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
         assert!(AgentKind::Codex.mcp_config_env_var().is_none());
         assert!(AgentKind::Gemini.mcp_config_env_var().is_none());
+    }
+
+    #[test]
+    fn test_refresh_discovery() {
+        let reg = Registry::builtin();
+
+        // Populate the cache by calling detect_runnable_with_paths
+        let first_result = reg.detect_runnable_with_paths();
+
+        // Verify cache is populated
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_some());
+
+        // Invalidate the cache
+        Registry::refresh_discovery();
+
+        // Verify cache is cleared
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_none());
+
+        // Next call should re-populate the cache
+        let second_result = reg.detect_runnable_with_paths();
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_some());
+
+        // Results should be consistent
+        assert_eq!(first_result.len(), second_result.len());
+    }
+
+    #[test]
+    fn test_detect_with_discovery() {
+        use std::env;
+        use std::fs::File;
+
+        let reg = Registry::builtin();
+
+        // Test 1: Basic detection without env vars (may find agents on PATH)
+        let detected = reg.detect_installed_with_paths();
+        // Can't assert specific count since it depends on what's installed on the system
+        // Just verify the method runs without panicking
+        assert!(detected.len() <= reg.len());
+
+        // Test 2: Detection with env var override
+        let temp_dir = env::temp_dir();
+        let temp_file = temp_dir.join("test_mock_claude");
+
+        // Create a temporary mock agent file
+        if File::create(&temp_file).is_ok() {
+            // Set CLAUDE_PATH to point to our mock file
+            unsafe {
+                env::set_var("CLAUDE_PATH", temp_file.to_string_lossy().as_ref());
+            }
+
+            // Run detection - should find Claude via env var
+            let detected = reg.detect_installed_with_paths();
+
+            // Look for Claude in the results
+            let claude_found = detected.iter().any(|d| {
+                d.entry.kind == AgentKind::Claude
+                    && d.command_path
+                        .as_ref()
+                        .map(|p| p.contains("test_mock_claude"))
+                        .unwrap_or(false)
+            });
+
+            assert!(
+                claude_found,
+                "Should detect Claude agent via CLAUDE_PATH env var"
+            );
+
+            // Clean up
+            unsafe {
+                env::remove_var("CLAUDE_PATH");
+            }
+            let _ = std::fs::remove_file(&temp_file);
+        }
+
+        // Test 3: Verify DetectedAgent structure
+        let detected = reg.detect_installed_with_paths();
+        for agent in detected {
+            // Each detected agent should have a valid entry
+            assert!(!agent.entry.id.is_empty());
+            assert!(!agent.entry.display_name.is_empty());
+            // command_path may be Some or None depending on what's installed
+        }
     }
 }
