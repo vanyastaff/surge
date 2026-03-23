@@ -7,6 +7,50 @@ use crate::theme;
 // ── Data Models ──────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+pub struct ModelOption {
+    pub name: String,
+    pub price: String,     // "$3/$15"
+    pub context: String,   // "1M ctx"
+    pub note: String,      // "Daily driver"
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortLevel { High, Medium, Low, Adaptive }
+
+impl EffortLevel {
+    fn label(self) -> &'static str {
+        match self { Self::High => "High", Self::Medium => "Medium", Self::Low => "Low", Self::Adaptive => "Adaptive" }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PermissionSetting {
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentCapabilities {
+    /// Available models (None = agent doesn't expose model selection)
+    pub models: Option<Vec<ModelOption>>,
+    /// Effort/thinking levels (None = not supported)
+    pub effort: Option<AgentEffortConfig>,
+    /// Permissions (None = not managed via ACP)
+    pub permissions: Option<Vec<PermissionSetting>>,
+    /// Dangerous ops policy
+    pub dangerous_ops: Option<String>, // "Ask permission", "Allow", "Block"
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentEffortConfig {
+    pub default: EffortLevel,
+    pub planning: EffortLevel,
+    pub coding: EffortLevel,
+    pub qa_review: EffortLevel,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConfiguredAgent {
     pub name: String,
     pub display_name: String,
@@ -20,6 +64,8 @@ pub struct ConfiguredAgent {
     pub cost_today: f64,
     pub avg_latency_ms: u32,
     pub sessions_today: u32,
+    // Agent-specific capabilities
+    pub capabilities: AgentCapabilities,
     // Usage & Limits — varies per agent
     pub usage: AgentUsage,
     // Today stats
@@ -115,9 +161,32 @@ impl AgentHubScreen {
                 ConfiguredAgent {
                     name: "claude-code".into(), display_name: "Claude Code".into(),
                     description: "Anthropic's autonomous coding agent with full file system access, terminal, and git integration".into(),
-                    model: Some("claude-sonnet-4-5".into()), binary: "claude".into(), version: Some("v2.3.1".into()),
+                    model: Some("claude-sonnet-4-6".into()), binary: "claude".into(), version: Some("v2.3.1".into()),
                     active_sessions: 2, requests_today: 42, tokens_today: 156_800,
                     cost_today: 2.34, avg_latency_ms: 1200, sessions_today: 12,
+                    capabilities: AgentCapabilities {
+                        models: Some(vec![
+                            ModelOption { name: "Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Heavy reasoning".into(), enabled: true },
+                            ModelOption { name: "Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
+                            ModelOption { name: "Opus 4.5".into(), price: "$5/$25".into(), context: "200K".into(), note: "Legacy".into(), enabled: false },
+                            ModelOption { name: "Sonnet 4.5".into(), price: "$3/$15".into(), context: "200K".into(), note: "Legacy".into(), enabled: false },
+                            ModelOption { name: "Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
+                        ]),
+                        effort: Some(AgentEffortConfig {
+                            default: EffortLevel::Adaptive,
+                            planning: EffortLevel::High,
+                            coding: EffortLevel::Adaptive,
+                            qa_review: EffortLevel::Low,
+                        }),
+                        permissions: Some(vec![
+                            PermissionSetting { name: "File read".into(), enabled: true },
+                            PermissionSetting { name: "File write".into(), enabled: true },
+                            PermissionSetting { name: "Bash commands".into(), enabled: true },
+                            PermissionSetting { name: "Network access".into(), enabled: false },
+                            PermissionSetting { name: "Git push (require gate)".into(), enabled: false },
+                        ]),
+                        dangerous_ops: Some("Ask permission".into()),
+                    },
                     usage: AgentUsage::ClaudeCode {
                         five_hour_pct: 0.62, five_hour_reset: "2h 14m".into(),
                         weekly_pct: 0.18, weekly_reset: "Mon".into(),
@@ -138,6 +207,12 @@ impl AgentHubScreen {
                     model: Some("claude-sonnet-4-5".into()), binary: "aider".into(), version: Some("v0.82.1".into()),
                     active_sessions: 0, requests_today: 0, tokens_today: 0,
                     cost_today: 0.0, avg_latency_ms: 0, sessions_today: 0,
+                    capabilities: AgentCapabilities {
+                        models: None, // Aider doesn't expose model selection via ACP
+                        effort: None, // No thinking level control
+                        permissions: None, // Uses API directly, not ACP permissions
+                        dangerous_ops: None,
+                    },
                     usage: AgentUsage::Estimated {
                         provider: "Anthropic API (claude-sonnet-4-5)".into(),
                         estimated_tokens: 0, estimated_cost: 0.0, is_local: false,
@@ -289,6 +364,55 @@ impl AgentHubScreen {
                     .child(info_item("Uptime", &agent.uptime))
                     .child(info_item("Sessions today", &format!("{}", agent.sessions_today))),
             )
+            // ── Models ── (if supported)
+            .when(agent.capabilities.models.is_some(), |el: Div| {
+                let models = agent.capabilities.models.as_ref().unwrap();
+                let rows: Vec<Div> = models.iter().map(|m| {
+                    div().h_flex().items_center().gap_3().px_3().py(px(6.0))
+                        .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.03))
+                        .child(div().text_xs().text_color(if m.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
+                            .w(px(14.0)).child(if m.enabled { "☑" } else { "☐" }))
+                        .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(m.name.clone()))
+                        .child(div().w(px(60.0)).text_xs().text_color(theme::TEXT_MUTED).child(m.price.clone()))
+                        .child(div().w(px(60.0)).text_xs().text_color(theme::TEXT_MUTED).child(m.context.clone()))
+                        .child(div().flex_shrink_0().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(m.note.clone()))
+                }).collect();
+                el.child(detail_section("Models", div().v_flex().rounded_lg().bg(theme::SURFACE)
+                    .border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden().children(rows)))
+            })
+            // ── Effort / Thinking ── (if supported)
+            .when(agent.capabilities.effort.is_some(), |el: Div| {
+                let eff = agent.capabilities.effort.as_ref().unwrap();
+                el.child(detail_section("Effort / Thinking",
+                    div().v_flex().gap(px(6.0))
+                        .child(effort_row("Default effort", eff.default))
+                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED.opacity(0.5)).pt_1().child("Per-phase override".to_string()))
+                        .child(effort_row("Planning", eff.planning))
+                        .child(effort_row("Coding", eff.coding))
+                        .child(effort_row("QA Review", eff.qa_review))
+                ))
+            })
+            // ── Permissions ── (if supported)
+            .when(agent.capabilities.permissions.is_some(), |el: Div| {
+                let perms = agent.capabilities.permissions.as_ref().unwrap();
+                let rows: Vec<Div> = perms.iter().map(|p| {
+                    div().h_flex().gap_2().items_center()
+                        .child(div().text_xs().text_color(if p.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
+                            .child(if p.enabled { "☑" } else { "☐" }))
+                        .child(div().text_xs().text_color(theme::TEXT_PRIMARY).child(p.name.clone()))
+                }).collect();
+                let mut section = div().v_flex().gap(px(6.0)).children(rows);
+                if let Some(dangerous) = &agent.capabilities.dangerous_ops {
+                    section = section.child(
+                        div().h_flex().gap_2().items_center().pt_1()
+                            .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Dangerous operations:".to_string()))
+                            .child(div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
+                                .bg(theme::WARNING.opacity(0.1)).text_color(theme::WARNING)
+                                .child(dangerous.clone())),
+                    );
+                }
+                el.child(detail_section("Permissions", section))
+            })
             // Stats (4 cards with period labels)
             .child(
                 div().h_flex().gap_2()
@@ -556,6 +680,29 @@ fn info_item(label: &str, value: &str) -> Div {
     div().v_flex().gap(px(2.0))
         .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(label.to_string()))
         .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
+}
+
+fn detail_section(title: &str, content: Div) -> Div {
+    div().v_flex().gap(px(6.0)).p_3().rounded_lg()
+        .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
+        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(title.to_string()))
+        .child(content)
+}
+
+fn effort_row(label: &str, level: EffortLevel) -> Div {
+    let color = match level {
+        EffortLevel::High => theme::WARNING,
+        EffortLevel::Medium => theme::PRIMARY,
+        EffortLevel::Low => theme::SUCCESS,
+        EffortLevel::Adaptive => theme::TEXT_MUTED,
+    };
+    div().h_flex().justify_between().items_center()
+        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(label.to_string()))
+        .child(
+            div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
+                .bg(color.opacity(0.1)).text_color(color)
+                .child(level.label().to_string()),
+        )
 }
 
 fn quota_color(pct: f32) -> Hsla {
