@@ -5,18 +5,22 @@
 //! within the context of a Surge task execution.
 
 use agent_client_protocol::{
-    Client, CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest,
-    ExtResponse, KillTerminalCommandRequest, KillTerminalCommandResponse, PermissionOptionId,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    Result as AcpResult, SessionNotification, TerminalOutputRequest, TerminalOutputResponse,
+    Client, ContentBlock, CreateTerminalRequest, CreateTerminalResponse, ExtNotification,
+    ExtRequest, ExtResponse, KillTerminalCommandRequest, KillTerminalCommandResponse,
+    PermissionOptionId, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+    ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, Result as AcpResult, SessionNotification, SessionUpdate,
+    TerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse,
     WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
     WriteTextFileResponse,
 };
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use surge_core::SurgeEvent;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tracing::debug;
+
+use crate::terminal::TerminalManager;
 
 /// Permission policy for controlling agent access to system resources.
 #[derive(Debug, Clone)]
@@ -68,7 +72,6 @@ pub struct SubtaskContext {
 ///
 /// One instance per subtask execution, providing isolated access to filesystem,
 /// terminals, and permission management within a git worktree.
-#[derive(Debug)]
 pub struct SurgeClient {
     /// Root directory of the worktree for file operations.
     worktree_root: PathBuf,
@@ -81,6 +84,9 @@ pub struct SurgeClient {
 
     /// Context of the current subtask (optional).
     subtask_context: Option<SubtaskContext>,
+
+    /// Terminal process manager.
+    terminals: Arc<Mutex<TerminalManager>>,
 }
 
 impl SurgeClient {
@@ -92,11 +98,13 @@ impl SurgeClient {
     /// * `permission_policy` - Policy for controlling agent access
     #[must_use]
     pub fn new(worktree_root: PathBuf, permission_policy: PermissionPolicy) -> Self {
+        let terminals = Arc::new(Mutex::new(TerminalManager::new(worktree_root.clone())));
         Self {
             worktree_root,
             permission_policy,
             event_tx: None,
             subtask_context: None,
+            terminals,
         }
     }
 
@@ -232,9 +240,43 @@ impl Client for SurgeClient {
         })
     }
 
-    async fn session_notification(&self, _args: SessionNotification) -> AcpResult<()> {
-        // Handle session notifications (progress updates, etc.)
-        // For now, we just acknowledge them
+    async fn session_notification(&self, args: SessionNotification) -> AcpResult<()> {
+        let session_id = args.session_id.to_string();
+        match args.update {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                if let ContentBlock::Text(text) = &chunk.content {
+                    self.emit_event(SurgeEvent::AgentMessageChunk {
+                        session_id,
+                        text: text.text.clone(),
+                    });
+                }
+            }
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                if let ContentBlock::Text(text) = &chunk.content {
+                    self.emit_event(SurgeEvent::AgentThoughtChunk {
+                        session_id,
+                        text: text.text.clone(),
+                    });
+                }
+            }
+            SessionUpdate::ToolCall(tool_call) => {
+                debug!(
+                    session_id = session_id.as_str(),
+                    tool = ?tool_call.title,
+                    "tool call initiated"
+                );
+            }
+            SessionUpdate::ToolCallUpdate(update) => {
+                debug!(
+                    session_id = session_id.as_str(),
+                    tool_id = update.id.to_string().as_str(),
+                    "tool call updated"
+                );
+            }
+            _ => {
+                debug!(session_id = session_id.as_str(), "session update received");
+            }
+        }
         Ok(())
     }
 
@@ -291,38 +333,149 @@ impl Client for SurgeClient {
 
     async fn create_terminal(
         &self,
-        _args: CreateTerminalRequest,
+        args: CreateTerminalRequest,
     ) -> AcpResult<CreateTerminalResponse> {
-        // Terminal support not yet implemented
-        Err(agent_client_protocol::Error::method_not_found())
+        debug!("Creating terminal: {} {:?}", args.command, args.args);
+
+        let env: Vec<(String, String)> = args
+            .env
+            .iter()
+            .map(|e| (e.name.clone(), e.value.clone()))
+            .collect();
+
+        let terminal_id = self
+            .terminals
+            .lock()
+            .await
+            .spawn(
+                &args.command,
+                &args.args,
+                &env,
+                args.cwd.as_ref(),
+                args.output_byte_limit,
+            )
+            .map_err(|e| {
+                agent_client_protocol::Error::new((-32603, format!("Terminal spawn failed: {e}")))
+            })?;
+
+        self.emit_event(SurgeEvent::TerminalCreated {
+            terminal_id: terminal_id.clone(),
+            command: format!("{} {}", args.command, args.args.join(" ")),
+        });
+
+        Ok(CreateTerminalResponse {
+            terminal_id: terminal_id.into(),
+            meta: None,
+        })
     }
 
     async fn terminal_output(
         &self,
-        _args: TerminalOutputRequest,
+        args: TerminalOutputRequest,
     ) -> AcpResult<TerminalOutputResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let terminal_id = args.terminal_id.to_string();
+
+        let (output, truncated, exit) = self
+            .terminals
+            .lock()
+            .await
+            .get_output(&terminal_id)
+            .await
+            .map_err(|e| {
+                agent_client_protocol::Error::new((-32603, format!("Terminal output failed: {e}")))
+            })?;
+
+        self.emit_event(SurgeEvent::TerminalOutput {
+            terminal_id: terminal_id.clone(),
+            output: output.clone(),
+        });
+
+        let exit_status = exit.map(|e| TerminalExitStatus {
+            exit_code: e.exit_code,
+            signal: e.signal,
+            meta: None,
+        });
+
+        Ok(TerminalOutputResponse {
+            output,
+            truncated,
+            exit_status,
+            meta: None,
+        })
     }
 
     async fn release_terminal(
         &self,
-        _args: ReleaseTerminalRequest,
+        args: ReleaseTerminalRequest,
     ) -> AcpResult<ReleaseTerminalResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let terminal_id = args.terminal_id.to_string();
+        debug!(terminal_id = terminal_id.as_str(), "releasing terminal");
+
+        self.terminals
+            .lock()
+            .await
+            .release(&terminal_id)
+            .await
+            .map_err(|e| {
+                agent_client_protocol::Error::new((-32603, format!("Terminal release failed: {e}")))
+            })?;
+
+        Ok(ReleaseTerminalResponse { meta: None })
     }
 
     async fn wait_for_terminal_exit(
         &self,
-        _args: WaitForTerminalExitRequest,
+        args: WaitForTerminalExitRequest,
     ) -> AcpResult<WaitForTerminalExitResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let terminal_id = args.terminal_id.to_string();
+        debug!(terminal_id = terminal_id.as_str(), "waiting for terminal exit");
+
+        let exit = self
+            .terminals
+            .lock()
+            .await
+            .wait_for_exit(&terminal_id)
+            .await
+            .map_err(|e| {
+                agent_client_protocol::Error::new((-32603, format!("Terminal wait failed: {e}")))
+            })?;
+
+        self.emit_event(SurgeEvent::TerminalExited {
+            terminal_id: terminal_id.clone(),
+            exit_code: exit.exit_code,
+        });
+
+        Ok(WaitForTerminalExitResponse {
+            exit_status: TerminalExitStatus {
+                exit_code: exit.exit_code,
+                signal: exit.signal,
+                meta: None,
+            },
+            meta: None,
+        })
     }
 
     async fn kill_terminal_command(
         &self,
-        _args: KillTerminalCommandRequest,
+        args: KillTerminalCommandRequest,
     ) -> AcpResult<KillTerminalCommandResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let terminal_id = args.terminal_id.to_string();
+        debug!(terminal_id = terminal_id.as_str(), "killing terminal");
+
+        self.terminals
+            .lock()
+            .await
+            .kill(&terminal_id)
+            .await
+            .map_err(|e| {
+                agent_client_protocol::Error::new((-32603, format!("Terminal kill failed: {e}")))
+            })?;
+
+        self.emit_event(SurgeEvent::TerminalKilled {
+            terminal_id,
+        });
+
+        Ok(KillTerminalCommandResponse { meta: None })
     }
 
     async fn ext_method(&self, _args: ExtRequest) -> AcpResult<ExtResponse> {

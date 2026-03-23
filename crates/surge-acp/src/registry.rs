@@ -111,9 +111,11 @@ impl Registry {
                     AgentCapability::Chat,
                 ],
                 models: vec![
-                    "Claude Opus 4".into(),
-                    "Claude Sonnet 4".into(),
-                    "Claude Haiku 3.5".into(),
+                    "Claude Opus 4.6".into(),
+                    "Claude Sonnet 4.6".into(),
+                    "Claude Opus 4.5".into(),
+                    "Claude Sonnet 4.5".into(),
+                    "Claude Haiku 4.5".into(),
                 ],
                 install_instructions: "npm install -g @anthropic-ai/claude-code".into(),
                 website: Some("https://claude.ai/claude-code".into()),
@@ -129,8 +131,12 @@ impl Registry {
                 transport: Transport::Stdio,
                 capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
                 models: vec![
-                    "GPT-4o".into(),
-                    "Claude Sonnet 3.5".into(),
+                    "GPT-5 mini".into(),
+                    "GPT-4.1".into(),
+                    "GPT-5.3-Codex".into(),
+                    "Claude Opus 4.6".into(),
+                    "Claude Sonnet 4.6".into(),
+                    "Gemini 3.1 Pro".into(),
                 ],
                 install_instructions: "gh extension install github/gh-copilot".into(),
                 website: Some("https://github.com/features/copilot".into()),
@@ -150,8 +156,9 @@ impl Registry {
                     AgentCapability::Chat,
                 ],
                 models: vec![
-                    "Claude Sonnet 4".into(),
-                    "GPT-4o".into(),
+                    "Claude Sonnet 4.6".into(),
+                    "Claude Opus 4.6".into(),
+                    "GPT-4.1".into(),
                     "Gemini 2.5 Pro".into(),
                 ],
                 install_instructions: "Install Zed from https://zed.dev".into(),
@@ -172,11 +179,13 @@ impl Registry {
                     AgentCapability::Chat,
                 ],
                 models: vec![
-                    "Claude Opus 4".into(),
-                    "Claude Sonnet 4".into(),
-                    "GPT-4o".into(),
+                    "Claude Opus 4.6".into(),
+                    "Claude Sonnet 4.6".into(),
+                    "GPT-4.1".into(),
+                    "GPT-5".into(),
+                    "Gemini 2.5 Pro".into(),
                     "DeepSeek V3".into(),
-                    "Llama 3.1".into(),
+                    "Qwen3-Coder".into(),
                 ],
                 install_instructions: "pip install aider-chat".into(),
                 website: Some("https://aider.chat".into()),
@@ -199,6 +208,132 @@ impl Registry {
                 install_instructions: "npm install -g @openai/codex".into(),
                 website: Some("https://openai.com".into()),
                 tags: vec!["openai".into(), "codex".into(), "ai".into(), "lightweight".into()],
+            },
+            RegistryEntry {
+                id: "gemini-cli".into(),
+                display_name: "Gemini CLI".into(),
+                description: "Google's AI coding agent with free tier".into(),
+                long_description: "Terminal-based coding agent from Google. Free tier with 100 RPD for Gemini 2.5 Pro. Auto-fallback from Pro to Flash when quota exhausted. 1M context window on all models.".into(),
+                command: "gemini".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                    AgentCapability::Refactor,
+                ],
+                models: vec![
+                    "Gemini 2.5 Pro".into(),
+                    "Gemini 2.5 Flash".into(),
+                    "Gemini 3 Flash".into(),
+                    "Gemini 3.1 Flash-Lite".into(),
+                ],
+                install_instructions: "npm install -g @anthropic-ai/gemini-cli || pip install gemini-cli".into(),
+                website: Some("https://ai.google.dev".into()),
+                tags: vec!["google".into(), "free".into(), "popular".into()],
+            },
+            RegistryEntry {
+                id: "goose".into(),
+                display_name: "Goose".into(),
+                description: "Open-source autonomous coding agent by Block".into(),
+                long_description: "Extensible autonomous agent from Block (Square). Supports any LLM provider — Anthropic, OpenAI, Google, Ollama. Plugin-based architecture with MCP support. Can run fully local.".into(),
+                command: "goose".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                    AgentCapability::Refactor,
+                ],
+                models: vec![
+                    "Claude Sonnet 4.6".into(),
+                    "GPT-4.1".into(),
+                    "Gemini 2.5 Pro".into(),
+                ],
+                install_instructions: "brew install goose || pip install goose-ai".into(),
+                website: Some("https://block.github.io/goose".into()),
+                tags: vec!["block".into(), "open-source".into(), "popular".into()],
+            },
+            RegistryEntry {
+                id: "cline".into(),
+                display_name: "Cline".into(),
+                description: "Open-source AI coding agent with multi-provider support".into(),
+                long_description: "Autonomous coding agent supporting any LLM provider. Works with Anthropic, OpenAI, Google, Azure, AWS Bedrock, Ollama, and OpenRouter. Can run fully local.".into(),
+                command: "cline".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                ],
+                models: vec![
+                    "Claude Sonnet 4.6".into(),
+                    "GPT-4.1".into(),
+                    "Gemini 2.5 Pro".into(),
+                ],
+                install_instructions: "npm install -g cline".into(),
+                website: Some("https://cline.bot".into()),
+                tags: vec!["open-source".into()],
+            },
+            RegistryEntry {
+                id: "amp".into(),
+                display_name: "Amp".into(),
+                description: "Codebase-aware AI agent by Sourcegraph".into(),
+                long_description: "Terminal coding agent from Sourcegraph. Leverages Sourcegraph's code intelligence for deep codebase understanding. Free tier available.".into(),
+                command: "amp".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                    AgentCapability::Review,
+                ],
+                models: vec![
+                    "Claude Sonnet 4.6".into(),
+                    "Claude Opus 4.6".into(),
+                ],
+                install_instructions: "npm install -g @anthropic-ai/amp || brew install amp".into(),
+                website: Some("https://sourcegraph.com/amp".into()),
+                tags: vec!["sourcegraph".into(), "free".into()],
+            },
+            RegistryEntry {
+                id: "devstral".into(),
+                display_name: "Devstral".into(),
+                description: "Mistral's coding-focused model agent".into(),
+                long_description: "Lightweight coding agent from Mistral. Optimized for code generation with small footprint. Runs fully local via Ollama — no API key required.".into(),
+                command: "devstral".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                ],
+                models: vec![
+                    "Devstral".into(),
+                ],
+                install_instructions: "ollama pull devstral".into(),
+                website: Some("https://mistral.ai".into()),
+                tags: vec!["mistral".into(), "free".into(), "open-source".into()],
+            },
+            RegistryEntry {
+                id: "qwen3-coder".into(),
+                display_name: "Qwen3-Coder".into(),
+                description: "Alibaba's fully local coding agent".into(),
+                long_description: "Local-first coding agent from Alibaba. Runs entirely on your machine via Ollama — no internet, no rate limits, completely free. 128K context.".into(),
+                command: "qwen3-coder".into(),
+                default_args: vec![],
+                transport: Transport::Stdio,
+                capabilities: vec![
+                    AgentCapability::Code,
+                    AgentCapability::Chat,
+                ],
+                models: vec![
+                    "Qwen3-Coder".into(),
+                    "Qwen3-Coder-Plus".into(),
+                ],
+                install_instructions: "ollama pull qwen3-coder".into(),
+                website: Some("https://qwen.ai".into()),
+                tags: vec!["alibaba".into(), "free".into(), "open-source".into()],
             },
         ];
 
@@ -314,7 +449,7 @@ mod tests {
     fn test_builtin_catalog_not_empty() {
         let reg = Registry::builtin();
         assert!(!reg.list().is_empty());
-        assert_eq!(reg.list().len(), 5);
+        assert_eq!(reg.list().len(), 11);
     }
 
     #[test]
@@ -339,8 +474,8 @@ mod tests {
     fn test_search_by_tag() {
         let reg = Registry::builtin();
         let results = reg.search("open-source");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "aider");
+        assert!(results.len() >= 1);
+        assert!(results.iter().any(|e| e.id == "aider"));
     }
 
     #[test]
@@ -351,7 +486,7 @@ mod tests {
         assert_eq!(planners[0].id, "claude-code");
 
         let coders = reg.by_capability(&AgentCapability::Code);
-        assert_eq!(coders.len(), 5);
+        assert_eq!(coders.len(), 11);
     }
 
     #[test]

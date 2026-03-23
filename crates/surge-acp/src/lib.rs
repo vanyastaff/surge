@@ -10,6 +10,7 @@ pub mod health;
 pub mod pool;
 pub mod registry;
 pub mod router;
+pub mod terminal;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use surge_core::SurgeEvent;

@@ -48,11 +48,33 @@ pub enum SurgeEvent {
     FileOperation { operation: String, path: PathBuf },
 
     // --- Terminal events ---
-    /// Terminal command executed.
-    TerminalCommand {
+    /// Terminal created for command execution.
+    TerminalCreated {
+        terminal_id: String,
         command: String,
-        exit_code: Option<i32>,
     },
+
+    /// Terminal produced output.
+    TerminalOutput {
+        terminal_id: String,
+        output: String,
+    },
+
+    /// Terminal command exited.
+    TerminalExited {
+        terminal_id: String,
+        exit_code: Option<u32>,
+    },
+
+    /// Terminal was killed.
+    TerminalKilled { terminal_id: String },
+
+    // --- Streaming events ---
+    /// Agent message chunk received during prompt streaming.
+    AgentMessageChunk { session_id: String, text: String },
+
+    /// Agent thought/reasoning chunk received.
+    AgentThoughtChunk { session_id: String, text: String },
 
     // --- Spec events ---
     /// Spec was loaded or created.

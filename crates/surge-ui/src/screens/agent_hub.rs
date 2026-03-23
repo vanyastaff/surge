@@ -768,6 +768,10 @@ fn vendor_color_for(agent_id: &str) -> Hsla {
         "codex-cli" => hsla(150.0/360.0, 0.6, 0.45, 1.0),
         "goose" => hsla(25.0/360.0, 0.8, 0.55, 1.0),
         "aider" => hsla(120.0/360.0, 0.5, 0.5, 1.0),
+        "cline" => hsla(340.0/360.0, 0.7, 0.55, 1.0),
+        "amp" => hsla(280.0/360.0, 0.6, 0.55, 1.0),
+        "devstral" => hsla(35.0/360.0, 0.9, 0.55, 1.0),
+        "qwen3-coder" => hsla(200.0/360.0, 0.7, 0.5, 1.0),
         _ => theme::TEXT_MUTED,
     }
 }
@@ -786,7 +790,7 @@ fn extract_install_method(instructions: &str) -> String {
 fn build_badges(entry: &surge_acp::RegistryEntry) -> Vec<(String, Hsla)> {
     let mut badges = Vec::new();
     // Popular agents
-    if ["claude-code", "copilot-cli", "codex-cli"].contains(&entry.id.as_str()) {
+    if entry.tags.contains(&"popular".to_string()) || ["claude-code", "copilot-cli", "codex-cli"].contains(&entry.id.as_str()) {
         badges.push(("Popular".into(), theme::WARNING));
     }
     // OSS tag

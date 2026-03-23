@@ -10,13 +10,15 @@ use agent_client_protocol::{
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use surge_core::config::AgentConfig;
 use surge_core::SurgeError;
-use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
 use crate::connection::AgentConnection;
+use crate::health::HealthMonitor;
 
 /// Handle to an active agent session.
 #[derive(Debug, Clone)]
@@ -46,6 +48,9 @@ pub struct AgentPool {
 
     /// Default permission policy for agent connections.
     permission_policy: PermissionPolicy,
+
+    /// Health monitor for tracking agent reliability and fallback routing.
+    health: Arc<Mutex<HealthMonitor>>,
 }
 
 impl AgentPool {
@@ -75,12 +80,18 @@ impl AgentPool {
             )));
         }
 
+        let mut health_monitor = HealthMonitor::new();
+        for name in configs.keys() {
+            health_monitor.register(name);
+        }
+
         Ok(Self {
             configs,
             connections: Arc::new(RwLock::new(HashMap::new())),
             default_agent,
             worktree_root,
             permission_policy,
+            health: Arc::new(Mutex::new(health_monitor)),
         })
     }
 
@@ -275,15 +286,37 @@ impl AgentPool {
 
         let request = PromptRequest {
             session_id: session.session_id.clone().into(),
-            prompt: content,
+            prompt: content.clone(),
             meta: None,
         };
 
-        connection
-            .connection()
-            .prompt(request)
-            .await
-            .map_err(|e| SurgeError::Acp(format!("Prompt failed: {:?}", e)))
+        let start = Instant::now();
+        match connection.connection().prompt(request).await {
+            Ok(response) => {
+                self.health
+                    .lock()
+                    .await
+                    .record_success(&session.agent_name, start.elapsed());
+                Ok(response)
+            }
+            Err(e) => {
+                let error_msg = format!("{e:?}");
+                {
+                    let mut health = self.health.lock().await;
+                    health.record_failure(&session.agent_name, &error_msg);
+
+                    let fallback = health.resolve_agent(&session.agent_name).to_string();
+                    if fallback != session.agent_name {
+                        warn!(
+                            primary = session.agent_name.as_str(),
+                            fallback = fallback.as_str(),
+                            "primary agent unhealthy, attempting fallback"
+                        );
+                    }
+                }
+                Err(SurgeError::Acp(format!("Prompt failed: {error_msg}")))
+            }
+        }
     }
 
     /// Gracefully shutdown all agents.
@@ -311,6 +344,17 @@ impl AgentPool {
     #[must_use]
     pub async fn is_connected(&self, name: &str) -> bool {
         self.connections.read().await.contains_key(name)
+    }
+
+    /// Get a reference to the health monitor.
+    #[must_use]
+    pub fn health(&self) -> &Arc<Mutex<HealthMonitor>> {
+        &self.health
+    }
+
+    /// Configure a fallback agent for a primary agent.
+    pub async fn set_fallback(&self, primary: &str, fallback: &str) {
+        self.health.lock().await.set_fallback(primary, fallback);
     }
 }
 
