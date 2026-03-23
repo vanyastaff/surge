@@ -6,6 +6,7 @@ use surge_acp::pool::AgentPool;
 use surge_acp::PermissionPolicy;
 use surge_core::event::SurgeEvent;
 use surge_core::id::TaskId;
+use surge_core::spec::SubtaskState;
 use surge_core::state::TaskState;
 use surge_core::SurgeConfig;
 use surge_git::worktree::GitManager;
@@ -59,13 +60,18 @@ impl Orchestrator {
     }
 
     /// Execute the full pipeline for a spec.
-    pub async fn execute(&self, spec_file: &SpecFile) -> PipelineResult {
-        let spec = &spec_file.spec;
+    ///
+    /// `spec_file` is taken by mutable reference so that subtask execution
+    /// states can be persisted to disk after each batch.
+    pub async fn execute(&self, spec_file: &mut SpecFile) -> PipelineResult {
+        // Clone the spec so we can hold a read-only reference while also
+        // mutably updating spec_file for state persistence within the loop.
+        let spec = spec_file.spec.clone();
         let task_id = TaskId::new();
         let spec_id_str = spec.id.to_string();
 
         // 1. Validate spec
-        let validation = validate_spec(spec);
+        let validation = validate_spec(&spec);
         if !validation.is_ok() {
             return PipelineResult::Failed {
                 reason: format!("Spec validation failed: {}", validation.errors.join("; ")),
@@ -111,8 +117,7 @@ impl Orchestrator {
             }
         };
 
-        // Forward pool events (TokensConsumed, AgentHealthChanged, etc.) to
-        // the orchestrator's broadcast channel so subscribers get full coverage.
+        // Forward pool events to the orchestrator broadcast channel.
         let mut pool_rx = pool.subscribe();
         let pipeline_event_tx = self.event_tx.clone();
         tokio::spawn(async move {
@@ -121,8 +126,6 @@ impl Orchestrator {
             }
         });
 
-        // Pre-connect the default agent in the background so the first prompt
-        // doesn't pay the full connection latency.
         pool.warm_up();
 
         // 4. Create ACP session
@@ -138,8 +141,8 @@ impl Orchestrator {
         };
         info!("ACP session created");
 
-        // 5. Build dependency graph and get batches
-        let graph = match DependencyGraph::from_spec(spec) {
+        // 5. Build dependency graph and topological batches
+        let graph = match DependencyGraph::from_spec(&spec) {
             Ok(g) => g,
             Err(e) => {
                 pool.shutdown().await;
@@ -161,7 +164,6 @@ impl Orchestrator {
             }
         };
 
-        // Resolve SubtaskId batches into Subtask batches
         let batches: Vec<Vec<_>> = batch_ids
             .iter()
             .map(|ids| {
@@ -179,47 +181,93 @@ impl Orchestrator {
             ExecutorConfig::default(),
         );
 
-        let specs_dir = self
-            .config
-            .working_dir
-            .join(".surge")
-            .join("specs");
+        let specs_dir = self.config.working_dir.join(".surge").join("specs");
         let gate_manager = GateManager::new(
             self.config.surge_config.pipeline.gates.clone(),
             specs_dir,
         );
 
         // 7. Execute subtasks in batches
+        let spec_id = spec.id;
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Draft,
-            new_state: TaskState::Executing {
-                completed: 0,
-                total,
-            },
+            new_state: TaskState::Executing { completed: 0, total },
         });
 
-        // Check gate once before batch execution
-        match gate_manager.check_gate(Phase::Executing, spec.id) {
-            GateAction::Pause { reason } => {
-                pool.shutdown().await;
-                return PipelineResult::Paused {
-                    phase: Phase::Executing,
-                    reason,
-                };
+        let mut completed: usize = 0;
+        let mut failed_batches: usize = 0;
+        // Human input to inject into the next batch's first subtask (consumed once).
+        let mut pending_human_input: Option<String> = None;
+
+        for (i, batch) in batches.iter().enumerate() {
+            // Gate check between batches (including before the first).
+            match gate_manager.check_gate(Phase::Executing, spec_id) {
+                GateAction::Pause { reason } => {
+                    pool.shutdown().await;
+                    return PipelineResult::Paused {
+                        phase: Phase::Executing,
+                        reason,
+                    };
+                }
+                GateAction::HumanInput { content } => {
+                    info!("human input received, will inject into next batch");
+                    pending_human_input = Some(content);
+                }
+                GateAction::Continue => {}
             }
-            GateAction::HumanInput { .. } | GateAction::Continue => {}
+
+            info!(batch_index = i, batch_size = batch.len(), "executing batch");
+
+            let result = parallel_exec
+                .execute_batch(
+                    &spec,
+                    batch,
+                    task_id,
+                    &pool,
+                    &session,
+                    &git,
+                    &self.event_tx,
+                    pending_human_input.as_deref(),
+                )
+                .await;
+
+            // Human input consumed after first batch that received it.
+            pending_human_input = None;
+
+            completed += result.successes.len();
+
+            // Persist subtask states to disk (best-effort — log and continue on error).
+            if let Some(ref path) = spec_file.path.clone() {
+                for subtask_id in &result.successes {
+                    if let Err(e) =
+                        spec_file.update_subtask_state(path, *subtask_id, SubtaskState::Completed)
+                    {
+                        warn!(subtask_id = %subtask_id, error = %e, "failed to persist subtask state");
+                    }
+                }
+                for (subtask_id, _) in &result.failures {
+                    if let Err(e) =
+                        spec_file.update_subtask_state(path, *subtask_id, SubtaskState::Failed)
+                    {
+                        warn!(subtask_id = %subtask_id, error = %e, "failed to persist subtask state");
+                    }
+                }
+            }
+
+            if !result.all_succeeded() {
+                failed_batches += 1;
+                warn!(
+                    batch_index = i,
+                    failures = result.failures.len(),
+                    "batch had failures, stopping further batches"
+                );
+                break;
+            }
         }
 
-        let batch_results = parallel_exec
-            .execute_all_batches(spec, &batches, task_id, &pool, &session, &git, &self.event_tx)
-            .await;
-
-        let completed: usize = batch_results.iter().map(|r| r.successes.len()).sum();
-        let failed: usize = batch_results.iter().map(|r| r.failures.len()).sum();
-
-        if failed > 0 {
-            warn!(completed, failed, "some subtasks failed during batch execution");
+        if failed_batches > 0 {
+            warn!(completed, "some subtasks failed during batch execution");
         }
 
         // 8. QA review
@@ -231,7 +279,7 @@ impl Orchestrator {
 
         let qa_reviewer = QaReviewer::new(self.config.surge_config.pipeline.max_qa_iterations);
         let qa_result = qa_reviewer
-            .run(spec, task_id, &pool, &session, &git, &self.event_tx)
+            .run(&spec, task_id, &pool, &session, &git, &self.event_tx)
             .await;
 
         info!(
@@ -260,6 +308,7 @@ impl Orchestrator {
             }
             QaVerdict::NeedsFix { issues } => {
                 pool.shutdown().await;
+                let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
                     reason: format!("QA review failed after max iterations: {issues}"),
                 };

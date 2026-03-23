@@ -71,6 +71,7 @@ impl SubtaskExecutor {
     /// Execute a subtask: build prompt, send to agent, commit on success.
     ///
     /// Retries up to `max_retries` times on failure.
+    /// If `human_input` is provided it is appended to the prompt.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &mut self,
@@ -81,17 +82,23 @@ impl SubtaskExecutor {
         session: &SessionHandle,
         git: &GitManager,
         event_tx: &broadcast::Sender<SurgeEvent>,
+        human_input: Option<&str>,
     ) -> SubtaskResult {
         let subtask_id = subtask.id;
 
-        // Emit start event
         let _ = event_tx.send(SurgeEvent::SubtaskStarted {
             task_id,
             subtask_id,
         });
 
         let ctx = SubtaskContext::new(spec, subtask);
-        let prompt_text = ctx.build_prompt();
+        let mut prompt_text = ctx.build_prompt();
+
+        if let Some(input) = human_input {
+            prompt_text.push_str(&format!(
+                "\n## Human Input\n\n{input}\n\nPlease incorporate this guidance into your implementation.\n"
+            ));
+        }
 
         let content = vec![ContentBlock::Text(TextContent::new(prompt_text))];
 
@@ -108,7 +115,6 @@ impl SubtaskExecutor {
 
             match pool.prompt(session, content.clone()).await {
                 Ok(_response) => {
-                    // Attempt to commit changes made by the agent
                     let commit_msg =
                         format!("surge: subtask {} — {}", subtask.title, subtask_id);
                     let spec_id_str = spec.id.to_string();

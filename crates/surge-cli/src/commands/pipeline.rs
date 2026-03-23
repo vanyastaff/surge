@@ -22,7 +22,7 @@ pub async fn run(
         config.pipeline.max_parallel = p;
     }
 
-    let spec_file = load_spec_by_id(&spec_id)?;
+    let mut spec_file = load_spec_by_id(&spec_id)?;
 
     println!("⚡ Running spec: {}", spec_file.spec.title);
     println!("   Subtasks: {}", spec_file.spec.subtasks.len());
@@ -53,7 +53,7 @@ pub async fn run(
         }
     });
 
-    let result = orchestrator.execute(&spec_file).await;
+    let result = orchestrator.execute(&mut spec_file).await;
 
     match result {
         surge_orchestrator::PipelineResult::Completed => {

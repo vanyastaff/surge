@@ -1,16 +1,14 @@
 //! Parallel batch executor — runs subtask batches with bounded concurrency.
 
-use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
 use surge_git::worktree::GitManager;
 use tokio::sync::{broadcast, Semaphore};
-use tracing::{info, warn};
+use tracing::warn;
 
-use crate::context::SubtaskContext;
-use crate::executor::ExecutorConfig;
+use crate::executor::{ExecutorConfig, SubtaskExecutor, SubtaskResult};
 
 /// Result of executing a single batch of subtasks.
 #[derive(Debug, Clone)]
@@ -33,7 +31,7 @@ impl BatchResult {
 ///
 /// Within a batch, subtasks are independent and can run concurrently
 /// (bounded by `max_parallel` via a [`Semaphore`]). Batches themselves
-/// run sequentially.
+/// run sequentially — see [`crate::pipeline`] for the inter-batch loop.
 pub struct ParallelExecutor {
     /// Maximum number of subtasks to run concurrently within a batch.
     max_parallel: usize,
@@ -67,10 +65,10 @@ impl ParallelExecutor {
 
     /// Execute a single batch of subtasks with bounded concurrency.
     ///
-    /// Since `AgentPool`/sessions may not be `Send`-safe for true `JoinSet`
-    /// parallelism, this currently uses a sequential loop bounded by the
-    /// semaphore. Each subtask builds a prompt, sends it to the agent, and
-    /// commits the result via git.
+    /// Uses [`SubtaskExecutor`] for per-subtask retry logic and circuit breaker.
+    /// If the circuit breaker trips mid-batch, remaining subtasks are skipped.
+    ///
+    /// `human_input` is injected into the first subtask's prompt only.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_batch(
         &self,
@@ -81,138 +79,40 @@ impl ParallelExecutor {
         session: &SessionHandle,
         git: &GitManager,
         event_tx: &broadcast::Sender<SurgeEvent>,
+        human_input: Option<&str>,
     ) -> BatchResult {
         let semaphore = Semaphore::new(self.max_parallel);
+        let mut executor = SubtaskExecutor::new(self.executor_config.clone());
         let mut successes = Vec::new();
         let mut failures = Vec::new();
 
-        for subtask in subtasks {
-            // Acquire semaphore permit (sequential loop, so this is mostly
-            // a placeholder for future true-parallel upgrade).
+        for (i, subtask) in subtasks.iter().enumerate() {
             let _permit = semaphore.acquire().await.expect("semaphore closed");
 
-            let subtask_id = subtask.id;
-
-            // Emit start event
-            let _ = event_tx.send(SurgeEvent::SubtaskStarted {
-                task_id,
-                subtask_id,
-            });
-
-            let ctx = SubtaskContext::new(spec, subtask);
-            let prompt_text = ctx.build_prompt();
-
-            let content = vec![ContentBlock::Text(TextContent::new(prompt_text))];
-
-            let mut last_error = String::from("unknown error");
-            let mut succeeded = false;
-
-            for attempt in 0..=self.executor_config.max_retries {
-                if attempt > 0 {
-                    info!(
-                        subtask_id = %subtask_id,
-                        attempt,
-                        "retrying subtask"
-                    );
-                }
-
-                match pool.prompt(session, content.clone()).await {
-                    Ok(_response) => {
-                        let commit_msg =
-                            format!("surge: subtask {} — {}", subtask.title, subtask_id);
-                        let spec_id_str = spec.id.to_string();
-
-                        match git.commit(&spec_id_str, &commit_msg) {
-                            Ok(oid) => {
-                                info!(
-                                    subtask_id = %subtask_id,
-                                    %oid,
-                                    "subtask completed and committed"
-                                );
-                                succeeded = true;
-                                break;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    subtask_id = %subtask_id,
-                                    error = %e,
-                                    "commit failed after agent prompt"
-                                );
-                                last_error = format!("commit failed: {e}");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            subtask_id = %subtask_id,
-                            attempt,
-                            error = %e,
-                            "agent prompt failed"
-                        );
-                        last_error = format!("agent prompt failed: {e}");
-                    }
-                }
-            }
-
-            if succeeded {
-                let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
-                    task_id,
-                    subtask_id,
-                    success: true,
-                });
-                successes.push(subtask_id);
-            } else {
-                let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
-                    task_id,
-                    subtask_id,
-                    success: false,
-                });
-                failures.push((subtask_id, last_error));
-            }
-        }
-
-        BatchResult {
-            successes,
-            failures,
-        }
-    }
-
-    /// Execute all batches sequentially.
-    ///
-    /// Each batch is a slice of subtasks that can run concurrently within
-    /// the batch. Batches are processed one at a time in order.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn execute_all_batches(
-        &self,
-        spec: &Spec,
-        batches: &[Vec<Subtask>],
-        task_id: TaskId,
-        pool: &AgentPool,
-        session: &SessionHandle,
-        git: &GitManager,
-        event_tx: &broadcast::Sender<SurgeEvent>,
-    ) -> Vec<BatchResult> {
-        let mut results = Vec::with_capacity(batches.len());
-
-        for (i, batch) in batches.iter().enumerate() {
-            info!(batch_index = i, batch_size = batch.len(), "executing batch");
-            let result = self
-                .execute_batch(spec, batch, task_id, pool, session, git, event_tx)
-                .await;
-
-            let all_ok = result.all_succeeded();
-            results.push(result);
-
-            if !all_ok {
+            if executor.is_circuit_broken() {
                 warn!(
-                    batch_index = i,
-                    "batch had failures, stopping further batches"
+                    subtask_id = %subtask.id,
+                    "circuit breaker tripped — skipping subtask"
                 );
-                break;
+                failures.push((subtask.id, "circuit breaker tripped".to_string()));
+                continue;
+            }
+
+            // Human input only goes to the first subtask in the batch.
+            let input = if i == 0 { human_input } else { None };
+
+            match executor
+                .execute(spec, subtask, task_id, pool, session, git, event_tx, input)
+                .await
+            {
+                SubtaskResult::Success { subtask_id } => successes.push(subtask_id),
+                SubtaskResult::Failed { subtask_id, reason } => {
+                    failures.push((subtask_id, reason));
+                }
             }
         }
 
-        results
+        BatchResult { successes, failures }
     }
 }
 
