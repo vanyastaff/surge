@@ -374,29 +374,38 @@ impl AgentHubScreen {
                         SessionStatus::Completed => ("✓", theme::SUCCESS),
                         SessionStatus::Failed => ("✕", theme::ERROR),
                     };
-                    div().h_flex().gap_3().items_center().px_3().py(px(6.0))
+                    let status_label = match s.status {
+                        SessionStatus::Running => "running",
+                        SessionStatus::Completed => "completed",
+                        SessionStatus::Failed => "failed",
+                    };
+                    let detail = [
+                        s.tokens.map(|t| format!("{} tok", format_tokens(t))),
+                        s.duration.clone(),
+                    ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+
+                    div().h_flex().items_center().px_3().py(px(7.0))
                         .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
                         .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
                         // Icon
-                        .child(div().text_xs().text_color(color).w(px(14.0)).child(icon.to_string()))
+                        .child(div().w(px(20.0)).text_xs().text_color(color).child(icon.to_string()))
                         // Label
-                        .child(div().flex_1().text_xs().text_color(theme::TEXT_PRIMARY).child(s.label.clone()))
-                        // Status
-                        .child(div().text_xs().text_color(color).w(px(70.0)).child(match s.status {
-                            SessionStatus::Running => "running".to_string(),
-                            SessionStatus::Completed => "completed".to_string(),
-                            SessionStatus::Failed => "failed".to_string(),
-                        }))
+                        .child(div().w(px(220.0)).text_xs().text_color(theme::TEXT_PRIMARY).child(s.label.clone()))
+                        // Status badge
+                        .child(
+                            div().w(px(80.0))
+                                .child(
+                                    div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
+                                        .bg(color.opacity(0.1)).text_color(color)
+                                        .child(status_label.to_string()),
+                                ),
+                        )
                         // Time ago
-                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).w(px(60.0)).child(s.time_ago.clone()))
+                        .child(div().w(px(70.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(s.time_ago.clone()))
                         // Tokens + duration
-                        .when(s.tokens.is_some() || s.duration.is_some(), |el: Div| {
-                            let info = [
-                                s.tokens.map(|t| format!("{} tok", format_tokens(t))),
-                                s.duration.clone(),
-                            ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-                            el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(info))
-                        })
+                        .child(div().flex_1().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(
+                            if detail.is_empty() { "—".to_string() } else { detail }
+                        ))
                 }).collect();
 
                 el.child(
