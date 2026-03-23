@@ -60,7 +60,6 @@ pub struct AgentInfo {
     pub subtasks_failed: u32,
     pub avg_subtask_secs: u32,
     pub qa_first_pass_rate: f32,
-    pub assigned_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,7 +179,15 @@ impl AgentHubScreen {
             // Row 1: dot + name + session badge
             .child(
                 div().h_flex().gap_2().items_center()
-                    .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(agent.status.color()))
+                    .child(
+                        if agent.status == AgentStatus::NotInstalled {
+                            // Hollow ring for not-installed
+                            div().w(px(8.0)).h(px(8.0)).rounded_full()
+                                .border_1().border_color(theme::TEXT_MUTED.opacity(0.4))
+                        } else {
+                            div().w(px(8.0)).h(px(8.0)).rounded_full().bg(agent.status.color())
+                        }
+                    )
                     .child(
                         div().flex_1().text_sm().font_weight(FontWeight::BOLD)
                             .text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()),
@@ -301,44 +308,28 @@ impl AgentHubScreen {
                             .child(div().h_full().rounded_full().bg(color).w(relative(pct)))),
                 )
             })
-            // ── Capabilities + Assigned Files + Today ──
+            // ── Capabilities (visual flavor, from agent registry catalog) ──
             .child(
-                div().v_flex().gap_3().p_3().rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-                    // Capabilities
+                div().v_flex().gap(px(6.0)).p_3().rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
+                    .child(div().h_flex().gap_2().items_center()
+                        .child(Icon::new(IconName::Star).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.5)))
+                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Capabilities".to_string()))
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child("from registry".to_string())))
+                    .child(div().h_flex().gap_1().flex_wrap().children(
+                        agent.capabilities.iter().map(|c| badge(c, cap_color(c))))),
+            )
+            // ── Today stats (full-width cards) ──
+            .child(
+                div().v_flex().gap_2()
+                    .child(div().h_flex().gap_2().items_center()
+                        .child(Icon::new(IconName::ChartPie).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.5)))
+                        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Today".to_string())))
                     .child(
-                        div().v_flex().gap(px(6.0))
-                            .child(div().h_flex().gap_2().items_center()
-                                .child(Icon::new(IconName::Star).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.5)))
-                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Capabilities".to_string())))
-                            .child(div().h_flex().gap_1().flex_wrap().children(
-                                agent.capabilities.iter().map(|c| badge(c, cap_color(c))))),
-                    )
-                    // Assigned Files
-                    .child(
-                        div().v_flex().gap(px(6.0)).pt_2().border_t_1().border_color(theme::TEXT_MUTED.opacity(0.04))
-                            .child(div().h_flex().gap_2().items_center()
-                                .child(Icon::new(IconName::Folder).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.5)))
-                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Assigned Files".to_string())))
-                            .child(div().text_xs().text_color(theme::TEXT_MUTED)
-                                .child(if agent.assigned_patterns.is_empty() {
-                                    "No patterns assigned".to_string()
-                                } else {
-                                    format!("{} ({} patterns)", agent.assigned_patterns.join(", "), agent.assigned_patterns.len())
-                                })),
-                    )
-                    // Today stats
-                    .child(
-                        div().v_flex().gap(px(6.0)).pt_2().border_t_1().border_color(theme::TEXT_MUTED.opacity(0.04))
-                            .child(div().h_flex().gap_2().items_center()
-                                .child(Icon::new(IconName::ChartPie).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.5)))
-                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Today".to_string())))
-                            .child(
-                                div().h_flex().gap_4()
-                                    .child(today_stat("Subtasks", &format!("{} completed", agent.subtasks_completed), theme::SUCCESS))
-                                    .child(today_stat("Failures", &format!("{}", agent.subtasks_failed), if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
-                                    .child(today_stat("Avg time", &format!("{}s/subtask", agent.avg_subtask_secs), theme::TEXT_MUTED))
-                                    .child(today_stat("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING }))),
-                    ),
+                        div().h_flex().gap_2()
+                            .child(stat_card("Subtasks", &format!("{} completed", agent.subtasks_completed), IconName::Check, theme::SUCCESS))
+                            .child(stat_card("Failures", &format!("{}", agent.subtasks_failed), IconName::CircleX, if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
+                            .child(stat_card("Avg time", &format!("{}s", agent.avg_subtask_secs), IconName::Loader, theme::TEXT_MUTED))
+                            .child(stat_card("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), IconName::CircleCheck, if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING }))),
             )
             // ── Error ──
             .when(agent.last_error.is_some(), |el: Div| {
@@ -484,9 +475,14 @@ fn badge(text: &str, color: Hsla) -> Div {
 }
 
 fn status_pill(status: AgentStatus) -> Div {
+    let dot = if status == AgentStatus::NotInstalled {
+        div().w(px(6.0)).h(px(6.0)).rounded_full().border_1().border_color(theme::TEXT_MUTED.opacity(0.4))
+    } else {
+        div().w(px(6.0)).h(px(6.0)).rounded_full().bg(status.color())
+    };
     div().h_flex().gap(px(6.0)).items_center().px(px(10.0)).py(px(4.0)).rounded_full()
         .bg(status.color().opacity(0.1))
-        .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(status.color()))
+        .child(dot)
         .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(status.color()).child(status.label().to_string()))
 }
 
@@ -503,12 +499,6 @@ fn stat_card(label: &str, value: &str, icon: IconName, color: Hsla) -> Div {
             .child(Icon::new(icon).size_3().text_color(color.opacity(0.5)))
             .child(div().text_xs().text_color(theme::TEXT_MUTED).child(label.to_string())))
         .child(div().text_base().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
-}
-
-fn today_stat(label: &str, value: &str, color: Hsla) -> Div {
-    div().v_flex().gap(px(2.0))
-        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6)).child(label.to_string()))
-        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(color).child(value.to_string()))
 }
 
 fn cap_color(cap: &str) -> Hsla {
@@ -608,7 +598,6 @@ fn demo_agents() -> Vec<AgentInfo> {
             rate_limit_remaining: Some(158), rate_limit_total: Some(200), rate_limit_reset_secs: Some(1800),
             last_error: None, last_seen: None, uptime: Some("4h 23m".into()),
             subtasks_completed: 8, subtasks_failed: 0, avg_subtask_secs: 45, qa_first_pass_rate: 0.87,
-            assigned_patterns: vec!["**/*.rs".into(), "**/*.toml".into(), "**/*.md".into()],
         },
         AgentInfo {
             name: "copilot-cli".into(), display_name: "GitHub Copilot CLI".into(),
@@ -623,7 +612,6 @@ fn demo_agents() -> Vec<AgentInfo> {
             last_error: Some("Connection refused: process not running".into()),
             last_seen: Some("2h ago".into()), uptime: None,
             subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
-            assigned_patterns: vec![],
         },
         AgentInfo {
             name: "aider".into(), display_name: "Aider".into(),
@@ -636,7 +624,6 @@ fn demo_agents() -> Vec<AgentInfo> {
             rate_limit_remaining: None, rate_limit_total: None, rate_limit_reset_secs: None,
             last_error: None, last_seen: None, uptime: None,
             subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
-            assigned_patterns: vec![],
         },
     ]
 }
