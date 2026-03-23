@@ -368,6 +368,15 @@ pub struct ResilienceConfig {
     /// Seconds to wait for a process to exit cleanly before SIGKILL.
     #[serde(default = "default_shutdown_grace_secs")]
     pub shutdown_grace_secs: u64,
+    /// Retry policy configuration with backoff strategies.
+    #[serde(default)]
+    pub retry_policy: RetryPolicy,
+    /// Number of consecutive failures before circuit breaker trips.
+    #[serde(default = "default_circuit_breaker_threshold")]
+    pub circuit_breaker_threshold: u32,
+    /// If true, auth failures (401) fail immediately without retry.
+    #[serde(default = "default_auth_failure_immediate_fail")]
+    pub auth_failure_immediate_fail: bool,
 }
 
 impl Default for ResilienceConfig {
@@ -378,6 +387,9 @@ impl Default for ResilienceConfig {
             prompt_timeout_secs: default_prompt_timeout_secs(),
             prompt_retries: default_prompt_retries(),
             shutdown_grace_secs: default_shutdown_grace_secs(),
+            retry_policy: RetryPolicy::default(),
+            circuit_breaker_threshold: default_circuit_breaker_threshold(),
+            auth_failure_immediate_fail: default_auth_failure_immediate_fail(),
         }
     }
 }
@@ -387,6 +399,8 @@ fn default_session_timeout_secs() -> u64 { 10 }
 fn default_prompt_timeout_secs() -> u64 { 300 }
 fn default_prompt_retries() -> u32 { 1 }
 fn default_shutdown_grace_secs() -> u64 { 5 }
+fn default_circuit_breaker_threshold() -> u32 { 5 }
+fn default_auth_failure_immediate_fail() -> bool { true }
 
 impl Default for SurgeConfig {
     fn default() -> Self {
