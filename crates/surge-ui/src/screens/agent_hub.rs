@@ -368,42 +368,36 @@ impl AgentHubScreen {
             .when(agent.capabilities.models.is_some() || agent.capabilities.effort.is_some() || agent.capabilities.permissions.is_some(), |el: Div| {
                 let caps = &agent.capabilities;
 
-                // Models — compact card grid
+                // Models — table rows like Recent Sessions
                 let models_section = caps.models.as_ref().map(|models| {
-                    let cards: Vec<Div> = models.iter().map(|m| {
+                    let rows: Vec<Div> = models.iter().map(|m| {
                         let opacity = if m.enabled { 1.0 } else { 0.4 };
-                        div()
-                            .h_flex().gap_2().items_center()
-                            .px(px(8.0)).py(px(5.0)).rounded_md()
-                            .bg(if m.enabled { theme::PRIMARY.opacity(0.06) } else { theme::TEXT_MUTED.opacity(0.03) })
-                            .border_1().border_color(if m.enabled { theme::PRIMARY.opacity(0.15) } else { theme::TEXT_MUTED.opacity(0.05) })
-                            // Checkbox
-                            .child(div().text_xs().text_color(if m.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
+                        div().w_full().h_flex().items_center().px_3().py(px(6.0))
+                            .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
+                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
+                            .child(div().flex_shrink_0().w(px(20.0)).text_xs()
+                                .text_color(if m.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
                                 .child(if m.enabled { "☑" } else { "☐" }))
-                            // Name
-                            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD)
+                            .child(div().flex_1().min_w_0().text_xs().font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme::TEXT_PRIMARY.opacity(opacity)).child(m.name.clone()))
-                            // Spacer
-                            .child(div().flex_1())
-                            // Price + context + note
-                            .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.7)).child(m.price.clone()))
-                            .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.5)).child(m.context.clone()))
-                            .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.4)).child(m.note.clone()))
+                            .child(div().flex_shrink_0().w(px(65.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.7)).child(m.price.clone()))
+                            .child(div().flex_shrink_0().w(px(55.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.6)).child(m.context.clone()))
+                            .child(div().flex_shrink_0().w(px(100.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.5)).child(m.note.clone()))
                     }).collect();
-                    detail_section("Models", div().v_flex().gap(px(4.0)).children(cards))
+                    detail_section("Models",
+                        div().v_flex().rounded_lg().bg(theme::SURFACE)
+                            .border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden()
+                            .children(rows))
                 });
 
-                // Effort — compact 2x2 grid
+                // Effort — table rows
                 let effort_section = caps.effort.as_ref().map(|eff| {
                     detail_section("Effort / Thinking",
-                        div().v_flex().gap(px(6.0))
-                            .child(effort_row("Default", eff.default))
-                            .child(
-                                div().h_flex().gap_2()
-                                    .child(effort_card("Planning", eff.planning))
-                                    .child(effort_card("Coding", eff.coding))
-                                    .child(effort_card("QA Review", eff.qa_review)),
-                            ),
+                        div().v_flex().gap(px(4.0))
+                            .child(effort_row("Default effort", eff.default))
+                            .child(effort_row("Planning", eff.planning))
+                            .child(effort_row("Coding", eff.coding))
+                            .child(effort_row("QA Review", eff.qa_review)),
                     )
                 });
 
