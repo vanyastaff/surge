@@ -133,8 +133,36 @@ impl AgentDiscovery {
     /// Returns the path to the agent binary if found via env vars.
     #[must_use]
     pub fn from_env(&self, kind: AgentKind) -> Option<PathBuf> {
-        // TODO: Implement env var detection in subtask-1-4
         debug!("Checking environment for {kind}");
+
+        // Define environment variable names to check for each agent kind
+        let env_vars = match kind {
+            AgentKind::Claude => vec!["CLAUDE_PATH", "CLAUDE_BIN"],
+            AgentKind::Copilot => vec!["COPILOT_PATH", "COPILOT_BIN", "GH_PATH"],
+            AgentKind::Codex => vec!["CODEX_PATH", "CODEX_BIN"],
+            AgentKind::Gemini => vec!["GEMINI_PATH", "GEMINI_BIN"],
+        };
+
+        // Try each environment variable in order
+        for env_var in env_vars {
+            if let Ok(value) = std::env::var(env_var) {
+                debug!("Found {env_var}={value}");
+                let path = PathBuf::from(value);
+
+                // Validate the path exists and is a file
+                if path.exists() && path.is_file() {
+                    debug!("Validated {kind} at {:?} from {env_var}", path);
+                    return Some(path);
+                } else {
+                    warn!(
+                        "Environment variable {env_var} points to invalid path: {:?}",
+                        path
+                    );
+                }
+            }
+        }
+
+        debug!("No environment variables found for {kind}");
         None
     }
 
@@ -392,6 +420,102 @@ mod tests {
                 // just verifying that the version detection logic works
                 // The real agent detection will be tested in integration tests
             }
+        }
+    }
+
+    #[test]
+    fn test_env_detection() {
+        use std::env;
+        use std::fs::File;
+
+        let discovery = AgentDiscovery::new();
+
+        // Test 1: No environment variables set
+        let _result = discovery.from_env(AgentKind::Claude);
+        // Should return None if no env vars are set (unless user has them set)
+        // We can't assert None here because the user might have these set
+
+        // Test 2: Set an environment variable pointing to a non-existent path
+        unsafe {
+            env::set_var("CLAUDE_PATH", "/non/existent/path");
+        }
+        let result = discovery.from_env(AgentKind::Claude);
+        assert!(
+            result.is_none(),
+            "Should return None for non-existent path"
+        );
+        unsafe {
+            env::remove_var("CLAUDE_PATH");
+        }
+
+        // Test 3: Create a temporary file and point env var to it
+        let temp_dir = env::temp_dir();
+        let temp_file = temp_dir.join("test_claude_agent");
+
+        // Create the temporary file
+        if File::create(&temp_file).is_ok() {
+            // Set env var to the temp file
+            unsafe {
+                env::set_var("CLAUDE_PATH", temp_file.to_string_lossy().as_ref());
+            }
+
+            let result = discovery.from_env(AgentKind::Claude);
+            assert!(
+                result.is_some(),
+                "Should find agent via CLAUDE_PATH env var"
+            );
+            assert_eq!(
+                result.unwrap(),
+                temp_file,
+                "Should return the correct path from env var"
+            );
+
+            // Clean up
+            unsafe {
+                env::remove_var("CLAUDE_PATH");
+            }
+            let _ = std::fs::remove_file(&temp_file);
+        }
+
+        // Test 4: Test fallback to secondary env var
+        let temp_file2 = temp_dir.join("test_claude_agent2");
+        if File::create(&temp_file2).is_ok() {
+            // Don't set CLAUDE_PATH, but set CLAUDE_BIN
+            unsafe {
+                env::set_var("CLAUDE_BIN", temp_file2.to_string_lossy().as_ref());
+            }
+
+            let result = discovery.from_env(AgentKind::Claude);
+            assert!(
+                result.is_some(),
+                "Should find agent via CLAUDE_BIN env var"
+            );
+
+            // Clean up
+            unsafe {
+                env::remove_var("CLAUDE_BIN");
+            }
+            let _ = std::fs::remove_file(&temp_file2);
+        }
+
+        // Test 5: Test Copilot with GH_PATH
+        let temp_file3 = temp_dir.join("test_gh_agent");
+        if File::create(&temp_file3).is_ok() {
+            unsafe {
+                env::set_var("GH_PATH", temp_file3.to_string_lossy().as_ref());
+            }
+
+            let result = discovery.from_env(AgentKind::Copilot);
+            assert!(
+                result.is_some(),
+                "Should find Copilot via GH_PATH env var"
+            );
+
+            // Clean up
+            unsafe {
+                env::remove_var("GH_PATH");
+            }
+            let _ = std::fs::remove_file(&temp_file3);
         }
     }
 }
