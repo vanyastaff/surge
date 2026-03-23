@@ -9,6 +9,9 @@
 
 pub use error::{PersistenceError, Result};
 
+/// Data models for token usage tracking
+pub mod models;
+
 /// Persistence error types
 pub mod error {
     use thiserror::Error;
