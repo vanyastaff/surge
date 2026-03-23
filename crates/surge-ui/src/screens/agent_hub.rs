@@ -48,10 +48,12 @@ pub struct AvailableAgent {
     pub name: String,
     pub display_name: String,
     pub vendor: String,
+    pub vendor_color: Hsla,
     pub description: String,
     pub pricing: String,
     pub install_command: String,
-    pub badge: Option<String>,
+    pub install_method: String, // "npm", "brew", "pip", "download", "ollama"
+    pub badges: Vec<(String, Hsla)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,26 +115,49 @@ impl AgentHubScreen {
                     uptime: "—".into(), last_seen: None, recent_sessions: vec![],
                 },
             ],
-            available: vec![
-                AvailableAgent { name: "gemini-cli".into(), display_name: "Gemini CLI".into(), vendor: "Google".into(),
-                    description: "Google's AI coding assistant with Gemini models".into(),
-                    pricing: "Free tier".into(), install_command: "npm install -g @anthropic/gemini-cli".into(), badge: Some("Popular".into()) },
-                AvailableAgent { name: "codex".into(), display_name: "OpenAI Codex".into(), vendor: "OpenAI".into(),
-                    description: "OpenAI's autonomous coding agent".into(),
-                    pricing: "API key".into(), install_command: "npm install -g @openai/codex".into(), badge: Some("Popular".into()) },
-                AvailableAgent { name: "goose".into(), display_name: "Goose".into(), vendor: "Square (OSS)".into(),
-                    description: "Open source AI developer agent".into(),
-                    pricing: "Free (OSS)".into(), install_command: "brew install goose".into(), badge: Some("Popular".into()) },
-                AvailableAgent { name: "cline".into(), display_name: "Cline".into(), vendor: "Open source".into(),
-                    description: "Autonomous coding agent with multi-model support".into(),
-                    pricing: "Free (OSS)".into(), install_command: "npm install -g cline".into(), badge: None },
-                AvailableAgent { name: "devstral".into(), display_name: "Devstral".into(), vendor: "Mistral".into(),
-                    description: "Mistral's coding-focused model".into(),
-                    pricing: "API key".into(), install_command: "pip install mistral-cli".into(), badge: Some("New".into()) },
-                AvailableAgent { name: "kiro".into(), display_name: "Kiro".into(), vendor: "Amazon".into(),
-                    description: "Amazon's spec-driven AI IDE".into(),
-                    pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(), badge: Some("New".into()) },
-            ],
+            available: {
+                let google = hsla(217.0/360.0, 0.9, 0.6, 1.0);
+                let openai = hsla(150.0/360.0, 0.6, 0.45, 1.0);
+                let square = hsla(25.0/360.0, 0.8, 0.55, 1.0);
+                let mistral = hsla(25.0/360.0, 0.8, 0.55, 1.0);
+                let amazon = hsla(30.0/360.0, 0.9, 0.5, 1.0);
+                let oss = theme::TEXT_MUTED;
+                let alibaba = hsla(210.0/360.0, 0.6, 0.5, 1.0);
+                let badge_popular = theme::WARNING;
+                let badge_new = theme::SUCCESS;
+                let badge_local = hsla(210.0/360.0, 0.7, 0.55, 1.0);
+                let badge_oss = theme::TEXT_MUTED;
+                vec![
+                    AvailableAgent { name: "gemini-cli".into(), display_name: "Gemini CLI".into(), vendor: "Google".into(), vendor_color: google,
+                        description: "Google's AI coding assistant with Gemini models and 1M token context".into(),
+                        pricing: "Free tier".into(), install_command: "npm install -g @google/gemini-cli".into(), install_method: "npm".into(),
+                        badges: vec![("Popular".into(), badge_popular)] },
+                    AvailableAgent { name: "codex".into(), display_name: "OpenAI Codex".into(), vendor: "OpenAI".into(), vendor_color: openai,
+                        description: "OpenAI's autonomous coding agent with sandboxed execution".into(),
+                        pricing: "API key".into(), install_command: "npm install -g @openai/codex".into(), install_method: "npm".into(),
+                        badges: vec![("Popular".into(), badge_popular)] },
+                    AvailableAgent { name: "goose".into(), display_name: "Goose".into(), vendor: "Square".into(), vendor_color: square,
+                        description: "Open source AI developer agent with extensible toolkit".into(),
+                        pricing: "Free".into(), install_command: "brew install goose".into(), install_method: "brew".into(),
+                        badges: vec![("Popular".into(), badge_popular), ("OSS".into(), badge_oss)] },
+                    AvailableAgent { name: "cline".into(), display_name: "Cline".into(), vendor: "Open source".into(), vendor_color: oss,
+                        description: "Autonomous coding agent with multi-model support".into(),
+                        pricing: "Free".into(), install_command: "npm install -g cline".into(), install_method: "npm".into(),
+                        badges: vec![("OSS".into(), badge_oss)] },
+                    AvailableAgent { name: "devstral".into(), display_name: "Devstral".into(), vendor: "Mistral".into(), vendor_color: mistral,
+                        description: "Mistral's coding-focused model optimized for dev tasks".into(),
+                        pricing: "API key".into(), install_command: "pip install mistral-cli".into(), install_method: "pip".into(),
+                        badges: vec![("New".into(), badge_new)] },
+                    AvailableAgent { name: "kiro".into(), display_name: "Kiro".into(), vendor: "Amazon".into(), vendor_color: amazon,
+                        description: "Amazon's spec-driven AI IDE for structured development".into(),
+                        pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(), install_method: "download".into(),
+                        badges: vec![("New".into(), badge_new)] },
+                    AvailableAgent { name: "qwen-coder".into(), display_name: "Qwen3-Coder".into(), vendor: "Alibaba".into(), vendor_color: alibaba,
+                        description: "Code generation model, runs fully locally via Ollama".into(),
+                        pricing: "Free".into(), install_command: "ollama pull qwen3-coder".into(), install_method: "ollama".into(),
+                        badges: vec![("Local".into(), badge_local), ("OSS".into(), badge_oss)] },
+                ]
+            },
             selected: Some(0),
             active_tab: HubTab::Installed,
             search: String::new(),
@@ -325,75 +350,71 @@ impl AgentHubScreen {
 
     fn render_available(&self, cx: &mut Context<Self>) -> Div {
         let filtered = self.filtered_available();
-        let cards: Vec<Div> = filtered.iter().map(|agent| {
+        let cards: Vec<Div> = filtered.iter().enumerate().map(|(i, agent)| {
             let cmd = agent.install_command.clone();
-            let badge_text = agent.badge.clone();
+            let is_even = i % 2 == 0;
+            let initial = agent.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
 
             div()
                 .w_full()
                 .h_flex().gap_3().items_center()
-                .p_3().rounded_lg()
-                .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-                .hover(|s: StyleRefinement| s.border_color(theme::TEXT_MUTED.opacity(0.12)))
-                // Left: name + badge + vendor
+                .px_3().py(px(10.0))
+                .rounded_lg()
+                .bg(if is_even { theme::SURFACE.opacity(0.5) } else { gpui::transparent_black() })
+                .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.04)))
+                // Vendor avatar (colored initial)
                 .child(
-                    div().w(px(180.0)).flex_shrink_0().v_flex().gap(px(3.0))
+                    div().w(px(32.0)).h(px(32.0)).rounded_lg().flex_shrink_0()
+                        .flex().items_center().justify_center()
+                        .bg(agent.vendor_color.opacity(0.15))
+                        .text_color(agent.vendor_color)
+                        .text_xs().font_weight(FontWeight::BOLD)
+                        .child(initial),
+                )
+                // Name + vendor + badges
+                .child(
+                    div().w(px(200.0)).flex_shrink_0().v_flex().gap(px(3.0))
                         .child(
-                            div().h_flex().gap_2().items_center()
+                            div().h_flex().gap(px(6.0)).items_center()
                                 .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
-                                .when(badge_text.is_some(), |el: Div| {
-                                    let b = badge_text.unwrap_or_default();
-                                    let c = if b == "Popular" { theme::WARNING } else { theme::PRIMARY };
-                                    el.child(div().text_xs().px(px(5.0)).py(px(1.0)).rounded(px(3.0))
-                                        .bg(c.opacity(0.15)).text_color(c).font_weight(FontWeight::BOLD).child(b))
-                                }),
+                                .children(agent.badges.iter().map(|(label, color)| {
+                                    div().text_xs().px(px(5.0)).py(px(1.0)).rounded(px(3.0))
+                                        .bg(color.opacity(0.15)).text_color(*color)
+                                        .font_weight(FontWeight::BOLD).child(label.clone())
+                                })),
                         )
                         .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{} · {}", agent.vendor, agent.pricing))),
                 )
-                // Center: description
+                // Description (brighter)
                 .child(
                     div().flex_1().min_w_0()
-                        .text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
+                        .text_xs().text_color(theme::TEXT_MUTED.opacity(0.8))
                         .line_height(relative(1.4))
                         .max_h(px(30.0)).overflow_hidden()
                         .child(agent.description.clone()),
                 )
-                // Right: install command + Install button
+                // Install method label
                 .child(
-                    div().flex_shrink_0().h_flex().gap_2().items_center()
-                        // Copy command
+                    div().flex_shrink_0().w(px(60.0))
+                        .text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
+                        .child(format!("via {}", agent.install_method)),
+                )
+                // Install button (filled primary)
+                .child(
+                    div()
+                        .id(SharedString::from(format!("install-{}", agent.name)))
+                        .flex_shrink_0().cursor_pointer()
+                        .on_click(cx.listener(move |_this, _e, _window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
+                        }))
                         .child(
-                            div()
-                                .id(SharedString::from(format!("copy-{}", agent.name)))
-                                .h_flex().gap_1().items_center().cursor_pointer()
-                                .px(px(6.0)).py(px(3.0)).rounded(px(4.0))
-                                .bg(theme::BACKGROUND.opacity(0.5))
-                                .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
-                                .on_click(cx.listener({
-                                    let cmd = agent.install_command.clone();
-                                    move |_this, _e, _window, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
-                                    }
-                                }))
-                                .child(Icon::new(IconName::Copy).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
-                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(agent.install_command.clone())),
-                        )
-                        // Install button
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("install-{}", agent.name)))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |_this, _e, _window, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
-                                }))
-                                .child(
-                                    div().h_flex().gap_1().items_center()
-                                        .px(px(8.0)).py(px(4.0)).rounded_md()
-                                        .bg(theme::PRIMARY.opacity(0.1)).text_color(theme::PRIMARY)
-                                        .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.2)))
-                                        .child(Icon::new(IconName::ArrowDown).size_3().text_color(theme::PRIMARY))
-                                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child("Install".to_string())),
-                                ),
+                            div().h_flex().gap_1().items_center()
+                                .px(px(12.0)).py(px(5.0)).rounded_md()
+                                .bg(theme::PRIMARY)
+                                .text_color(hsla(0.0, 0.0, 1.0, 1.0))
+                                .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
+                                .child(Icon::new(IconName::ArrowDown).size_3().text_color(hsla(0.0, 0.0, 1.0, 1.0)))
+                                .child(div().text_xs().font_weight(FontWeight::BOLD).child("Install".to_string())),
                         ),
                 )
         }).collect();
@@ -429,12 +450,12 @@ impl AgentHubScreen {
                         ),
                     ),
             )
-            // Count
+            // Subtitle
             .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
-                .child(format!("{} agents", filtered.len())))
-            // Cards (full-width rows)
+                .child("Click Install to copy the command. Surge auto-detects agents after installation.".to_string()))
+            // Rows
             .child(
-                div().v_flex().gap_2().children(cards),
+                div().v_flex().gap_0().rounded_lg().overflow_hidden().children(cards),
             )
     }
 }
