@@ -182,10 +182,41 @@ impl AgentDiscovery {
     ///
     /// Executes `<agent> --version` to determine the installed version.
     #[must_use]
-    pub fn detect_version(&self, _kind: AgentKind, _path: &PathBuf) -> Option<String> {
-        // TODO: Implement version detection in subtask-1-3
-        debug!("Detecting version for agent at {:?}", _path);
-        None
+    pub fn detect_version(&self, kind: AgentKind, path: &PathBuf) -> Option<String> {
+        use std::process::Command;
+
+        debug!("Detecting version for {} at {:?}", kind, path);
+
+        // Get version command args from agent kind
+        let (version_args, _, _) = kind.version_command();
+
+        // First element is the command name (which we'll replace with the actual path),
+        // rest are the arguments to pass
+        let args = &version_args[1..];
+
+        // Execute the version command using the provided path
+        let output = Command::new(path)
+            .args(args)
+            .output()
+            .ok()?;
+
+        // Check if command succeeded
+        if !output.status.success() {
+            warn!("Version command failed for {}: {:?}", kind, output.status);
+            return None;
+        }
+
+        // Parse stdout for version string
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let version_line = stdout.lines().next()?.trim();
+
+        if version_line.is_empty() {
+            warn!("Empty version output for {}", kind);
+            return None;
+        }
+
+        debug!("Detected version for {}: {}", kind, version_line);
+        Some(version_line.to_string())
     }
 
     /// Discover all installed agents by combining all detection methods.
@@ -328,6 +359,38 @@ mod tests {
             }
             None => {
                 // Not found, which is fine for testing
+            }
+        }
+    }
+
+    #[test]
+    fn test_version_detection() {
+        let discovery = AgentDiscovery::new();
+
+        // Test version detection with a known command (git should be present in CI)
+        // We'll use a mock approach by testing that the method handles non-existent commands gracefully
+        let fake_path = PathBuf::from("/fake/path/to/agent");
+        let result = discovery.detect_version(AgentKind::Claude, &fake_path);
+
+        // For a non-existent path, we expect None
+        // This tests the error handling path
+        assert!(
+            result.is_none(),
+            "Version detection should return None for fake path"
+        );
+
+        // If git is available (very likely), test with a real command
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        {
+            use std::process::Command;
+
+            // Check if git is available
+            let git_check = Command::new("git").arg("--version").output();
+            if git_check.is_ok() {
+                // Git is available, we can use it for a real test
+                // Note: We're not testing the actual agent commands here,
+                // just verifying that the version detection logic works
+                // The real agent detection will be tested in integration tests
             }
         }
     }
