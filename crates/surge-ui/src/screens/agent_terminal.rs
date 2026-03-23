@@ -257,6 +257,7 @@ impl AgentTerminalScreen {
 
         div()
             .w_full()
+            .overflow_x_hidden()
             .p(px(12.0))
             .bg(bg)
             .child(
@@ -320,14 +321,17 @@ impl Render for AgentTerminalScreen {
                 div()
                     .id("terminal-messages")
                     .flex_1()
+                    .min_h_0()
                     .overflow_y_scroll()
+                    .overflow_x_hidden()
                     .bg(theme::BACKGROUND)
                     .children(messages),
             )
-            // Input area
+            // Input area — pinned to bottom
             .child(
                 div()
                     .w_full()
+                    .flex_shrink_0()
                     .p(px(12.0))
                     .bg(theme::SURFACE)
                     .border_t_1()
