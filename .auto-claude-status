@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "002-working-cli-commands-ping-prompt-agent",
+  "spec": "001-per-subtask-token-cost-tracking",
   "state": "building",
   "subtasks": {
-    "completed": 3,
-    "total": 12,
+    "completed": 12,
+    "total": 15,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "ACP Infrastructure",
+    "current": "Real-time Display",
     "id": null,
-    "total": 5
+    "total": 2
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 5,
-    "started_at": "2026-03-22T08:17:22.479718"
+    "number": 14,
+    "started_at": "2026-03-23T06:42:49.906336"
   },
-  "last_update": "2026-03-22T08:44:04.015028"
+  "last_update": "2026-03-23T07:38:23.737378"
 }

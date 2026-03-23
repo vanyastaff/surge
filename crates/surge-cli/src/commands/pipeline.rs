@@ -1,3 +1,5 @@
+use std::io::Write as _;
+
 use anyhow::Result;
 use surge_core::{SurgeConfig, SurgeEvent};
 
@@ -36,17 +38,61 @@ pub async fn run(
 
     let mut events = orchestrator.subscribe();
     tokio::spawn(async move {
+        let mut input_tokens: u64 = 0;
+        let mut output_tokens: u64 = 0;
+        let mut thought_tokens: u64 = 0;
+        let mut total_cost: f64 = 0.0;
+
         while let Ok(event) = events.recv().await {
             match event {
                 SurgeEvent::SubtaskStarted { subtask_id, .. } => {
+                    // Clear the token counter line before printing subtask status
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     println!("  ▶ Starting subtask {subtask_id}");
                 }
                 SurgeEvent::SubtaskCompleted { subtask_id, success, .. } => {
+                    // Clear the token counter line before printing subtask status
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     let mark = if success { "✅" } else { "❌" };
                     println!("  {mark} Subtask {subtask_id}");
                 }
                 SurgeEvent::TaskStateChanged { new_state, .. } => {
+                    // Clear the token counter line before printing state change
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     println!("  📊 State: {new_state}");
+                }
+                SurgeEvent::TokensConsumed {
+                    input_tokens: input,
+                    output_tokens: output,
+                    thought_tokens: thought,
+                    estimated_cost_usd,
+                    ..
+                } => {
+                    // Update cumulative totals
+                    input_tokens += input;
+                    output_tokens += output;
+                    if let Some(t) = thought {
+                        thought_tokens += t;
+                    }
+                    if let Some(cost) = estimated_cost_usd {
+                        total_cost += cost;
+                    }
+
+                    // Calculate total tokens
+                    let total = input_tokens + output_tokens + thought_tokens;
+
+                    // Display live counter on the same line
+                    print!(
+                        "\r💰 Tokens: {} in / {} out / {} total | Cost: ${:.4}",
+                        format_tokens(input_tokens),
+                        format_tokens(output_tokens),
+                        format_tokens(total),
+                        total_cost
+                    );
+                    let _ = std::io::stdout().flush();
                 }
                 _ => {}
             }
@@ -55,16 +101,20 @@ pub async fn run(
 
     let result = orchestrator.execute(&mut spec_file).await;
 
+    // Clear the token counter line before printing final result
+    print!("\r\x1b[K");
+    let _ = std::io::stdout().flush();
+
     match result {
         surge_orchestrator::PipelineResult::Completed => {
-            println!("\n✅ Pipeline completed successfully!");
+            println!("✅ Pipeline completed successfully!");
         }
         surge_orchestrator::PipelineResult::Paused { phase, reason } => {
-            println!("\n⏸️  Pipeline paused at {phase}: {reason}");
+            println!("⏸️  Pipeline paused at {phase}: {reason}");
             std::process::exit(3);
         }
         surge_orchestrator::PipelineResult::Failed { reason } => {
-            println!("\n❌ Pipeline failed: {reason}");
+            println!("❌ Pipeline failed: {reason}");
             std::process::exit(4);
         }
     }
