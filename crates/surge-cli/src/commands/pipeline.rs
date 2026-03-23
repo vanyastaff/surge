@@ -1,7 +1,19 @@
+use std::io::Write as _;
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use surge_core::{SurgeConfig, SurgeEvent};
 
 use super::load_spec_by_id;
+
+/// Accumulated token and cost totals for a pipeline run.
+#[derive(Debug, Clone, Default)]
+struct RunTotals {
+    input_tokens: u64,
+    output_tokens: u64,
+    thought_tokens: u64,
+    total_cost: f64,
+}
 
 /// Run a spec through the full pipeline.
 ///
@@ -34,19 +46,63 @@ pub async fn run(
     };
     let orchestrator = surge_orchestrator::Orchestrator::new(orch_config);
 
+    let totals = Arc::new(Mutex::new(RunTotals::default()));
+    let totals_clone = Arc::clone(&totals);
+
     let mut events = orchestrator.subscribe();
     tokio::spawn(async move {
+
         while let Ok(event) = events.recv().await {
             match event {
                 SurgeEvent::SubtaskStarted { subtask_id, .. } => {
+                    // Clear the token counter line before printing subtask status
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     println!("  ▶ Starting subtask {subtask_id}");
                 }
                 SurgeEvent::SubtaskCompleted { subtask_id, success, .. } => {
+                    // Clear the token counter line before printing subtask status
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     let mark = if success { "✅" } else { "❌" };
                     println!("  {mark} Subtask {subtask_id}");
                 }
                 SurgeEvent::TaskStateChanged { new_state, .. } => {
+                    // Clear the token counter line before printing state change
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                     println!("  📊 State: {new_state}");
+                }
+                SurgeEvent::TokensConsumed {
+                    input_tokens: input,
+                    output_tokens: output,
+                    thought_tokens: thought,
+                    estimated_cost_usd,
+                    ..
+                } => {
+                    // Update cumulative totals
+                    let mut t = totals_clone.lock().unwrap();
+                    t.input_tokens += input;
+                    t.output_tokens += output;
+                    if let Some(th) = thought {
+                        t.thought_tokens += th;
+                    }
+                    if let Some(cost) = estimated_cost_usd {
+                        t.total_cost += cost;
+                    }
+
+                    // Calculate total tokens
+                    let total = t.input_tokens + t.output_tokens + t.thought_tokens;
+
+                    // Display live counter on the same line
+                    print!(
+                        "\r💰 Tokens: {} in / {} out / {} total | Cost: ${:.4}",
+                        format_tokens(t.input_tokens),
+                        format_tokens(t.output_tokens),
+                        format_tokens(total),
+                        t.total_cost
+                    );
+                    let _ = std::io::stdout().flush();
                 }
                 _ => {}
             }
@@ -55,18 +111,37 @@ pub async fn run(
 
     let result = orchestrator.execute(&mut spec_file).await;
 
+    // Clear the token counter line before printing final result
+    print!("\r\x1b[K");
+    let _ = std::io::stdout().flush();
+
     match result {
         surge_orchestrator::PipelineResult::Completed => {
-            println!("\n✅ Pipeline completed successfully!");
+            println!("✅ Pipeline completed successfully!");
         }
         surge_orchestrator::PipelineResult::Paused { phase, reason } => {
-            println!("\n⏸️  Pipeline paused at {phase}: {reason}");
+            println!("⏸️  Pipeline paused at {phase}: {reason}");
             std::process::exit(3);
         }
         surge_orchestrator::PipelineResult::Failed { reason } => {
-            println!("\n❌ Pipeline failed: {reason}");
+            println!("❌ Pipeline failed: {reason}");
             std::process::exit(4);
         }
+    }
+
+    // Display final cost summary
+    let final_totals = totals.lock().unwrap();
+    if final_totals.input_tokens > 0 || final_totals.output_tokens > 0 {
+        println!();
+        println!("💰 Token Usage Summary:");
+        println!("   Input tokens:   {}", format_tokens(final_totals.input_tokens));
+        println!("   Output tokens:  {}", format_tokens(final_totals.output_tokens));
+        if final_totals.thought_tokens > 0 {
+            println!("   Thought tokens: {}", format_tokens(final_totals.thought_tokens));
+        }
+        let total_tokens = final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
+        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Estimated cost: ${:.4}", final_totals.total_cost);
     }
 
     Ok(())
@@ -93,6 +168,31 @@ pub fn status(spec_id: String) -> Result<()> {
                 println!("   ⬜ {}", sub.title);
             }
         }
+    }
+
+    // Show token and cost data if available
+    if let Ok(store_path) = surge_persistence::store::Store::default_path()
+        && store_path.exists()
+        && let Ok(store) = surge_persistence::store::Store::open(&store_path)
+        && let Ok(Some(spec_usage)) = store.get_spec(spec.id)
+    {
+        println!();
+        println!("💰 Token Usage:");
+        println!("   Sessions:       {}", spec_usage.session_count);
+        println!("   Input tokens:   {}", format_tokens(spec_usage.input_tokens));
+        println!("   Output tokens:  {}", format_tokens(spec_usage.output_tokens));
+        if spec_usage.thought_tokens > 0 {
+            println!("   Thought tokens: {}", format_tokens(spec_usage.thought_tokens));
+        }
+        if spec_usage.cached_read_tokens > 0 {
+            println!("   Cached read:    {}", format_tokens(spec_usage.cached_read_tokens));
+        }
+        if spec_usage.cached_write_tokens > 0 {
+            println!("   Cached write:   {}", format_tokens(spec_usage.cached_write_tokens));
+        }
+        let total_tokens = spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
+        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Estimated cost: ${:.4}", spec_usage.estimated_cost_usd);
     }
 
     // Show worktree info if available
@@ -240,4 +340,22 @@ fn resolve_spec_id_for_logs(id: &str, specs_dir: &std::path::Path) -> Result<Str
         }
     }
     Ok(id.to_string())
+}
+
+/// Format token count with thousands separator
+fn format_tokens(tokens: u64) -> String {
+    let s = tokens.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+
+    for c in s.chars().rev() {
+        if count == 3 {
+            result.push(',');
+            count = 0;
+        }
+        result.push(c);
+        count += 1;
+    }
+
+    result.chars().rev().collect()
 }

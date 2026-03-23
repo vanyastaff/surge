@@ -9,6 +9,7 @@ surge-core = { workspace = true }
 surge-acp = { workspace = true }
 surge-spec = { workspace = true }
 surge-git = { workspace = true }
+surge-persistence = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

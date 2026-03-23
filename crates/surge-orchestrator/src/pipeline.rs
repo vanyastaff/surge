@@ -10,6 +10,8 @@ use surge_core::spec::SubtaskState;
 use surge_core::state::TaskState;
 use surge_core::SurgeConfig;
 use surge_git::worktree::GitManager;
+use surge_persistence::aggregator::{SessionContext, UsageAggregator};
+use surge_persistence::store::Store;
 use surge_spec::{validate_spec, DependencyGraph, SpecFile};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -78,7 +80,23 @@ impl Orchestrator {
             };
         }
 
-        // 1. Create git worktree
+        // Set up persistence layer for token tracking
+        let db_dir = self.config.working_dir.join(".surge");
+        let db_path = db_dir.join("usage.db");
+
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "failed to create usage store, continuing without persistence");
+                Store::in_memory().unwrap()
+            }
+        };
+
+        let aggregator = UsageAggregator::new(store);
+        let aggregator_rx = self.event_tx.subscribe();
+        let _aggregator_handle = aggregator.start_listening(aggregator_rx);
+
+        // Create git worktree
         let git = match GitManager::new(self.config.working_dir.clone()) {
             Ok(g) => g,
             Err(e) => {
@@ -99,7 +117,7 @@ impl Orchestrator {
         let worktree_path = worktree_info.path.clone();
         info!(path = %worktree_path.display(), "worktree created");
 
-        // 2. Create AgentPool
+        // Create AgentPool
         let pool = match AgentPool::new(
             self.config.surge_config.agents.clone(),
             self.config.surge_config.default_agent.clone(),
@@ -127,7 +145,7 @@ impl Orchestrator {
 
         pool.warm_up();
 
-        // 3. Create ACP session
+        // Create ACP session
         let session = match pool.create_session(None, None, &worktree_path).await {
             Ok(s) => s,
             Err(e) => {
@@ -139,6 +157,18 @@ impl Orchestrator {
             }
         };
         info!("ACP session created");
+
+        // Register session with usage aggregator
+        aggregator
+            .register_session(
+                session.session_id.clone(),
+                SessionContext {
+                    task_id,
+                    subtask_id: None,
+                    spec_id: spec_file.spec.id,
+                },
+            )
+            .await;
 
         // Gate manager (shared across all phases).
         let gate_manager = GateManager::new(
@@ -164,6 +194,7 @@ impl Orchestrator {
             )
             .await
             {
+                aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
@@ -175,6 +206,7 @@ impl Orchestrator {
             // Gate: user reviews requirements before planning.
             match gate_manager.check_gate(Phase::SpecCreation, spec_id) {
                 GateAction::Pause { reason } => {
+                    aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     return PipelineResult::Paused {
                         phase: Phase::SpecCreation,
@@ -196,6 +228,7 @@ impl Orchestrator {
             )
             .await
             {
+                aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
@@ -210,6 +243,7 @@ impl Orchestrator {
             // Gate: user reviews plan (architecture.md + stories) before execution.
             match gate_manager.check_gate(Phase::Planning, spec_id) {
                 GateAction::Pause { reason } => {
+                    aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     return PipelineResult::Paused {
                         phase: Phase::Planning,
@@ -228,6 +262,7 @@ impl Orchestrator {
         // Validate spec (subtasks now populated).
         let validation = validate_spec(&spec);
         if !validation.is_ok() {
+            aggregator.unregister_session(&session.session_id).await;
             pool.shutdown().await;
             let _ = git.discard(&spec_id_str);
             return PipelineResult::Failed {
@@ -380,6 +415,7 @@ impl Orchestrator {
                 });
 
                 if let Err(e) = git.merge(&spec_id_str, None, true) {
+                    aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
                     return PipelineResult::Failed {
@@ -389,6 +425,7 @@ impl Orchestrator {
                 info!("merged successfully");
             }
             QaVerdict::NeedsFix { issues } => {
+                aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
@@ -398,6 +435,7 @@ impl Orchestrator {
         }
 
         // ── Cleanup ─────────────────────────────────────────────────────
+        aggregator.unregister_session(&session.session_id).await;
         let _ = git.discard(&spec_id_str);
         pool.shutdown().await;
 

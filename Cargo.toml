@@ -5,6 +5,7 @@ members = [
     "crates/surge-acp",
     "crates/surge-spec",
     "crates/surge-git",
+    "crates/surge-persistence",
     "crates/surge-orchestrator",
     "crates/surge-cli",
     "crates/surge-ui",
@@ -49,6 +50,12 @@ petgraph = "0.7"
 # Git
 git2 = "0.20"
 
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# File paths
+dirs = "5"
+
 # HTTP client (remote registry fetching)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
@@ -60,4 +67,5 @@ surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
 surge-spec = { path = "crates/surge-spec" }
 surge-git = { path = "crates/surge-git" }
+surge-persistence = { path = "crates/surge-persistence" }
 surge-orchestrator = { path = "crates/surge-orchestrator" }

@@ -35,8 +35,8 @@ use crate::top_bar::TopBar;
 enum AppMode {
     Welcome(Entity<WelcomeScreen>),
     Project {
-        path: PathBuf,
-        name: String,
+        _path: PathBuf,
+        _name: String,
     },
 }
 
@@ -230,8 +230,8 @@ impl SurgeApp {
         self.settings = None;
 
         self.mode = AppMode::Project {
-            path: path.to_path_buf(),
-            name,
+            _path: path.to_path_buf(),
+            _name: name,
         };
         self.active_screen = Screen::Dashboard;
         self.sidebar.update(cx, |sb, cx| sb.set_active(Screen::Dashboard, cx));
@@ -709,7 +709,7 @@ impl SurgeApp {
 }
 
 impl Render for SurgeApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.mode {
             AppMode::Welcome(welcome) => {
                 div()

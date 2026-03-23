@@ -9,6 +9,7 @@ mod commands;
 use commands::{
     agent::AgentCommands,
     config::ConfigCommands,
+    insights::InsightsCommands,
     registry::RegistryCommands,
     spec::SpecCommands,
 };
@@ -137,6 +138,12 @@ enum Commands {
     Registry {
         #[command(subcommand)]
         command: RegistryCommands,
+    },
+
+    /// View insights and analytics
+    Insights {
+        #[command(subcommand)]
+        command: InsightsCommands,
     },
 }
 
@@ -288,6 +295,10 @@ async fn main() -> Result<()> {
 
         Commands::Registry { command } => {
             commands::registry::run(command)?;
+        }
+
+        Commands::Insights { command } => {
+            commands::insights::run(command)?;
         }
 
         Commands::Init => {

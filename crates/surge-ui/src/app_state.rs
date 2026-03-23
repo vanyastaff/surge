@@ -37,7 +37,7 @@ pub struct AppState {
     pub agent_pool: Option<Arc<AgentPool>>,
 
     // ── Events ──
-    pub event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
+    pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
     pub recent_events: Vec<SurgeEvent>,
 }
 
@@ -45,13 +45,13 @@ pub struct AppState {
 #[derive(Debug, Clone)]
 pub struct TaskEntry {
     pub id: TaskId,
-    pub spec_id: SpecId,
+    pub _spec_id: SpecId,
     pub title: String,
     pub description: String,
     pub state: TaskState,
     pub agent: Option<String>,
     pub complexity: String,
-    pub created_at: String,
+    pub _created_at: String,
     pub updated_at: String,
 }
 
@@ -89,7 +89,7 @@ impl AppState {
             specs: Vec::new(),
             worktrees: Vec::new(),
             agent_pool: None,
-            event_tx,
+            _event_tx: event_tx,
             recent_events: Vec::new(),
         }
     }
