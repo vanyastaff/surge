@@ -41,10 +41,10 @@ pub struct AvailableAgent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HubTab { Configured, Available }
+enum HubTab { Installed, Available, Benchmarks }
 
 impl HubTab {
-    fn all() -> &'static [Self] { &[Self::Configured, Self::Available] }
+    fn all() -> &'static [Self] { &[Self::Installed, Self::Available, Self::Benchmarks] }
 }
 
 // ── Screen ───────────────────────────────────────────────────
@@ -114,7 +114,7 @@ impl AgentHubScreen {
                     pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(), badge: Some("New".into()) },
             ],
             selected: Some(0),
-            active_tab: HubTab::Configured,
+            active_tab: HubTab::Installed,
             search: String::new(),
             filter: CatalogFilter::All,
         }
@@ -126,8 +126,9 @@ impl AgentHubScreen {
         let tabs: Vec<Stateful<Div>> = HubTab::all().iter().map(|&tab| {
             let is_active = tab == self.active_tab;
             let label = match tab {
-                HubTab::Configured => format!("Configured ({})", self.configured.len()),
+                HubTab::Installed => format!("Installed ({})", self.configured.len()),
                 HubTab::Available => format!("Available ({})", self.available.len()),
+                HubTab::Benchmarks => "Benchmarks".to_string(),
             };
             div()
                 .id(SharedString::from(format!("tab-{:?}", tab)))
@@ -262,11 +263,14 @@ impl AgentHubScreen {
             let badge_text = agent.badge.clone();
 
             div()
-                .v_flex().gap(px(6.0)).p_3().rounded_lg()
+                .w_full()
+                .h_flex().gap_3().items_center()
+                .p_3().rounded_lg()
                 .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-                // Name + badge + Install
+                .hover(|s: StyleRefinement| s.border_color(theme::TEXT_MUTED.opacity(0.12)))
+                // Left: name + badge + vendor
                 .child(
-                    div().h_flex().justify_between().items_center()
+                    div().w(px(180.0)).flex_shrink_0().v_flex().gap(px(3.0))
                         .child(
                             div().h_flex().gap_2().items_center()
                                 .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
@@ -277,6 +281,37 @@ impl AgentHubScreen {
                                         .bg(c.opacity(0.15)).text_color(c).font_weight(FontWeight::BOLD).child(b))
                                 }),
                         )
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{} · {}", agent.vendor, agent.pricing))),
+                )
+                // Center: description
+                .child(
+                    div().flex_1().min_w_0()
+                        .text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
+                        .line_height(relative(1.4))
+                        .max_h(px(30.0)).overflow_hidden()
+                        .child(agent.description.clone()),
+                )
+                // Right: install command + Install button
+                .child(
+                    div().flex_shrink_0().h_flex().gap_2().items_center()
+                        // Copy command
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("copy-{}", agent.name)))
+                                .h_flex().gap_1().items_center().cursor_pointer()
+                                .px(px(6.0)).py(px(3.0)).rounded(px(4.0))
+                                .bg(theme::BACKGROUND.opacity(0.5))
+                                .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
+                                .on_click(cx.listener({
+                                    let cmd = agent.install_command.clone();
+                                    move |_this, _e, _window, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
+                                    }
+                                }))
+                                .child(Icon::new(IconName::Copy).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(agent.install_command.clone())),
+                        )
+                        // Install button
                         .child(
                             div()
                                 .id(SharedString::from(format!("install-{}", agent.name)))
@@ -293,34 +328,6 @@ impl AgentHubScreen {
                                         .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child("Install".to_string())),
                                 ),
                         ),
-                )
-                // Vendor + pricing
-                .child(
-                    div().text_xs().text_color(theme::TEXT_MUTED)
-                        .child(format!("{} · {}", agent.vendor, agent.pricing)),
-                )
-                // Description
-                .child(
-                    div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
-                        .line_height(relative(1.4)).max_h(px(30.0)).overflow_hidden()
-                        .child(agent.description.clone()),
-                )
-                // Install command (click to copy)
-                .child(
-                    div()
-                        .id(SharedString::from(format!("copy-{}", agent.name)))
-                        .h_flex().gap_1().items_center().cursor_pointer()
-                        .px(px(6.0)).py(px(3.0)).rounded(px(4.0))
-                        .bg(theme::BACKGROUND.opacity(0.5))
-                        .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
-                        .on_click(cx.listener({
-                            let cmd = agent.install_command.clone();
-                            move |_this, _e, _window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
-                            }
-                        }))
-                        .child(Icon::new(IconName::Copy).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
-                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6)).child(agent.install_command.clone())),
                 )
         }).collect();
 
@@ -358,10 +365,9 @@ impl AgentHubScreen {
             // Count
             .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
                 .child(format!("{} agents", filtered.len())))
-            // Cards
+            // Cards (full-width rows)
             .child(
-                div().flex().flex_wrap().gap_3().content_start()
-                    .children(cards.into_iter().map(|c| div().w(px(300.0)).child(c))),
+                div().v_flex().gap_2().children(cards),
             )
     }
 }
@@ -396,27 +402,23 @@ fn format_tokens(tokens: u64) -> String {
 impl Render for AgentHubScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div().size_full().v_flex()
-            // Header: title + tabs
+            // Tabs only (no duplicate title — top bar already shows "Agents")
             .child(
-                div().h_flex().gap_3().items_center().px_4().pt_3().pb_1()
-                    .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
-                        .child(format!("Agents ({})", self.configured.len())))
+                div().px_4().pt_3().pb_2()
                     .child(self.render_tabs(cx)),
             )
             // Content
             .child(match self.active_tab {
-                HubTab::Configured => {
+                HubTab::Installed => {
                     let items: Vec<Stateful<Div>> = self.configured.iter().enumerate()
                         .map(|(i, a)| self.render_agent_item(i, a, cx)).collect();
 
                     div().flex_1().h_flex().overflow_hidden()
-                        // Left: simple list
                         .child(
                             div().w(px(300.0)).flex_shrink_0().h_full().v_flex().gap_0().p_2()
                                 .border_r_1().border_color(theme::TEXT_MUTED.opacity(0.06))
                                 .children(items),
                         )
-                        // Right: read-only detail
                         .child(
                             div().id("detail-scroll").flex_1().h_full().min_w_0()
                                 .v_flex().gap_3().p_4().overflow_y_scroll()
@@ -424,6 +426,12 @@ impl Render for AgentHubScreen {
                         )
                 }
                 HubTab::Available => self.render_available(cx),
+                HubTab::Benchmarks => {
+                    div().flex_1().v_flex().items_center().justify_center().gap_2()
+                        .child(Icon::new(IconName::ChartPie).size_8().text_color(theme::TEXT_MUTED.opacity(0.15)))
+                        .child(div().text_sm().text_color(theme::TEXT_MUTED.opacity(0.4)).child("Agent Benchmarks".to_string()))
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.3)).child("Compare agent performance — coming in Phase 7".to_string()))
+                }
             })
     }
 }
