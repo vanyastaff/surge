@@ -1,131 +1,13 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::{Icon, IconName, StyledExt};
+use surge_acp::{
+    build_available_agent, build_configured_agent, vendor_hue, AgentUsage, AvailableAgent,
+    BadgeKind, ConfiguredAgent, EffortLevel, SessionStatus,
+};
 
 use crate::app_state::AppState;
 use crate::theme;
-
-// ── Data Models ──────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct ModelOption {
-    pub name: String,
-    pub price: String,     // "$3/$15"
-    pub context: String,   // "1M ctx"
-    pub note: String,      // "Daily driver"
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffortLevel { High, Medium, Low, Adaptive }
-
-impl EffortLevel {
-    fn label(self) -> &'static str {
-        match self { Self::High => "High", Self::Medium => "Medium", Self::Low => "Low", Self::Adaptive => "Adaptive" }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PermissionSetting {
-    pub name: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct AgentCapabilities {
-    /// Available models (None = agent doesn't expose model selection)
-    pub models: Option<Vec<ModelOption>>,
-    /// Effort/thinking levels (None = not supported)
-    pub effort: Option<AgentEffortConfig>,
-    /// Permissions (None = not managed via ACP)
-    pub permissions: Option<Vec<PermissionSetting>>,
-    /// Dangerous ops policy
-    pub dangerous_ops: Option<String>, // "Ask permission", "Allow", "Block"
-}
-
-#[derive(Debug, Clone)]
-pub struct AgentEffortConfig {
-    pub default: EffortLevel,
-    pub planning: EffortLevel,
-    pub coding: EffortLevel,
-    pub qa_review: EffortLevel,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConfiguredAgent {
-    pub name: String,
-    pub display_name: String,
-    pub description: String,
-    pub model: Option<String>,
-    pub binary: String,
-    pub version: Option<String>,
-    pub active_sessions: u32,
-    pub requests_today: u32,
-    pub tokens_today: u64,
-    pub cost_today: f64,
-    pub avg_latency_ms: u32,
-    pub sessions_today: u32,
-    // Agent-specific capabilities
-    pub capabilities: AgentCapabilities,
-    // Usage & Limits — varies per agent
-    pub usage: AgentUsage,
-    // Today stats
-    pub subtasks_completed: u32,
-    pub subtasks_failed: u32,
-    pub avg_subtask_secs: u32,
-    pub qa_first_pass_rate: f32,
-    pub uptime: String,
-    pub last_seen: Option<String>,
-    pub recent_sessions: Vec<SessionEntry>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionEntry {
-    pub label: String,
-    pub status: SessionStatus,
-    pub time_ago: String,
-    pub tokens: Option<u64>,
-    pub duration: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionStatus { Running, Completed, Failed }
-
-/// Usage data varies by agent — Level 1 (native API), Level 2 (estimated), Level 3 (429 detection).
-#[derive(Debug, Clone)]
-pub enum AgentUsage {
-    /// Claude Code: native statusline data
-    ClaudeCode {
-        five_hour_pct: f32,
-        five_hour_reset: String,   // "2h 14m"
-        weekly_pct: f32,
-        weekly_reset: String,      // "Mon"
-        extra_usage_enabled: bool,
-        extra_usage_cost: f64,
-    },
-    /// Estimated from ACP response tokens (Aider, Goose, Cline)
-    Estimated {
-        provider: String,          // "Anthropic API", "OpenAI API", "Local (Ollama)"
-        estimated_tokens: u64,
-        estimated_cost: f64,
-        is_local: bool,
-    },
-    /// No data yet
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub struct AvailableAgent {
-    pub name: String,
-    pub display_name: String,
-    pub vendor: String,
-    pub vendor_color: Hsla,
-    pub description: String,
-    pub pricing: String,
-    pub install_command: String,
-    pub install_method: String, // "npm", "brew", "pip", "download", "ollama"
-    pub badges: Vec<(String, Hsla)>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HubTab { Installed, Available, Benchmarks }
@@ -170,38 +52,7 @@ impl AgentHubScreen {
         let state = self.state.read(cx);
         state.installed_agents.iter().map(|detected| {
             let health = state.health.get_health(&detected.entry.id);
-            let (requests, latency, failures) = match health {
-                Some(h) => (h.total_requests, h.avg_latency_ms, h.total_failures),
-                None => (0, 0, 0),
-            };
-
-            // Determine capabilities based on agent ID (from registry knowledge).
-            let capabilities = build_agent_capabilities(&detected.entry.id);
-            let usage = build_agent_usage(&detected.entry.id);
-
-            ConfiguredAgent {
-                name: detected.entry.id.clone(),
-                display_name: detected.entry.display_name.clone(),
-                description: detected.entry.long_description.clone(),
-                model: detected.entry.models.first().cloned(),
-                binary: detected.entry.command.clone(),
-                version: None, // TODO: detect via `command --version`
-                active_sessions: 0, // TODO: from AgentPool
-                requests_today: requests as u32,
-                tokens_today: 0, // TODO: from usage tracking
-                cost_today: 0.0,
-                avg_latency_ms: latency as u32,
-                sessions_today: 0,
-                capabilities,
-                usage,
-                subtasks_completed: 0,
-                subtasks_failed: failures as u32,
-                avg_subtask_secs: 0,
-                qa_first_pass_rate: 0.0,
-                uptime: "—".into(),
-                last_seen: None,
-                recent_sessions: vec![],
-            }
+            build_configured_agent(detected, health)
         }).collect()
     }
 
@@ -212,21 +63,7 @@ impl AgentHubScreen {
 
         state.registry.list().iter()
             .filter(|e| !installed_ids.contains(&e.id.as_str()))
-            .map(|entry| {
-                let vendor_color = vendor_color_for(&entry.id);
-                let install_method = extract_install_method(&entry.install_instructions);
-                AvailableAgent {
-                    name: entry.id.clone(),
-                    display_name: entry.display_name.clone(),
-                    vendor: entry.tags.first().cloned().unwrap_or_default(),
-                    vendor_color,
-                    description: entry.long_description.clone(),
-                    pricing: if entry.tags.contains(&"free".to_string()) { "Free".into() } else { "API key".into() },
-                    install_command: entry.install_instructions.clone(),
-                    install_method,
-                    badges: build_badges(entry),
-                }
-            })
+            .map(|entry| build_available_agent(entry))
             .collect()
     }
 
@@ -511,8 +348,8 @@ impl AgentHubScreen {
             }
             match self.filter {
                 CatalogFilter::All => true,
-                CatalogFilter::Free => a.pricing.to_lowercase().contains("free"),
-                CatalogFilter::Paid => !a.pricing.to_lowercase().contains("free"),
+                CatalogFilter::Free => a.badges.iter().any(|b| b.kind == BadgeKind::OpenSource) || a.license.to_lowercase().contains("free"),
+                CatalogFilter::Paid => !a.badges.iter().any(|b| b.kind == BadgeKind::OpenSource) && !a.license.to_lowercase().contains("free"),
             }
         }).collect()
     }
@@ -524,6 +361,9 @@ impl AgentHubScreen {
             let cmd = agent.install_command.clone();
             let is_even = i % 2 == 0;
             let initial = agent.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+            let vc = vendor_hue(&agent.name)
+                .map(|h| hsla(h, 0.7, 0.55, 1.0))
+                .unwrap_or(theme::TEXT_MUTED);
 
             div()
                 .w_full()
@@ -536,8 +376,8 @@ impl AgentHubScreen {
                 .child(
                     div().w(px(32.0)).h(px(32.0)).rounded_lg().flex_shrink_0()
                         .flex().items_center().justify_center()
-                        .bg(agent.vendor_color.opacity(0.15))
-                        .text_color(agent.vendor_color)
+                        .bg(vc.opacity(0.15))
+                        .text_color(vc)
                         .text_xs().font_weight(FontWeight::BOLD)
                         .child(initial),
                 )
@@ -547,13 +387,14 @@ impl AgentHubScreen {
                         .child(
                             div().h_flex().gap(px(6.0)).items_center()
                                 .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
-                                .children(agent.badges.iter().map(|(label, color)| {
+                                .children(agent.badges.iter().map(|badge| {
+                                    let color = badge_color(badge.kind);
                                     div().text_xs().px(px(5.0)).py(px(1.0)).rounded(px(3.0))
-                                        .bg(color.opacity(0.15)).text_color(*color)
-                                        .font_weight(FontWeight::BOLD).child(label.clone())
+                                        .bg(color.opacity(0.15)).text_color(color)
+                                        .font_weight(FontWeight::BOLD).child(badge.label.clone())
                                 })),
                         )
-                        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{} · {}", agent.vendor, agent.pricing))),
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{} · {}", agent.vendor, agent.license))),
                 )
                 // Description (brighter, 3 lines)
                 .child(
@@ -716,98 +557,14 @@ fn latency_color(ms: u32) -> Hsla {
     if ms == 0 { theme::TEXT_MUTED } else if ms < 1000 { theme::SUCCESS } else if ms < 3000 { theme::WARNING } else { theme::ERROR }
 }
 
-/// Build agent-specific capabilities (models, effort, permissions) based on agent ID.
-fn build_agent_capabilities(agent_id: &str) -> AgentCapabilities {
-    match agent_id {
-        "claude-acp" | "claude-code" => AgentCapabilities {
-            models: Some(vec![
-                ModelOption { name: "Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Heavy reasoning".into(), enabled: true },
-                ModelOption { name: "Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
-                ModelOption { name: "Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
-            ]),
-            effort: Some(AgentEffortConfig {
-                default: EffortLevel::Adaptive,
-                planning: EffortLevel::High,
-                coding: EffortLevel::Adaptive,
-                qa_review: EffortLevel::Low,
-            }),
-            permissions: Some(vec![
-                PermissionSetting { name: "File read".into(), enabled: true },
-                PermissionSetting { name: "File write".into(), enabled: true },
-                PermissionSetting { name: "Bash commands".into(), enabled: true },
-                PermissionSetting { name: "Network access".into(), enabled: false },
-                PermissionSetting { name: "Git push".into(), enabled: false },
-            ]),
-            dangerous_ops: Some("Ask permission".into()),
-        },
-        // Other agents — no ACP-managed capabilities
-        _ => AgentCapabilities { models: None, effort: None, permissions: None, dangerous_ops: None },
+/// Map BadgeKind to a theme color for rendering.
+fn badge_color(kind: BadgeKind) -> Hsla {
+    match kind {
+        BadgeKind::Popular => theme::WARNING,
+        BadgeKind::OpenSource => theme::TEXT_MUTED,
+        BadgeKind::Free => theme::SUCCESS,
+        BadgeKind::New => theme::PRIMARY,
     }
-}
-
-/// Build agent-specific usage display based on agent ID.
-fn build_agent_usage(agent_id: &str) -> AgentUsage {
-    match agent_id {
-        "claude-acp" | "claude-code" => AgentUsage::ClaudeCode {
-            five_hour_pct: 0.0, five_hour_reset: "—".into(),
-            weekly_pct: 0.0, weekly_reset: "—".into(),
-            extra_usage_enabled: false, extra_usage_cost: 0.0,
-        },
-        _ => AgentUsage::Estimated {
-            provider: "Unknown".into(),
-            estimated_tokens: 0, estimated_cost: 0.0, is_local: false,
-        },
-    }
-}
-
-fn vendor_color_for(agent_id: &str) -> Hsla {
-    match agent_id {
-        "claude-acp" => hsla(263.0/360.0, 0.85, 0.58, 1.0),
-        "github-copilot-cli" => hsla(210.0/360.0, 0.7, 0.5, 1.0),
-        "gemini" => hsla(217.0/360.0, 0.9, 0.6, 1.0),
-        "codex-acp" => hsla(150.0/360.0, 0.6, 0.45, 1.0),
-        "goose" => hsla(25.0/360.0, 0.8, 0.55, 1.0),
-        "cline" => hsla(340.0/360.0, 0.7, 0.55, 1.0),
-        "amp-acp" => hsla(280.0/360.0, 0.6, 0.55, 1.0),
-        "mistral-vibe" => hsla(35.0/360.0, 0.9, 0.55, 1.0),
-        "cursor" => hsla(50.0/360.0, 0.8, 0.5, 1.0),
-        "junie" => hsla(310.0/360.0, 0.7, 0.5, 1.0),
-        "kimi" => hsla(190.0/360.0, 0.7, 0.5, 1.0),
-        "qwen-code" => hsla(200.0/360.0, 0.7, 0.5, 1.0),
-        "kilo" => hsla(160.0/360.0, 0.6, 0.5, 1.0),
-        "opencode" => hsla(120.0/360.0, 0.5, 0.5, 1.0),
-        "factory-droid" => hsla(0.0/360.0, 0.7, 0.55, 1.0),
-        "auggie" => hsla(270.0/360.0, 0.5, 0.6, 1.0),
-        "codebuddy-code" => hsla(200.0/360.0, 0.8, 0.45, 1.0),
-        "stakpak" => hsla(140.0/360.0, 0.6, 0.45, 1.0),
-        _ => theme::TEXT_MUTED,
-    }
-}
-
-fn extract_install_method(instructions: &str) -> String {
-    let lower = instructions.to_lowercase();
-    if lower.starts_with("npx ") { "npx".into() }
-    else if lower.starts_with("uvx ") { "uvx".into() }
-    else if lower.contains("npm") { "npm".into() }
-    else if lower.contains("brew") { "brew".into() }
-    else if lower.contains("pip") { "pip".into() }
-    else if lower.contains("cargo") { "cargo".into() }
-    else if lower.contains("ollama") { "ollama".into() }
-    else if lower.contains("download") { "download".into() }
-    else { "binary".into() }
-}
-
-fn build_badges(entry: &surge_acp::RegistryEntry) -> Vec<(String, Hsla)> {
-    let mut badges = Vec::new();
-    // Popular agents
-    if entry.tags.contains(&"popular".to_string()) {
-        badges.push(("Popular".into(), theme::WARNING));
-    }
-    // OSS tag
-    if entry.tags.contains(&"open-source".to_string()) || entry.tags.contains(&"oss".to_string()) {
-        badges.push(("OSS".into(), theme::TEXT_MUTED));
-    }
-    badges
 }
 
 fn format_tokens(tokens: u64) -> String {
