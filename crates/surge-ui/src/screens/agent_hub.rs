@@ -13,15 +13,23 @@ pub struct ConfiguredAgent {
     pub description: String,
     pub model: Option<String>,
     pub binary: String,
+    pub version: Option<String>,
     pub active_sessions: u32,
     pub requests_today: u32,
     pub tokens_today: u64,
     pub cost_today: f64,
     pub avg_latency_ms: u32,
     pub sessions_today: u32,
+    // Usage & Limits
     pub rate_limit_remaining: Option<u32>,
     pub rate_limit_total: Option<u32>,
     pub rate_limit_reset_secs: Option<u64>,
+    pub five_hour_quota_pct: Option<f32>,
+    pub daily_quota_pct: Option<f32>,
+    pub context_used_pct: Option<f32>,
+    pub context_used_tokens: Option<u64>,
+    pub context_total_tokens: Option<u64>,
+    // Today stats
     pub subtasks_completed: u32,
     pub subtasks_failed: u32,
     pub avg_subtask_secs: u32,
@@ -91,10 +99,12 @@ impl AgentHubScreen {
                 ConfiguredAgent {
                     name: "claude-code".into(), display_name: "Claude Code".into(),
                     description: "Anthropic's autonomous coding agent with full file system access, terminal, and git integration".into(),
-                    model: Some("claude-sonnet-4-5".into()), binary: "claude".into(),
+                    model: Some("claude-sonnet-4-5".into()), binary: "claude".into(), version: Some("v2.3.1".into()),
                     active_sessions: 2, requests_today: 42, tokens_today: 156_800,
                     cost_today: 2.34, avg_latency_ms: 1200, sessions_today: 12,
                     rate_limit_remaining: Some(158), rate_limit_total: Some(200), rate_limit_reset_secs: Some(1800),
+                    five_hour_quota_pct: Some(0.32), daily_quota_pct: Some(0.18),
+                    context_used_pct: Some(0.48), context_used_tokens: Some(96_000), context_total_tokens: Some(200_000),
                     subtasks_completed: 8, subtasks_failed: 0, avg_subtask_secs: 45, qa_first_pass_rate: 0.87,
                     uptime: "4h 23m".into(), last_seen: None,
                     recent_sessions: vec![
@@ -107,10 +117,12 @@ impl AgentHubScreen {
                 ConfiguredAgent {
                     name: "aider".into(), display_name: "Aider".into(),
                     description: "AI pair programming in terminal. Supports multiple LLM backends".into(),
-                    model: Some("claude-sonnet-4-5".into()), binary: "aider".into(),
+                    model: Some("claude-sonnet-4-5".into()), binary: "aider".into(), version: Some("v0.82.1".into()),
                     active_sessions: 0, requests_today: 0, tokens_today: 0,
                     cost_today: 0.0, avg_latency_ms: 0, sessions_today: 0,
                     rate_limit_remaining: None, rate_limit_total: None, rate_limit_reset_secs: None,
+                    five_hour_quota_pct: None, daily_quota_pct: None,
+                    context_used_pct: None, context_used_tokens: None, context_total_tokens: None,
                     subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
                     uptime: "—".into(), last_seen: None, recent_sessions: vec![],
                 },
@@ -228,24 +240,33 @@ impl AgentHubScreen {
         };
         let agent = &self.configured[idx];
 
+        let version_str = agent.version.as_deref().unwrap_or("—");
+
         div().flex_1().v_flex().gap_3()
-            // Header
+            // Header: icon + name + status + version
             .child(
-                div().h_flex().gap_2().items_center()
-                    .child(Icon::new(IconName::Bot).size_5().text_color(theme::PRIMARY))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
-                    .child(div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(3.0)).rounded_full()
-                        .bg(theme::SUCCESS.opacity(0.1))
-                        .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(theme::SUCCESS))
-                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::SUCCESS).child("Ready".to_string()))),
+                div().h_flex().justify_between().items_center()
+                    .child(
+                        div().h_flex().gap_2().items_center()
+                            .child(Icon::new(IconName::Bot).size_5().text_color(theme::PRIMARY))
+                            .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
+                            .child(div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(3.0)).rounded_full()
+                                .bg(theme::SUCCESS.opacity(0.1))
+                                .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(theme::SUCCESS))
+                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::SUCCESS).child("Ready".to_string()))),
+                    )
+                    .child(
+                        div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(version_str.to_string()),
+                    ),
             )
             // Description
-            .child(div().text_xs().text_color(theme::TEXT_MUTED).child(agent.description.clone()))
-            // Info row
+            .child(div().text_xs().text_color(theme::TEXT_MUTED).line_height(relative(1.5)).child(agent.description.clone()))
+            // Info row (with version)
             .child(
                 div().h_flex().gap_6().pt_2().pb_1().border_t_1().border_b_1().border_color(theme::TEXT_MUTED.opacity(0.06))
                     .child(info_item("Model", agent.model.as_deref().unwrap_or("—")))
                     .child(info_item("Binary", &agent.binary))
+                    .child(info_item("Version", version_str))
                     .child(info_item("Uptime", &agent.uptime))
                     .child(info_item("Sessions today", &format!("{}", agent.sessions_today))),
             )
@@ -257,21 +278,53 @@ impl AgentHubScreen {
                     .child(stat_card_with_period("Cost", &format!("${:.2}", agent.cost_today), "today", theme::WARNING))
                     .child(stat_card_with_period("Latency", &format!("{}ms", agent.avg_latency_ms), "avg", latency_color(agent.avg_latency_ms))),
             )
-            // Rate limit
-            .when(agent.rate_limit_total.is_some(), |el: Div| {
-                let rem = agent.rate_limit_remaining.unwrap_or(0);
-                let total = agent.rate_limit_total.unwrap_or(1);
-                let pct = rem as f32 / total as f32;
-                let color = if pct > 0.5 { theme::SUCCESS } else if pct > 0.2 { theme::WARNING } else { theme::ERROR };
-                let reset = agent.rate_limit_reset_secs.unwrap_or(0);
-                el.child(
-                    div().v_flex().gap(px(6.0)).p_3().rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-                        .child(div().h_flex().justify_between()
-                            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Rate Limit".to_string()))
-                            .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{rem}/{total} · resets {}m", reset / 60))))
-                        .child(div().w_full().h(px(4.0)).rounded_full().bg(theme::TEXT_MUTED.opacity(0.1))
-                            .child(div().h_full().rounded_full().bg(color).w(relative(pct)))),
-                )
+            // Usage & Limits
+            .child({
+                let has_api_data = agent.rate_limit_total.is_some();
+                let mut section = div().v_flex().gap(px(8.0)).p_3().rounded_lg()
+                    .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Usage & Limits".to_string()));
+
+                if has_api_data {
+                    // Rate Limit bar
+                    if let (Some(rem), Some(total)) = (agent.rate_limit_remaining, agent.rate_limit_total) {
+                        let pct = rem as f32 / total as f32;
+                        let color = if pct > 0.5 { theme::SUCCESS } else if pct > 0.2 { theme::WARNING } else { theme::ERROR };
+                        let reset = agent.rate_limit_reset_secs.unwrap_or(0);
+                        section = section.child(usage_bar("Rate Limit", &format!("{rem}/{total} req · resets {}m", reset / 60), pct, color));
+                    }
+                    // 5-Hour Quota
+                    if let Some(pct) = agent.five_hour_quota_pct {
+                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
+                        section = section.child(usage_bar("5-Hour Quota", &format!("{:.0}% used", pct * 100.0), pct, color));
+                    }
+                    // Daily Quota
+                    if let Some(pct) = agent.daily_quota_pct {
+                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
+                        section = section.child(usage_bar("Daily Quota", &format!("{:.0}% used", pct * 100.0), pct, color));
+                    }
+                    // Context Window
+                    if let Some(pct) = agent.context_used_pct {
+                        let used = agent.context_used_tokens.unwrap_or(0);
+                        let total = agent.context_total_tokens.unwrap_or(0);
+                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
+                        section = section.child(usage_bar(
+                            "Context Window",
+                            &format!("{:.0}% · {}K/{}K tokens", pct * 100.0, used / 1000, total / 1000),
+                            pct, color,
+                        ));
+                    }
+                } else {
+                    // No API data — show estimated
+                    section = section
+                        .child(usage_bar("Rate Limit", "Unknown (no API)", 0.0, theme::TEXT_MUTED))
+                        .child(
+                            div().h_flex().gap_2().items_center()
+                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
+                                    .child(format!("Estimated usage: ~{} tokens today (based on responses)", format_tokens(agent.tokens_today)))),
+                        );
+                }
+                section
             })
             // Today header + stats
             .child(
@@ -466,6 +519,19 @@ fn info_item(label: &str, value: &str) -> Div {
     div().v_flex().gap(px(2.0))
         .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(label.to_string()))
         .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
+}
+
+fn usage_bar(label: &str, detail: &str, pct: f32, color: Hsla) -> Div {
+    div().v_flex().gap(px(4.0))
+        .child(
+            div().h_flex().justify_between()
+                .child(div().text_xs().text_color(theme::TEXT_MUTED).child(label.to_string()))
+                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6)).child(detail.to_string())),
+        )
+        .child(
+            div().w_full().h(px(5.0)).rounded_full().bg(theme::TEXT_MUTED.opacity(0.1))
+                .child(div().h_full().rounded_full().bg(color).w(relative(pct.clamp(0.0, 1.0)))),
+        )
 }
 
 fn stat_card_with_period(label: &str, value: &str, period: &str, color: Hsla) -> Div {
