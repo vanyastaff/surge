@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod connection;
+pub mod discovery;
 pub mod display;
 pub mod health;
 pub mod pool;
@@ -17,6 +18,7 @@ pub mod transport;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, EffectiveCapabilities, SessionState};
+pub use discovery::{AgentDiscovery, Platform};
 pub use display::{
     detect_installed_version, AgentDetail, AgentSummary, Badge, BadgeKind, DisplayCapabilities,
     EffortConfig, EffortLevel, InstallMethod, Model, Permission, SessionEntry, SessionStatus,
