@@ -14,6 +14,7 @@ surge-acp = { workspace = true }
 surge-spec = { workspace = true }
 surge-git = { workspace = true }
 surge-orchestrator = { workspace = true }
+surge-persistence = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
