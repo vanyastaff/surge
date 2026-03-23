@@ -217,6 +217,8 @@ impl SurgeClient {
                     .unwrap_or("")
                     .to_lowercase();
 
+                debug!(title = title.as_str(), "evaluating Smart permission");
+
                 // Classify the operation based on tool title heuristics
                 if title.contains("read") || title.contains("search") || title.contains("list") {
                     *allow_read
@@ -243,6 +245,9 @@ impl SurgeClient {
                     }
                 } else if title.contains("fetch") || title.contains("network") || title.contains("http") {
                     !_deny_network && *allow_read
+                } else if title.contains("mcp") || title.contains("tool") {
+                    // MCP tool calls (crates.io, web search, etc.) — treat as read
+                    *allow_read
                 } else {
                     // Unknown operation type: fail closed
                     false
