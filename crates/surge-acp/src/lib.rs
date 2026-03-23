@@ -18,7 +18,7 @@ pub use agent_info::{
     build_available_agent, build_configured_agent, detect_installed_version, vendor_color,
     vendor_hue, AgentBadge, AgentCapabilities, AgentEffortConfig, AgentUsage, AvailableAgent,
     BadgeKind, ConfiguredAgent, EffortLevel, InstallStatus, ModelOption, PermissionSetting,
-    SessionEntry, SessionStatus,
+    SessionEntry, SessionStatus, VersionInfo,
 };
 pub use metadata::{AgentMetadata, MetadataStore};
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};

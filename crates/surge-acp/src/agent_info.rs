@@ -508,39 +508,96 @@ fn rgb_to_hue(r: f32, g: f32, b: f32) -> f32 {
     if hue < 0.0 { hue + 1.0 } else { hue }
 }
 
-/// Detect the actually installed version of an agent by running its command.
+/// Detected version info for display.
+#[derive(Debug, Clone)]
+pub struct VersionInfo {
+    /// Parsed version number (e.g. "2.1.81").
+    pub version: String,
+    /// Full display string (e.g. "Claude Code 2.1.81 (adapter v0.22.2)").
+    pub display: String,
+    /// Whether this is a wrapper adapter.
+    pub is_wrapper: bool,
+}
+
+/// Detect the actually installed version of an agent.
 ///
-/// Tries `--version`, `-v`, `version` subcommands. Returns the first
-/// version-like string found in stdout (e.g. "1.2.3").
-pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<String> {
+/// Uses `version_command` from metadata if available, otherwise tries
+/// common flags. Returns structured version info for display.
+pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<VersionInfo> {
     use tokio::process::Command;
 
-    let cmd = &entry.command;
+    let store = MetadataStore::embedded();
+    let meta = store.get(&entry.id);
 
-    // For npx agents, we can't easily detect version without downloading
+    // For npx/uvx agents, skip detection (would trigger download)
     if entry.is_npx() || entry.is_uvx() {
         return None;
     }
 
-    // Try common version flags
-    for flag in &["--version", "-v", "-V", "version"] {
-        let output = Command::new(cmd)
+    // Try metadata version_command first
+    if let Some(m) = meta {
+        if !m.version_command.is_empty() {
+            let cmd = &m.version_command[0];
+            let args: Vec<&str> = m.version_command[1..].iter().map(String::as_str).collect();
+
+            if let Ok(output) = Command::new(cmd)
+                .args(&args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await
+            {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let combined = format!("{stdout} {stderr}");
+
+                    if let Some(ver) = extract_version_string(&combined) {
+                        let is_wrapper = m.acp_type == "wrapper";
+                        let display = if is_wrapper {
+                            let cli_name = if m.wrapped_cli_name.is_empty() {
+                                &m.display_name
+                            } else {
+                                &m.wrapped_cli_name
+                            };
+                            format!("{cli_name} {ver} (adapter v{})", entry.version)
+                        } else {
+                            format!("{} {ver}", m.display_name)
+                        };
+
+                        return Some(VersionInfo {
+                            version: ver,
+                            display,
+                            is_wrapper,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: try common version flags on the registry command
+    let cmd = &entry.command;
+    for flag in &["--version", "-v", "-V"] {
+        if let Ok(output) = Command::new(cmd)
             .arg(flag)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .ok()?;
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = format!("{stdout} {stderr}");
 
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Some(ver) = extract_version_string(&stdout) {
-                return Some(ver);
-            }
-            // Try stderr too (some tools print version there)
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if let Some(ver) = extract_version_string(&stderr) {
-                return Some(ver);
+                if let Some(ver) = extract_version_string(&combined) {
+                    return Some(VersionInfo {
+                        display: format!("{ver}"),
+                        version: ver,
+                        is_wrapper: false,
+                    });
+                }
             }
         }
     }

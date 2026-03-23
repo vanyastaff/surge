@@ -42,6 +42,21 @@ pub struct AgentMetadata {
     /// Hex color for vendor branding (e.g. "#D97757").
     #[serde(default)]
     pub color: String,
+    /// "wrapper" (ACP adapter around a CLI) or "native" (direct ACP support).
+    #[serde(default)]
+    pub acp_type: String,
+    /// Command + args to detect the real installed CLI version.
+    #[serde(default)]
+    pub version_command: Vec<String>,
+    /// For wrapper agents: the name of the underlying CLI (e.g. "Claude Code").
+    #[serde(default)]
+    pub wrapped_cli_name: String,
+    /// Known command names for this agent.
+    #[serde(default)]
+    pub commands: Vec<String>,
+    /// Primary binary name.
+    #[serde(default)]
+    pub binary_name: String,
     #[serde(default)]
     pub pricing: Option<PricingInfo>,
     #[serde(default)]
