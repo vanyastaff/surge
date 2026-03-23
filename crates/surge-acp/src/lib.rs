@@ -14,9 +14,10 @@ pub mod router;
 pub mod terminal;
 
 pub use agent_info::{
-    build_available_agent, build_configured_agent, vendor_hue, AgentBadge, AgentCapabilities,
-    AgentEffortConfig, AgentUsage, AvailableAgent, BadgeKind, ConfiguredAgent, EffortLevel,
-    InstallStatus, ModelOption, PermissionSetting, SessionEntry, SessionStatus,
+    build_available_agent, build_configured_agent, detect_installed_version, vendor_hue,
+    AgentBadge, AgentCapabilities, AgentEffortConfig, AgentUsage, AvailableAgent, BadgeKind,
+    ConfiguredAgent, EffortLevel, InstallStatus, ModelOption, PermissionSetting, SessionEntry,
+    SessionStatus,
 };
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, SessionState};

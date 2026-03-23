@@ -136,7 +136,10 @@ pub struct ConfiguredAgent {
     pub description: String,
     pub model: Option<String>,
     pub binary: String,
-    pub version: Option<String>,
+    /// Version from ACP registry (may lag behind actual).
+    pub registry_version: String,
+    /// Actually installed version (detected via `--version`), None if not yet checked.
+    pub installed_version: Option<String>,
     /// How this agent is available.
     pub install_status: InstallStatus,
     pub active_sessions: u32,
@@ -212,7 +215,8 @@ pub fn build_configured_agent(
         description: detected.entry.description.clone(),
         model: detected.entry.models.first().cloned(),
         binary: detected.entry.command.clone(),
-        version: Some(detected.entry.version.clone()),
+        registry_version: detected.entry.version.clone(),
+        installed_version: None,
         install_status,
         active_sessions: 0,
         requests_today: requests as u32,
@@ -392,4 +396,79 @@ pub fn vendor_hue(agent_id: &str) -> Option<f32> {
         _ => return None,
     };
     Some(hue / 360.0)
+}
+
+/// Detect the actually installed version of an agent by running its command.
+///
+/// Tries `--version`, `-v`, `version` subcommands. Returns the first
+/// version-like string found in stdout (e.g. "1.2.3").
+pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<String> {
+    use tokio::process::Command;
+
+    let cmd = &entry.command;
+
+    // For npx agents, we can't easily detect version without downloading
+    if entry.is_npx() || entry.is_uvx() {
+        return None;
+    }
+
+    // Try common version flags
+    for flag in &["--version", "-v", "-V", "version"] {
+        let output = Command::new(cmd)
+            .arg(flag)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .ok()?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(ver) = extract_version_string(&stdout) {
+                return Some(ver);
+            }
+            // Try stderr too (some tools print version there)
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if let Some(ver) = extract_version_string(&stderr) {
+                return Some(ver);
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract a semver-like version string from text.
+/// Finds patterns like "1.2.3", "v0.10.0", "888.212.0".
+fn extract_version_string(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        let trimmed = word.trim_start_matches('v').trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+        let parts: Vec<&str> = trimmed.split('.').collect();
+        if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_version_string() {
+        assert_eq!(extract_version_string("goose v1.28.0"), Some("1.28.0".into()));
+        assert_eq!(extract_version_string("version 0.10.0"), Some("0.10.0".into()));
+        assert_eq!(extract_version_string("888.212.0"), Some("888.212.0".into()));
+        assert_eq!(extract_version_string("Claude Code CLI v2.3.1"), Some("2.3.1".into()));
+        assert_eq!(extract_version_string("no version here"), None);
+        assert_eq!(extract_version_string(""), None);
+    }
+
+    #[test]
+    fn test_install_status_label() {
+        assert_eq!(InstallStatus::Installed.label(), "Installed");
+        assert_eq!(InstallStatus::Npx.label(), "npx");
+        assert_eq!(InstallStatus::Uvx.label(), "uvx");
+    }
 }

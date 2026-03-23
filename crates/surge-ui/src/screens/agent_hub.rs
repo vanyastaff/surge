@@ -134,7 +134,8 @@ impl AgentHubScreen {
             return div().flex_1();
         };
 
-        let version_str = agent.version.as_deref().unwrap_or("—");
+        let version_str = agent.installed_version.as_deref()
+            .unwrap_or(&agent.registry_version);
 
         div().flex_1().v_flex().gap_3()
             // Header: icon + name + status + version
