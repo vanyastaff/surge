@@ -174,8 +174,6 @@ impl AgentTerminalScreen {
     }
 
     fn render_input(&self, cx: &mut Context<Self>) -> Div {
-        let has_pool = self.state.read(cx).agent_pool.is_some();
-
         let mut row = div()
             .w_full()
             .h_flex()
@@ -191,7 +189,7 @@ impl AgentTerminalScreen {
             );
         }
 
-        // Send button
+        // Send button — always active (shows error if no pool)
         row = row.child(
             div()
                 .id("send-btn")
@@ -202,17 +200,17 @@ impl AgentTerminalScreen {
                 .px_3()
                 .py_2()
                 .rounded_lg()
-                .bg(if self.is_sending || !has_pool {
+                .bg(if self.is_sending {
                     theme::TEXT_MUTED.opacity(0.1)
                 } else {
                     theme::PRIMARY
                 })
-                .text_color(if self.is_sending || !has_pool {
+                .text_color(if self.is_sending {
                     theme::TEXT_MUTED
                 } else {
                     hsla(0.0, 0.0, 1.0, 1.0)
                 })
-                .when(!self.is_sending && has_pool, |el: Stateful<Div>| {
+                .when(!self.is_sending, |el: Stateful<Div>| {
                     el.hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
                         .on_click(cx.listener(|this, _e, window, cx| {
                             this.send_prompt(window, cx);
@@ -221,7 +219,7 @@ impl AgentTerminalScreen {
                 .child(if self.is_sending {
                     Icon::new(IconName::Loader).size_4().text_color(theme::TEXT_MUTED)
                 } else {
-                    Icon::new(IconName::ArrowUp).size_4().text_color(if has_pool { hsla(0.0, 0.0, 1.0, 1.0) } else { theme::TEXT_MUTED })
+                    Icon::new(IconName::ArrowUp).size_4().text_color(hsla(0.0, 0.0, 1.0, 1.0))
                 })
                 .child(
                     div()

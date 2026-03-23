@@ -124,6 +124,22 @@ impl AppState {
         // Re-detect installed agents (might have changed).
         self.installed_agents = self.registry.detect_installed_with_paths();
 
+        // If no pool yet (no surge.toml), create one from installed agents.
+        if self.agent_pool.is_none() && !self.installed_agents.is_empty() {
+            let mut agents = std::collections::HashMap::new();
+            let mut default_agent = String::new();
+            for detected in &self.installed_agents {
+                let config = detected.entry.to_agent_config();
+                if default_agent.is_empty() {
+                    default_agent = detected.entry.id.clone();
+                }
+                agents.insert(detected.entry.id.clone(), config);
+            }
+            if let Ok(pool) = AgentPool::new(agents, default_agent, path.to_path_buf(), PermissionPolicy::default()) {
+                self.agent_pool = Some(Arc::new(pool));
+            }
+        }
+
         // Try detecting current git branch.
         self.current_branch = detect_branch(path).unwrap_or_else(|| "main".to_string());
     }
