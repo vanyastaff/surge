@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Icon, IconName, StyledExt};
 
 use crate::app_state::AppState;
@@ -26,7 +27,7 @@ pub enum MessageRole {
 pub struct AgentTerminalScreen {
     state: Entity<AppState>,
     messages: Vec<TerminalMessage>,
-    input: String,
+    input_state: Option<Entity<InputState>>,
     is_sending: bool,
     agent_name: String,
     session_active: bool,
@@ -50,15 +51,17 @@ impl AgentTerminalScreen {
                     timestamp: String::new(),
                 },
             ],
-            input: String::new(),
+            input_state: None, // created lazily in render (needs Window)
             is_sending: false,
             agent_name,
             session_active: false,
         }
     }
 
-    fn send_prompt(&mut self, cx: &mut Context<Self>) {
-        let input = self.input.trim().to_string();
+    fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input_entity) = &self.input_state else { return; };
+        let input = input_entity.read(cx).value().to_string();
+        let input = input.trim().to_string();
         if input.is_empty() || self.is_sending {
             return;
         }
@@ -69,7 +72,10 @@ impl AgentTerminalScreen {
             content: input.clone(),
             timestamp: "now".into(),
         });
-        self.input.clear();
+        // Clear input.
+        input_entity.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
         self.is_sending = true;
         cx.notify();
 
@@ -170,70 +176,62 @@ impl AgentTerminalScreen {
     fn render_input(&self, cx: &mut Context<Self>) -> Div {
         let has_pool = self.state.read(cx).agent_pool.is_some();
 
-        div()
+        let mut row = div()
             .w_full()
             .h_flex()
             .gap_2()
             .p_3()
             .border_t_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.08))
-            // Input display
-            .child(
-                div()
-                    .flex_1()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(theme::SURFACE)
-                    .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
-                    .text_sm()
-                    .text_color(if self.input.is_empty() { theme::TEXT_MUTED.opacity(0.4) } else { theme::TEXT_PRIMARY })
-                    .child(if self.input.is_empty() {
-                        format!("Send a message to {}...", self.agent_name)
-                    } else {
-                        self.input.clone()
-                    }),
-            )
-            // Send button
-            .child(
-                div()
-                    .id("send-btn")
-                    .cursor_pointer()
-                    .h_flex()
-                    .gap_1()
-                    .items_center()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(if self.is_sending || !has_pool {
-                        theme::TEXT_MUTED.opacity(0.1)
-                    } else {
-                        theme::PRIMARY
-                    })
-                    .text_color(if self.is_sending || !has_pool {
-                        theme::TEXT_MUTED
-                    } else {
-                        hsla(0.0, 0.0, 1.0, 1.0)
-                    })
-                    .when(!self.is_sending && has_pool, |el: Stateful<Div>| {
-                        el.hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
-                            .on_click(cx.listener(|this, _e, _w, cx| {
-                                this.send_prompt(cx);
-                            }))
-                    })
-                    .child(if self.is_sending {
-                        Icon::new(IconName::Loader).size_4().text_color(theme::TEXT_MUTED)
-                    } else {
-                        Icon::new(IconName::ArrowUp).size_4().text_color(if has_pool { hsla(0.0, 0.0, 1.0, 1.0) } else { theme::TEXT_MUTED })
-                    })
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .child(if self.is_sending { "Sending..." } else { "Send" }),
-                    ),
-            )
+            .border_color(theme::TEXT_MUTED.opacity(0.08));
+
+        // Real Input component
+        if let Some(input_state) = &self.input_state {
+            row = row.child(
+                div().flex_1().child(Input::new(input_state)),
+            );
+        }
+
+        // Send button
+        row = row.child(
+            div()
+                .id("send-btn")
+                .cursor_pointer()
+                .h_flex()
+                .gap_1()
+                .items_center()
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .bg(if self.is_sending || !has_pool {
+                    theme::TEXT_MUTED.opacity(0.1)
+                } else {
+                    theme::PRIMARY
+                })
+                .text_color(if self.is_sending || !has_pool {
+                    theme::TEXT_MUTED
+                } else {
+                    hsla(0.0, 0.0, 1.0, 1.0)
+                })
+                .when(!self.is_sending && has_pool, |el: Stateful<Div>| {
+                    el.hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
+                        .on_click(cx.listener(|this, _e, window, cx| {
+                            this.send_prompt(window, cx);
+                        }))
+                })
+                .child(if self.is_sending {
+                    Icon::new(IconName::Loader).size_4().text_color(theme::TEXT_MUTED)
+                } else {
+                    Icon::new(IconName::ArrowUp).size_4().text_color(if has_pool { hsla(0.0, 0.0, 1.0, 1.0) } else { theme::TEXT_MUTED })
+                })
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .child(if self.is_sending { "Sending..." } else { "Send" }),
+                ),
+        );
+
+        row
     }
 
     fn render_header(&self) -> Div {
@@ -306,7 +304,16 @@ async fn send_prompt_to_agent(
 }
 
 impl Render for AgentTerminalScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Lazily create InputState (needs Window).
+        if self.input_state.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(format!("Send a message to {}...", self.agent_name))
+            });
+            self.input_state = Some(input);
+        }
+
         let messages: Vec<Div> = self.messages.iter().map(|m| self.render_message(m)).collect();
 
         div()
