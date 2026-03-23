@@ -3,23 +3,23 @@
   "spec": "001-per-subtask-token-cost-tracking",
   "state": "building",
   "subtasks": {
-    "completed": 12,
+    "completed": 14,
     "total": 15,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Real-time Display",
+    "current": "Integration Testing",
     "id": null,
-    "total": 2
+    "total": 1
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 14,
+    "number": 16,
     "started_at": "2026-03-23T06:42:49.906336"
   },
-  "last_update": "2026-03-23T07:38:23.737378"
+  "last_update": "2026-03-23T07:44:18.690225"
 }
