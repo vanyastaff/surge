@@ -304,8 +304,9 @@ impl SurgeApp {
                 kanban.clone().into_any_element()
             }
             Screen::AgentHub => {
+                let state = self.state.clone();
                 let agent_hub = self.agent_hub.get_or_insert_with(|| {
-                    cx.new(AgentHubScreen::new)
+                    cx.new(|cx| AgentHubScreen::new(state, cx))
                 });
                 agent_hub.clone().into_any_element()
             }

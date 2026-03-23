@@ -2,6 +2,7 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::{Icon, IconName, StyledExt};
 
+use crate::app_state::AppState;
 use crate::theme;
 
 // ── Data Models ──────────────────────────────────────────────
@@ -146,8 +147,7 @@ impl CatalogFilter {
 }
 
 pub struct AgentHubScreen {
-    configured: Vec<ConfiguredAgent>,
-    available: Vec<AvailableAgent>,
+    state: Entity<AppState>,
     selected: Option<usize>,
     active_tab: HubTab,
     search: String,
@@ -155,120 +155,79 @@ pub struct AgentHubScreen {
 }
 
 impl AgentHubScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
-            configured: vec![
-                ConfiguredAgent {
-                    name: "claude-code".into(), display_name: "Claude Code".into(),
-                    description: "Anthropic's autonomous coding agent with full file system access, terminal, and git integration".into(),
-                    model: Some("claude-sonnet-4-6".into()), binary: "claude".into(), version: Some("v2.3.1".into()),
-                    active_sessions: 2, requests_today: 42, tokens_today: 156_800,
-                    cost_today: 2.34, avg_latency_ms: 1200, sessions_today: 12,
-                    capabilities: AgentCapabilities {
-                        models: Some(vec![
-                            ModelOption { name: "Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Heavy reasoning".into(), enabled: true },
-                            ModelOption { name: "Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
-                            ModelOption { name: "Opus 4.5".into(), price: "$5/$25".into(), context: "200K".into(), note: "Legacy".into(), enabled: false },
-                            ModelOption { name: "Sonnet 4.5".into(), price: "$3/$15".into(), context: "200K".into(), note: "Legacy".into(), enabled: false },
-                            ModelOption { name: "Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
-                        ]),
-                        effort: Some(AgentEffortConfig {
-                            default: EffortLevel::Adaptive,
-                            planning: EffortLevel::High,
-                            coding: EffortLevel::Adaptive,
-                            qa_review: EffortLevel::Low,
-                        }),
-                        permissions: Some(vec![
-                            PermissionSetting { name: "File read".into(), enabled: true },
-                            PermissionSetting { name: "File write".into(), enabled: true },
-                            PermissionSetting { name: "Bash commands".into(), enabled: true },
-                            PermissionSetting { name: "Network access".into(), enabled: false },
-                            PermissionSetting { name: "Git push (require gate)".into(), enabled: false },
-                        ]),
-                        dangerous_ops: Some("Ask permission".into()),
-                    },
-                    usage: AgentUsage::ClaudeCode {
-                        five_hour_pct: 0.62, five_hour_reset: "2h 14m".into(),
-                        weekly_pct: 0.18, weekly_reset: "Mon".into(),
-                        extra_usage_enabled: true, extra_usage_cost: 0.0,
-                    },
-                    subtasks_completed: 8, subtasks_failed: 0, avg_subtask_secs: 45, qa_first_pass_rate: 0.87,
-                    uptime: "4h 23m".into(), last_seen: None,
-                    recent_sessions: vec![
-                        SessionEntry { label: "auth-refactor / subtask 3".into(), status: SessionStatus::Running, time_ago: "12s ago".into(), tokens: None, duration: None },
-                        SessionEntry { label: "auth-refactor / subtask 2".into(), status: SessionStatus::Completed, time_ago: "2m ago".into(), tokens: Some(23_000), duration: Some("1m 12s".into()) },
-                        SessionEntry { label: "auth-refactor / subtask 1".into(), status: SessionStatus::Completed, time_ago: "4m ago".into(), tokens: Some(12_000), duration: Some("34s".into()) },
-                        SessionEntry { label: "fix-login / subtask 3".into(), status: SessionStatus::Failed, time_ago: "1h ago".into(), tokens: Some(31_000), duration: Some("2m 01s".into()) },
-                    ],
-                },
-                ConfiguredAgent {
-                    name: "aider".into(), display_name: "Aider".into(),
-                    description: "AI pair programming in terminal. Supports multiple LLM backends".into(),
-                    model: Some("claude-sonnet-4-5".into()), binary: "aider".into(), version: Some("v0.82.1".into()),
-                    active_sessions: 0, requests_today: 0, tokens_today: 0,
-                    cost_today: 0.0, avg_latency_ms: 0, sessions_today: 0,
-                    capabilities: AgentCapabilities {
-                        models: None, // Aider doesn't expose model selection via ACP
-                        effort: None, // No thinking level control
-                        permissions: None, // Uses API directly, not ACP permissions
-                        dangerous_ops: None,
-                    },
-                    usage: AgentUsage::Estimated {
-                        provider: "Anthropic API (claude-sonnet-4-5)".into(),
-                        estimated_tokens: 0, estimated_cost: 0.0, is_local: false,
-                    },
-                    subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
-                    uptime: "—".into(), last_seen: None, recent_sessions: vec![],
-                },
-            ],
-            available: {
-                let google = hsla(217.0/360.0, 0.9, 0.6, 1.0);
-                let openai = hsla(150.0/360.0, 0.6, 0.45, 1.0);
-                let square = hsla(25.0/360.0, 0.8, 0.55, 1.0);
-                let mistral = hsla(25.0/360.0, 0.8, 0.55, 1.0);
-                let amazon = hsla(30.0/360.0, 0.9, 0.5, 1.0);
-                let oss = theme::TEXT_MUTED;
-                let alibaba = hsla(210.0/360.0, 0.6, 0.5, 1.0);
-                let badge_popular = theme::WARNING;
-                let badge_new = theme::SUCCESS;
-                let badge_local = hsla(210.0/360.0, 0.7, 0.55, 1.0);
-                let badge_oss = theme::TEXT_MUTED;
-                vec![
-                    AvailableAgent { name: "gemini-cli".into(), display_name: "Gemini CLI".into(), vendor: "Google".into(), vendor_color: google,
-                        description: "Agentic coding assistant powered by Gemini 2.5 Pro. 1M token context window, native Google Cloud integration, multi-file editing with automatic conflict resolution".into(),
-                        pricing: "Free tier".into(), install_command: "npm install -g @google/gemini-cli".into(), install_method: "npm".into(),
-                        badges: vec![("Popular".into(), badge_popular)] },
-                    AvailableAgent { name: "codex".into(), display_name: "OpenAI Codex".into(), vendor: "OpenAI".into(), vendor_color: openai,
-                        description: "Autonomous coding agent that runs in a sandboxed environment. Executes code, runs tests, and makes commits. Supports multi-step reasoning with tool use".into(),
-                        pricing: "API key".into(), install_command: "npm install -g @openai/codex".into(), install_method: "npm".into(),
-                        badges: vec![("Popular".into(), badge_popular)] },
-                    AvailableAgent { name: "goose".into(), display_name: "Goose".into(), vendor: "Square".into(), vendor_color: square,
-                        description: "Open source AI developer agent with extensible toolkit. Plugin system for custom tools, supports multiple LLM backends, built-in code review and test generation".into(),
-                        pricing: "Free".into(), install_command: "brew install goose".into(), install_method: "brew".into(),
-                        badges: vec![("Popular".into(), badge_popular), ("OSS".into(), badge_oss)] },
-                    AvailableAgent { name: "cline".into(), display_name: "Cline".into(), vendor: "Open source".into(), vendor_color: oss,
-                        description: "Autonomous coding agent originally built for VS Code, now available as CLI. Supports Claude, GPT, Gemini, and local models. Plan-and-execute workflow with human approval gates".into(),
-                        pricing: "Free".into(), install_command: "npm install -g cline".into(), install_method: "npm".into(),
-                        badges: vec![("OSS".into(), badge_oss)] },
-                    AvailableAgent { name: "devstral".into(), display_name: "Devstral".into(), vendor: "Mistral".into(), vendor_color: mistral,
-                        description: "Mistral's coding-specialized model fine-tuned for software engineering. Optimized for code generation, refactoring, and bug fixing with low-latency inference".into(),
-                        pricing: "API key".into(), install_command: "pip install mistral-cli".into(), install_method: "pip".into(),
-                        badges: vec![("New".into(), badge_new)] },
-                    AvailableAgent { name: "kiro".into(), display_name: "Kiro".into(), vendor: "Amazon".into(), vendor_color: amazon,
-                        description: "Spec-driven AI IDE that generates implementation plans from requirements. Automated task decomposition, built-in testing, and AWS service integration".into(),
-                        pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(), install_method: "download".into(),
-                        badges: vec![("New".into(), badge_new)] },
-                    AvailableAgent { name: "qwen-coder".into(), display_name: "Qwen3-Coder".into(), vendor: "Alibaba".into(), vendor_color: alibaba,
-                        description: "High-performance code generation model that runs fully locally. No API keys, no internet required. 32K context, supports 90+ programming languages via Ollama".into(),
-                        pricing: "Free".into(), install_command: "ollama pull qwen3-coder".into(), install_method: "ollama".into(),
-                        badges: vec![("Local".into(), badge_local), ("OSS".into(), badge_oss)] },
-                ]
-            },
+            state,
             selected: Some(0),
             active_tab: HubTab::Installed,
             search: String::new(),
             filter: CatalogFilter::All,
         }
+    }
+
+    /// Build ConfiguredAgent display data from real DetectedAgent + AgentHealth.
+    fn build_configured(&self, cx: &Context<Self>) -> Vec<ConfiguredAgent> {
+        let state = self.state.read(cx);
+        state.installed_agents.iter().map(|detected| {
+            let health = state.health.get_health(&detected.entry.id);
+            let (requests, latency, failures) = match health {
+                Some(h) => (h.total_requests, h.avg_latency_ms, h.total_failures),
+                None => (0, 0, 0),
+            };
+
+            // Determine capabilities based on agent ID (from registry knowledge).
+            let capabilities = build_agent_capabilities(&detected.entry.id);
+            let usage = build_agent_usage(&detected.entry.id);
+
+            ConfiguredAgent {
+                name: detected.entry.id.clone(),
+                display_name: detected.entry.display_name.clone(),
+                description: detected.entry.long_description.clone(),
+                model: detected.entry.models.first().cloned(),
+                binary: detected.entry.command.clone(),
+                version: None, // TODO: detect via `command --version`
+                active_sessions: 0, // TODO: from AgentPool
+                requests_today: requests as u32,
+                tokens_today: 0, // TODO: from usage tracking
+                cost_today: 0.0,
+                avg_latency_ms: latency as u32,
+                sessions_today: 0,
+                capabilities,
+                usage,
+                subtasks_completed: 0,
+                subtasks_failed: failures as u32,
+                avg_subtask_secs: 0,
+                qa_first_pass_rate: 0.0,
+                uptime: "—".into(),
+                last_seen: None,
+                recent_sessions: vec![],
+            }
+        }).collect()
+    }
+
+    /// Build AvailableAgent display data from registry entries NOT installed.
+    fn build_available(&self, cx: &Context<Self>) -> Vec<AvailableAgent> {
+        let state = self.state.read(cx);
+        let installed_ids: Vec<&str> = state.installed_agents.iter().map(|a| a.entry.id.as_str()).collect();
+
+        state.registry.list().iter()
+            .filter(|e| !installed_ids.contains(&e.id.as_str()))
+            .map(|entry| {
+                let vendor_color = vendor_color_for(&entry.id);
+                let install_method = extract_install_method(&entry.install_instructions);
+                AvailableAgent {
+                    name: entry.id.clone(),
+                    display_name: entry.display_name.clone(),
+                    vendor: entry.tags.first().cloned().unwrap_or_default(),
+                    vendor_color,
+                    description: entry.long_description.clone(),
+                    pricing: if entry.tags.contains(&"free".to_string()) { "Free".into() } else { "API key".into() },
+                    install_command: entry.install_instructions.clone(),
+                    install_method,
+                    badges: build_badges(entry),
+                }
+            })
+            .collect()
     }
 
     // ── Tabs ─────────────────────────────────────────────────
@@ -277,8 +236,8 @@ impl AgentHubScreen {
         let tabs: Vec<Stateful<Div>> = HubTab::all().iter().map(|&tab| {
             let is_active = tab == self.active_tab;
             let label = match tab {
-                HubTab::Installed => format!("Installed ({})", self.configured.len()),
-                HubTab::Available => format!("Available ({})", self.available.len()),
+                HubTab::Installed => format!("Installed ({})", self.state.read(cx).installed_agents.len()),
+                HubTab::Available => format!("Available ({})", self.build_available(cx).len()),
                 HubTab::Benchmarks => "Benchmarks".to_string(),
             };
             div()
@@ -326,13 +285,15 @@ impl AgentHubScreen {
 
     // ── Detail Panel (right, read-only) ──────────────────────
 
-    fn render_detail(&self) -> Div {
+    fn render_detail(&self, configured: &[ConfiguredAgent]) -> Div {
         let Some(idx) = self.selected else {
             return div().flex_1().v_flex().items_center().justify_center().gap_2()
                 .child(Icon::new(IconName::Bot).size_8().text_color(theme::TEXT_MUTED.opacity(0.15)))
                 .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.3)).child("Select an agent".to_string()));
         };
-        let agent = &self.configured[idx];
+        let Some(agent) = configured.get(idx) else {
+            return div().flex_1();
+        };
 
         let version_str = agent.version.as_deref().unwrap_or("—");
 
@@ -538,8 +499,8 @@ impl AgentHubScreen {
 
     // ── Available Tab ────────────────────────────────────────
 
-    fn filtered_available(&self) -> Vec<&AvailableAgent> {
-        self.available.iter().filter(|a| {
+    fn filtered_available<'a>(&self, available: &'a [AvailableAgent]) -> Vec<&'a AvailableAgent> {
+        available.iter().filter(|a| {
             if !self.search.is_empty() {
                 let q = self.search.to_lowercase();
                 if !a.display_name.to_lowercase().contains(&q)
@@ -557,7 +518,8 @@ impl AgentHubScreen {
     }
 
     fn render_available(&self, cx: &mut Context<Self>) -> Div {
-        let filtered = self.filtered_available();
+        let available = self.build_available(cx);
+        let filtered = self.filtered_available(&available);
         let cards: Vec<Div> = filtered.iter().enumerate().map(|(i, agent)| {
             let cmd = agent.install_command.clone();
             let is_even = i % 2 == 0;
@@ -754,6 +716,86 @@ fn latency_color(ms: u32) -> Hsla {
     if ms == 0 { theme::TEXT_MUTED } else if ms < 1000 { theme::SUCCESS } else if ms < 3000 { theme::WARNING } else { theme::ERROR }
 }
 
+/// Build agent-specific capabilities (models, effort, permissions) based on agent ID.
+fn build_agent_capabilities(agent_id: &str) -> AgentCapabilities {
+    match agent_id {
+        "claude-code" => AgentCapabilities {
+            models: Some(vec![
+                ModelOption { name: "Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Heavy reasoning".into(), enabled: true },
+                ModelOption { name: "Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
+                ModelOption { name: "Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
+            ]),
+            effort: Some(AgentEffortConfig {
+                default: EffortLevel::Adaptive,
+                planning: EffortLevel::High,
+                coding: EffortLevel::Adaptive,
+                qa_review: EffortLevel::Low,
+            }),
+            permissions: Some(vec![
+                PermissionSetting { name: "File read".into(), enabled: true },
+                PermissionSetting { name: "File write".into(), enabled: true },
+                PermissionSetting { name: "Bash commands".into(), enabled: true },
+                PermissionSetting { name: "Network access".into(), enabled: false },
+                PermissionSetting { name: "Git push".into(), enabled: false },
+            ]),
+            dangerous_ops: Some("Ask permission".into()),
+        },
+        // Other agents — no ACP-managed capabilities
+        _ => AgentCapabilities { models: None, effort: None, permissions: None, dangerous_ops: None },
+    }
+}
+
+/// Build agent-specific usage display based on agent ID.
+fn build_agent_usage(agent_id: &str) -> AgentUsage {
+    match agent_id {
+        "claude-code" => AgentUsage::ClaudeCode {
+            five_hour_pct: 0.0, five_hour_reset: "—".into(),
+            weekly_pct: 0.0, weekly_reset: "—".into(),
+            extra_usage_enabled: false, extra_usage_cost: 0.0,
+        },
+        _ => AgentUsage::Estimated {
+            provider: "Unknown".into(),
+            estimated_tokens: 0, estimated_cost: 0.0, is_local: false,
+        },
+    }
+}
+
+fn vendor_color_for(agent_id: &str) -> Hsla {
+    match agent_id {
+        "claude-code" => hsla(263.0/360.0, 0.85, 0.58, 1.0),
+        "copilot-cli" => hsla(210.0/360.0, 0.7, 0.5, 1.0),
+        "gemini-cli" => hsla(217.0/360.0, 0.9, 0.6, 1.0),
+        "codex-cli" => hsla(150.0/360.0, 0.6, 0.45, 1.0),
+        "goose" => hsla(25.0/360.0, 0.8, 0.55, 1.0),
+        "aider" => hsla(120.0/360.0, 0.5, 0.5, 1.0),
+        _ => theme::TEXT_MUTED,
+    }
+}
+
+fn extract_install_method(instructions: &str) -> String {
+    let lower = instructions.to_lowercase();
+    if lower.contains("npm") { "npm".into() }
+    else if lower.contains("brew") { "brew".into() }
+    else if lower.contains("pip") { "pip".into() }
+    else if lower.contains("cargo") { "cargo".into() }
+    else if lower.contains("ollama") { "ollama".into() }
+    else if lower.contains("download") { "download".into() }
+    else { "manual".into() }
+}
+
+fn build_badges(entry: &surge_acp::RegistryEntry) -> Vec<(String, Hsla)> {
+    let mut badges = Vec::new();
+    // Popular agents
+    if ["claude-code", "copilot-cli", "codex-cli"].contains(&entry.id.as_str()) {
+        badges.push(("Popular".into(), theme::WARNING));
+    }
+    // OSS tag
+    if entry.tags.contains(&"open-source".to_string()) || entry.tags.contains(&"oss".to_string()) {
+        badges.push(("OSS".into(), theme::TEXT_MUTED));
+    }
+    badges
+}
+
 fn format_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 { format!("{:.1}M", tokens as f64 / 1_000_000.0) }
     else if tokens >= 1_000 { format!("{:.1}K", tokens as f64 / 1_000.0) }
@@ -773,7 +815,8 @@ impl Render for AgentHubScreen {
             // Content
             .child(match self.active_tab {
                 HubTab::Installed => {
-                    let items: Vec<Stateful<Div>> = self.configured.iter().enumerate()
+                    let configured = self.build_configured(cx);
+                    let items: Vec<Stateful<Div>> = configured.iter().enumerate()
                         .map(|(i, a)| self.render_agent_item(i, a, cx)).collect();
 
                     div().flex_1().h_flex().overflow_hidden()
@@ -785,7 +828,7 @@ impl Render for AgentHubScreen {
                         .child(
                             div().id("detail-scroll").flex_1().h_full().min_w_0()
                                 .v_flex().gap_3().p_4().overflow_y_scroll()
-                                .child(self.render_detail()),
+                                .child(self.render_detail(&configured)),
                         )
                 }
                 HubTab::Available => self.render_available(cx),
