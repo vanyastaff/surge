@@ -12,6 +12,9 @@ pub use error::{PersistenceError, Result};
 /// Data models for token usage tracking
 pub mod models;
 
+/// SQLite-based storage implementation
+pub mod store;
+
 /// Persistence error types
 pub mod error {
     use thiserror::Error;
@@ -26,6 +29,10 @@ pub mod error {
         /// Serialization error
         #[error("Serialization error: {0}")]
         Serialization(#[from] serde_json::Error),
+
+        /// Database error
+        #[error("Database error: {0}")]
+        Database(#[from] rusqlite::Error),
 
         /// Storage error
         #[error("Storage error: {0}")]
