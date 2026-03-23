@@ -1,15 +1,13 @@
 //! Agent display information — business logic for UI presentation.
 //!
-//! This module builds display-ready data from registry entries and health stats.
-//! The UI should only render, never compute agent metadata.
+//! All agent metadata (colors, models, taglines, version commands) is
+//! hardcoded here for the 4 supported agents. No external JSON files.
 
 use crate::health::AgentHealth;
-use crate::metadata::{AgentMetadata, MetadataStore};
 use crate::registry::{DetectedAgent, RegistryEntry};
 
 // ── Display models ──────────────────────────────────────────────────
 
-/// Model option for agent configuration panel.
 #[derive(Debug, Clone)]
 pub struct ModelOption {
     pub name: String,
@@ -19,35 +17,22 @@ pub struct ModelOption {
     pub enabled: bool,
 }
 
-/// Effort/thinking level for agent operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffortLevel {
-    High,
-    Medium,
-    Low,
-    Adaptive,
-}
+pub enum EffortLevel { High, Medium, Low, Adaptive }
 
 impl EffortLevel {
     #[must_use]
     pub fn label(self) -> &'static str {
-        match self {
-            Self::High => "High",
-            Self::Medium => "Medium",
-            Self::Low => "Low",
-            Self::Adaptive => "Adaptive",
-        }
+        match self { Self::High => "High", Self::Medium => "Medium", Self::Low => "Low", Self::Adaptive => "Adaptive" }
     }
 }
 
-/// Permission toggle for agent configuration panel.
 #[derive(Debug, Clone)]
 pub struct PermissionSetting {
     pub name: String,
     pub enabled: bool,
 }
 
-/// Agent-specific effort configuration.
 #[derive(Debug, Clone)]
 pub struct AgentEffortConfig {
     pub default: EffortLevel,
@@ -56,7 +41,6 @@ pub struct AgentEffortConfig {
     pub qa_review: EffortLevel,
 }
 
-/// Agent capabilities for the configuration panel.
 #[derive(Debug, Clone)]
 pub struct AgentCapabilities {
     pub models: Option<Vec<ModelOption>>,
@@ -65,10 +49,8 @@ pub struct AgentCapabilities {
     pub dangerous_ops: Option<String>,
 }
 
-/// Usage data — varies by agent type.
 #[derive(Debug, Clone)]
 pub enum AgentUsage {
-    /// Claude Code: native statusline data.
     ClaudeCode {
         five_hour_pct: f32,
         five_hour_reset: String,
@@ -77,18 +59,15 @@ pub enum AgentUsage {
         extra_usage_enabled: bool,
         extra_usage_cost: f64,
     },
-    /// Estimated from ACP response tokens.
     Estimated {
         provider: String,
         estimated_tokens: u64,
         estimated_cost: f64,
         is_local: bool,
     },
-    /// No data yet.
     Unknown,
 }
 
-/// Session entry for agent detail panel.
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub label: String,
@@ -98,38 +77,19 @@ pub struct SessionEntry {
     pub duration: Option<String>,
 }
 
-/// Session status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionStatus {
-    Running,
-    Completed,
-    Failed,
-}
+pub enum SessionStatus { Running, Completed, Failed }
 
-/// How an agent is available on the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallStatus {
-    /// Binary installed locally on PATH.
-    Installed,
-    /// Available via npx (downloaded on-demand).
-    Npx,
-    /// Available via uvx (downloaded on-demand).
-    Uvx,
-}
+pub enum InstallStatus { Installed, Npx, Uvx }
 
 impl InstallStatus {
-    /// Human-readable label.
     #[must_use]
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Installed => "Installed",
-            Self::Npx => "npx",
-            Self::Uvx => "uvx",
-        }
+        match self { Self::Installed => "Installed", Self::Npx => "npx", Self::Uvx => "uvx" }
     }
 }
 
-/// Fully assembled display data for a runnable agent.
 #[derive(Debug, Clone)]
 pub struct ConfiguredAgent {
     pub name: String,
@@ -137,11 +97,8 @@ pub struct ConfiguredAgent {
     pub description: String,
     pub model: Option<String>,
     pub binary: String,
-    /// Version from ACP registry (may lag behind actual).
     pub registry_version: String,
-    /// Actually installed version (detected via `--version`), None if not yet checked.
     pub installed_version: Option<String>,
-    /// How this agent is available.
     pub install_status: InstallStatus,
     pub active_sessions: u32,
     pub requests_today: u32,
@@ -160,7 +117,6 @@ pub struct ConfiguredAgent {
     pub recent_sessions: Vec<SessionEntry>,
 }
 
-/// Display data for an agent available for installation / on-demand use.
 #[derive(Debug, Clone)]
 pub struct AvailableAgent {
     pub name: String,
@@ -171,80 +127,48 @@ pub struct AvailableAgent {
     pub install_command: String,
     pub install_method: String,
     pub badges: Vec<AgentBadge>,
-    /// Whether this agent can be launched right now (e.g. npx available).
     pub runnable: bool,
-    /// How it would be launched (npx/uvx/binary).
     pub run_via: Option<InstallStatus>,
 }
 
-/// A badge to display on an agent card.
 #[derive(Debug, Clone)]
 pub struct AgentBadge {
     pub label: String,
     pub kind: BadgeKind,
 }
 
-/// Badge visual category (UI maps these to colors).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BadgeKind {
-    Popular,
-    OpenSource,
-    Free,
-    New,
+pub enum BadgeKind { Popular, OpenSource, Free, New }
+
+#[derive(Debug, Clone)]
+pub struct VersionInfo {
+    pub version: String,
+    pub display: String,
+    pub is_wrapper: bool,
 }
 
-// ── Builder functions ───────────────────────────────────────────────
+// ── Builders ────────────────────────────────────────────────────────
 
-/// Build a `ConfiguredAgent` from a detected agent, health data, and metadata.
 #[must_use]
 pub fn build_configured_agent(
     detected: &DetectedAgent,
     health: Option<&AgentHealth>,
-) -> ConfiguredAgent {
-    build_configured_agent_with_metadata(detected, health, MetadataStore::global())
-}
-
-/// Build a `ConfiguredAgent` with explicit metadata store.
-#[must_use]
-pub fn build_configured_agent_with_metadata(
-    detected: &DetectedAgent,
-    health: Option<&AgentHealth>,
-    metadata: &MetadataStore,
 ) -> ConfiguredAgent {
     let (requests, latency, failures) = match health {
         Some(h) => (h.total_requests, h.avg_latency_ms, h.total_failures),
         None => (0, 0, 0),
     };
 
-    let install_status = if detected.entry.is_npx() {
-        InstallStatus::Npx
-    } else if detected.entry.is_uvx() {
-        InstallStatus::Uvx
-    } else {
-        InstallStatus::Installed
-    };
-
-    let meta = metadata.get(&detected.entry.id);
-
-    // Use metadata tagline if available, else registry description
-    let description = meta
-        .map(|m| m.tagline.clone())
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| detected.entry.description.clone());
-
-    // Build models from metadata if available
-    let model = meta
-        .and_then(|m| m.models.first())
-        .map(|m| m.name.clone())
-        .or_else(|| detected.entry.models.first().cloned());
+    let id = &detected.entry.id;
+    let install_status = if detected.entry.is_npx() { InstallStatus::Npx }
+        else if detected.entry.is_uvx() { InstallStatus::Uvx }
+        else { InstallStatus::Installed };
 
     ConfiguredAgent {
-        name: detected.entry.id.clone(),
-        display_name: meta
-            .map(|m| m.display_name.clone())
-            .unwrap_or_else(|| detected.entry.display_name.clone()),
-        description,
-        model,
+        name: id.clone(),
+        display_name: agent_display_name(id).unwrap_or(&detected.entry.display_name).to_string(),
+        description: agent_tagline(id).unwrap_or(&detected.entry.description).to_string(),
+        model: agent_default_model(id).map(String::from),
         binary: detected.entry.command.clone(),
         registry_version: detected.entry.version.clone(),
         installed_version: None,
@@ -255,8 +179,8 @@ pub fn build_configured_agent_with_metadata(
         cost_today: 0.0,
         avg_latency_ms: latency as u32,
         sessions_today: 0,
-        capabilities: build_capabilities_from_metadata(&detected.entry.id, meta),
-        usage: build_usage(&detected.entry.id),
+        capabilities: build_capabilities(id),
+        usage: build_usage(id),
         subtasks_completed: 0,
         subtasks_failed: failures as u32,
         avg_subtask_secs: 0,
@@ -267,348 +191,217 @@ pub fn build_configured_agent_with_metadata(
     }
 }
 
-/// Build an `AvailableAgent` from a registry entry (uses embedded metadata).
 #[must_use]
 pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
-    let store = MetadataStore::global();
-    build_available_agent_with_metadata(entry, &store)
-}
-
-/// Build an `AvailableAgent` with explicit metadata store.
-#[must_use]
-pub fn build_available_agent_with_metadata(
-    entry: &RegistryEntry,
-    metadata: &MetadataStore,
-) -> AvailableAgent {
     let runnable = entry.is_runnable();
-    let run_via = if entry.is_npx() {
-        Some(InstallStatus::Npx)
-    } else if entry.is_uvx() {
-        Some(InstallStatus::Uvx)
-    } else if runnable {
-        Some(InstallStatus::Installed)
-    } else {
-        None
-    };
-
-    let meta = metadata.get(&entry.id);
+    let run_via = if entry.is_npx() { Some(InstallStatus::Npx) }
+        else if entry.is_uvx() { Some(InstallStatus::Uvx) }
+        else if runnable { Some(InstallStatus::Installed) }
+        else { None };
 
     AvailableAgent {
         name: entry.id.clone(),
-        display_name: meta
-            .map(|m| m.display_name.clone())
-            .unwrap_or_else(|| entry.display_name.clone()),
-        vendor: meta
-            .map(|m| m.vendor.clone())
-            .unwrap_or_else(|| entry.vendor().to_string()),
-        description: meta
-            .map(|m| m.tagline.clone())
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| entry.description.clone()),
+        display_name: agent_display_name(&entry.id).unwrap_or(&entry.display_name).to_string(),
+        vendor: agent_vendor(&entry.id).unwrap_or_else(|| entry.vendor()).to_string(),
+        description: agent_tagline(&entry.id).unwrap_or(&entry.description).to_string(),
         license: entry.license.clone(),
         install_command: entry.install_instructions.clone(),
-        install_method: extract_install_method(&entry.install_instructions),
+        install_method: if entry.is_npx() { "npx" } else if entry.is_uvx() { "uvx" } else { "binary" }.into(),
         badges: build_badges(entry),
         runnable,
         run_via,
     }
 }
 
-// ── Internal helpers ────────────────────────────────────────────────
+// ── Agent metadata (hardcoded for 4 agents) ─────────────────────────
 
-/// Build capabilities from metadata if available, else fallback to hardcoded.
-fn build_capabilities_from_metadata(
-    agent_id: &str,
-    meta: Option<&AgentMetadata>,
-) -> AgentCapabilities {
-    let models = meta.and_then(|m| {
-        if m.models.is_empty() {
-            return None;
-        }
-        Some(
-            m.models
-                .iter()
-                .map(|model| {
-                    let context = if model.context > 0 {
-                        format_context(model.context)
-                    } else {
-                        "—".into()
-                    };
-                    ModelOption {
-                        name: model.name.clone(),
-                        price: model
-                            .premium_multiplier
-                            .map(|pm| {
-                                if pm == 0.0 {
-                                    "included".into()
-                                } else {
-                                    format!("{pm}x")
-                                }
-                            })
-                            .unwrap_or_else(|| "—".into()),
-                        context,
-                        note: if !model.note.is_empty() {
-                            model.note.clone()
-                        } else {
-                            model.strengths.join(", ")
-                        },
-                        enabled: true,
-                    }
-                })
-                .collect(),
-        )
-    });
+fn agent_display_name(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-acp" => Some("Claude Agent"),
+        "github-copilot-cli" => Some("GitHub Copilot"),
+        "codex-acp" => Some("Codex CLI"),
+        "gemini" => Some("Gemini CLI"),
+        _ => None,
+    }
+}
 
-    // Effort control only for agents that support it
-    let effort = meta.and_then(|m| {
-        if m.features.get("effort_control").and_then(|v| v.as_bool()) == Some(true) {
-            Some(AgentEffortConfig {
-                default: EffortLevel::Adaptive,
-                planning: EffortLevel::High,
-                coding: EffortLevel::Adaptive,
-                qa_review: EffortLevel::Low,
-            })
-        } else {
-            None
-        }
-    });
+fn agent_tagline(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-acp" => Some("Anthropic's autonomous coding agent — deepest reasoning, largest context"),
+        "github-copilot-cli" => Some("GitHub's multi-model terminal agent with native repo integration"),
+        "codex-acp" => Some("OpenAI's cloud-native coding agent with sandboxed parallel execution"),
+        "gemini" => Some("Google's CLI with the most generous free tier — 1M context on all models"),
+        _ => None,
+    }
+}
 
-    AgentCapabilities {
-        models,
-        effort,
-        permissions: if agent_id == "claude-acp" {
-            Some(vec![
+fn agent_vendor(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-acp" => Some("Anthropic"),
+        "github-copilot-cli" => Some("GitHub"),
+        "codex-acp" => Some("OpenAI"),
+        "gemini" => Some("Google"),
+        _ => None,
+    }
+}
+
+fn agent_default_model(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-acp" => Some("Claude Sonnet 4.6"),
+        "github-copilot-cli" => Some("GPT-5 mini"),
+        "codex-acp" => Some("GPT-5.3-Codex"),
+        "gemini" => Some("Gemini 2.5 Pro"),
+        _ => None,
+    }
+}
+
+/// Vendor brand color as (r, g, b) in 0.0–1.0.
+#[must_use]
+pub fn vendor_color(id: &str) -> Option<(f32, f32, f32)> {
+    match id {
+        "claude-acp"        => Some((0.851, 0.467, 0.341)),  // #D97757
+        "github-copilot-cli"=> Some((0.431, 0.251, 0.788)),  // #6E40C9
+        "codex-acp"         => Some((0.063, 0.639, 0.498)),  // #10A37F
+        "gemini"            => Some((0.259, 0.522, 0.957)),  // #4285F4
+        _ => None,
+    }
+}
+
+/// Version detection command for each agent.
+fn version_command(id: &str) -> Option<(&'static [&'static str], bool, &'static str)> {
+    // Returns (command+args, is_wrapper, wrapped_cli_name)
+    match id {
+        "claude-acp"         => Some((&["claude", "--version"], true, "Claude Code")),
+        "github-copilot-cli" => Some((&["gh", "copilot", "--version"], false, "")),
+        "codex-acp"          => Some((&["codex", "--version"], true, "Codex CLI")),
+        "gemini"             => Some((&["gemini", "--version"], false, "")),
+        _ => None,
+    }
+}
+
+fn build_capabilities(id: &str) -> AgentCapabilities {
+    match id {
+        "claude-acp" => AgentCapabilities {
+            models: Some(vec![
+                ModelOption { name: "Claude Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Deep reasoning".into(), enabled: true },
+                ModelOption { name: "Claude Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
+                ModelOption { name: "Claude Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
+            ]),
+            effort: Some(AgentEffortConfig {
+                default: EffortLevel::Adaptive, planning: EffortLevel::High,
+                coding: EffortLevel::Adaptive, qa_review: EffortLevel::Low,
+            }),
+            permissions: Some(vec![
                 PermissionSetting { name: "File read".into(), enabled: true },
                 PermissionSetting { name: "File write".into(), enabled: true },
                 PermissionSetting { name: "Bash commands".into(), enabled: true },
                 PermissionSetting { name: "Network access".into(), enabled: false },
                 PermissionSetting { name: "Git push".into(), enabled: false },
-            ])
-        } else {
-            None
+            ]),
+            dangerous_ops: Some("Ask permission".into()),
         },
-        dangerous_ops: Some("Ask permission".into()),
+        "github-copilot-cli" => AgentCapabilities {
+            models: Some(vec![
+                ModelOption { name: "Claude Opus 4.6".into(), price: "1x".into(), context: "1M ctx".into(), note: "Deep reasoning".into(), enabled: true },
+                ModelOption { name: "Claude Sonnet 4.6".into(), price: "1x".into(), context: "1M ctx".into(), note: "Fast coding".into(), enabled: true },
+                ModelOption { name: "GPT-5.3-Codex".into(), price: "1x".into(), context: "—".into(), note: "Terminal workflows".into(), enabled: true },
+                ModelOption { name: "GPT-5 mini".into(), price: "included".into(), context: "—".into(), note: "Free with subscription".into(), enabled: true },
+                ModelOption { name: "GPT-4.1".into(), price: "included".into(), context: "—".into(), note: "General coding".into(), enabled: true },
+                ModelOption { name: "Gemini 3 Pro".into(), price: "1x".into(), context: "—".into(), note: "Large context, multimodal".into(), enabled: true },
+            ]),
+            effort: None,
+            permissions: None,
+            dangerous_ops: Some("Ask permission".into()),
+        },
+        "codex-acp" => AgentCapabilities {
+            models: Some(vec![
+                ModelOption { name: "GPT-5.3-Codex".into(), price: "—".into(), context: "200K".into(), note: "Terminal workflows, polyglot".into(), enabled: true },
+                ModelOption { name: "o4-mini".into(), price: "—".into(), context: "200K".into(), note: "Deep reasoning".into(), enabled: true },
+                ModelOption { name: "o3".into(), price: "—".into(), context: "200K".into(), note: "Advanced reasoning".into(), enabled: true },
+                ModelOption { name: "GPT-4.1".into(), price: "—".into(), context: "200K".into(), note: "General coding".into(), enabled: true },
+            ]),
+            effort: None,
+            permissions: None,
+            dangerous_ops: Some("Sandboxed".into()),
+        },
+        "gemini" => AgentCapabilities {
+            models: Some(vec![
+                ModelOption { name: "Gemini 2.5 Pro".into(), price: "free".into(), context: "1M ctx".into(), note: "Flagship, reasoning".into(), enabled: true },
+                ModelOption { name: "Gemini 2.5 Flash".into(), price: "free".into(), context: "1M ctx".into(), note: "Fast, cost-effective".into(), enabled: true },
+                ModelOption { name: "Gemini 3 Flash".into(), price: "free".into(), context: "1M ctx".into(), note: "Latest generation".into(), enabled: true },
+            ]),
+            effort: None,
+            permissions: None,
+            dangerous_ops: Some("Ask permission".into()),
+        },
+        _ => AgentCapabilities { models: None, effort: None, permissions: None, dangerous_ops: None },
     }
 }
 
-fn format_context(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{}M ctx", tokens / 1_000_000)
-    } else if tokens >= 1_000 {
-        format!("{}K ctx", tokens / 1_000)
-    } else {
-        format!("{tokens} ctx")
-    }
-}
-
-fn build_usage(agent_id: &str) -> AgentUsage {
-    match agent_id {
+fn build_usage(id: &str) -> AgentUsage {
+    match id {
         "claude-acp" => AgentUsage::ClaudeCode {
-            five_hour_pct: 0.0,
-            five_hour_reset: "—".into(),
-            weekly_pct: 0.0,
-            weekly_reset: "—".into(),
-            extra_usage_enabled: false,
-            extra_usage_cost: 0.0,
+            five_hour_pct: 0.0, five_hour_reset: "—".into(),
+            weekly_pct: 0.0, weekly_reset: "—".into(),
+            extra_usage_enabled: false, extra_usage_cost: 0.0,
         },
-        _ => AgentUsage::Estimated {
-            provider: "Unknown".into(),
-            estimated_tokens: 0,
-            estimated_cost: 0.0,
-            is_local: false,
-        },
+        _ => AgentUsage::Unknown,
     }
 }
 
 fn build_badges(entry: &RegistryEntry) -> Vec<AgentBadge> {
     let mut badges = Vec::new();
-
     if entry.tags.contains(&"popular".to_string()) {
         badges.push(AgentBadge { label: "Popular".into(), kind: BadgeKind::Popular });
     }
     if entry.is_open_source() {
         badges.push(AgentBadge { label: "OSS".into(), kind: BadgeKind::OpenSource });
     }
-    if entry.license.to_lowercase().contains("free")
-        || entry.tags.contains(&"free".to_string())
-    {
-        badges.push(AgentBadge { label: "Free".into(), kind: BadgeKind::Free });
-    }
-
     badges
 }
 
-fn extract_install_method(instructions: &str) -> String {
-    let lower = instructions.to_lowercase();
-    if lower.starts_with("npx ") {
-        "npx".into()
-    } else if lower.starts_with("uvx ") {
-        "uvx".into()
-    } else if lower.contains("npm") {
-        "npm".into()
-    } else if lower.contains("brew") {
-        "brew".into()
-    } else if lower.contains("pip") {
-        "pip".into()
-    } else if lower.contains("download") {
-        "download".into()
-    } else {
-        "binary".into()
-    }
-}
+// ── Version detection ───────────────────────────────────────────────
 
-/// Vendor color as (r, g, b) floats for an agent ID.
-///
-/// Uses metadata hex color if available, else returns None.
-/// UI maps this to its own color type (Hsla, rgb, etc.).
-#[must_use]
-pub fn vendor_color(agent_id: &str) -> Option<(f32, f32, f32)> {
-    let store = MetadataStore::global();
-    if let Some(meta) = store.get(agent_id) {
-        if !meta.color.is_empty() {
-            return MetadataStore::parse_color(&meta.color);
-        }
-    }
-    None
-}
-
-/// Vendor color hue (0.0–1.0) for an agent ID. Returns None for unknown agents.
-///
-/// Derives hue from metadata hex color. Fallback for agents without metadata.
-#[must_use]
-pub fn vendor_hue(agent_id: &str) -> Option<f32> {
-    // Try metadata color first
-    if let Some((r, g, b)) = vendor_color(agent_id) {
-        return Some(rgb_to_hue(r, g, b));
-    }
-    // Fallback for agents without metadata
-    None
-}
-
-/// Convert RGB (0.0-1.0) to hue (0.0-1.0).
-fn rgb_to_hue(r: f32, g: f32, b: f32) -> f32 {
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let delta = max - min;
-
-    if delta < f32::EPSILON {
-        return 0.0;
-    }
-
-    let hue = if (max - r).abs() < f32::EPSILON {
-        ((g - b) / delta) % 6.0
-    } else if (max - g).abs() < f32::EPSILON {
-        (b - r) / delta + 2.0
-    } else {
-        (r - g) / delta + 4.0
-    };
-
-    let hue = hue / 6.0;
-    if hue < 0.0 { hue + 1.0 } else { hue }
-}
-
-/// Detected version info for display.
-#[derive(Debug, Clone)]
-pub struct VersionInfo {
-    /// Parsed version number (e.g. "2.1.81").
-    pub version: String,
-    /// Full display string (e.g. "Claude Code 2.1.81 (adapter v0.22.2)").
-    pub display: String,
-    /// Whether this is a wrapper adapter.
-    pub is_wrapper: bool,
-}
-
-/// Detect the actually installed version of an agent.
-///
-/// Uses `version_command` from metadata if available, otherwise tries
-/// common flags. Returns structured version info for display.
+/// Detect the installed version of an agent by running its version command.
 pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<VersionInfo> {
     use tokio::process::Command;
 
-    let store = MetadataStore::global();
-    let meta = store.get(&entry.id);
-
-    // For npx/uvx agents, skip detection (would trigger download)
     if entry.is_npx() || entry.is_uvx() {
         return None;
     }
 
-    // Try metadata version_command first
-    if let Some(m) = meta {
-        if !m.version_command.is_empty() {
-            let cmd = &m.version_command[0];
-            let args: Vec<&str> = m.version_command[1..].iter().map(String::as_str).collect();
+    let (cmd_args, is_wrapper, cli_name) = version_command(&entry.id)?;
+    let (cmd, args) = cmd_args.split_first()?;
 
-            if let Ok(output) = Command::new(cmd)
-                .args(&args)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output()
-                .await
-            {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let combined = format!("{stdout} {stderr}");
+    let output = Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .ok()?;
 
-                    if let Some(ver) = extract_version_string(&combined) {
-                        let is_wrapper = m.acp_type == "wrapper";
-                        let display = if is_wrapper {
-                            let cli_name = if m.wrapped_cli_name.is_empty() {
-                                &m.display_name
-                            } else {
-                                &m.wrapped_cli_name
-                            };
-                            format!("{cli_name} {ver} (adapter v{})", entry.version)
-                        } else {
-                            format!("{} {ver}", m.display_name)
-                        };
-
-                        return Some(VersionInfo {
-                            version: ver,
-                            display,
-                            is_wrapper,
-                        });
-                    }
-                }
-            }
-        }
+    if !output.status.success() {
+        return None;
     }
 
-    // Fallback: try common version flags on the registry command
-    let cmd = &entry.command;
-    for flag in &["--version", "-v", "-V"] {
-        if let Ok(output) = Command::new(cmd)
-            .arg(flag)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = format!("{stdout} {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let ver = extract_version_string(&format!("{stdout} {stderr}"))?;
 
-                if let Some(ver) = extract_version_string(&combined) {
-                    return Some(VersionInfo {
-                        display: format!("{ver}"),
-                        version: ver,
-                        is_wrapper: false,
-                    });
-                }
-            }
-        }
-    }
+    let display = if is_wrapper {
+        format!("{cli_name} {ver} (adapter v{})", entry.version)
+    } else {
+        ver.clone()
+    };
 
-    None
+    Some(VersionInfo { version: ver, display, is_wrapper })
 }
 
-/// Extract a semver-like version string from text.
-/// Finds patterns like "1.2.3", "v0.10.0", "888.212.0".
 fn extract_version_string(text: &str) -> Option<String> {
     for word in text.split_whitespace() {
-        let trimmed = word.trim_start_matches('v').trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+        let trimmed = word.trim_start_matches('v')
+            .trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
         let parts: Vec<&str> = trimmed.split('.').collect();
         if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) {
             return Some(trimmed.to_string());
@@ -622,19 +415,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_version_string() {
-        assert_eq!(extract_version_string("goose v1.28.0"), Some("1.28.0".into()));
-        assert_eq!(extract_version_string("version 0.10.0"), Some("0.10.0".into()));
-        assert_eq!(extract_version_string("888.212.0"), Some("888.212.0".into()));
+    fn test_vendor_colors() {
+        assert!(vendor_color("claude-acp").is_some());
+        assert!(vendor_color("gemini").is_some());
+        assert!(vendor_color("unknown").is_none());
+    }
+
+    #[test]
+    fn test_extract_version() {
+        assert_eq!(extract_version_string("v1.28.0"), Some("1.28.0".into()));
         assert_eq!(extract_version_string("Claude Code CLI v2.3.1"), Some("2.3.1".into()));
-        assert_eq!(extract_version_string("no version here"), None);
         assert_eq!(extract_version_string(""), None);
     }
 
     #[test]
-    fn test_install_status_label() {
-        assert_eq!(InstallStatus::Installed.label(), "Installed");
-        assert_eq!(InstallStatus::Npx.label(), "npx");
-        assert_eq!(InstallStatus::Uvx.label(), "uvx");
+    fn test_all_agents_have_metadata() {
+        for id in &["claude-acp", "github-copilot-cli", "codex-acp", "gemini"] {
+            assert!(agent_display_name(id).is_some(), "{id} missing display_name");
+            assert!(agent_tagline(id).is_some(), "{id} missing tagline");
+            assert!(agent_vendor(id).is_some(), "{id} missing vendor");
+            assert!(agent_default_model(id).is_some(), "{id} missing default model");
+            assert!(vendor_color(id).is_some(), "{id} missing color");
+            assert!(version_command(id).is_some(), "{id} missing version_command");
+        }
     }
 }

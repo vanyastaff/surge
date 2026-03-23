@@ -8,7 +8,6 @@ pub mod agent_info;
 pub mod client;
 pub mod connection;
 pub mod health;
-pub mod metadata;
 pub mod pool;
 pub mod registry;
 pub mod router;
@@ -16,11 +15,10 @@ pub mod terminal;
 
 pub use agent_info::{
     build_available_agent, build_configured_agent, detect_installed_version, vendor_color,
-    vendor_hue, AgentBadge, AgentCapabilities, AgentEffortConfig, AgentUsage, AvailableAgent,
-    BadgeKind, ConfiguredAgent, EffortLevel, InstallStatus, ModelOption, PermissionSetting,
-    SessionEntry, SessionStatus, VersionInfo,
+    AgentBadge, AgentCapabilities, AgentEffortConfig, AgentUsage, AvailableAgent, BadgeKind,
+    ConfiguredAgent, EffortLevel, InstallStatus, ModelOption, PermissionSetting, SessionEntry,
+    SessionStatus, VersionInfo,
 };
-pub use metadata::{AgentMetadata, MetadataStore};
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, SessionState};
 pub use health::{AgentHealth, HealthMonitor};
