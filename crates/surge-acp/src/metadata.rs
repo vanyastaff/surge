@@ -10,9 +10,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tracing::{debug, info, warn};
 
 const METADATA_JSON: &str = include_str!("agent_metadata.json");
+
+/// Global cached metadata store — parsed once, reused everywhere.
+static EMBEDDED_METADATA: LazyLock<MetadataStore> = LazyLock::new(MetadataStore::load);
 
 // ── Serde types ─────────────────────────────────────────────────────
 
@@ -151,7 +155,13 @@ pub struct MetadataStore {
 }
 
 impl MetadataStore {
-    /// Load from embedded JSON.
+    /// Get the global cached metadata store (parsed once on first access).
+    #[must_use]
+    pub fn global() -> &'static Self {
+        &EMBEDDED_METADATA
+    }
+
+    /// Load from embedded JSON (creates a new instance — prefer `global()`).
     #[must_use]
     pub fn embedded() -> Self {
         Self::from_json(METADATA_JSON).unwrap_or_else(|e| {

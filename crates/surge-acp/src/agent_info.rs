@@ -201,8 +201,7 @@ pub fn build_configured_agent(
     detected: &DetectedAgent,
     health: Option<&AgentHealth>,
 ) -> ConfiguredAgent {
-    let store = MetadataStore::embedded();
-    build_configured_agent_with_metadata(detected, health, &store)
+    build_configured_agent_with_metadata(detected, health, MetadataStore::global())
 }
 
 /// Build a `ConfiguredAgent` with explicit metadata store.
@@ -271,7 +270,7 @@ pub fn build_configured_agent_with_metadata(
 /// Build an `AvailableAgent` from a registry entry (uses embedded metadata).
 #[must_use]
 pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
-    let store = MetadataStore::embedded();
+    let store = MetadataStore::global();
     build_available_agent_with_metadata(entry, &store)
 }
 
@@ -464,7 +463,7 @@ fn extract_install_method(instructions: &str) -> String {
 /// UI maps this to its own color type (Hsla, rgb, etc.).
 #[must_use]
 pub fn vendor_color(agent_id: &str) -> Option<(f32, f32, f32)> {
-    let store = MetadataStore::embedded();
+    let store = MetadataStore::global();
     if let Some(meta) = store.get(agent_id) {
         if !meta.color.is_empty() {
             return MetadataStore::parse_color(&meta.color);
@@ -526,7 +525,7 @@ pub struct VersionInfo {
 pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<VersionInfo> {
     use tokio::process::Command;
 
-    let store = MetadataStore::embedded();
+    let store = MetadataStore::global();
     let meta = store.get(&entry.id);
 
     // For npx/uvx agents, skip detection (would trigger download)
