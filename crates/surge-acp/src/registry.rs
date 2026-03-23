@@ -10,6 +10,7 @@
 //!
 //! Remote entries are cached in `~/.surge/registry-cache.json` for 24 hours.
 
+use crate::discovery::AgentDiscovery;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -302,14 +303,9 @@ impl Registry {
     }
 
     pub fn detect_installed_with_paths(&self) -> Vec<DetectedAgent> {
-        self.entries
-            .iter()
-            .filter(|e| e.is_installed())
-            .map(|e| DetectedAgent {
-                entry: e.clone(),
-                command_path: resolve_command_path(&e.command),
-            })
-            .collect()
+        // Use AgentDiscovery module for enhanced detection via env vars and standard paths
+        let mut discovery = AgentDiscovery::new();
+        discovery.discover_all(&self.entries)
     }
 
     pub fn detect_runnable_with_paths(&self) -> Vec<DetectedAgent> {
@@ -842,5 +838,63 @@ mod tests {
         assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
         assert!(AgentKind::Codex.mcp_config_env_var().is_none());
         assert!(AgentKind::Gemini.mcp_config_env_var().is_none());
+    }
+
+    #[test]
+    fn test_detect_with_discovery() {
+        use std::env;
+        use std::fs::File;
+
+        let reg = Registry::builtin();
+
+        // Test 1: Basic detection without env vars (may find agents on PATH)
+        let detected = reg.detect_installed_with_paths();
+        // Can't assert specific count since it depends on what's installed on the system
+        // Just verify the method runs without panicking
+        assert!(detected.len() <= reg.len());
+
+        // Test 2: Detection with env var override
+        let temp_dir = env::temp_dir();
+        let temp_file = temp_dir.join("test_mock_claude");
+
+        // Create a temporary mock agent file
+        if File::create(&temp_file).is_ok() {
+            // Set CLAUDE_PATH to point to our mock file
+            unsafe {
+                env::set_var("CLAUDE_PATH", temp_file.to_string_lossy().as_ref());
+            }
+
+            // Run detection - should find Claude via env var
+            let detected = reg.detect_installed_with_paths();
+
+            // Look for Claude in the results
+            let claude_found = detected.iter().any(|d| {
+                d.entry.kind == AgentKind::Claude
+                    && d.command_path
+                        .as_ref()
+                        .map(|p| p.contains("test_mock_claude"))
+                        .unwrap_or(false)
+            });
+
+            assert!(
+                claude_found,
+                "Should detect Claude agent via CLAUDE_PATH env var"
+            );
+
+            // Clean up
+            unsafe {
+                env::remove_var("CLAUDE_PATH");
+            }
+            let _ = std::fs::remove_file(&temp_file);
+        }
+
+        // Test 3: Verify DetectedAgent structure
+        let detected = reg.detect_installed_with_paths();
+        for agent in detected {
+            // Each detected agent should have a valid entry
+            assert!(!agent.entry.id.is_empty());
+            assert!(!agent.entry.display_name.is_empty());
+            // command_path may be Some or None depending on what's installed
+        }
     }
 }
