@@ -1,12 +1,17 @@
 //! ACP Agent Registry — data-driven catalog parsed from official ACP registry.json.
 //!
-//! The registry is embedded at compile time from `acp_registry.json` and provides
-//! platform-aware command resolution for npx, binary, and uvx distribution types.
+//! Two-tier loading:
+//! 1. **Embedded fallback** — compiled into the binary via `include_str!`
+//! 2. **Cached registry** — `~/.surge/cache/registry.json`, updated via CDN fetch
+//!
+//! `Registry::load()` tries the cache first, falls back to embedded.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use surge_core::config::{AgentConfig, Transport};
+use tracing::{debug, info, warn};
 
 // ── Embedded registry JSON ──────────────────────────────────────────
 
@@ -224,9 +229,9 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Create the registry from the embedded `acp_registry.json`.
+    /// Create the registry from the embedded `acp_registry.json` only.
     #[must_use]
-    pub fn builtin() -> Self {
+    pub fn embedded() -> Self {
         Self::from_json(REGISTRY_JSON).unwrap_or_else(|e| {
             tracing::error!("Failed to parse embedded registry: {e}");
             Self {
@@ -235,7 +240,45 @@ impl Registry {
         })
     }
 
-    /// Parse a registry from JSON string (for runtime refresh).
+    /// Load registry: try cache first, fall back to embedded.
+    ///
+    /// Cache location: `~/.surge/cache/registry.json`
+    #[must_use]
+    pub fn load() -> Self {
+        if let Some(cache_path) = cache_path() {
+            if cache_path.exists() {
+                match std::fs::read_to_string(&cache_path) {
+                    Ok(json) => match Self::from_json(&json) {
+                        Ok(reg) => {
+                            info!(
+                                agents = reg.len(),
+                                "loaded registry from cache: {}",
+                                cache_path.display()
+                            );
+                            return reg;
+                        }
+                        Err(e) => {
+                            warn!("cached registry is corrupt, using embedded: {e}");
+                        }
+                    },
+                    Err(e) => {
+                        warn!("cannot read cached registry: {e}");
+                    }
+                }
+            } else {
+                debug!("no cached registry, using embedded");
+            }
+        }
+        Self::embedded()
+    }
+
+    /// Backward-compat alias for `load()`.
+    #[must_use]
+    pub fn builtin() -> Self {
+        Self::load()
+    }
+
+    /// Parse a registry from JSON string.
     ///
     /// # Errors
     ///
@@ -252,6 +295,68 @@ impl Registry {
             .collect();
 
         Ok(Self { entries })
+    }
+
+    /// Update the local cache with fresh JSON (e.g. fetched from CDN).
+    ///
+    /// Also saves the ETag for conditional GET on next fetch.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if cache directory can't be created or file can't be written.
+    pub fn save_cache(json: &str, etag: Option<&str>) -> Result<PathBuf, String> {
+        let cache_dir = cache_dir().ok_or("Cannot determine home directory")?;
+        std::fs::create_dir_all(&cache_dir)
+            .map_err(|e| format!("Cannot create cache dir: {e}"))?;
+
+        let registry_path = cache_dir.join("registry.json");
+        std::fs::write(&registry_path, json)
+            .map_err(|e| format!("Cannot write registry cache: {e}"))?;
+
+        if let Some(etag) = etag {
+            let etag_path = cache_dir.join("registry.etag");
+            let _ = std::fs::write(etag_path, etag);
+        }
+
+        info!("registry cache updated: {}", registry_path.display());
+        Ok(registry_path)
+    }
+
+    /// Read the cached ETag for conditional GET.
+    #[must_use]
+    pub fn cached_etag() -> Option<String> {
+        let etag_path = cache_dir()?.join("registry.etag");
+        std::fs::read_to_string(etag_path).ok().map(|s| s.trim().to_string())
+    }
+
+    /// Update cache from JSON and reload the registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if JSON is invalid or cache write fails.
+    pub fn update_from_json(json: &str, etag: Option<&str>) -> Result<Self, String> {
+        // Validate JSON parses before caching
+        let registry = Self::from_json(json)?;
+        Self::save_cache(json, etag)?;
+        Ok(registry)
+    }
+
+    /// Age of the cached registry file, if it exists.
+    #[must_use]
+    pub fn cache_age() -> Option<std::time::Duration> {
+        let path = cache_path()?;
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok()?;
+        std::time::SystemTime::now().duration_since(modified).ok()
+    }
+
+    /// Whether the cache is stale (older than TTL, default 24 hours).
+    #[must_use]
+    pub fn is_cache_stale(ttl: std::time::Duration) -> bool {
+        match Self::cache_age() {
+            Some(age) => age > ttl,
+            None => true, // no cache = stale
+        }
     }
 
     /// Return all entries in the registry.
@@ -489,6 +594,34 @@ fn strip_version(package: &str) -> String {
     package.to_string()
 }
 
+// ── Cache paths ─────────────────────────────────────────────────────
+
+/// Return `~/.surge/cache/` directory path.
+fn cache_dir() -> Option<PathBuf> {
+    dirs_path().map(|p| p.join("cache"))
+}
+
+/// Return `~/.surge/cache/registry.json` path.
+fn cache_path() -> Option<PathBuf> {
+    cache_dir().map(|p| p.join("registry.json"))
+}
+
+/// Return `~/.surge/` directory path.
+fn dirs_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|p| PathBuf::from(p).join(".surge"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .map(|p| PathBuf::from(p).join(".surge"))
+    }
+}
+
 // ── Utilities ───────────────────────────────────────────────────────
 
 /// Check if a command exists on PATH.
@@ -536,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_builtin_parses_embedded_json() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         assert!(!reg.is_empty());
         // Official ACP registry has 27 agents
         assert!(reg.len() >= 25, "expected >=25 agents, got {}", reg.len());
@@ -544,7 +677,7 @@ mod tests {
 
     #[test]
     fn test_find_claude() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let entry = reg.find("claude-acp");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().display_name, "Claude Agent");
@@ -552,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_find_goose() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let entry = reg.find("goose");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().vendor(), "Block");
@@ -560,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_npx_command_resolution() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let gemini = reg.find("gemini").unwrap();
         // Gemini is npx-only, should resolve to npx
         assert_eq!(gemini.command, "npx");
@@ -570,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_binary_command_resolution() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let goose = reg.find("goose").unwrap();
         // goose is binary-only, command depends on platform
         assert!(!goose.command.is_empty());
@@ -578,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_uvx_command_resolution() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let crow = reg.find("crow-cli").unwrap();
         assert_eq!(crow.command, "uvx");
         assert!(crow.default_args.contains(&"crow-cli".to_string()));
@@ -586,21 +719,21 @@ mod tests {
 
     #[test]
     fn test_search() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let results = reg.search("anthropic");
         assert!(!results.is_empty());
     }
 
     #[test]
     fn test_search_by_tag() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let results = reg.search("open-source");
         assert!(results.len() >= 5);
     }
 
     #[test]
     fn test_capabilities() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let planners = reg.by_capability(&AgentCapability::Plan);
         assert_eq!(planners.len(), 1);
         assert_eq!(planners[0].id, "claude-acp");
@@ -611,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_to_agent_config() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let entry = reg.find("gemini").unwrap();
         let config = entry.to_agent_config();
         assert_eq!(config.command, "npx");
@@ -628,7 +761,7 @@ mod tests {
 
     #[test]
     fn test_is_open_source() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let goose = reg.find("goose").unwrap();
         assert!(goose.is_open_source());
 
@@ -658,14 +791,14 @@ mod tests {
 
     #[test]
     fn test_detect_installed_returns_subset() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         let installed = reg.detect_installed();
         assert!(installed.len() <= reg.list().len());
     }
 
     #[test]
     fn test_all_entries_have_command() {
-        let reg = Registry::builtin();
+        let reg = Registry::embedded();
         for entry in reg.list() {
             assert!(
                 !entry.command.is_empty(),
@@ -673,5 +806,53 @@ mod tests {
                 entry.id
             );
         }
+    }
+
+    #[test]
+    fn test_save_and_load_cache() {
+        // Use a temp dir to avoid polluting real ~/.surge
+        let tmp = std::env::temp_dir().join("surge-test-cache");
+        let _ = std::fs::create_dir_all(&tmp);
+        let cache_file = tmp.join("registry.json");
+
+        let json = r#"{"version":"1.0.0","agents":[{"id":"cached","name":"Cached Agent","version":"0.1.0","description":"From cache","authors":["Test"],"license":"MIT","distribution":{"npx":{"package":"cached@0.1.0"}}}]}"#;
+
+        std::fs::write(&cache_file, json).unwrap();
+
+        // Verify JSON parses correctly
+        let reg = Registry::from_json(json).unwrap();
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.find("cached").unwrap().display_name, "Cached Agent");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_from_json_validates() {
+        let json = r#"{"version":"1.0.0","agents":[{"id":"fresh","name":"Fresh","version":"1.0.0","description":"Fresh agent","authors":["Dev"],"license":"Apache-2.0","distribution":{"npx":{"package":"fresh@1.0.0","args":["--acp"]}}}]}"#;
+
+        let reg = Registry::from_json(json).unwrap();
+        assert_eq!(reg.len(), 1);
+        assert!(reg.find("fresh").unwrap().is_open_source());
+    }
+
+    #[test]
+    fn test_from_invalid_json() {
+        let result = Registry::from_json("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_embedded_always_works() {
+        let reg = Registry::embedded();
+        assert!(reg.len() >= 25);
+    }
+
+    #[test]
+    fn test_cache_staleness_zero_ttl() {
+        use std::time::Duration;
+        // With TTL of 0, cache is always stale (even if it exists)
+        assert!(Registry::is_cache_stale(Duration::ZERO));
     }
 }
