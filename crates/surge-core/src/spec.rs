@@ -15,6 +15,20 @@ pub enum SubtaskState {
     Skipped,
 }
 
+impl SubtaskState {
+    /// Returns `true` if no further execution will happen for this subtask.
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Skipped)
+    }
+
+    /// Returns `true` if the subtask is currently being executed by an agent.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
 /// Execution metadata for a single subtask, persisted to spec.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SubtaskExecution {
@@ -160,6 +174,24 @@ mod tests {
             deserialized.subtasks[0].acceptance_criteria[0].description,
             "It compiles"
         );
+    }
+
+    #[test]
+    fn test_subtask_state_is_terminal() {
+        assert!(SubtaskState::Completed.is_terminal());
+        assert!(SubtaskState::Failed.is_terminal());
+        assert!(SubtaskState::Skipped.is_terminal());
+        assert!(!SubtaskState::Pending.is_terminal());
+        assert!(!SubtaskState::Running.is_terminal());
+    }
+
+    #[test]
+    fn test_subtask_state_is_active() {
+        assert!(SubtaskState::Running.is_active());
+        assert!(!SubtaskState::Pending.is_active());
+        assert!(!SubtaskState::Completed.is_active());
+        assert!(!SubtaskState::Failed.is_active());
+        assert!(!SubtaskState::Skipped.is_active());
     }
 
     #[test]

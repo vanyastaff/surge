@@ -381,6 +381,16 @@ impl SurgeConfig {
         // Validate pipeline configuration
         self.pipeline.validate()?;
 
+        // Validate log level
+        const VALID_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
+        if !VALID_LEVELS.contains(&self.log.level.as_str()) {
+            return Err(crate::SurgeError::Config(format!(
+                "log.level '{}' is invalid. Must be one of: {}",
+                self.log.level,
+                VALID_LEVELS.join(", ")
+            )));
+        }
+
         Ok(())
     }
 
@@ -1316,6 +1326,23 @@ auto_open_worktree = true
         assert_eq!(config.ide.editor.as_deref(), Some("vscode"));
         assert_eq!(config.ide.open_file_cmd.as_deref(), Some("code {path}:{line}"));
         assert!(config.ide.auto_open_worktree);
+    }
+
+    #[test]
+    fn test_log_level_validation_valid() {
+        for level in ["error", "warn", "info", "debug", "trace"] {
+            let mut config = SurgeConfig::default();
+            config.log.level = level.to_string();
+            assert!(config.validate().is_ok(), "level '{level}' should be valid");
+        }
+    }
+
+    #[test]
+    fn test_log_level_validation_invalid() {
+        let mut config = SurgeConfig::default();
+        config.log.level = "verbose".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("verbose"));
     }
 
     #[test]
