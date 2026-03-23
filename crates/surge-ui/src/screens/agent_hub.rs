@@ -49,11 +49,23 @@ impl HubTab {
 
 // ── Screen ───────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogFilter { All, Free, Paid }
+
+impl CatalogFilter {
+    fn label(self) -> &'static str {
+        match self { Self::All => "All", Self::Free => "Free", Self::Paid => "Paid" }
+    }
+    fn all() -> &'static [Self] { &[Self::All, Self::Free, Self::Paid] }
+}
+
 pub struct AgentHubScreen {
     configured: Vec<ConfiguredAgent>,
     available: Vec<AvailableAgent>,
     selected: Option<usize>,
     active_tab: HubTab,
+    search: String,
+    filter: CatalogFilter,
 }
 
 impl AgentHubScreen {
@@ -103,6 +115,8 @@ impl AgentHubScreen {
             ],
             selected: Some(0),
             active_tab: HubTab::Configured,
+            search: String::new(),
+            filter: CatalogFilter::All,
         }
     }
 
@@ -223,8 +237,27 @@ impl AgentHubScreen {
 
     // ── Available Tab ────────────────────────────────────────
 
+    fn filtered_available(&self) -> Vec<&AvailableAgent> {
+        self.available.iter().filter(|a| {
+            if !self.search.is_empty() {
+                let q = self.search.to_lowercase();
+                if !a.display_name.to_lowercase().contains(&q)
+                    && !a.vendor.to_lowercase().contains(&q)
+                    && !a.description.to_lowercase().contains(&q) {
+                    return false;
+                }
+            }
+            match self.filter {
+                CatalogFilter::All => true,
+                CatalogFilter::Free => a.pricing.to_lowercase().contains("free"),
+                CatalogFilter::Paid => !a.pricing.to_lowercase().contains("free"),
+            }
+        }).collect()
+    }
+
     fn render_available(&self, cx: &mut Context<Self>) -> Div {
-        let cards: Vec<Div> = self.available.iter().map(|agent| {
+        let filtered = self.filtered_available();
+        let cards: Vec<Div> = filtered.iter().map(|agent| {
             let cmd = agent.install_command.clone();
             let badge_text = agent.badge.clone();
 
@@ -266,6 +299,12 @@ impl AgentHubScreen {
                     div().text_xs().text_color(theme::TEXT_MUTED)
                         .child(format!("{} · {}", agent.vendor, agent.pricing)),
                 )
+                // Description
+                .child(
+                    div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
+                        .line_height(relative(1.4)).max_h(px(30.0)).overflow_hidden()
+                        .child(agent.description.clone()),
+                )
                 // Install command (click to copy)
                 .child(
                     div()
@@ -286,8 +325,40 @@ impl AgentHubScreen {
         }).collect();
 
         div().size_full().v_flex().gap_3().p_4()
-            .child(div().text_xs().text_color(theme::TEXT_MUTED)
-                .child("Install an agent, then restart Surge to auto-detect it.".to_string()))
+            // Search bar + filter chips
+            .child(
+                div().h_flex().gap_3().items_center()
+                    .child(
+                        div().flex_1().h_flex().gap_2().items_center()
+                            .px_3().py(px(6.0)).rounded_lg()
+                            .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.08))
+                            .child(Icon::new(IconName::Search).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                            .child(
+                                div().text_xs()
+                                    .text_color(if self.search.is_empty() { theme::TEXT_MUTED.opacity(0.4) } else { theme::TEXT_PRIMARY })
+                                    .child(if self.search.is_empty() { "Search agents...".to_string() } else { self.search.clone() }),
+                            ),
+                    )
+                    .child(
+                        div().h_flex().gap_1().children(
+                            CatalogFilter::all().iter().map(|&f| {
+                                let is_active = f == self.filter;
+                                div()
+                                    .id(SharedString::from(format!("cf-{}", f.label())))
+                                    .px(px(8.0)).py(px(4.0)).rounded_full().cursor_pointer().text_xs()
+                                    .bg(if is_active { theme::PRIMARY.opacity(0.12) } else { gpui::transparent_black() })
+                                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
+                                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
+                                    .on_click(cx.listener(move |this, _e, _w, cx| { this.filter = f; cx.notify(); }))
+                                    .child(f.label().to_string())
+                            }),
+                        ),
+                    ),
+            )
+            // Count
+            .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
+                .child(format!("{} agents", filtered.len())))
+            // Cards
             .child(
                 div().flex().flex_wrap().gap_3().content_start()
                     .children(cards.into_iter().map(|c| div().w(px(300.0)).child(c))),
