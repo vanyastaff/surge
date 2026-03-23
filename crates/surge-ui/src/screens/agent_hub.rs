@@ -2,7 +2,7 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_acp::{
-    build_available_agent, build_configured_agent, vendor_hue, AgentUsage, AvailableAgent,
+    build_available_agent, build_configured_agent, vendor_color, AgentUsage, AvailableAgent,
     BadgeKind, ConfiguredAgent, EffortLevel, InstallStatus, SessionStatus,
 };
 
@@ -371,8 +371,13 @@ impl AgentHubScreen {
             let cmd = agent.install_command.clone();
             let is_even = i % 2 == 0;
             let initial = agent.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
-            let vc = vendor_hue(&agent.name)
-                .map(|h| hsla(h, 0.7, 0.55, 1.0))
+            let vc = vendor_color(&agent.name)
+                .map(|(r, g, b)| gpui::rgba(
+                    ((r * 255.0) as u32) << 24
+                        | ((g * 255.0) as u32) << 16
+                        | ((b * 255.0) as u32) << 8
+                        | 0xFF,
+                ).into())
                 .unwrap_or(theme::TEXT_MUTED);
 
             div()

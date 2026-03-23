@@ -4,6 +4,7 @@
 //! The UI should only render, never compute agent metadata.
 
 use crate::health::AgentHealth;
+use crate::metadata::{AgentMetadata, MetadataStore};
 use crate::registry::{DetectedAgent, RegistryEntry};
 
 // ── Display models ──────────────────────────────────────────────────
@@ -194,11 +195,22 @@ pub enum BadgeKind {
 
 // ── Builder functions ───────────────────────────────────────────────
 
-/// Build a `ConfiguredAgent` from a detected agent and optional health data.
+/// Build a `ConfiguredAgent` from a detected agent, health data, and metadata.
 #[must_use]
 pub fn build_configured_agent(
     detected: &DetectedAgent,
     health: Option<&AgentHealth>,
+) -> ConfiguredAgent {
+    let store = MetadataStore::embedded();
+    build_configured_agent_with_metadata(detected, health, &store)
+}
+
+/// Build a `ConfiguredAgent` with explicit metadata store.
+#[must_use]
+pub fn build_configured_agent_with_metadata(
+    detected: &DetectedAgent,
+    health: Option<&AgentHealth>,
+    metadata: &MetadataStore,
 ) -> ConfiguredAgent {
     let (requests, latency, failures) = match health {
         Some(h) => (h.total_requests, h.avg_latency_ms, h.total_failures),
@@ -213,11 +225,27 @@ pub fn build_configured_agent(
         InstallStatus::Installed
     };
 
+    let meta = metadata.get(&detected.entry.id);
+
+    // Use metadata tagline if available, else registry description
+    let description = meta
+        .map(|m| m.tagline.clone())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| detected.entry.description.clone());
+
+    // Build models from metadata if available
+    let model = meta
+        .and_then(|m| m.models.first())
+        .map(|m| m.name.clone())
+        .or_else(|| detected.entry.models.first().cloned());
+
     ConfiguredAgent {
         name: detected.entry.id.clone(),
-        display_name: detected.entry.display_name.clone(),
-        description: detected.entry.description.clone(),
-        model: detected.entry.models.first().cloned(),
+        display_name: meta
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| detected.entry.display_name.clone()),
+        description,
+        model,
         binary: detected.entry.command.clone(),
         registry_version: detected.entry.version.clone(),
         installed_version: None,
@@ -228,7 +256,7 @@ pub fn build_configured_agent(
         cost_today: 0.0,
         avg_latency_ms: latency as u32,
         sessions_today: 0,
-        capabilities: build_capabilities(&detected.entry.id),
+        capabilities: build_capabilities_from_metadata(&detected.entry.id, meta),
         usage: build_usage(&detected.entry.id),
         subtasks_completed: 0,
         subtasks_failed: failures as u32,
@@ -240,9 +268,19 @@ pub fn build_configured_agent(
     }
 }
 
-/// Build an `AvailableAgent` from a registry entry.
+/// Build an `AvailableAgent` from a registry entry (uses embedded metadata).
 #[must_use]
 pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
+    let store = MetadataStore::embedded();
+    build_available_agent_with_metadata(entry, &store)
+}
+
+/// Build an `AvailableAgent` with explicit metadata store.
+#[must_use]
+pub fn build_available_agent_with_metadata(
+    entry: &RegistryEntry,
+    metadata: &MetadataStore,
+) -> AvailableAgent {
     let runnable = entry.is_runnable();
     let run_via = if entry.is_npx() {
         Some(InstallStatus::Npx)
@@ -254,11 +292,20 @@ pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
         None
     };
 
+    let meta = metadata.get(&entry.id);
+
     AvailableAgent {
         name: entry.id.clone(),
-        display_name: entry.display_name.clone(),
-        vendor: entry.vendor().to_string(),
-        description: entry.description.clone(),
+        display_name: meta
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| entry.display_name.clone()),
+        vendor: meta
+            .map(|m| m.vendor.clone())
+            .unwrap_or_else(|| entry.vendor().to_string()),
+        description: meta
+            .map(|m| m.tagline.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| entry.description.clone()),
         license: entry.license.clone(),
         install_command: entry.install_instructions.clone(),
         install_method: extract_install_method(&entry.install_instructions),
@@ -270,53 +317,88 @@ pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-fn build_capabilities(agent_id: &str) -> AgentCapabilities {
-    match agent_id {
-        "claude-acp" => AgentCapabilities {
-            models: Some(vec![
-                ModelOption {
-                    name: "Opus 4.6".into(),
-                    price: "$5/$25".into(),
-                    context: "1M ctx".into(),
-                    note: "Heavy reasoning".into(),
-                    enabled: true,
-                },
-                ModelOption {
-                    name: "Sonnet 4.6".into(),
-                    price: "$3/$15".into(),
-                    context: "1M ctx".into(),
-                    note: "Daily driver".into(),
-                    enabled: true,
-                },
-                ModelOption {
-                    name: "Haiku 4.5".into(),
-                    price: "$0.80/$4".into(),
-                    context: "200K".into(),
-                    note: "Quick tasks".into(),
-                    enabled: true,
-                },
-            ]),
-            effort: Some(AgentEffortConfig {
+/// Build capabilities from metadata if available, else fallback to hardcoded.
+fn build_capabilities_from_metadata(
+    agent_id: &str,
+    meta: Option<&AgentMetadata>,
+) -> AgentCapabilities {
+    let models = meta.and_then(|m| {
+        if m.models.is_empty() {
+            return None;
+        }
+        Some(
+            m.models
+                .iter()
+                .map(|model| {
+                    let context = if model.context > 0 {
+                        format_context(model.context)
+                    } else {
+                        "—".into()
+                    };
+                    ModelOption {
+                        name: model.name.clone(),
+                        price: model
+                            .premium_multiplier
+                            .map(|pm| {
+                                if pm == 0.0 {
+                                    "included".into()
+                                } else {
+                                    format!("{pm}x")
+                                }
+                            })
+                            .unwrap_or_else(|| "—".into()),
+                        context,
+                        note: if !model.note.is_empty() {
+                            model.note.clone()
+                        } else {
+                            model.strengths.join(", ")
+                        },
+                        enabled: true,
+                    }
+                })
+                .collect(),
+        )
+    });
+
+    // Effort control only for agents that support it
+    let effort = meta.and_then(|m| {
+        if m.features.get("effort_control").and_then(|v| v.as_bool()) == Some(true) {
+            Some(AgentEffortConfig {
                 default: EffortLevel::Adaptive,
                 planning: EffortLevel::High,
                 coding: EffortLevel::Adaptive,
                 qa_review: EffortLevel::Low,
-            }),
-            permissions: Some(vec![
+            })
+        } else {
+            None
+        }
+    });
+
+    AgentCapabilities {
+        models,
+        effort,
+        permissions: if agent_id == "claude-acp" {
+            Some(vec![
                 PermissionSetting { name: "File read".into(), enabled: true },
                 PermissionSetting { name: "File write".into(), enabled: true },
                 PermissionSetting { name: "Bash commands".into(), enabled: true },
                 PermissionSetting { name: "Network access".into(), enabled: false },
                 PermissionSetting { name: "Git push".into(), enabled: false },
-            ]),
-            dangerous_ops: Some("Ask permission".into()),
+            ])
+        } else {
+            None
         },
-        _ => AgentCapabilities {
-            models: None,
-            effort: None,
-            permissions: None,
-            dangerous_ops: None,
-        },
+        dangerous_ops: Some("Ask permission".into()),
+    }
+}
+
+fn format_context(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{}M ctx", tokens / 1_000_000)
+    } else if tokens >= 1_000 {
+        format!("{}K ctx", tokens / 1_000)
+    } else {
+        format!("{tokens} ctx")
     }
 }
 
@@ -376,43 +458,54 @@ fn extract_install_method(instructions: &str) -> String {
     }
 }
 
+/// Vendor color as (r, g, b) floats for an agent ID.
+///
+/// Uses metadata hex color if available, else returns None.
+/// UI maps this to its own color type (Hsla, rgb, etc.).
+#[must_use]
+pub fn vendor_color(agent_id: &str) -> Option<(f32, f32, f32)> {
+    let store = MetadataStore::embedded();
+    if let Some(meta) = store.get(agent_id) {
+        if !meta.color.is_empty() {
+            return MetadataStore::parse_color(&meta.color);
+        }
+    }
+    None
+}
+
 /// Vendor color hue (0.0–1.0) for an agent ID. Returns None for unknown agents.
 ///
-/// UI maps this to its own color type (Hsla, etc.).
+/// Derives hue from metadata hex color. Fallback for agents without metadata.
 #[must_use]
 pub fn vendor_hue(agent_id: &str) -> Option<f32> {
-    let hue = match agent_id {
-        "claude-acp" => 263.0,
-        "github-copilot-cli" => 210.0,
-        "gemini" => 217.0,
-        "codex-acp" => 150.0,
-        "goose" => 25.0,
-        "cline" => 340.0,
-        "amp-acp" => 280.0,
-        "mistral-vibe" => 35.0,
-        "cursor" => 50.0,
-        "junie" => 310.0,
-        "kimi" => 190.0,
-        "qwen-code" => 200.0,
-        "kilo" => 160.0,
-        "opencode" => 120.0,
-        "factory-droid" => 0.0,
-        "auggie" => 270.0,
-        "codebuddy-code" => 200.0,
-        "stakpak" => 140.0,
-        "corust-agent" => 30.0,
-        "nova" => 220.0,
-        "dimcode" => 180.0,
-        "autohand" => 90.0,
-        "pi-acp" => 60.0,
-        "qoder" => 250.0,
-        "crow-cli" => 100.0,
-        "deepagents" => 170.0,
-        "fast-agent" => 130.0,
-        "minion-code" => 300.0,
-        _ => return None,
+    // Try metadata color first
+    if let Some((r, g, b)) = vendor_color(agent_id) {
+        return Some(rgb_to_hue(r, g, b));
+    }
+    // Fallback for agents without metadata
+    None
+}
+
+/// Convert RGB (0.0-1.0) to hue (0.0-1.0).
+fn rgb_to_hue(r: f32, g: f32, b: f32) -> f32 {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    if delta < f32::EPSILON {
+        return 0.0;
+    }
+
+    let hue = if (max - r).abs() < f32::EPSILON {
+        ((g - b) / delta) % 6.0
+    } else if (max - g).abs() < f32::EPSILON {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
     };
-    Some(hue / 360.0)
+
+    let hue = hue / 6.0;
+    if hue < 0.0 { hue + 1.0 } else { hue }
 }
 
 /// Detect the actually installed version of an agent by running its command.

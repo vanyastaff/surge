@@ -1,0 +1,829 @@
+{
+  "$schema": "https://surge.dev/schemas/agent-metadata.v1.json",
+  "version": "1.0.0",
+  "updated_at": "2026-03-22",
+  "agents": {
+    "claude-acp": {
+      "display_name": "Claude Agent",
+      "tagline": "Anthropic's autonomous coding agent — deepest reasoning, largest context",
+      "commands": ["claude", "claude-code", "claude-agent"],
+      "binary_name": "claude",
+      "vendor": "Anthropic",
+      "vendor_url": "https://anthropic.com",
+      "docs_url": "https://code.claude.com/docs",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/claude-acp.svg",
+      "color": "#D97757",
+      "pricing": {
+        "type": "api-key",
+        "plans": [
+          {
+            "name": "API",
+            "price": "pay-per-token",
+            "note": "Opus: $5/$25 per 1M tokens, Sonnet: $3/$15"
+          },
+          {
+            "name": "Max (Pro)",
+            "price": "$100/mo",
+            "note": "Includes Claude Code with Opus access"
+          },
+          {
+            "name": "Max (Team)",
+            "price": "$200/mo",
+            "note": "Enterprise features"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 1000000,
+        "note": "1M context GA with unified pricing (March 2026)"
+      },
+      "models": [
+        {
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6",
+          "tier": "flagship",
+          "released": "2026-02-05",
+          "context": 1000000,
+          "strengths": [
+            "deep reasoning",
+            "multi-file refactoring",
+            "architecture",
+            "agent teams"
+          ],
+          "swe_bench": 80.8
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "tier": "balanced",
+          "released": "2026-02-17",
+          "context": 1000000,
+          "strengths": ["fast coding", "daily driver", "cost-effective"],
+          "swe_bench": 72.0,
+          "note": "Preferred over Opus 4.5 by 59% of developers"
+        },
+        {
+          "id": "claude-opus-4-5-20251101",
+          "name": "Claude Opus 4.5",
+          "tier": "flagship",
+          "released": "2025-11-24",
+          "context": 200000,
+          "strengths": ["reasoning", "coding", "workplace tasks"]
+        },
+        {
+          "id": "claude-sonnet-4-5-20250929",
+          "name": "Claude Sonnet 4.5",
+          "tier": "balanced",
+          "released": "2025-09-29",
+          "context": 200000,
+          "strengths": ["all-round coding", "general work"]
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "name": "Claude Haiku 4.5",
+          "tier": "fast",
+          "released": "2025-10-01",
+          "context": 200000,
+          "strengths": ["quick edits", "file reads", "routine tasks"]
+        }
+      ],
+      "capabilities": [
+        "code",
+        "plan",
+        "review",
+        "test",
+        "refactor",
+        "chat",
+        "agent-teams",
+        "mcp"
+      ],
+      "features": {
+        "extended_thinking": true,
+        "agent_teams": true,
+        "mcp_support": true,
+        "git_integration": true,
+        "auto_model_switching": true,
+        "effort_control": true
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "env_or_flag",
+        "env_var": "ANTHROPIC_MODEL",
+        "flag": "--model"
+      }
+    },
+
+    "github-copilot-cli": {
+      "display_name": "GitHub Copilot CLI",
+      "tagline": "GitHub's multi-model terminal agent with native repo integration",
+      "commands": ["copilot", "gh-copilot", "github-copilot"],
+      "binary_name": "gh",
+      "vendor": "GitHub (Microsoft)",
+      "vendor_url": "https://github.com/features/copilot",
+      "docs_url": "https://docs.github.com/en/copilot",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/github-copilot-cli.svg",
+      "color": "#6E40C9",
+      "pricing": {
+        "type": "subscription",
+        "plans": [
+          {
+            "name": "Free",
+            "price": "$0",
+            "note": "Limited requests, GPT-5 mini included"
+          },
+          {
+            "name": "Pro",
+            "price": "$10/mo",
+            "note": "GPT-5 mini + GPT-4.1 included, premium models use PRU"
+          },
+          {
+            "name": "Business",
+            "price": "$19/user/mo",
+            "note": "Admin controls, policy settings"
+          },
+          {
+            "name": "Enterprise",
+            "price": "$39/user/mo",
+            "note": "Full model access, audit trails"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 128000,
+        "max": 1000000,
+        "note": "Depends on selected model — Opus 4.6 gives 1M, GPT models vary"
+      },
+      "models": [
+        {
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6",
+          "provider": "anthropic",
+          "tier": "flagship",
+          "premium_multiplier": 1.0,
+          "strengths": ["deep reasoning", "complex refactoring"]
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "provider": "anthropic",
+          "tier": "balanced",
+          "premium_multiplier": 1.0,
+          "strengths": ["fast coding", "daily work"]
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5",
+          "provider": "anthropic",
+          "tier": "fast",
+          "premium_multiplier": 0.25,
+          "strengths": ["quick tasks", "low cost"]
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3-Codex",
+          "provider": "openai",
+          "tier": "flagship",
+          "premium_multiplier": 1.0,
+          "strengths": ["terminal workflows", "polyglot", "fast"],
+          "terminal_bench": 77.3
+        },
+        {
+          "id": "gpt-5-mini",
+          "name": "GPT-5 mini",
+          "provider": "openai",
+          "tier": "fast",
+          "premium_multiplier": 0,
+          "note": "Included free with subscription",
+          "strengths": ["quick completions", "cost-effective"]
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "provider": "openai",
+          "tier": "balanced",
+          "premium_multiplier": 0,
+          "note": "Included free with subscription",
+          "strengths": ["general coding"]
+        },
+        {
+          "id": "gemini-3-pro",
+          "name": "Gemini 3 Pro",
+          "provider": "google",
+          "tier": "flagship",
+          "premium_multiplier": 1.0,
+          "strengths": ["large context", "multimodal"]
+        }
+      ],
+      "capabilities": [
+        "code",
+        "plan",
+        "review",
+        "test",
+        "chat",
+        "explore",
+        "mcp"
+      ],
+      "features": {
+        "extended_thinking": true,
+        "multi_model": true,
+        "specialized_agents": true,
+        "background_delegation": true,
+        "autopilot_mode": true,
+        "plan_mode": true,
+        "mcp_support": true,
+        "git_integration": true,
+        "plugins": true
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "flag_or_slash",
+        "flag": "--model",
+        "in_session": "/model"
+      }
+    },
+
+    "codex-acp": {
+      "display_name": "Codex CLI",
+      "tagline": "OpenAI's cloud-native coding agent with sandboxed parallel execution",
+      "commands": ["codex", "openai-codex"],
+      "binary_name": "codex",
+      "vendor": "OpenAI",
+      "vendor_url": "https://openai.com",
+      "docs_url": "https://github.com/zed-industries/codex-acp",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg",
+      "color": "#10A37F",
+      "pricing": {
+        "type": "subscription",
+        "plans": [
+          {
+            "name": "ChatGPT Plus",
+            "price": "$20/mo",
+            "note": "Basic Codex access"
+          },
+          {
+            "name": "ChatGPT Pro",
+            "price": "$200/mo",
+            "note": "Full Codex with cloud execution"
+          },
+          {
+            "name": "ChatGPT Team",
+            "price": "$25/user/mo",
+            "note": "Team features"
+          },
+          {
+            "name": "ChatGPT Enterprise",
+            "price": "custom",
+            "note": "Enterprise security, audit trails"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 200000,
+        "note": "Sandboxed execution — each task in isolated container"
+      },
+      "models": [
+        {
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3-Codex",
+          "tier": "flagship",
+          "strengths": ["terminal workflows", "fast completions", "polyglot"],
+          "terminal_bench": 77.3
+        },
+        {
+          "id": "o4-mini",
+          "name": "o4-mini",
+          "tier": "reasoning",
+          "strengths": ["deep reasoning", "math", "complex logic"]
+        },
+        {
+          "id": "o3",
+          "name": "o3",
+          "tier": "reasoning",
+          "strengths": ["advanced reasoning", "research"]
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "tier": "balanced",
+          "strengths": ["general coding", "instruction following"]
+        }
+      ],
+      "capabilities": ["code", "chat", "test"],
+      "features": {
+        "sandboxed_execution": true,
+        "parallel_tasks": true,
+        "cloud_native": true,
+        "auto_pr_creation": true,
+        "git_integration": true,
+        "mcp_support": false
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "env",
+        "env_var": "OPENAI_MODEL"
+      }
+    },
+
+    "gemini": {
+      "display_name": "Gemini CLI",
+      "tagline": "Google's CLI with the most generous free tier — 1M context on all models",
+      "commands": ["gemini", "gemini-cli"],
+      "binary_name": "gemini",
+      "vendor": "Google",
+      "vendor_url": "https://ai.google.dev",
+      "docs_url": "https://github.com/google-gemini/gemini-cli",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/gemini.svg",
+      "color": "#4285F4",
+      "pricing": {
+        "type": "api-key",
+        "plans": [
+          {
+            "name": "Free tier",
+            "price": "$0",
+            "note": "60 RPM Gemini 2.5 Flash, fallback to Flash on quota"
+          },
+          {
+            "name": "Pay-as-you-go",
+            "price": "pay-per-token",
+            "note": "Pro: $1.25/$5 per 1M tokens"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 1000000,
+        "max": 1000000,
+        "note": "1M context on all models"
+      },
+      "models": [
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "tier": "flagship",
+          "strengths": ["large context", "multimodal", "reasoning"]
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "tier": "fast",
+          "strengths": ["speed", "free tier", "cost-effective"]
+        },
+        {
+          "id": "gemini-3-flash",
+          "name": "Gemini 3 Flash",
+          "tier": "fast",
+          "strengths": ["latest generation", "speed"]
+        }
+      ],
+      "capabilities": ["code", "chat", "refactor"],
+      "features": {
+        "extended_thinking": false,
+        "mcp_support": true,
+        "git_integration": false,
+        "free_tier": true,
+        "auto_fallback": true
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "env",
+        "env_var": "GEMINI_MODEL"
+      }
+    },
+
+    "goose": {
+      "display_name": "Goose",
+      "tagline": "Block's open-source extensible agent — runs with any LLM, fully local option",
+      "commands": ["goose"],
+      "binary_name": "goose",
+      "vendor": "Block (Square)",
+      "vendor_url": "https://block.github.io/goose",
+      "docs_url": "https://block.github.io/goose/docs",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/goose.svg",
+      "color": "#FF6F00",
+      "pricing": {
+        "type": "byok",
+        "plans": [
+          {
+            "name": "Open Source",
+            "price": "$0",
+            "note": "Bring your own API keys or use local models"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 1000000,
+        "note": "Depends on selected model"
+      },
+      "models": [
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "provider": "anthropic",
+          "tier": "balanced"
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "provider": "openai",
+          "tier": "balanced"
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "provider": "google",
+          "tier": "flagship"
+        },
+        {
+          "id": "ollama-local",
+          "name": "Local models (Ollama)",
+          "provider": "ollama",
+          "tier": "local",
+          "note": "Any Ollama model"
+        }
+      ],
+      "capabilities": ["code", "chat", "refactor"],
+      "features": {
+        "mcp_support": true,
+        "plugin_system": true,
+        "fully_local": true,
+        "multi_provider": true,
+        "desktop_app": true
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "config",
+        "note": "Configured via goose config"
+      }
+    },
+
+    "cline": {
+      "display_name": "Cline",
+      "tagline": "Autonomous coding agent — 5M installs, zero markup, any provider",
+      "commands": ["cline"],
+      "binary_name": "cline",
+      "vendor": "Cline Bot Inc.",
+      "vendor_url": "https://cline.bot",
+      "docs_url": "https://cline.bot/cli",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/cline.svg",
+      "color": "#00D4AA",
+      "pricing": {
+        "type": "byok",
+        "plans": [
+          {
+            "name": "Open Source",
+            "price": "$0",
+            "note": "Apache-2.0, bring your own keys"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 200000,
+        "note": "Depends on selected model"
+      },
+      "models": [
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "provider": "anthropic",
+          "tier": "balanced"
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "provider": "openai",
+          "tier": "balanced"
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "provider": "google",
+          "tier": "flagship"
+        },
+        {
+          "id": "ollama-local",
+          "name": "Local models",
+          "provider": "ollama",
+          "tier": "local"
+        }
+      ],
+      "capabilities": ["code", "chat", "browser"],
+      "features": {
+        "browser_automation": true,
+        "multi_provider": true,
+        "fully_local": true,
+        "mcp_support": false
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "config",
+        "note": "Configured via settings"
+      }
+    },
+
+    "cursor": {
+      "display_name": "Cursor",
+      "tagline": "AI-first code editor with the fastest Composer model and 8 parallel agents",
+      "commands": ["cursor"],
+      "binary_name": "cursor-agent",
+      "vendor": "Anysphere",
+      "vendor_url": "https://cursor.com",
+      "docs_url": "https://cursor.com/docs/cli/acp",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/cursor.svg",
+      "color": "#7B61FF",
+      "pricing": {
+        "type": "subscription",
+        "plans": [
+          { "name": "Free", "price": "$0", "note": "Limited requests" },
+          {
+            "name": "Pro",
+            "price": "$20/mo",
+            "note": "Unlimited completions, premium models"
+          },
+          {
+            "name": "Ultra",
+            "price": "$200/mo",
+            "note": "Max premium requests"
+          },
+          { "name": "Business", "price": "$40/user/mo", "note": "Admin + SSO" }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 1000000,
+        "note": "Depends on selected model"
+      },
+      "models": [
+        {
+          "id": "cursor-composer",
+          "name": "Cursor Composer",
+          "provider": "cursor",
+          "tier": "flagship",
+          "note": "4x faster than competitors"
+        },
+        {
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6",
+          "provider": "anthropic",
+          "tier": "flagship"
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "provider": "anthropic",
+          "tier": "balanced"
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3-Codex",
+          "provider": "openai",
+          "tier": "flagship"
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "provider": "google",
+          "tier": "flagship"
+        }
+      ],
+      "capabilities": ["code", "chat", "refactor"],
+      "features": {
+        "multi_agent": true,
+        "parallel_agents": 8,
+        "plan_mode": true,
+        "multi_model": true,
+        "inline_completions": true
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "ui",
+        "note": "Model picker in editor UI"
+      }
+    },
+
+    "junie": {
+      "display_name": "Junie",
+      "tagline": "JetBrains' AI coding agent — deep IDE integration",
+      "commands": ["junie"],
+      "binary_name": "junie",
+      "vendor": "JetBrains",
+      "vendor_url": "https://junie.jetbrains.com",
+      "docs_url": "https://github.com/JetBrains/junie",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/junie.svg",
+      "color": "#087CFA",
+      "pricing": {
+        "type": "subscription",
+        "plans": [
+          {
+            "name": "JetBrains AI Pro",
+            "price": "$10/mo",
+            "note": "Included with AI Assistant"
+          }
+        ]
+      },
+      "context_window": {
+        "default": 200000,
+        "max": 200000
+      },
+      "models": [
+        {
+          "id": "junie-default",
+          "name": "JetBrains Managed",
+          "provider": "jetbrains",
+          "tier": "flagship",
+          "note": "JetBrains selects optimal model"
+        }
+      ],
+      "capabilities": ["code", "chat", "refactor", "test"],
+      "features": {
+        "ide_integration": true,
+        "jetbrains_native": true,
+        "mcp_support": false
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "managed",
+        "note": "JetBrains manages model selection"
+      }
+    },
+
+    "mistral-vibe": {
+      "display_name": "Mistral Vibe",
+      "tagline": "Mistral's open-source coding assistant — Apache-2.0, runs local",
+      "commands": ["vibe", "mistral-vibe", "mistral"],
+      "binary_name": "vibe-acp",
+      "vendor": "Mistral AI",
+      "vendor_url": "https://mistral.ai",
+      "docs_url": "https://github.com/mistralai/mistral-vibe",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/mistral-vibe.svg",
+      "color": "#FF7000",
+      "pricing": {
+        "type": "api-key",
+        "plans": [
+          {
+            "name": "API",
+            "price": "pay-per-token",
+            "note": "Mistral API pricing"
+          },
+          { "name": "Local", "price": "$0", "note": "Via Ollama" }
+        ]
+      },
+      "context_window": {
+        "default": 128000,
+        "max": 128000
+      },
+      "models": [
+        {
+          "id": "devstral",
+          "name": "Devstral",
+          "provider": "mistral",
+          "tier": "flagship",
+          "strengths": ["code generation"]
+        },
+        {
+          "id": "codestral",
+          "name": "Codestral",
+          "provider": "mistral",
+          "tier": "balanced",
+          "strengths": ["code", "fill-in-middle"]
+        }
+      ],
+      "capabilities": ["code", "chat"],
+      "features": {
+        "fully_local": true,
+        "open_source": true,
+        "mcp_support": false
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "config",
+        "note": "Configured at launch"
+      }
+    },
+
+    "qwen-code": {
+      "display_name": "Qwen Code",
+      "tagline": "Alibaba's Qwen coding assistant — strong open-weight models",
+      "commands": ["qwen", "qwen-code"],
+      "binary_name": "qwen-code",
+      "vendor": "Alibaba Qwen Team",
+      "vendor_url": "https://qwenlm.github.io/qwen-code-docs",
+      "docs_url": "https://github.com/QwenLM/qwen-code",
+      "icon_url": "https://cdn.agentclientprotocol.com/registry/v1/latest/qwen-code.svg",
+      "color": "#615EFF",
+      "pricing": {
+        "type": "api-key",
+        "plans": [
+          {
+            "name": "API",
+            "price": "pay-per-token",
+            "note": "Alibaba Cloud / DashScope pricing"
+          },
+          { "name": "Local", "price": "$0", "note": "Via Ollama" }
+        ]
+      },
+      "context_window": {
+        "default": 131072,
+        "max": 131072
+      },
+      "models": [
+        {
+          "id": "qwen3-coder",
+          "name": "Qwen3-Coder",
+          "provider": "alibaba",
+          "tier": "flagship",
+          "strengths": ["code generation", "multilingual"]
+        },
+        {
+          "id": "qwen3-coder-plus",
+          "name": "Qwen3-Coder-Plus",
+          "provider": "alibaba",
+          "tier": "flagship",
+          "strengths": ["advanced reasoning"]
+        }
+      ],
+      "capabilities": ["code", "chat"],
+      "features": {
+        "fully_local": true,
+        "open_source": true,
+        "skills_support": true,
+        "mcp_support": false
+      },
+      "platforms": [
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "linux-aarch64",
+        "linux-x86_64",
+        "windows-aarch64",
+        "windows-x86_64"
+      ],
+      "model_selection": {
+        "method": "config",
+        "note": "Configured via settings"
+      }
+    }
+  }
+}
