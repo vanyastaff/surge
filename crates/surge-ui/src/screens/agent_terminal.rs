@@ -195,7 +195,8 @@ impl AgentTerminalScreen {
                     cx.notify();
                 });
             }).ok();
-        });
+        })
+        .detach();
     }
 
     fn render_header(&self) -> Div {
