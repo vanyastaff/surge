@@ -1,6 +1,7 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use surge_acp::{AgentHealth, DetectedAgent, HealthMonitor, Registry, RegistryEntry};
+use surge_acp::{AgentHealth, AgentPool, DetectedAgent, HealthMonitor, PermissionPolicy, Registry, RegistryEntry};
 use surge_core::{Spec, SpecId, SurgeConfig, SurgeEvent, TaskId, TaskState};
 
 /// Central application state shared across all UI screens.
@@ -30,6 +31,10 @@ pub struct AppState {
 
     // ── Worktrees ──
     pub worktrees: Vec<WorktreeEntry>,
+
+    // ── ACP ──
+    /// Agent pool for ACP connections (created when project has agents configured).
+    pub agent_pool: Option<Arc<AgentPool>>,
 
     // ── Events ──
     pub event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
@@ -83,6 +88,7 @@ impl AppState {
             tasks: Vec::new(),
             specs: Vec::new(),
             worktrees: Vec::new(),
+            agent_pool: None,
             event_tx,
             recent_events: Vec::new(),
         }
@@ -96,10 +102,21 @@ impl AppState {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "project".to_string());
 
-        // Try loading surge.toml config.
+        // Try loading surge.toml config and create AgentPool.
         let config_path = path.join("surge.toml");
         if config_path.exists() {
             if let Ok(config) = SurgeConfig::load(&config_path) {
+                // Create AgentPool from config if agents are configured.
+                if !config.agents.is_empty() {
+                    if let Ok(pool) = AgentPool::new(
+                        config.agents.clone(),
+                        config.default_agent.clone(),
+                        path.to_path_buf(),
+                        PermissionPolicy::default(),
+                    ) {
+                        self.agent_pool = Some(Arc::new(pool));
+                    }
+                }
                 self.config = Some(config);
             }
         }

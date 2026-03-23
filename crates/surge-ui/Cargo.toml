@@ -14,6 +14,7 @@ gpui-component-assets = "0.5"
 
 surge-core = { path = "../surge-core" }
 surge-acp = { path = "../surge-acp" }
+agent-client-protocol.workspace = true
 
 tokio.workspace = true
 dirs = "6"

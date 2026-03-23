@@ -14,6 +14,7 @@ use crate::notifications::SurgeNotification;
 use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
+use crate::screens::agent_terminal::AgentTerminalScreen;
 use crate::screens::dashboard::DashboardScreen;
 use crate::screens::diff_viewer::DiffViewerScreen;
 use crate::screens::file_explorer::FileExplorerScreen;
@@ -60,6 +61,7 @@ pub struct SurgeApp {
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
     live_execution: Option<Entity<LiveExecutionScreen>>,
+    agent_terminal: Option<Entity<AgentTerminalScreen>>,
     diff_viewer: Option<Entity<DiffViewerScreen>>,
     file_explorer: Option<Entity<FileExplorerScreen>>,
     worktrees: Option<Entity<WorktreesScreen>>,
@@ -103,6 +105,7 @@ impl SurgeApp {
             command_palette: None,
             task_detail_id: None,
             dashboard: None,
+            agent_terminal: None,
             kanban: None,
             agent_hub: None,
             spec_explorer: None,
@@ -215,6 +218,7 @@ impl SurgeApp {
         self.dashboard = None;
         self.kanban = None;
         self.agent_hub = None;
+        self.agent_terminal = None;
         self.spec_explorer = None;
         self.spec_wizard = None;
         self.live_execution = None;
@@ -340,6 +344,13 @@ impl SurgeApp {
                     cx.new(|cx| SpecExplorerScreen::new(state, cx))
                 });
                 spec_explorer.clone().into_any_element()
+            }
+            Screen::AgentTerminals => {
+                let state = self.state.clone();
+                let terminal = self.agent_terminal.get_or_insert_with(|| {
+                    cx.new(|cx| AgentTerminalScreen::new(state, cx))
+                });
+                terminal.clone().into_any_element()
             }
             Screen::SpecWizard => {
                 let spec_wizard = self.spec_wizard.get_or_insert_with(|| {
