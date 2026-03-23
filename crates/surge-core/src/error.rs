@@ -34,6 +34,10 @@ pub enum SurgeError {
     #[error("Rate limit exceeded for agent '{agent}': retry after {retry_after_secs}s")]
     RateLimit { agent: String, retry_after_secs: u64 },
 
+    /// Authentication failed with remediation guidance.
+    #[error("Authentication failed for agent '{agent}': {remediation}")]
+    AuthFailure { agent: String, remediation: String },
+
     /// Operation was cancelled by user or pipeline gate.
     #[error("Cancelled: {0}")]
     Cancelled(String),
@@ -74,6 +78,17 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("claude"));
         assert!(msg.contains("30"));
+    }
+
+    #[test]
+    fn test_auth_failure_display() {
+        let err = SurgeError::AuthFailure {
+            agent: "claude".to_string(),
+            remediation: "Check API key in config".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("claude"));
+        assert!(msg.contains("Check API key in config"));
     }
 
     #[test]
