@@ -36,6 +36,10 @@ pub fn run(command: ConfigCommands) -> Result<()> {
                             println!("      host: {}", host);
                             println!("      port: {}", port);
                         }
+                        surge_core::config::Transport::WebSocket { url } => {
+                            println!("    transport: ws");
+                            println!("      url: {}", url);
+                        }
                     }
                 }
             }

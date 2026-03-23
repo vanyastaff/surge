@@ -144,6 +144,8 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on,
+            agent: None,
+            execution: surge_core::spec::SubtaskExecution::default(),
         }
     }
 
@@ -217,6 +219,8 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on: vec![id_b],
+            agent: None,
+            execution: surge_core::spec::SubtaskExecution::default(),
         };
         let sub_b = Subtask {
             id: id_b,
@@ -226,6 +230,8 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on: vec![id_a],
+            agent: None,
+            execution: surge_core::spec::SubtaskExecution::default(),
         };
         let spec = Spec {
             id: SpecId::new(),

@@ -112,6 +112,9 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                         surge_core::config::Transport::Tcp { host, port } => {
                             println!("  Transport:    tcp ({}:{})", host, port);
                         }
+                        surge_core::config::Transport::WebSocket { url } => {
+                            println!("  Transport:    ws ({})", url);
+                        }
                     }
                     println!("  Capabilities: {}", caps.join(", "));
                     println!("  Install:      {}", entry.install_instructions);

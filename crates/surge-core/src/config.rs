@@ -19,6 +19,8 @@ pub struct SurgeConfig {
     pub ide: IdeConfig,
     #[serde(default)]
     pub resilience: ResilienceConfig,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 /// Configuration for a single MCP (Model Context Protocol) server passed to an agent.
@@ -83,6 +85,12 @@ impl AgentConfig {
             }
         }
 
+        if let Transport::WebSocket { .. } = &self.transport {
+            return Err(crate::SurgeError::Config(
+                "WebSocket transport not yet supported".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -96,6 +104,9 @@ pub enum Transport {
         host: String,
         port: u16,
     },
+    /// WebSocket transport for remote agents (reserved, not yet implemented).
+    #[serde(rename = "ws")]
+    WebSocket { url: String },
 }
 
 fn default_transport() -> Transport {
@@ -110,6 +121,12 @@ pub struct PipelineConfig {
     pub max_parallel: usize,
     #[serde(default)]
     pub gates: GateConfig,
+    /// Stop pipeline if estimated cost exceeds this (USD). None = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
+    /// Stop pipeline if total tokens exceed this. None = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 impl Default for PipelineConfig {
@@ -118,6 +135,8 @@ impl Default for PipelineConfig {
             max_qa_iterations: default_max_qa_iterations(),
             max_parallel: default_max_parallel(),
             gates: GateConfig::default(),
+            max_cost_usd: None,
+            max_tokens: None,
         }
     }
 }
@@ -239,6 +258,44 @@ pub struct IdeConfig {
     /// Editor name (e.g. "vscode", "rustrover", "zed").
     #[serde(default)]
     pub editor: Option<String>,
+    /// Command to open a file: substitutes `{path}` and `{line}`.
+    /// Auto-detected from `editor` if not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_file_cmd: Option<String>,
+    /// Open worktree in IDE automatically after spec starts executing.
+    #[serde(default)]
+    pub auto_open_worktree: bool,
+}
+
+/// Logging configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// Log level: error, warn, info, debug, trace.
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    /// Write logs to this file in addition to stderr.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<std::path::PathBuf>,
+    /// Max log file size in MB before rotation.
+    #[serde(default = "default_log_max_mb")]
+    pub max_size_mb: u64,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            file: None,
+            max_size_mb: default_log_max_mb(),
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_log_max_mb() -> u64 {
+    50
 }
 
 /// Resilience configuration for agent connections.
@@ -289,6 +346,7 @@ impl Default for SurgeConfig {
             cleanup: CleanupPolicy::default(),
             ide: IdeConfig::default(),
             resilience: ResilienceConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }
@@ -981,6 +1039,8 @@ transport = "stdio"
             max_qa_iterations: 5,
             max_parallel: 10,
             gates: GateConfig::default(),
+            max_cost_usd: None,
+            max_tokens: None,
         };
         assert!(pipeline.validate().is_ok());
     }
@@ -1056,6 +1116,7 @@ after_spec = false
             cleanup: CleanupPolicy::default(),
             ide: IdeConfig::default(),
             resilience: ResilienceConfig::default(),
+            log: LogConfig::default(),
         };
         // Should be valid because agents map is empty
         assert!(config.validate().is_ok());
@@ -1138,6 +1199,123 @@ editor = "rustrover"
         assert!(config.cleanup.remove_worktrees_on_complete);
         assert_eq!(config.cleanup.keep_branches_days, 7);
         assert!(config.ide.editor.is_none());
+    }
+
+    #[test]
+    fn test_websocket_transport_roundtrip() {
+        let toml_str = r#"
+command = "agent"
+[transport]
+url = "ws://localhost:8080"
+"#;
+        // Deserialize using the "ws" tag
+        let toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
+        // Use inline table format that matches serde rename
+        let agent: AgentConfig = toml::from_str(&format!(
+            "command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n"
+        ))
+        .unwrap();
+        assert!(matches!(agent.transport, Transport::WebSocket { .. }));
+
+        let serialized = toml::to_string(&agent).unwrap();
+        let roundtripped: AgentConfig = toml::from_str(&serialized).unwrap();
+        assert!(matches!(roundtripped.transport, Transport::WebSocket { url } if url == "ws://localhost:8080"));
+    }
+
+    #[test]
+    fn test_websocket_transport_validation_error() {
+        let agent = AgentConfig {
+            command: "agent".to_string(),
+            args: vec![],
+            transport: Transport::WebSocket {
+                url: "ws://localhost:8080".to_string(),
+            },
+            mcp_servers: vec![],
+        };
+        let err = agent.validate("test-agent").unwrap_err();
+        assert!(err.to_string().contains("WebSocket transport not yet supported"));
+    }
+
+    #[test]
+    fn test_pipeline_token_budget_defaults_to_none() {
+        let pipeline = PipelineConfig::default();
+        assert!(pipeline.max_cost_usd.is_none());
+        assert!(pipeline.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_token_budget_roundtrip() {
+        let toml_str = r#"
+default_agent = "test"
+
+[pipeline]
+max_cost_usd = 1.50
+max_tokens = 100000
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.pipeline.max_cost_usd, Some(1.50));
+        assert_eq!(config.pipeline.max_tokens, Some(100_000));
+
+        let serialized = toml::to_string(&config).unwrap();
+        let roundtripped: SurgeConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(roundtripped.pipeline.max_cost_usd, Some(1.50));
+        assert_eq!(roundtripped.pipeline.max_tokens, Some(100_000));
+    }
+
+    #[test]
+    fn test_pipeline_budget_omitted_when_none() {
+        let config = SurgeConfig::default();
+        let s = toml::to_string(&config).unwrap();
+        assert!(!s.contains("max_cost_usd"));
+        assert!(!s.contains("max_tokens"));
+    }
+
+    #[test]
+    fn test_log_config_defaults() {
+        let log = LogConfig::default();
+        assert_eq!(log.level, "info");
+        assert!(log.file.is_none());
+        assert_eq!(log.max_size_mb, 50);
+    }
+
+    #[test]
+    fn test_log_config_roundtrip() {
+        let toml_str = r#"
+default_agent = "test"
+
+[log]
+level = "debug"
+file = "/var/log/surge.log"
+max_size_mb = 100
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.log.level, "debug");
+        assert_eq!(config.log.file.as_ref().unwrap().to_str().unwrap(), "/var/log/surge.log");
+        assert_eq!(config.log.max_size_mb, 100);
+    }
+
+    #[test]
+    fn test_ide_config_extension_defaults() {
+        let ide = IdeConfig::default();
+        assert!(ide.editor.is_none());
+        assert!(ide.open_file_cmd.is_none());
+        assert!(!ide.auto_open_worktree);
+    }
+
+    #[test]
+    fn test_ide_config_extension_roundtrip() {
+        let toml_str = r#"
+default_agent = "test"
+
+[ide]
+editor = "vscode"
+open_file_cmd = "code {path}:{line}"
+auto_open_worktree = true
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ide.editor.as_deref(), Some("vscode"));
+        assert_eq!(config.ide.open_file_cmd.as_deref(), Some("code {path}:{line}"));
+        assert!(config.ide.auto_open_worktree);
     }
 
     #[test]

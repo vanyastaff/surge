@@ -213,3 +213,86 @@ pub enum SurgeEvent {
         estimated_cost_usd: Option<f64>,
     },
 }
+
+/// Versioned wrapper for `SurgeEvent` — used by `surge-persistence` for durable
+/// event logs. Adding new fields to `SurgeEvent` variants does not change `version`;
+/// bump `version` only when old readers cannot safely ignore unknown fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionedEvent {
+    /// Schema version. Currently always `1`.
+    pub version: u32,
+    /// Unix timestamp in milliseconds when the event was emitted.
+    pub timestamp_ms: u64,
+    /// The event payload.
+    pub event: SurgeEvent,
+}
+
+impl VersionedEvent {
+    /// Wrap an event with the current schema version.
+    /// Caller supplies the timestamp to keep this crate free of wall-clock I/O.
+    pub fn new(event: SurgeEvent, timestamp_ms: u64) -> Self {
+        Self { version: 1, timestamp_ms, event }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::toml;
+
+    // VersionedEvent wraps SurgeEvent which uses serde(tag)-free enum —
+    // TOML requires a helper wrapper for enums; use a JSON-like table form via
+    // the toml crate's Value round-trip for the test.
+
+    fn roundtrip<T: serde::Serialize + serde::de::DeserializeOwned>(val: &T) -> T {
+        let s = toml::to_string(val).unwrap();
+        toml::from_str(&s).unwrap()
+    }
+
+    #[test]
+    fn test_versioned_event_fields() {
+        let event = SurgeEvent::AgentConnected {
+            agent_name: "claude".to_string(),
+        };
+        let versioned = VersionedEvent::new(event, 1_700_000_000_000);
+        assert_eq!(versioned.version, 1);
+        assert_eq!(versioned.timestamp_ms, 1_700_000_000_000);
+        assert!(matches!(versioned.event, SurgeEvent::AgentConnected { .. }));
+    }
+
+    #[test]
+    fn test_versioned_event_roundtrip() {
+        let versioned = VersionedEvent::new(
+            SurgeEvent::AgentConnected { agent_name: "claude".to_string() },
+            42,
+        );
+        let rt = roundtrip(&versioned);
+        assert_eq!(rt.version, 1);
+        assert_eq!(rt.timestamp_ms, 42);
+        assert!(matches!(rt.event, SurgeEvent::AgentConnected { .. }));
+    }
+
+    #[test]
+    fn test_tokens_consumed_roundtrip() {
+        let versioned = VersionedEvent::new(
+            SurgeEvent::TokensConsumed {
+                session_id: "sess-1".to_string(),
+                agent_name: "claude".to_string(),
+                input_tokens: 1000,
+                output_tokens: 500,
+                thought_tokens: Some(200),
+                cached_read_tokens: None,
+                cached_write_tokens: None,
+                estimated_cost_usd: Some(0.005),
+            },
+            0,
+        );
+        let rt = roundtrip(&versioned);
+        if let SurgeEvent::TokensConsumed { input_tokens, output_tokens, .. } = rt.event {
+            assert_eq!(input_tokens, 1000);
+            assert_eq!(output_tokens, 500);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+}

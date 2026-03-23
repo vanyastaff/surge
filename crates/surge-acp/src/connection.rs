@@ -150,6 +150,11 @@ impl AgentConnection {
         let io = match &config.transport {
             Transport::Stdio => StdioTransport::connect(&name, config, &worktree_root).await?,
             Transport::Tcp { .. } => TcpTransport::connect(&name, config, &worktree_root).await?,
+            Transport::WebSocket { .. } => {
+                return Err(SurgeError::Config(
+                    "WebSocket transport not yet supported".to_string(),
+                ))
+            }
         };
 
         Self::connect_with_io(name, io, worktree_root, permission_policy, event_tx).await

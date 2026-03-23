@@ -107,6 +107,8 @@ mod tests {
                         },
                     ],
                     depends_on: vec![],
+                    agent: None,
+                    execution: surge_core::spec::SubtaskExecution::default(),
                 },
                 Subtask {
                     id: SubtaskId::new(),
@@ -116,6 +118,8 @@ mod tests {
                     files: vec![],
                     acceptance_criteria: vec![],
                     depends_on: vec![sub1_id],
+                    agent: None,
+                    execution: surge_core::spec::SubtaskExecution::default(),
                 },
             ],
         }

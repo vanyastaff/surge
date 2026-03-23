@@ -42,6 +42,9 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                         surge_core::config::Transport::Tcp { host, port } => {
                             println!("    transport: tcp ({}:{})", host, port);
                         }
+                        surge_core::config::Transport::WebSocket { url } => {
+                            println!("    transport: ws ({})", url);
+                        }
                     }
                 }
             }

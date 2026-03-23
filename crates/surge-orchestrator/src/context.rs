@@ -118,6 +118,8 @@ mod tests {
                     },
                 ],
                 depends_on: vec![],
+                agent: None,
+                execution: surge_core::spec::SubtaskExecution::default(),
             }],
         }
     }
