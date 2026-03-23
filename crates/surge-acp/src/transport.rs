@@ -14,10 +14,10 @@
 //! [`AgentConnection`]: super::connection::AgentConnection
 
 use std::path::Path;
-use surge_core::config::{AgentConfig, Transport};
+use surge_core::config::{AgentConfig, McpServerConfig, Transport};
 use surge_core::SurgeError;
 use tokio::process::Child;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ── AgentIo ──────────────────────────────────────────────────────────
 
@@ -114,6 +114,12 @@ impl AgentTransport for StdioTransport {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(worktree_root);
 
+        // MCP server pass-through: write config to a temp file and set the
+        // agent-specific env var before spawning.
+        if !config.mcp_servers.is_empty() {
+            setup_mcp_env(name, &config.mcp_servers, &mut cmd);
+        }
+
         debug!("Spawning command: {:?}", cmd);
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -155,6 +161,92 @@ impl AgentTransport for StdioTransport {
     }
 }
 
+// ── MCP pass-through ─────────────────────────────────────────────────
+
+/// Serialises `servers` to a temp JSON file and sets the agent-specific env var
+/// on `cmd` so the agent passes them on to its underlying model.
+///
+/// The JSON format follows the standard `mcpServers` schema:
+/// ```json
+/// { "mcpServers": { "name": { "command": "…", "args": [], "env": {} } } }
+/// ```
+///
+/// For agents whose env var is not yet known, a `warn!` is emitted and no env
+/// var is set — the agent starts normally but without the MCP servers.
+fn setup_mcp_env(
+    agent_name: &str,
+    servers: &[McpServerConfig],
+    cmd: &mut tokio::process::Command,
+) {
+    use crate::registry::AgentKind;
+
+    let Some(env_var) = AgentKind::from_id(agent_name).and_then(|k| k.mcp_config_env_var()) else {
+        warn!(
+            agent = agent_name,
+            servers = servers.len(),
+            "MCP servers configured but no known env var for this agent type — skipping"
+        );
+        return;
+    };
+
+    match write_mcp_config_file(agent_name, servers) {
+        Ok(path) => {
+            debug!(
+                agent = agent_name,
+                path = %path.display(),
+                env_var,
+                servers = servers.len(),
+                "setting MCP config env var"
+            );
+            cmd.env(env_var, path);
+        }
+        Err(e) => warn!(agent = agent_name, "failed to write MCP config: {e}"),
+    }
+}
+
+/// Serialise MCP servers to the JSON format expected by agents.
+fn serialize_mcp_config(servers: &[McpServerConfig]) -> Result<String, String> {
+    let servers_obj: serde_json::Map<String, serde_json::Value> = servers
+        .iter()
+        .map(|s| {
+            let val = serde_json::json!({
+                "command": s.command,
+                "args":    s.args,
+                "env":     s.env,
+            });
+            (s.name.clone(), val)
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&serde_json::json!({ "mcpServers": servers_obj }))
+        .map_err(|e| e.to_string())
+}
+
+/// Write the MCP config JSON to a temporary file.
+///
+/// File name is `surge-mcp-<agent>-<pid>.json` in the OS temp directory.
+/// The file persists until the OS cleans the temp dir; no explicit cleanup is
+/// needed since the agent reads it once at startup.
+fn write_mcp_config_file(
+    agent_name: &str,
+    servers: &[McpServerConfig],
+) -> Result<std::path::PathBuf, SurgeError> {
+    let json = serialize_mcp_config(servers).map_err(|e| {
+        SurgeError::AgentConnection(format!("Failed to serialize MCP config: {e}"))
+    })?;
+
+    let path = std::env::temp_dir().join(format!(
+        "surge-mcp-{}-{}.json",
+        agent_name,
+        std::process::id()
+    ));
+
+    std::fs::write(&path, &json)
+        .map_err(|e| SurgeError::AgentConnection(format!("Failed to write MCP config file: {e}")))?;
+
+    Ok(path)
+}
+
 // ── TcpTransport ─────────────────────────────────────────────────────
 
 /// TCP transport — reserved for Phase 7 remote-agent support.
@@ -194,6 +286,7 @@ mod tests {
                 host: host.to_string(),
                 port,
             },
+            mcp_servers: vec![],
         }
     }
 
@@ -207,5 +300,43 @@ mod tests {
             msg.contains("TCP transport not yet implemented"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_serialize_mcp_config_empty() {
+        let json = serialize_mcp_config(&[]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["mcpServers"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_serialize_mcp_config_single_server() {
+        use surge_core::config::McpServerConfig;
+        let server = McpServerConfig {
+            name: "my-tool".to_string(),
+            command: "uvx".to_string(),
+            args: vec!["my-tool-server".to_string()],
+            env: std::collections::HashMap::new(),
+        };
+        let json = serialize_mcp_config(&[server]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["mcpServers"]["my-tool"]["command"], "uvx");
+        assert_eq!(v["mcpServers"]["my-tool"]["args"][0], "my-tool-server");
+    }
+
+    #[test]
+    fn test_serialize_mcp_config_preserves_env() {
+        use surge_core::config::McpServerConfig;
+        let mut env = std::collections::HashMap::new();
+        env.insert("API_KEY".to_string(), "secret".to_string());
+        let server = McpServerConfig {
+            name: "secure-tool".to_string(),
+            command: "npx".to_string(),
+            args: vec![],
+            env,
+        };
+        let json = serialize_mcp_config(&[server]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["mcpServers"]["secure-tool"]["env"]["API_KEY"], "secret");
     }
 }

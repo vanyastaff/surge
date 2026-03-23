@@ -1,10 +1,23 @@
-//! ACP Agent Registry — hardcoded catalog of supported agents.
+//! ACP Agent Registry — builtin catalog of supported agents plus remote fetching.
+//!
+//! # Registry sources
+//!
+//! | Source | API |
+//! |---|---|
+//! | Builtin (hardcoded) | [`Registry::builtin()`] |
+//! | Remote URL | [`Registry::fetch_remote()`] |
+//! | Merged | [`Registry::merged()`] |
+//!
+//! Remote entries are cached in `~/.surge/registry-cache.json` for 24 hours.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 use surge_core::config::{AgentConfig, Transport};
+use tracing::{debug, warn};
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -110,6 +123,20 @@ impl AgentKind {
             Self::Gemini => (&["gemini", "--version"], false, ""),
         }
     }
+
+    /// Environment variable used to pass an MCP config file path to this agent.
+    ///
+    /// Returns `None` for agents whose MCP pass-through mechanism is not yet known.
+    /// Extend this as each agent's CLI is verified against its documentation.
+    #[must_use]
+    pub fn mcp_config_env_var(self) -> Option<&'static str> {
+        match self {
+            // Claude Code reads MCP server config from the path in CLAUDE_MCP_CONFIG.
+            Self::Claude => Some("CLAUDE_MCP_CONFIG"),
+            // TODO: discover the correct env var / flag for each agent below.
+            Self::Copilot | Self::Codex | Self::Gemini => None,
+        }
+    }
 }
 
 impl fmt::Display for AgentKind {
@@ -178,6 +205,7 @@ impl RegistryEntry {
             command: self.command.clone(),
             args: self.default_args.clone(),
             transport: self.transport.clone(),
+            mcp_servers: vec![],
         }
     }
 
@@ -312,6 +340,85 @@ impl Registry {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    // ── Remote fetching ──────────────────────────────────────────────
+
+    /// Fetch a registry from a remote URL, using a 24-hour file cache.
+    ///
+    /// The remote endpoint must serve a JSON array of [`RegistryEntry`] objects
+    /// using the same schema as the builtin catalog.
+    ///
+    /// # Cache
+    ///
+    /// Successful responses are stored in `~/.surge/registry-cache.json`.
+    /// Subsequent calls within 24 hours return the cached data without hitting
+    /// the network.  Cache failures are silently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the network request fails **and** there is no valid
+    /// (possibly stale) cache entry to fall back to.
+    pub async fn fetch_remote(url: &str) -> Result<Self, surge_core::SurgeError> {
+        // Serve from cache when fresh.
+        if let Some(entries) = load_registry_cache() {
+            debug!("remote registry served from cache");
+            return Ok(Self { entries });
+        }
+
+        debug!(url, "fetching remote registry");
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .map_err(|e| {
+                surge_core::SurgeError::AgentConnection(format!(
+                    "Failed to build HTTP client: {e}"
+                ))
+            })?;
+
+        let entries: Vec<RegistryEntry> = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| {
+                surge_core::SurgeError::AgentConnection(format!(
+                    "Failed to fetch remote registry from {url}: {e}"
+                ))
+            })?
+            .error_for_status()
+            .map_err(|e| {
+                surge_core::SurgeError::AgentConnection(format!(
+                    "Remote registry request failed: {e}"
+                ))
+            })?
+            .json()
+            .await
+            .map_err(|e| {
+                surge_core::SurgeError::AgentConnection(format!(
+                    "Failed to parse remote registry JSON: {e}"
+                ))
+            })?;
+
+        save_registry_cache(&entries);
+
+        Ok(Self { entries })
+    }
+
+    /// Merge a builtin and a remote registry.
+    ///
+    /// Builtin entries take priority: if both catalogs contain an entry with
+    /// the same `id`, the builtin version is kept and the remote one ignored.
+    /// Unknown remote entries are appended after all builtin entries.
+    #[must_use]
+    pub fn merged(builtin: Self, remote: Self) -> Self {
+        let mut entries = builtin.entries;
+        for remote_entry in remote.entries {
+            if !entries.iter().any(|e| e.id == remote_entry.id) {
+                entries.push(remote_entry);
+            }
+        }
+        Self { entries }
+    }
 }
 
 /// Result of detecting an installed agent.
@@ -431,6 +538,58 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
     ]
+}
+
+// ── Registry cache ───────────────────────────────────────────────────
+
+const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Platform-appropriate path for the registry cache file.
+fn registry_cache_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("APPDATA")
+            .ok()
+            .map(|d| PathBuf::from(d).join("surge").join("registry-cache.json"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join(".surge").join("registry-cache.json"))
+    }
+}
+
+/// Load cached entries if the cache file exists and is younger than [`CACHE_TTL`].
+fn load_registry_cache() -> Option<Vec<RegistryEntry>> {
+    let path = registry_cache_path()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    let age = metadata.modified().ok()?.elapsed().ok()?;
+    if age > CACHE_TTL {
+        debug!("registry cache is stale ({age:?}), will re-fetch");
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Persist registry entries to the cache file, creating parent dirs as needed.
+/// Failures are silently ignored — caching is best-effort.
+fn save_registry_cache(entries: &[RegistryEntry]) {
+    let Some(path) = registry_cache_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_string_pretty(entries) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                warn!("failed to write registry cache to {}: {e}", path.display());
+            }
+        }
+        Err(e) => warn!("failed to serialize registry cache: {e}"),
+    }
 }
 
 // ── Utilities ───────────────────────────────────────────────────────
@@ -570,5 +729,70 @@ mod tests {
 
         let cache = WHICH_CACHE.lock().unwrap();
         assert!(cache.contains_key("git"));
+    }
+
+    fn make_entry(id: &str) -> RegistryEntry {
+        RegistryEntry {
+            kind: AgentKind::Claude,
+            id: id.to_string(),
+            display_name: id.to_string(),
+            description: String::new(),
+            version: "0.0.0".to_string(),
+            authors: vec![],
+            license: "MIT".to_string(),
+            command: "echo".to_string(),
+            default_args: vec![],
+            transport: Transport::Stdio,
+            install_instructions: String::new(),
+            cli_binary: None,
+            website: None,
+            tags: vec![],
+            capabilities: vec![AgentCapability::Code],
+            models: vec![],
+            long_description: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_merged_builtin_takes_priority_on_id_collision() {
+        let builtin = Registry { entries: vec![make_entry("agent-a")] };
+        let mut remote_a = make_entry("agent-a");
+        remote_a.display_name = "remote-version".to_string();
+        let remote = Registry { entries: vec![remote_a, make_entry("agent-b")] };
+
+        let merged = Registry::merged(builtin, remote);
+
+        assert_eq!(merged.len(), 2);
+        // builtin entry preserved — display_name from builtin, not remote
+        assert_eq!(merged.find("agent-a").unwrap().display_name, "agent-a");
+        // new remote-only entry appended
+        assert!(merged.find("agent-b").is_some());
+    }
+
+    #[test]
+    fn test_merged_remote_only_entries_appended() {
+        let builtin = Registry::builtin();
+        let remote = Registry { entries: vec![make_entry("custom-agent")] };
+        let merged = Registry::merged(builtin, remote);
+
+        assert!(merged.find("custom-agent").is_some());
+        // builtin agents still present
+        assert!(merged.find("claude-acp").is_some());
+    }
+
+    #[test]
+    fn test_merged_empty_remote() {
+        let builtin = Registry::builtin();
+        let len = builtin.len();
+        let merged = Registry::merged(builtin, Registry { entries: vec![] });
+        assert_eq!(merged.len(), len);
+    }
+
+    #[test]
+    fn test_mcp_config_env_var() {
+        assert_eq!(AgentKind::Claude.mcp_config_env_var(), Some("CLAUDE_MCP_CONFIG"));
+        assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
+        assert!(AgentKind::Codex.mcp_config_env_var().is_none());
+        assert!(AgentKind::Gemini.mcp_config_env_var().is_none());
     }
 }

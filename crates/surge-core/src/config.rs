@@ -21,6 +21,25 @@ pub struct SurgeConfig {
     pub resilience: ResilienceConfig,
 }
 
+/// Configuration for a single MCP (Model Context Protocol) server passed to an agent.
+///
+/// When non-empty, Surge writes these servers to a temporary JSON config file and
+/// hands the path to the agent via an agent-specific environment variable so the
+/// agent can forward them to its underlying model.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct McpServerConfig {
+    /// Identifier used as the key in the `mcpServers` JSON object.
+    pub name: String,
+    /// Command that runs the MCP server process.
+    pub command: String,
+    /// Arguments passed to the MCP server command.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment variables for the MCP server process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub command: String,
@@ -28,6 +47,13 @@ pub struct AgentConfig {
     pub args: Vec<String>,
     #[serde(default = "default_transport")]
     pub transport: Transport,
+    /// MCP servers to pass to the agent at startup.
+    ///
+    /// If non-empty, Surge serialises these to a temporary JSON file and sets
+    /// the agent-specific environment variable (e.g. `CLAUDE_MCP_CONFIG` for
+    /// Claude Code) before spawning the process.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl AgentConfig {
@@ -510,6 +536,7 @@ max_parallel = 2
             command: "claude".to_string(),
             args: vec![],
             transport: Transport::Stdio,
+            mcp_servers: vec![],
         });
         assert!(valid_config.validate().is_ok());
 
@@ -520,6 +547,7 @@ max_parallel = 2
             command: "other".to_string(),
             args: vec![],
             transport: Transport::Stdio,
+            mcp_servers: vec![],
         });
         let result = invalid_config.validate();
         assert!(result.is_err());
@@ -534,6 +562,7 @@ max_parallel = 2
             command: "".to_string(),
             args: vec![],
             transport: Transport::Stdio,
+            mcp_servers: vec![],
         });
         let result = config_empty_cmd.validate();
         assert!(result.is_err());
@@ -550,6 +579,7 @@ max_parallel = 2
                 host: "".to_string(),
                 port: 8080,
             },
+            mcp_servers: vec![],
         });
         let result = config_empty_host.validate();
         assert!(result.is_err());
@@ -566,6 +596,7 @@ max_parallel = 2
                 host: "localhost".to_string(),
                 port: 0,
             },
+            mcp_servers: vec![],
         });
         let result = config_invalid_port.validate();
         assert!(result.is_err());
@@ -598,6 +629,7 @@ max_parallel = 2
                 host: "localhost".to_string(),
                 port: 8080,
             },
+            mcp_servers: vec![],
         });
         assert!(config_valid_tcp.validate().is_ok());
 
@@ -914,6 +946,7 @@ transport = "stdio"
             command: "   ".to_string(),
             args: vec![],
             transport: Transport::Stdio,
+            mcp_servers: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -932,6 +965,7 @@ transport = "stdio"
                 host: "   ".to_string(),
                 port: 8080,
             },
+            mcp_servers: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -1037,6 +1071,7 @@ after_spec = false
                 host: "localhost".to_string(),
                 port: 1,
             },
+            mcp_servers: vec![],
         };
         assert!(agent_min.validate("test").is_ok());
 
@@ -1047,6 +1082,7 @@ after_spec = false
                 host: "localhost".to_string(),
                 port: 65535,
             },
+            mcp_servers: vec![],
         };
         assert!(agent_max.validate("test").is_ok());
     }

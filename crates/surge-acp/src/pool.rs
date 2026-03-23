@@ -639,6 +639,7 @@ mod tests {
             command: "echo".to_string(),
             args: vec!["test".to_string()],
             transport: Transport::Stdio,
+            mcp_servers: vec![],
         }
     }
 
