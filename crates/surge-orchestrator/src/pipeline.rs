@@ -375,6 +375,8 @@ impl Orchestrator {
 
             info!(batch_index = i, batch_size = batch.len(), "executing batch");
 
+            // Get store reference for checkpoint saves
+            let store_ref = aggregator.store();
             let result = parallel_exec
                 .execute_batch(
                     &spec,
@@ -386,6 +388,9 @@ impl Orchestrator {
                     &self.event_tx,
                     pending_human_input.as_deref(),
                     Some(&spec_dir),
+                    Some(&store_ref),
+                    completed,
+                    total,
                 )
                 .await;
 

@@ -1,13 +1,15 @@
 //! Parallel batch executor — runs subtask batches with bounded concurrency.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
 use surge_git::worktree::GitManager;
-use tokio::sync::{broadcast, Semaphore};
+use surge_persistence::store::Store;
+use tokio::sync::{broadcast, Mutex, Semaphore};
 use tracing::warn;
 
 use crate::executor::{ExecutorConfig, SubtaskExecutor, SubtaskResult};
@@ -71,6 +73,8 @@ impl ParallelExecutor {
     /// If the circuit breaker trips mid-batch, remaining subtasks are skipped.
     ///
     /// `human_input` is injected into the first subtask's prompt only.
+    /// `store` is used to save checkpoints after each successful subtask.
+    /// `completed_offset` indicates how many subtasks were completed before this batch.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_batch(
         &self,
@@ -83,6 +87,9 @@ impl ParallelExecutor {
         event_tx: &broadcast::Sender<SurgeEvent>,
         human_input: Option<&str>,
         spec_dir: Option<&Path>,
+        store: Option<&Arc<Mutex<Store>>>,
+        completed_offset: usize,
+        total_count: usize,
     ) -> BatchResult {
         let semaphore = Semaphore::new(self.max_parallel);
         let mut executor = SubtaskExecutor::new(self.executor_config.clone());
@@ -104,8 +111,24 @@ impl ParallelExecutor {
             // Human input only goes to the first subtask in the batch.
             let input = if i == 0 { human_input } else { None };
 
+            // Calculate how many subtasks completed before this one
+            let completed_so_far = completed_offset + successes.len();
+
             match executor
-                .execute(spec, subtask, task_id, pool, session, git, event_tx, input, spec_dir)
+                .execute(
+                    spec,
+                    subtask,
+                    task_id,
+                    pool,
+                    session,
+                    git,
+                    event_tx,
+                    input,
+                    spec_dir,
+                    store,
+                    completed_so_far,
+                    total_count,
+                )
                 .await
             {
                 SubtaskResult::Success { subtask_id } => successes.push(subtask_id),

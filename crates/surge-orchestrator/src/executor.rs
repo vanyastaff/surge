@@ -1,14 +1,17 @@
 //! Subtask executor — runs a single subtask via ACP agent.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
+use surge_core::state::TaskState;
 use surge_git::worktree::GitManager;
-use tokio::sync::broadcast;
+use surge_persistence::store::Store;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
 use crate::context::SubtaskContext;
@@ -74,6 +77,7 @@ impl SubtaskExecutor {
     ///
     /// Retries up to `max_retries` times on failure.
     /// If `human_input` is provided it is appended to the prompt.
+    /// After successful completion, saves a checkpoint to the store.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &mut self,
@@ -86,6 +90,9 @@ impl SubtaskExecutor {
         event_tx: &broadcast::Sender<SurgeEvent>,
         human_input: Option<&str>,
         spec_dir: Option<&Path>,
+        store: Option<&Arc<Mutex<Store>>>,
+        completed_count: usize,
+        total_count: usize,
     ) -> SubtaskResult {
         let subtask_id = subtask.id;
 
@@ -151,6 +158,31 @@ impl SubtaskExecutor {
                                 "subtask completed and committed"
                             );
                             self.consecutive_failures = 0;
+
+                            // Save checkpoint to enable task resumption
+                            if let Some(store_ref) = store {
+                                let new_completed = completed_count + 1;
+                                let state = TaskState::Executing {
+                                    completed: new_completed,
+                                    total: total_count,
+                                };
+                                let mut store_guard = store_ref.lock().await;
+                                if let Err(e) = store_guard.checkpoint_task_state(task_id, spec.id, &state) {
+                                    warn!(
+                                        subtask_id = %subtask_id,
+                                        error = %e,
+                                        "failed to save task checkpoint"
+                                    );
+                                } else {
+                                    info!(
+                                        task_id = %task_id,
+                                        completed = new_completed,
+                                        total = total_count,
+                                        "task checkpoint saved"
+                                    );
+                                }
+                            }
+
                             let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
                                 task_id,
                                 subtask_id,
