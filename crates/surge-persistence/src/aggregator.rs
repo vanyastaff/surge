@@ -64,6 +64,15 @@ impl UsageAggregator {
         sessions.remove(session_id);
     }
 
+    /// Get a reference to the underlying store for checkpoint operations.
+    ///
+    /// Returns a cloned Arc to the store, allowing concurrent access for
+    /// checkpoint saves during task execution.
+    #[must_use]
+    pub fn store(&self) -> Arc<Mutex<Store>> {
+        Arc::clone(&self.store)
+    }
+
     /// Start listening to events from the given broadcast channel.
     ///
     /// This spawns a background task that processes TokensConsumed events

@@ -1,14 +1,17 @@
 //! Subtask executor — runs a single subtask via ACP agent.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
+use surge_core::state::TaskState;
 use surge_git::worktree::GitManager;
-use tokio::sync::broadcast;
+use surge_persistence::store::Store;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
 use crate::context::SubtaskContext;
@@ -74,6 +77,7 @@ impl SubtaskExecutor {
     ///
     /// Retries up to `max_retries` times on failure.
     /// If `human_input` is provided it is appended to the prompt.
+    /// After successful completion, saves a checkpoint to the store.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &mut self,
@@ -86,6 +90,9 @@ impl SubtaskExecutor {
         event_tx: &broadcast::Sender<SurgeEvent>,
         human_input: Option<&str>,
         spec_dir: Option<&Path>,
+        store: Option<&Arc<Mutex<Store>>>,
+        completed_count: usize,
+        total_count: usize,
     ) -> SubtaskResult {
         let subtask_id = subtask.id;
 
@@ -93,6 +100,27 @@ impl SubtaskExecutor {
             task_id,
             subtask_id,
         });
+
+        // Check circuit breaker before attempting execution
+        if self.is_circuit_broken() {
+            warn!(
+                subtask_id = %subtask_id,
+                consecutive_failures = self.consecutive_failures,
+                "circuit breaker tripped, failing fast without retries"
+            );
+            let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
+                task_id,
+                subtask_id,
+                success: false,
+            });
+            return SubtaskResult::Failed {
+                subtask_id,
+                reason: format!(
+                    "circuit breaker tripped after {} consecutive failures",
+                    self.consecutive_failures
+                ),
+            };
+        }
 
         let ctx = SubtaskContext::new(spec, subtask, spec_dir);
         let mut prompt_text = ctx.build_prompt();
@@ -106,12 +134,15 @@ impl SubtaskExecutor {
         let content = vec![ContentBlock::Text(TextContent::new(prompt_text))];
 
         let mut last_error = String::from("unknown error");
+        let retry_start = std::time::Instant::now();
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
                 info!(
                     subtask_id = %subtask_id,
                     attempt,
+                    max_retries = self.config.max_retries,
+                    elapsed_ms = retry_start.elapsed().as_millis() as u64,
                     "retrying subtask"
                 );
             }
@@ -130,6 +161,31 @@ impl SubtaskExecutor {
                                 "subtask completed and committed"
                             );
                             self.consecutive_failures = 0;
+
+                            // Save checkpoint to enable task resumption
+                            if let Some(store_ref) = store {
+                                let new_completed = completed_count + 1;
+                                let state = TaskState::Executing {
+                                    completed: new_completed,
+                                    total: total_count,
+                                };
+                                let mut store_guard = store_ref.lock().await;
+                                if let Err(e) = store_guard.checkpoint_task_state(task_id, spec.id, &state) {
+                                    warn!(
+                                        subtask_id = %subtask_id,
+                                        error = %e,
+                                        "failed to save task checkpoint"
+                                    );
+                                } else {
+                                    info!(
+                                        task_id = %task_id,
+                                        completed = new_completed,
+                                        total = total_count,
+                                        "task checkpoint saved"
+                                    );
+                                }
+                            }
+
                             let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
                                 task_id,
                                 subtask_id,
@@ -140,6 +196,9 @@ impl SubtaskExecutor {
                         Err(e) => {
                             warn!(
                                 subtask_id = %subtask_id,
+                                attempt,
+                                max_retries = self.config.max_retries,
+                                elapsed_ms = retry_start.elapsed().as_millis() as u64,
                                 error = %e,
                                 "commit failed after agent prompt"
                             );
@@ -151,6 +210,8 @@ impl SubtaskExecutor {
                     warn!(
                         subtask_id = %subtask_id,
                         attempt,
+                        max_retries = self.config.max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
                         error = %e,
                         "agent prompt failed"
                     );
@@ -160,6 +221,12 @@ impl SubtaskExecutor {
         }
 
         // All retries exhausted
+        warn!(
+            subtask_id = %subtask_id,
+            max_retries = self.config.max_retries,
+            total_elapsed_ms = retry_start.elapsed().as_millis() as u64,
+            "all subtask retries exhausted"
+        );
         self.consecutive_failures += 1;
         let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
             task_id,

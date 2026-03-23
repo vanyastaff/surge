@@ -5,6 +5,7 @@ use crate::{PersistenceError, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
+use surge_core::state::TaskState;
 
 // ── Schema Constants ────────────────────────────────────────────────
 
@@ -74,6 +75,18 @@ const CREATE_SESSION_TIMESTAMP_INDEX: &str =
 
 const CREATE_SUBTASK_SPEC_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS idx_subtask_spec ON subtask_usage(spec_id)";
+
+const CREATE_TASK_STATE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS task_state (
+    task_id TEXT PRIMARY KEY,
+    spec_id TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+)
+"#;
+
+const CREATE_TASK_STATE_SPEC_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS idx_task_state_spec ON task_state(spec_id)";
 
 // ── Store ───────────────────────────────────────────────────────────
 
@@ -154,10 +167,12 @@ impl Store {
             self.conn.execute(CREATE_SESSION_USAGE_TABLE, [])?;
             self.conn.execute(CREATE_SUBTASK_USAGE_TABLE, [])?;
             self.conn.execute(CREATE_SPEC_USAGE_TABLE, [])?;
+            self.conn.execute(CREATE_TASK_STATE_TABLE, [])?;
             self.conn.execute(CREATE_SESSION_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_SESSION_SUBTASK_INDEX, [])?;
             self.conn.execute(CREATE_SESSION_TIMESTAMP_INDEX, [])?;
             self.conn.execute(CREATE_SUBTASK_SPEC_INDEX, [])?;
+            self.conn.execute(CREATE_TASK_STATE_SPEC_INDEX, [])?;
 
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (?1)", [SCHEMA_VERSION])?;
@@ -445,6 +460,92 @@ impl Store {
 
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    // ── Task State Operations ───────────────────────────────────────
+
+    /// Save a task state checkpoint.
+    ///
+    /// Creates or updates a checkpoint for the given task, storing its current
+    /// state for later resumption. The state is serialized as JSON.
+    pub fn checkpoint_task_state(
+        &mut self,
+        task_id: TaskId,
+        spec_id: SpecId,
+        state: &TaskState,
+    ) -> Result<()> {
+        let state_json = serde_json::to_string(state)
+            .map_err(|e| PersistenceError::Storage(format!("Failed to serialize task state: {e}")))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| PersistenceError::Storage(format!("System time error: {e}")))?
+            .as_millis() as i64;
+
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO task_state (
+                task_id, spec_id, state_json, updated_at
+            ) VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                task_id.to_string(),
+                spec_id.to_string(),
+                state_json,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Resume a task from its last checkpoint.
+    ///
+    /// Retrieves the most recent task state for the given task ID. Returns
+    /// `None` if no checkpoint exists for the task.
+    pub fn resume_task_state(&self, task_id: TaskId) -> Result<Option<(SpecId, TaskState)>> {
+        self.conn
+            .query_row(
+                "SELECT spec_id, state_json FROM task_state WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| {
+                    let spec_id: String = row.get(0)?;
+                    let state_json: String = row.get(1)?;
+                    Ok((spec_id, state_json))
+                },
+            )
+            .optional()?
+            .map(|(spec_id_str, state_json)| {
+                let spec_id = spec_id_str.parse()
+                    .map_err(|e| PersistenceError::Storage(format!("Invalid spec_id: {e}")))?;
+                let state: TaskState = serde_json::from_str(&state_json)
+                    .map_err(|e| PersistenceError::Storage(format!("Failed to deserialize task state: {e}")))?;
+                Ok((spec_id, state))
+            })
+            .transpose()
+    }
+
+    /// Get all task checkpoints for a given spec.
+    pub fn list_task_states_by_spec(&self, spec_id: SpecId) -> Result<Vec<(TaskId, TaskState, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, state_json, updated_at FROM task_state WHERE spec_id = ?1 ORDER BY updated_at DESC",
+        )?;
+
+        let rows = stmt.query_map([spec_id.to_string()], |row| {
+            let task_id_str: String = row.get(0)?;
+            let state_json: String = row.get(1)?;
+            let updated_at: i64 = row.get(2)?;
+            Ok((task_id_str, state_json, updated_at as u64))
+        })?;
+
+        rows.map(|row| {
+            let (task_id_str, state_json, updated_at) = row?;
+            let task_id = task_id_str.parse()
+                .map_err(|e| PersistenceError::Storage(format!("Invalid task_id: {e}")))?;
+            let state: TaskState = serde_json::from_str(&state_json)
+                .map_err(|e| PersistenceError::Storage(format!("Failed to deserialize task state: {e}")))?;
+            Ok((task_id, state, updated_at))
+        })
+        .collect()
     }
 
     // ── Utility Operations ──────────────────────────────────────────
@@ -773,5 +874,107 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let result = store.get_spec(SpecId::new()).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_and_resume_task_state() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let spec_id = SpecId::new();
+        let state = TaskState::Executing { completed: 3, total: 10 };
+
+        // Checkpoint the task state
+        store.checkpoint_task_state(task_id, spec_id, &state).unwrap();
+
+        // Resume the task state
+        let resumed = store.resume_task_state(task_id).unwrap();
+        assert!(resumed.is_some());
+
+        let (resumed_spec_id, resumed_state) = resumed.unwrap();
+        assert_eq!(resumed_spec_id, spec_id);
+        assert_eq!(resumed_state, state);
+    }
+
+    #[test]
+    fn test_checkpoint_replaces_existing_state() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let spec_id = SpecId::new();
+
+        // First checkpoint
+        let state1 = TaskState::Executing { completed: 3, total: 10 };
+        store.checkpoint_task_state(task_id, spec_id, &state1).unwrap();
+
+        // Second checkpoint (should replace)
+        let state2 = TaskState::Executing { completed: 7, total: 10 };
+        store.checkpoint_task_state(task_id, spec_id, &state2).unwrap();
+
+        // Resume should get the latest state
+        let (_, resumed_state) = store.resume_task_state(task_id).unwrap().unwrap();
+        assert_eq!(resumed_state, state2);
+    }
+
+    #[test]
+    fn test_resume_nonexistent_task_returns_none() {
+        let store = Store::in_memory().unwrap();
+        let result = store.resume_task_state(TaskId::new()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_various_task_states() {
+        let mut store = Store::in_memory().unwrap();
+        let spec_id = SpecId::new();
+
+        // Test different task states can be checkpointed and resumed
+        let test_states = vec![
+            TaskState::Draft,
+            TaskState::Planning,
+            TaskState::Planned { subtask_count: 5 },
+            TaskState::Executing { completed: 2, total: 5 },
+            TaskState::QaReview,
+            TaskState::QaFix { iteration: 2 },
+            TaskState::HumanReview,
+            TaskState::Merging,
+            TaskState::Completed,
+            TaskState::Failed { reason: "test error".to_string() },
+            TaskState::Cancelled,
+        ];
+
+        for state in test_states {
+            let task_id = TaskId::new();
+            store.checkpoint_task_state(task_id, spec_id, &state).unwrap();
+            let (_, resumed_state) = store.resume_task_state(task_id).unwrap().unwrap();
+            assert_eq!(resumed_state, state);
+        }
+    }
+
+    #[test]
+    fn test_list_task_states_by_spec() {
+        let mut store = Store::in_memory().unwrap();
+        let spec_id = SpecId::new();
+
+        let task1 = TaskId::new();
+        let task2 = TaskId::new();
+        let task3 = TaskId::new();
+
+        // Checkpoint three tasks for the same spec
+        store.checkpoint_task_state(task1, spec_id, &TaskState::Executing { completed: 1, total: 5 }).unwrap();
+        store.checkpoint_task_state(task2, spec_id, &TaskState::Completed).unwrap();
+        store.checkpoint_task_state(task3, spec_id, &TaskState::Planning).unwrap();
+
+        // Also checkpoint a task for a different spec (should not be included)
+        let other_spec = SpecId::new();
+        store.checkpoint_task_state(TaskId::new(), other_spec, &TaskState::Draft).unwrap();
+
+        // List tasks for the first spec
+        let tasks = store.list_task_states_by_spec(spec_id).unwrap();
+        assert_eq!(tasks.len(), 3);
+
+        // Verify all task IDs are present
+        let task_ids: Vec<TaskId> = tasks.iter().map(|(id, _, _)| *id).collect();
+        assert!(task_ids.contains(&task1));
+        assert!(task_ids.contains(&task2));
+        assert!(task_ids.contains(&task3));
     }
 }

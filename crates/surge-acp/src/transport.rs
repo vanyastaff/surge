@@ -14,8 +14,8 @@
 //! [`AgentConnection`]: super::connection::AgentConnection
 
 use std::path::Path;
-use surge_core::config::{AgentConfig, McpServerConfig, Transport};
 use surge_core::SurgeError;
+use surge_core::config::{AgentConfig, McpServerConfig, Transport};
 use tokio::process::Child;
 use tracing::{debug, info, warn};
 
@@ -183,11 +183,7 @@ impl AgentTransport for StdioTransport {
 ///
 /// For agents whose env var is not yet known, a `warn!` is emitted and no env
 /// var is set — the agent starts normally but without the MCP servers.
-fn setup_mcp_env(
-    agent_name: &str,
-    servers: &[McpServerConfig],
-    cmd: &mut tokio::process::Command,
-) {
+fn setup_mcp_env(agent_name: &str, servers: &[McpServerConfig], cmd: &mut tokio::process::Command) {
     use crate::registry::AgentKind;
 
     let Some(env_var) = AgentKind::from_id(agent_name).and_then(|k| k.mcp_config_env_var()) else {
@@ -241,9 +237,8 @@ fn write_mcp_config_file(
     agent_name: &str,
     servers: &[McpServerConfig],
 ) -> Result<std::path::PathBuf, SurgeError> {
-    let json = serialize_mcp_config(servers).map_err(|e| {
-        SurgeError::AgentConnection(format!("Failed to serialize MCP config: {e}"))
-    })?;
+    let json = serialize_mcp_config(servers)
+        .map_err(|e| SurgeError::AgentConnection(format!("Failed to serialize MCP config: {e}")))?;
 
     let path = std::env::temp_dir().join(format!(
         "surge-mcp-{}-{}.json",
@@ -251,8 +246,9 @@ fn write_mcp_config_file(
         std::process::id()
     ));
 
-    std::fs::write(&path, &json)
-        .map_err(|e| SurgeError::AgentConnection(format!("Failed to write MCP config file: {e}")))?;
+    std::fs::write(&path, &json).map_err(|e| {
+        SurgeError::AgentConnection(format!("Failed to write MCP config file: {e}"))
+    })?;
 
     Ok(path)
 }

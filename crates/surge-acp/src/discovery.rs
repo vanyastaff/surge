@@ -62,10 +62,7 @@ impl Platform {
                 paths
             }
             Self::Linux => {
-                let mut paths = vec![
-                    PathBuf::from("/usr/local/bin"),
-                    PathBuf::from("/usr/bin"),
-                ];
+                let mut paths = vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")];
                 if let Some(h) = home {
                     paths.push(h.join(".local/bin"));
                 }
@@ -186,10 +183,7 @@ impl AgentDiscovery {
 
             // On Windows, also check for .exe extension
             let paths_to_check = if self.platform == Platform::Windows {
-                vec![
-                    candidate.clone(),
-                    candidate.with_extension("exe"),
-                ]
+                vec![candidate.clone(), candidate.with_extension("exe")]
             } else {
                 vec![candidate]
             };
@@ -223,10 +217,7 @@ impl AgentDiscovery {
         let args = &version_args[1..];
 
         // Execute the version command using the provided path
-        let output = Command::new(path)
-            .args(args)
-            .output()
-            .ok()?;
+        let output = Command::new(path).args(args).output().ok()?;
 
         // Check if command succeeded
         if !output.status.success() {
@@ -444,10 +435,7 @@ mod tests {
             env::set_var("CLAUDE_PATH", "/non/existent/path");
         }
         let result = discovery.from_env(AgentKind::Claude);
-        assert!(
-            result.is_none(),
-            "Should return None for non-existent path"
-        );
+        assert!(result.is_none(), "Should return None for non-existent path");
         unsafe {
             env::remove_var("CLAUDE_PATH");
         }
@@ -490,10 +478,7 @@ mod tests {
             }
 
             let result = discovery.from_env(AgentKind::Claude);
-            assert!(
-                result.is_some(),
-                "Should find agent via CLAUDE_BIN env var"
-            );
+            assert!(result.is_some(), "Should find agent via CLAUDE_BIN env var");
 
             // Clean up
             unsafe {
@@ -510,10 +495,7 @@ mod tests {
             }
 
             let result = discovery.from_env(AgentKind::Copilot);
-            assert!(
-                result.is_some(),
-                "Should find Copilot via GH_PATH env var"
-            );
+            assert!(result.is_some(), "Should find Copilot via GH_PATH env var");
 
             // Clean up
             unsafe {

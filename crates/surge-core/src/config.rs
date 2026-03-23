@@ -298,6 +298,58 @@ fn default_log_max_mb() -> u64 {
     50
 }
 
+/// Backoff strategy for retry delays.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackoffStrategy {
+    /// Fixed delay between retries.
+    Linear,
+    /// Exponentially increasing delay (delay *= 2 each retry).
+    #[default]
+    Exponential,
+    /// Exponential backoff with random jitter to avoid thundering herd.
+    #[serde(rename = "exponential_jitter")]
+    ExponentialWithJitter,
+}
+
+/// Retry policy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// Initial delay before first retry (milliseconds).
+    #[serde(default = "default_initial_delay_ms")]
+    pub initial_delay_ms: u64,
+    /// Maximum delay between retries (milliseconds).
+    #[serde(default = "default_max_delay_ms")]
+    pub max_delay_ms: u64,
+    /// Backoff strategy for calculating delays.
+    #[serde(default)]
+    pub backoff_strategy: BackoffStrategy,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: default_max_retries(),
+            initial_delay_ms: default_initial_delay_ms(),
+            max_delay_ms: default_max_delay_ms(),
+            backoff_strategy: BackoffStrategy::default(),
+        }
+    }
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+fn default_initial_delay_ms() -> u64 {
+    1000
+}
+fn default_max_delay_ms() -> u64 {
+    60000
+}
+
 /// Resilience configuration for agent connections.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResilienceConfig {
@@ -316,6 +368,15 @@ pub struct ResilienceConfig {
     /// Seconds to wait for a process to exit cleanly before SIGKILL.
     #[serde(default = "default_shutdown_grace_secs")]
     pub shutdown_grace_secs: u64,
+    /// Retry policy configuration with backoff strategies.
+    #[serde(default)]
+    pub retry_policy: RetryPolicy,
+    /// Number of consecutive failures before circuit breaker trips.
+    #[serde(default = "default_circuit_breaker_threshold")]
+    pub circuit_breaker_threshold: u32,
+    /// If true, auth failures (401) fail immediately without retry.
+    #[serde(default = "default_auth_failure_immediate_fail")]
+    pub auth_failure_immediate_fail: bool,
 }
 
 impl Default for ResilienceConfig {
@@ -326,6 +387,9 @@ impl Default for ResilienceConfig {
             prompt_timeout_secs: default_prompt_timeout_secs(),
             prompt_retries: default_prompt_retries(),
             shutdown_grace_secs: default_shutdown_grace_secs(),
+            retry_policy: RetryPolicy::default(),
+            circuit_breaker_threshold: default_circuit_breaker_threshold(),
+            auth_failure_immediate_fail: default_auth_failure_immediate_fail(),
         }
     }
 }
@@ -335,6 +399,8 @@ fn default_session_timeout_secs() -> u64 { 10 }
 fn default_prompt_timeout_secs() -> u64 { 300 }
 fn default_prompt_retries() -> u32 { 1 }
 fn default_shutdown_grace_secs() -> u64 { 5 }
+fn default_circuit_breaker_threshold() -> u32 { 5 }
+fn default_auth_failure_immediate_fail() -> bool { true }
 
 impl Default for SurgeConfig {
     fn default() -> Self {

@@ -303,16 +303,27 @@ impl Orchestrator {
             }
         };
 
+        // Count already completed subtasks (for resume support)
+        let already_completed = spec.subtasks.iter()
+            .filter(|s| s.execution.state.is_terminal())
+            .count();
+
+        // Build batches, filtering out already completed subtasks
         let batches: Vec<Vec<_>> = batch_ids
             .iter()
             .map(|ids| {
                 ids.iter()
-                    .filter_map(|id| spec.subtasks.iter().find(|s| s.id == *id).cloned())
+                    .filter_map(|id| {
+                        spec.subtasks.iter()
+                            .find(|s| s.id == *id)
+                            .filter(|s| !s.execution.state.is_terminal())
+                            .cloned()
+                    })
                     .collect()
             })
             .collect();
 
-        let total: usize = batches.iter().map(|b| b.len()).sum();
+        let total = spec.subtasks.len();
 
         let parallel_exec = ParallelExecutor::new(
             self.config.surge_config.pipeline.max_parallel,
@@ -322,10 +333,10 @@ impl Orchestrator {
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Planning,
-            new_state: TaskState::Executing { completed: 0, total },
+            new_state: TaskState::Executing { completed: already_completed, total },
         });
 
-        let mut completed: usize = 0;
+        let mut completed: usize = already_completed;
         let mut failed_batches: usize = 0;
         let mut pending_human_input: Option<String> = None;
 
@@ -375,6 +386,8 @@ impl Orchestrator {
 
             info!(batch_index = i, batch_size = batch.len(), "executing batch");
 
+            // Get store reference for checkpoint saves
+            let store_ref = aggregator.store();
             let result = parallel_exec
                 .execute_batch(
                     &spec,
@@ -386,6 +399,9 @@ impl Orchestrator {
                     &self.event_tx,
                     pending_human_input.as_deref(),
                     Some(&spec_dir),
+                    Some(&store_ref),
+                    completed,
+                    total,
                 )
                 .await;
 

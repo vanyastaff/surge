@@ -26,6 +26,7 @@ pub async fn run(
     parallel: Option<usize>,
     _planner: Option<String>,
     _coder: Option<String>,
+    resume: bool,
 ) -> Result<()> {
     let mut config = SurgeConfig::load_or_default()?;
     config.apply_env_overrides();
@@ -35,6 +36,41 @@ pub async fn run(
     }
 
     let mut spec_file = load_spec_by_id(&spec_id)?;
+
+    // Handle resume logic if requested
+    if resume
+        && let Ok(store_path) = surge_persistence::store::Store::default_path()
+        && store_path.exists()
+        && let Ok(store) = surge_persistence::store::Store::open(&store_path)
+        && let Ok(checkpoints) = store.list_task_states_by_spec(spec_file.spec.id)
+        && let Some((_, state, _)) = checkpoints.first()
+        && let surge_core::state::TaskState::Executing { completed, total } = state
+    {
+        if *completed > 0 {
+            println!("📍 Resuming from checkpoint: {completed}/{total} subtasks completed");
+
+            // Build dependency graph to get subtasks in execution order
+            if let Ok(graph) = surge_spec::DependencyGraph::from_spec(&spec_file.spec)
+                && let Ok(batch_ids) = graph.topological_batches()
+            {
+                // Flatten batch IDs into execution order
+                let execution_order: Vec<_> = batch_ids.iter().flatten().copied().collect();
+
+                // Mark the first N subtasks as completed
+                let mut marked = 0;
+                for subtask_id in execution_order.iter().take(*completed) {
+                    if let Some(subtask) = spec_file.spec.subtasks.iter_mut().find(|s| s.id == *subtask_id) {
+                        subtask.execution.state = surge_core::spec::SubtaskState::Completed;
+                        marked += 1;
+                    }
+                }
+
+                println!("   ✓ Skipping {marked} completed subtask{}", if marked == 1 { "" } else { "s" });
+            }
+        } else {
+            println!("ℹ️  No completed subtasks to resume from");
+        }
+    }
 
     println!("⚡ Running spec: {}", spec_file.spec.title);
     println!("   Subtasks: {}", spec_file.spec.subtasks.len());

@@ -8,18 +8,19 @@
 //! and `spawn_local` per-operation for concurrent ACP I/O.
 
 use agent_client_protocol::{
-    Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SetSessionModeRequest,
-    SessionModeId,
+    Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionModeId,
+    SetSessionModeRequest,
 };
+use rand::Rng;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use surge_core::config::{AgentConfig, ResilienceConfig};
+use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
 use surge_core::{SurgeError, SurgeEvent};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
@@ -336,9 +337,7 @@ fn run_worker(
         while let Some(op) = op_rx.recv().await {
             match op {
                 PoolOp::Shutdown { tx } => {
-                    let grace = Duration::from_secs(
-                        state.borrow().resilience.shutdown_grace_secs,
-                    );
+                    let grace = Duration::from_secs(state.borrow().resilience.shutdown_grace_secs);
                     let conns: Vec<_> = state.borrow_mut().connections.drain().collect();
                     for (name, mut conn) in conns {
                         debug!(agent = name.as_str(), "shutting down agent");
@@ -489,9 +488,11 @@ async fn create_session(
             debug!("Setting session mode to '{}'", m);
             match tokio::time::timeout(
                 session_timeout,
-                conn.connection().set_session_mode(
-                    SetSessionModeRequest::new(session_id.clone(), SessionModeId::new(m)),
-                ),
+                conn.connection()
+                    .set_session_mode(SetSessionModeRequest::new(
+                        session_id.clone(),
+                        SessionModeId::new(m),
+                    )),
             )
             .await
             {
@@ -507,7 +508,11 @@ async fn create_session(
 
     // Track session on success, then restore the connection regardless of outcome.
     if let Ok(ref session_id) = session_id_result {
-        conn.add_session(session_id.clone(), working_dir.to_path_buf(), mode.map(String::from));
+        conn.add_session(
+            session_id.clone(),
+            working_dir.to_path_buf(),
+            mode.map(String::from),
+        );
     }
     state
         .borrow_mut()
@@ -525,11 +530,12 @@ async fn prompt(
     session: &SessionHandle,
     content: Vec<ContentBlock>,
 ) -> Result<PromptResponse, SurgeError> {
-    let (prompt_timeout, max_retries) = {
+    let (prompt_timeout, max_retries, auth_failure_immediate) = {
         let s = state.borrow();
         (
             Duration::from_secs(s.resilience.prompt_timeout_secs),
             s.resilience.prompt_retries,
+            s.resilience.auth_failure_immediate_fail,
         )
     };
 
@@ -537,7 +543,11 @@ async fn prompt(
     // borrow is held across the await.
     let resolved_agent = {
         let health = state.borrow().health.clone();
-        health.lock().await.resolve_agent(&session.agent_name).to_string()
+        health
+            .lock()
+            .await
+            .resolve_agent(&session.agent_name)
+            .to_string()
     };
 
     let candidates: Vec<String> = if resolved_agent != session.agent_name {
@@ -552,8 +562,19 @@ async fn prompt(
     };
 
     let mut last_error: Option<SurgeError> = None;
+    let retry_start = Instant::now();
 
     for attempt in 0..=max_retries {
+        if attempt > 0 {
+            info!(
+                session_id = session.session_id.as_str(),
+                attempt,
+                max_retries,
+                elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                "retrying prompt after failure"
+            );
+        }
+
         for agent_name in &candidates {
             if let Err(e) = connect(state, agent_name).await {
                 last_error = Some(e);
@@ -584,7 +605,10 @@ async fn prompt(
 
             match result {
                 Ok(Ok(response)) => {
-                    health.lock().await.record_success(agent_name, start.elapsed());
+                    health
+                        .lock()
+                        .await
+                        .record_success(agent_name, start.elapsed());
 
                     // Emit token usage if the agent reported it.
                     if let Some(usage) = &response.usage {
@@ -607,28 +631,135 @@ async fn prompt(
                 }
                 Ok(Err(e)) => {
                     let msg = format!("{e:?}");
+
+                    // Check for authentication failures (401) and fail immediately if configured
+                    if auth_failure_immediate && is_auth_failure(&msg) {
+                        health.lock().await.record_failure(agent_name, &msg);
+                        return Err(SurgeError::AuthFailure {
+                            agent: agent_name.clone(),
+                            remediation: "Check API key configuration in surge.toml".to_string(),
+                        });
+                    }
+
                     health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
                     )));
-                    warn!(agent = agent_name.as_str(), attempt, "prompt failed");
+                    warn!(
+                        agent = agent_name.as_str(),
+                        session_id = session.session_id.as_str(),
+                        attempt,
+                        max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                        error = %msg,
+                        "prompt failed"
+                    );
                 }
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
                     health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Timeout(msg));
-                    warn!(agent = agent_name.as_str(), attempt, "prompt timed out");
+                    warn!(
+                        agent = agent_name.as_str(),
+                        session_id = session.session_id.as_str(),
+                        attempt,
+                        max_retries,
+                        elapsed_ms = retry_start.elapsed().as_millis() as u64,
+                        "prompt timed out"
+                    );
                 }
             }
         }
 
         if attempt < max_retries {
-            tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+            let delay = {
+                let s = state.borrow();
+                calculate_backoff(
+                    attempt,
+                    s.resilience.retry_policy.initial_delay_ms,
+                    s.resilience.retry_policy.max_delay_ms,
+                    &s.resilience.retry_policy.backoff_strategy,
+                )
+            };
+            info!(
+                session_id = session.session_id.as_str(),
+                attempt,
+                delay_ms = delay.as_millis() as u64,
+                "backing off before retry"
+            );
+            tokio::time::sleep(delay).await;
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+    warn!(
+        session_id = session.session_id.as_str(),
+        max_retries,
+        total_elapsed_ms = retry_start.elapsed().as_millis() as u64,
+        "all prompt retries exhausted"
+    );
+
+    Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+}
+
+// ── Error detection helpers ─────────────────────────────────────────
+
+/// Check if an error message indicates an authentication failure (401).
+///
+/// Common patterns:
+/// - HTTP 401 status code
+/// - "Unauthorized" or "authentication failed"
+/// - API key errors
+fn is_auth_failure(error_msg: &str) -> bool {
+    let msg_lower = error_msg.to_lowercase();
+    msg_lower.contains("401")
+        || msg_lower.contains("unauthorized")
+        || msg_lower.contains("authentication failed")
+        || msg_lower.contains("invalid api key")
+        || msg_lower.contains("invalid_api_key")
+        || msg_lower.contains("authentication_error")
+}
+
+// ── Backoff calculation ─────────────────────────────────────────────
+
+/// Calculate backoff delay for a retry attempt.
+///
+/// # Arguments
+///
+/// * `attempt` - Zero-based retry attempt number (0 = first retry)
+/// * `initial_delay_ms` - Base delay in milliseconds
+/// * `max_delay_ms` - Maximum delay cap in milliseconds
+/// * `strategy` - Backoff strategy to use
+///
+/// # Returns
+///
+/// Duration to wait before the next retry attempt.
+fn calculate_backoff(
+    attempt: u32,
+    initial_delay_ms: u64,
+    max_delay_ms: u64,
+    strategy: &BackoffStrategy,
+) -> Duration {
+    let delay_ms = match strategy {
+        BackoffStrategy::Linear => initial_delay_ms,
+
+        BackoffStrategy::Exponential => {
+            // delay = initial_delay * 2^attempt, capped at max_delay
+            let exponential = initial_delay_ms.saturating_mul(2u64.saturating_pow(attempt));
+            exponential.min(max_delay_ms)
+        }
+
+        BackoffStrategy::ExponentialWithJitter => {
+            // Calculate exponential backoff
+            let exponential = initial_delay_ms.saturating_mul(2u64.saturating_pow(attempt));
+            let capped = exponential.min(max_delay_ms);
+
+            // Add random jitter: uniform random value in [0, capped]
+            let mut rng = rand::rng();
+            rng.random_range(0..=capped)
+        }
+    };
+
+    Duration::from_millis(delay_ms)
 }
 
 #[cfg(test)]
@@ -732,5 +863,212 @@ mod tests {
         // No connections were established, so Shutdown drains nothing.
         // The worker should exit and join almost immediately.
         drop(pool);
+    }
+
+    // ── Backoff calculation tests ──────────────────────────────────
+
+    #[test]
+    fn test_calculate_backoff_linear() {
+        let strategy = BackoffStrategy::Linear;
+        let initial = 1000;
+        let max = 60000;
+
+        // Linear backoff should always return the initial delay
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(5, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = 60000;
+
+        // Exponential: 1000 * 2^attempt
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000) // 1000 * 2^0 = 1000
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(2000) // 1000 * 2^1 = 2000
+        );
+        assert_eq!(
+            calculate_backoff(2, initial, max, &strategy),
+            Duration::from_millis(4000) // 1000 * 2^2 = 4000
+        );
+        assert_eq!(
+            calculate_backoff(3, initial, max, &strategy),
+            Duration::from_millis(8000) // 1000 * 2^3 = 8000
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential_capped() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = 5000;
+
+        // Should be capped at max_delay
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            calculate_backoff(2, initial, max, &strategy),
+            Duration::from_millis(4000)
+        );
+        assert_eq!(
+            calculate_backoff(3, initial, max, &strategy),
+            Duration::from_millis(5000) // capped at 5000
+        );
+        assert_eq!(
+            calculate_backoff(10, initial, max, &strategy),
+            Duration::from_millis(5000) // still capped
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential_overflow_protection() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = u64::MAX;
+
+        // Very large attempt should saturate, not overflow
+        let result = calculate_backoff(100, initial, max, &strategy);
+        assert!(result.as_millis() > 0);
+        assert!(result.as_millis() <= u128::from(u64::MAX));
+    }
+
+    #[test]
+    fn test_calculate_backoff_jitter() {
+        let strategy = BackoffStrategy::ExponentialWithJitter;
+        let initial = 1000;
+        let max = 60000;
+
+        // Jitter should return a value in range [0, exponential_delay]
+        for attempt in 0..5 {
+            let delay = calculate_backoff(attempt, initial, max, &strategy);
+            let expected_max = (initial * 2u64.pow(attempt)).min(max);
+
+            assert!(
+                delay.as_millis() <= u128::from(expected_max),
+                "Jitter delay {} exceeds max {} for attempt {}",
+                delay.as_millis(),
+                expected_max,
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_calculate_backoff_jitter_distribution() {
+        let strategy = BackoffStrategy::ExponentialWithJitter;
+        let initial = 1000;
+        let max = 60000;
+        let attempt = 2; // 1000 * 2^2 = 4000ms max
+
+        // Run multiple times to verify randomness
+        let mut delays = Vec::new();
+        for _ in 0..100 {
+            let delay = calculate_backoff(attempt, initial, max, &strategy);
+            delays.push(delay.as_millis());
+        }
+
+        // All delays should be in valid range
+        for delay in &delays {
+            assert!(*delay <= 4000, "Delay {} exceeds maximum", delay);
+        }
+
+        // Should have some variation (not all the same value)
+        let unique_values: std::collections::HashSet<_> = delays.iter().collect();
+        assert!(
+            unique_values.len() > 1,
+            "Jitter produced no variation in 100 attempts"
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_zero_initial_delay() {
+        // Edge case: zero initial delay should work
+        assert_eq!(
+            calculate_backoff(0, 0, 1000, &BackoffStrategy::Linear),
+            Duration::from_millis(0)
+        );
+        assert_eq!(
+            calculate_backoff(5, 0, 1000, &BackoffStrategy::Exponential),
+            Duration::from_millis(0)
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_zero_max_delay() {
+        // Edge case: zero max delay should cap everything to zero
+        assert_eq!(
+            calculate_backoff(5, 1000, 0, &BackoffStrategy::Exponential),
+            Duration::from_millis(0)
+        );
+    }
+
+    // ── Auth failure detection tests ──────────────────────────────
+
+    #[test]
+    fn test_is_auth_failure_http_401() {
+        assert!(is_auth_failure("HTTP 401 Unauthorized"));
+        assert!(is_auth_failure("Error: status code 401"));
+        assert!(is_auth_failure("Request failed with 401"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_unauthorized() {
+        assert!(is_auth_failure("Unauthorized access"));
+        assert!(is_auth_failure("UNAUTHORIZED"));
+        assert!(is_auth_failure("Authentication failed: Unauthorized"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_api_key() {
+        assert!(is_auth_failure("Invalid API key provided"));
+        assert!(is_auth_failure("Error: invalid_api_key"));
+        assert!(is_auth_failure("INVALID_API_KEY"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_authentication_error() {
+        assert!(is_auth_failure("authentication failed"));
+        assert!(is_auth_failure("Authentication Failed"));
+        assert!(is_auth_failure("Error: authentication_error"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_negative_cases() {
+        // These should NOT be detected as auth failures
+        assert!(!is_auth_failure("Connection timeout"));
+        assert!(!is_auth_failure("500 Internal Server Error"));
+        assert!(!is_auth_failure("Rate limit exceeded"));
+        assert!(!is_auth_failure("Network error"));
+        assert!(!is_auth_failure("404 Not Found"));
+        assert!(!is_auth_failure("403 Forbidden")); // 403 is different from 401
+    }
+
+    #[test]
+    fn test_is_auth_failure_case_insensitive() {
+        assert!(is_auth_failure("uNaUtHoRiZeD"));
+        assert!(is_auth_failure("AUTHENTICATION FAILED"));
+        assert!(is_auth_failure("InVaLiD aPi KeY"));
     }
 }

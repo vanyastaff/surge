@@ -74,10 +74,14 @@ impl AgentKind {
     #[must_use]
     pub fn tagline(self) -> &'static str {
         match self {
-            Self::Claude => "Anthropic's autonomous coding agent — deepest reasoning, largest context",
+            Self::Claude => {
+                "Anthropic's autonomous coding agent — deepest reasoning, largest context"
+            }
             Self::Copilot => "GitHub's multi-model terminal agent with native repo integration",
             Self::Codex => "OpenAI's cloud-native coding agent with sandboxed parallel execution",
-            Self::Gemini => "Google's CLI with the most generous free tier — 1M context on all models",
+            Self::Gemini => {
+                "Google's CLI with the most generous free tier — 1M context on all models"
+            }
         }
     }
 
@@ -389,9 +393,7 @@ impl Registry {
             .timeout(Duration::from_secs(3))
             .build()
             .map_err(|e| {
-                surge_core::SurgeError::AgentConnection(format!(
-                    "Failed to build HTTP client: {e}"
-                ))
+                surge_core::SurgeError::AgentConnection(format!("Failed to build HTTP client: {e}"))
             })?;
 
         let entries: Vec<RegistryEntry> = client
@@ -462,9 +464,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             authors: vec!["Anthropic".into()],
             license: "proprietary".into(),
             command: "npx".into(),
-            default_args: vec![
-                "@zed-industries/claude-agent-acp".into(),
-            ],
+            default_args: vec!["@zed-industries/claude-agent-acp".into()],
             transport: Transport::Stdio,
             install_instructions: "npx @zed-industries/claude-agent-acp".into(),
             cli_binary: Some("claude".into()),
@@ -490,10 +490,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             authors: vec!["GitHub".into()],
             license: "proprietary".into(),
             command: "npx".into(),
-            default_args: vec![
-                "@github/copilot".into(),
-                "--acp".into(),
-            ],
+            default_args: vec!["@github/copilot".into(), "--acp".into()],
             transport: Transport::Stdio,
             install_instructions: "npx @github/copilot --acp".into(),
             cli_binary: Some("gh".into()),
@@ -517,18 +514,13 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             authors: vec!["OpenAI".into(), "Zed Industries".into()],
             license: "Apache-2.0".into(),
             command: "npx".into(),
-            default_args: vec![
-                "@zed-industries/codex-acp".into(),
-            ],
+            default_args: vec!["@zed-industries/codex-acp".into()],
             transport: Transport::Stdio,
             install_instructions: "npx @zed-industries/codex-acp".into(),
             cli_binary: Some("codex".into()),
             website: Some("https://openai.com".into()),
             tags: vec!["openai".into(), "popular".into(), "open-source".into()],
-            capabilities: vec![
-                AgentCapability::Code,
-                AgentCapability::Chat,
-            ],
+            capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
             models: vec![],
             long_description: String::new(),
         },
@@ -541,10 +533,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             authors: vec!["Google".into()],
             license: "Apache-2.0".into(),
             command: "npx".into(),
-            default_args: vec![
-                "@google/gemini-cli".into(),
-                "--acp".into(),
-            ],
+            default_args: vec!["@google/gemini-cli".into(), "--acp".into()],
             transport: Transport::Stdio,
             install_instructions: "npx @google/gemini-cli --acp".into(),
             cli_binary: Some("gemini".into()),
@@ -815,10 +804,14 @@ mod tests {
 
     #[test]
     fn test_merged_builtin_takes_priority_on_id_collision() {
-        let builtin = Registry { entries: vec![make_entry("agent-a")] };
+        let builtin = Registry {
+            entries: vec![make_entry("agent-a")],
+        };
         let mut remote_a = make_entry("agent-a");
         remote_a.display_name = "remote-version".to_string();
-        let remote = Registry { entries: vec![remote_a, make_entry("agent-b")] };
+        let remote = Registry {
+            entries: vec![remote_a, make_entry("agent-b")],
+        };
 
         let merged = Registry::merged(builtin, remote);
 
@@ -832,7 +825,9 @@ mod tests {
     #[test]
     fn test_merged_remote_only_entries_appended() {
         let builtin = Registry::builtin();
-        let remote = Registry { entries: vec![make_entry("custom-agent")] };
+        let remote = Registry {
+            entries: vec![make_entry("custom-agent")],
+        };
         let merged = Registry::merged(builtin, remote);
 
         assert!(merged.find("custom-agent").is_some());
@@ -850,7 +845,10 @@ mod tests {
 
     #[test]
     fn test_mcp_config_env_var() {
-        assert_eq!(AgentKind::Claude.mcp_config_env_var(), Some("CLAUDE_MCP_CONFIG"));
+        assert_eq!(
+            AgentKind::Claude.mcp_config_env_var(),
+            Some("CLAUDE_MCP_CONFIG")
+        );
         assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
         assert!(AgentKind::Codex.mcp_config_env_var().is_none());
         assert!(AgentKind::Gemini.mcp_config_env_var().is_none());

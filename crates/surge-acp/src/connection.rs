@@ -10,8 +10,8 @@ use agent_client_protocol::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use surge_core::config::AgentConfig;
 use surge_core::SurgeError;
+use surge_core::config::AgentConfig;
 use tokio::process::Child;
 use tracing::{debug, info};
 
@@ -153,7 +153,7 @@ impl AgentConnection {
             Transport::WebSocket { .. } => {
                 return Err(SurgeError::Config(
                     "WebSocket transport not yet supported".to_string(),
-                ))
+                ));
             }
         };
 
@@ -171,7 +171,11 @@ impl AgentConnection {
         // Compute declared capabilities before permission_policy is moved.
         let declared_caps = surge_client_capabilities(&permission_policy);
 
-        let AgentIo { reader, writer, child } = io;
+        let AgentIo {
+            reader,
+            writer,
+            child,
+        } = io;
 
         let mut client = SurgeClient::new(worktree_root.clone(), permission_policy);
         if let Some(tx) = event_tx {
@@ -179,15 +183,10 @@ impl AgentConnection {
         }
 
         // Establish ACP connection over the transport I/O.
-        let (connection, io_task) = ClientSideConnection::new(
-            client,
-            writer,
-            reader,
-            |fut| {
-                #[allow(clippy::let_underscore_future)]
-                let _ = tokio::task::spawn_local(fut);
-            },
-        );
+        let (connection, io_task) = ClientSideConnection::new(client, writer, reader, |fut| {
+            #[allow(clippy::let_underscore_future)]
+            let _ = tokio::task::spawn_local(fut);
+        });
 
         tokio::task::spawn_local(async move {
             if let Err(e) = io_task.await {
@@ -352,11 +351,9 @@ fn surge_client_capabilities(policy: &PermissionPolicy) -> ClientCapabilities {
     };
 
     ClientCapabilities::new()
-        .fs(
-            FileSystemCapabilities::new()
-                .read_text_file(allow_read)
-                .write_text_file(allow_write),
-        )
+        .fs(FileSystemCapabilities::new()
+            .read_text_file(allow_read)
+            .write_text_file(allow_write))
         .terminal(true)
 }
 

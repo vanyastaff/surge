@@ -65,6 +65,9 @@ enum Commands {
         /// Override coder agent
         #[arg(long)]
         coder: Option<String>,
+        /// Resume from last checkpoint
+        #[arg(long)]
+        resume: bool,
     },
 
     /// Show pipeline status for a spec
@@ -253,8 +256,8 @@ async fn main() -> Result<()> {
             commands::spec::run(command)?;
         }
 
-        Commands::Run { spec_id, parallel, planner, coder } => {
-            commands::pipeline::run(spec_id, parallel, planner, coder).await?;
+        Commands::Run { spec_id, parallel, planner, coder, resume } => {
+            commands::pipeline::run(spec_id, parallel, planner, coder, resume).await?;
         }
 
         Commands::Status { spec_id } => {

@@ -12,8 +12,8 @@
 //! to the agent. A `tracing::warn!` is emitted for each hit so operators can
 //! audit which files triggered redaction.
 
-use std::sync::LazyLock;
 use regex::{NoExpand, Regex};
+use std::sync::LazyLock;
 use tracing::warn;
 
 // ── Pattern table ────────────────────────────────────────────────────
@@ -26,19 +26,22 @@ struct Pattern {
 static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
     let raw: &[(&str, &str)] = &[
         // Anthropic keys: sk-ant-api03-<base64>
-        ("anthropic-key",   r"sk-ant-[A-Za-z0-9_\-]{20,}"),
+        ("anthropic-key", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
         // AWS IAM access key IDs
-        ("aws-access-key",  r"AKIA[0-9A-Z]{16}"),
+        ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
         // OpenAI API keys
-        ("openai-key",      r"sk-[A-Za-z0-9]{48}"),
+        ("openai-key", r"sk-[A-Za-z0-9]{48}"),
         // GitHub personal access tokens (new ghp_ format)
-        ("github-pat",      r"ghp_[A-Za-z0-9]{36}"),
+        ("github-pat", r"ghp_[A-Za-z0-9]{36}"),
         // PEM private key headers (RSA, EC, OPENSSH, etc.)
-        ("private-key",     r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+        ("private-key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
         // Database DSNs with embedded credentials (user:pass@host)
-        ("postgres-dsn",    r"postgres://[^:@\s]{1,64}:[^@\s]{1,128}@"),
-        ("mysql-dsn",       r"mysql://[^:@\s]{1,64}:[^@\s]{1,128}@"),
-        ("mongodb-dsn",     r"mongodb(?:\+srv)?://[^:@\s]{1,64}:[^@\s]{1,128}@"),
+        ("postgres-dsn", r"postgres://[^:@\s]{1,64}:[^@\s]{1,128}@"),
+        ("mysql-dsn", r"mysql://[^:@\s]{1,64}:[^@\s]{1,128}@"),
+        (
+            "mongodb-dsn",
+            r"mongodb(?:\+srv)?://[^:@\s]{1,64}:[^@\s]{1,128}@",
+        ),
     ];
 
     raw.iter()
@@ -69,7 +72,9 @@ pub fn redact_secrets(content: &str) -> (String, bool) {
                 "secret pattern detected in file content — redacting before sending to agent"
             );
             let replacement = format!("[REDACTED:{}]", p.name);
-            result = p.re.replace_all(&result, NoExpand(&replacement)).into_owned();
+            result =
+                p.re.replace_all(&result, NoExpand(&replacement))
+                    .into_owned();
             was_redacted = true;
         }
     }
