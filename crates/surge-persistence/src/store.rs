@@ -109,7 +109,6 @@ impl Store {
     }
 
     /// Create an in-memory store (for testing).
-    #[must_use]
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let mut store = Self {

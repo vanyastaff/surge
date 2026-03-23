@@ -104,22 +104,22 @@ impl PricingModel {
             return Err("output_price_per_million must be non-negative".to_string());
         }
 
-        if let Some(price) = self.thought_price_per_million {
-            if price < 0.0 {
-                return Err("thought_price_per_million must be non-negative".to_string());
-            }
+        if let Some(price) = self.thought_price_per_million
+            && price < 0.0
+        {
+            return Err("thought_price_per_million must be non-negative".to_string());
         }
 
-        if let Some(price) = self.cache_read_price_per_million {
-            if price < 0.0 {
-                return Err("cache_read_price_per_million must be non-negative".to_string());
-            }
+        if let Some(price) = self.cache_read_price_per_million
+            && price < 0.0
+        {
+            return Err("cache_read_price_per_million must be non-negative".to_string());
         }
 
-        if let Some(price) = self.cache_write_price_per_million {
-            if price < 0.0 {
-                return Err("cache_write_price_per_million must be non-negative".to_string());
-            }
+        if let Some(price) = self.cache_write_price_per_million
+            && price < 0.0
+        {
+            return Err("cache_write_price_per_million must be non-negative".to_string());
         }
 
         Ok(())
