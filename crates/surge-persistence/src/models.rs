@@ -1,7 +1,29 @@
-//! Data models for token usage tracking.
+//! Data models for token usage tracking and task checkpoints.
 
 use serde::{Deserialize, Serialize};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
+use surge_core::spec::SubtaskState;
+
+// ── Task Checkpoint Models ──────────────────────────────────────────
+
+/// Checkpoint record for task execution state persistence.
+///
+/// Stores the current execution state and retry count for a subtask,
+/// enabling recovery from failures and implementing retry policies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskCheckpoint {
+    /// Spec this checkpoint belongs to.
+    pub spec_id: SpecId,
+
+    /// Subtask this checkpoint tracks (if any).
+    pub subtask_id: Option<SubtaskId>,
+
+    /// Current execution state of the subtask.
+    pub state: SubtaskState,
+
+    /// Number of retry attempts for this subtask.
+    pub retry_count: u32,
+}
 
 // ── Token Usage Models ──────────────────────────────────────────────
 
