@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -23,7 +21,7 @@ pub enum MessageRole {
     System,
 }
 
-/// Agent Terminal screen — send prompts, see responses.
+/// Agent Terminal screen — send prompts, see streaming responses.
 pub struct AgentTerminalScreen {
     state: Entity<AppState>,
     messages: Vec<TerminalMessage>,
@@ -51,7 +49,7 @@ impl AgentTerminalScreen {
                     timestamp: String::new(),
                 },
             ],
-            input_state: None, // created lazily in render (needs Window)
+            input_state: None,
             is_sending: false,
             agent_name,
             session_active: false,
@@ -102,28 +100,87 @@ impl AgentTerminalScreen {
             state.project_path.clone().unwrap_or_else(|| std::path::PathBuf::from("."))
         };
 
-        // Run ACP on a background thread with its own tokio runtime + LocalSet.
-        cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            // Run blocking ACP call on a background thread (needs its own tokio LocalSet).
-            let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
-            std::thread::spawn(move || {
-                let result = send_prompt_blocking(pool, agent_name, cwd, input);
-                let _ = tx.send(result);
-            });
-            let result = match rx.await {
-                Ok(r) => r,
-                Err(_) => Err("Thread died".into()),
+        // Subscribe to events for streaming chunks
+        let mut event_rx = pool.subscribe();
+
+        // Spawn async task — pool is Send-safe, no separate thread needed.
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            // Create session
+            let session = match pool
+                .create_session(Some(&agent_name), None, &cwd)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    let err = format!("Session error: {e}");
+                    cx.update(|cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.messages.push(TerminalMessage {
+                                role: MessageRole::System,
+                                content: err,
+                                timestamp: String::new(),
+                            });
+                            this.is_sending = false;
+                            cx.notify();
+                        });
+                    }).ok();
+                    return;
+                }
             };
 
+            // Add empty agent message that we'll append chunks to
             cx.update(|cx| {
-                this.update(cx, |this: &mut Self, cx| {
-                    match result {
-                        Ok(response_text) => {
-                            this.messages.push(TerminalMessage {
-                                role: MessageRole::Agent,
-                                content: response_text,
-                                timestamp: "just now".into(),
+                let _ = this.update(cx, |this, cx| {
+                    this.messages.push(TerminalMessage {
+                        role: MessageRole::Agent,
+                        content: String::new(),
+                        timestamp: "just now".into(),
+                    });
+                    cx.notify();
+                });
+            }).ok();
+
+            // Spawn event listener for streaming chunks
+            let this_for_events = this.clone();
+            let event_task = cx.spawn(async move |cx: &mut AsyncApp| {
+                while let Ok(event) = event_rx.recv().await {
+                    if let surge_core::SurgeEvent::AgentMessageChunk { text, .. } = event {
+                        let _ = cx.update(|cx| {
+                            let _ = this_for_events.update(cx, |this, cx| {
+                                if let Some(last) = this.messages.last_mut() {
+                                    if last.role == MessageRole::Agent {
+                                        last.content.push_str(&text);
+                                        cx.notify();
+                                    }
+                                }
                             });
+                        });
+                    }
+                }
+            });
+
+            // Send prompt
+            let content = vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new(input),
+            )];
+
+            let result = pool.prompt(&session, content).await;
+
+            // Drop event task
+            drop(event_task);
+
+            cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    match result {
+                        Ok(_response) => {
+                            // If no streaming text was received, show stop reason
+                            if let Some(last) = this.messages.last() {
+                                if last.role == MessageRole::Agent && last.content.is_empty() {
+                                    if let Some(msg) = this.messages.last_mut() {
+                                        msg.content = "(Agent completed with no text output)".into();
+                                    }
+                                }
+                            }
                             this.session_active = true;
                         }
                         Err(err) => {
@@ -136,10 +193,52 @@ impl AgentTerminalScreen {
                     }
                     this.is_sending = false;
                     cx.notify();
-                })
+                });
             }).ok();
-        })
-        .detach();
+        });
+    }
+
+    fn render_header(&self) -> Div {
+        div()
+            .w_full()
+            .h(px(48.0))
+            .px(px(16.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .bg(theme::SURFACE)
+            .border_b_1()
+            .border_color(theme::TEXT_MUTED)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(Icon::new(IconName::SquareTerminal).size_4().text_color(theme::PRIMARY))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::TEXT_PRIMARY)
+                            .child("Agent Terminal"),
+                    )
+                    .child(
+                        div()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(theme::SIDEBAR_BG)
+                            .text_xs()
+                            .text_color(theme::TEXT_MUTED)
+                            .child(self.agent_name.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::TEXT_MUTED)
+                    .child(format!("{} messages", self.messages.len())),
+            )
     }
 
     fn render_message(&self, msg: &TerminalMessage) -> Div {
@@ -149,169 +248,46 @@ impl AgentTerminalScreen {
             MessageRole::System => (IconName::Info, theme::TEXT_MUTED, "System"),
         };
 
+        let bg = match msg.role {
+            MessageRole::User => theme::PRIMARY.opacity(0.08),
+            MessageRole::Agent => theme::SUCCESS.opacity(0.06),
+            MessageRole::System => theme::SIDEBAR_BG.opacity(0.5),
+        };
+
         div()
             .w_full()
-            .v_flex()
-            .gap(px(4.0))
-            .p_3()
-            .rounded_lg()
-            .bg(match msg.role {
-                MessageRole::User => theme::PRIMARY.opacity(0.05),
-                MessageRole::Agent => theme::SURFACE,
-                MessageRole::System => theme::TEXT_MUTED.opacity(0.05),
-            })
-            // Header: role + timestamp
+            .p(px(12.0))
+            .bg(bg)
             .child(
                 div()
-                    .h_flex()
-                    .gap_2()
+                    .flex()
                     .items_center()
-                    .child(Icon::new(icon).size_3p5().text_color(color))
-                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(color).child(label.to_string()))
-                    .when(!msg.timestamp.is_empty(), |el: Div| {
-                        el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(msg.timestamp.clone()))
-                    }),
-            )
-            // Content
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::TEXT_PRIMARY)
-                    .line_height(relative(1.5))
-                    .child(msg.content.clone()),
-            )
-    }
-
-    fn render_input(&self, cx: &mut Context<Self>) -> Div {
-        let mut row = div()
-            .w_full()
-            .h_flex()
-            .gap_2()
-            .p_3()
-            .border_t_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.08));
-
-        // Real Input component
-        if let Some(input_state) = &self.input_state {
-            row = row.child(
-                div().flex_1().child(Input::new(input_state)),
-            );
-        }
-
-        // Send button — always active (shows error if no pool)
-        row = row.child(
-            div()
-                .id("send-btn")
-                .cursor_pointer()
-                .h_flex()
-                .gap_1()
-                .items_center()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .bg(if self.is_sending {
-                    theme::TEXT_MUTED.opacity(0.1)
-                } else {
-                    theme::PRIMARY
-                })
-                .text_color(if self.is_sending {
-                    theme::TEXT_MUTED
-                } else {
-                    hsla(0.0, 0.0, 1.0, 1.0)
-                })
-                .when(!self.is_sending, |el: Stateful<Div>| {
-                    el.hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
-                        .on_click(cx.listener(|this, _e, window, cx| {
-                            this.send_prompt(window, cx);
-                        }))
-                })
-                .child(if self.is_sending {
-                    Icon::new(IconName::Loader).size_4().text_color(theme::TEXT_MUTED)
-                } else {
-                    Icon::new(IconName::ArrowUp).size_4().text_color(hsla(0.0, 0.0, 1.0, 1.0))
-                })
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .child(if self.is_sending { "Sending..." } else { "Send" }),
-                ),
-        );
-
-        row
-    }
-
-    fn render_header(&self) -> Div {
-        div()
-            .h_flex()
-            .justify_between()
-            .items_center()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.08))
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(IconName::SquareTerminal).size_4().text_color(theme::PRIMARY))
-                    .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Agent Terminal".to_string()))
+                    .gap(px(6.0))
+                    .child(Icon::new(icon).size_4().text_color(color))
                     .child(
                         div()
                             .text_xs()
-                            .px(px(6.0))
-                            .py(px(2.0))
-                            .rounded(px(4.0))
-                            .bg(if self.session_active { theme::SUCCESS.opacity(0.12) } else { theme::TEXT_MUTED.opacity(0.1) })
-                            .text_color(if self.session_active { theme::SUCCESS } else { theme::TEXT_MUTED })
-                            .child(self.agent_name.clone()),
-                    ),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color)
+                            .child(label),
+                    )
+                    .when(!msg.timestamp.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::TEXT_MUTED)
+                                .child(msg.timestamp.clone()),
+                        )
+                    }),
             )
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme::TEXT_MUTED.opacity(0.5))
-                    .child(format!("{} messages", self.messages.len())),
+                    .mt(px(4.0))
+                    .text_sm()
+                    .text_color(theme::TEXT_PRIMARY)
+                    .child(msg.content.clone()),
             )
     }
-}
-
-/// Send prompt to agent on a dedicated tokio runtime with LocalSet.
-/// This is needed because ACP library uses spawn_local internally.
-fn send_prompt_blocking(
-    pool: Arc<surge_acp::AgentPool>,
-    agent_name: String,
-    cwd: std::path::PathBuf,
-    prompt: String,
-) -> Result<String, String> {
-    // Create a dedicated runtime with LocalSet for ACP's spawn_local requirement.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("Runtime error: {e}"))?;
-
-    let local = tokio::task::LocalSet::new();
-
-    local.block_on(&rt, async move {
-        // Create session.
-        let session = pool
-            .create_session(Some(&agent_name), None, &cwd)
-            .await
-            .map_err(|e| format!("Session error: {e}"))?;
-
-        // Send prompt.
-        let content = vec![agent_client_protocol::ContentBlock::Text(
-            agent_client_protocol::TextContent::new(prompt),
-        )];
-
-        let response = pool
-            .prompt(&session, content)
-            .await
-            .map_err(|e| format!("Prompt error: {e}"))?;
-
-        Ok(format!("Agent completed (stop_reason: {:?})", response.stop_reason))
-    })
 }
 
 impl Render for AgentTerminalScreen {
@@ -322,6 +298,12 @@ impl Render for AgentTerminalScreen {
                 InputState::new(window, cx)
                     .placeholder(format!("Send a message to {}...", self.agent_name))
             });
+            cx.subscribe_in(&input, window, |this: &mut Self, _input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.send_prompt(window, cx);
+                }
+            })
+            .detach();
             self.input_state = Some(input);
         }
 
@@ -337,25 +319,64 @@ impl Render for AgentTerminalScreen {
                 div()
                     .id("terminal-messages")
                     .flex_1()
-                    .v_flex()
-                    .gap_2()
-                    .p_3()
                     .overflow_y_scroll()
-                    .children(messages)
-                    // Sending indicator
-                    .when(self.is_sending, |el: Stateful<Div>| {
-                        el.child(
-                            div()
-                                .h_flex()
-                                .gap_2()
-                                .items_center()
-                                .p_3()
-                                .child(Icon::new(IconName::Loader).size_4().text_color(theme::WARNING))
-                                .child(div().text_sm().text_color(theme::TEXT_MUTED).child("Agent is thinking...".to_string())),
-                        )
-                    }),
+                    .bg(theme::BACKGROUND)
+                    .children(messages),
             )
             // Input area
-            .child(self.render_input(cx))
+            .child(
+                div()
+                    .w_full()
+                    .p(px(12.0))
+                    .bg(theme::SURFACE)
+                    .border_t_1()
+                    .border_color(theme::TEXT_MUTED)
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div().flex_1().child(
+                            Input::new(self.input_state.as_ref().unwrap())
+                                .appearance(false)
+                                .cleanable(true),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .px(px(16.0))
+                            .py(px(8.0))
+                            .rounded(px(8.0))
+                            .bg(if self.is_sending {
+                                theme::SIDEBAR_BG
+                            } else {
+                                theme::PRIMARY
+                            })
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .when(self.is_sending, |d| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme::TEXT_MUTED)
+                                        .child("Sending..."),
+                                )
+                            })
+                            .when(!self.is_sending, |d| {
+                                d.child(Icon::new(IconName::ArrowUp).size_4().text_color(gpui::white()))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(gpui::white())
+                                            .child("Send"),
+                                    )
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.send_prompt(window, cx);
+                                    }))
+                            }),
+                    ),
+            )
     }
 }

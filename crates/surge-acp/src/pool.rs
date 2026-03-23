@@ -18,8 +18,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, ResilienceConfig};
-use surge_core::SurgeError;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use surge_core::{SurgeError, SurgeEvent};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
@@ -69,6 +69,7 @@ struct WorkerState {
     permission_policy: PermissionPolicy,
     resilience: ResilienceConfig,
     health: Arc<Mutex<HealthTracker>>,
+    event_tx: broadcast::Sender<SurgeEvent>,
 }
 
 /// Pool for managing multiple agent connections.
@@ -90,6 +91,9 @@ pub struct AgentPool {
 
     /// Health tracker (Send-safe, shared with worker).
     health: Arc<Mutex<HealthTracker>>,
+
+    /// Event broadcast sender for subscribing to agent events.
+    event_tx: broadcast::Sender<SurgeEvent>,
 }
 
 impl AgentPool {
@@ -119,10 +123,12 @@ impl AgentPool {
             health_tracker.register(name);
         }
         let health = Arc::new(Mutex::new(health_tracker));
+        let (event_tx, _) = broadcast::channel::<SurgeEvent>(256);
 
         let (op_tx, op_rx) = mpsc::unbounded_channel::<PoolOp>();
 
         let worker_health = Arc::clone(&health);
+        let worker_event_tx = event_tx.clone();
 
         let worker = std::thread::Builder::new()
             .name("surge-acp-pool".into())
@@ -134,6 +140,7 @@ impl AgentPool {
                     permission_policy,
                     resilience,
                     worker_health,
+                    worker_event_tx,
                 );
             })
             .map_err(|e| {
@@ -145,6 +152,7 @@ impl AgentPool {
             _worker: Some(worker),
             default_agent,
             health,
+            event_tx,
         })
     }
 
@@ -234,6 +242,12 @@ impl AgentPool {
         &self.health
     }
 
+    /// Subscribe to agent events (message chunks, file ops, terminal events, etc.).
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<SurgeEvent> {
+        self.event_tx.subscribe()
+    }
+
     /// Configure a fallback agent for a primary agent.
     pub async fn set_fallback(&self, primary: &str, fallback: &str) {
         self.health.lock().await.set_fallback(primary, fallback);
@@ -276,6 +290,7 @@ fn run_worker(
     permission_policy: PermissionPolicy,
     resilience: ResilienceConfig,
     health: Arc<Mutex<HealthTracker>>,
+    event_tx: broadcast::Sender<SurgeEvent>,
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -292,6 +307,7 @@ fn run_worker(
             permission_policy,
             resilience,
             health,
+            event_tx,
         }));
 
         while let Some(op) = op_rx.recv().await {
@@ -384,6 +400,8 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     info!("Connecting to agent '{}'", name);
     state.borrow_mut().spawning.insert(name.to_string());
 
+    let event_tx = state.borrow().event_tx.clone();
+
     let result = tokio::time::timeout(
         timeout,
         AgentConnection::spawn(
@@ -391,6 +409,7 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
             &config,
             worktree_root,
             permission_policy,
+            Some(event_tx),
         ),
     )
     .await

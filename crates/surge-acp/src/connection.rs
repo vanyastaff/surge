@@ -77,12 +77,13 @@ impl AgentConnection {
         config: &AgentConfig,
         worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
+        event_tx: Option<tokio::sync::broadcast::Sender<surge_core::SurgeEvent>>,
     ) -> Result<Self, SurgeError> {
         info!("Spawning agent '{}' with command: {}", name, config.command);
 
         match &config.transport {
             Transport::Stdio => {
-                Self::spawn_stdio(name, config, worktree_root, permission_policy).await
+                Self::spawn_stdio(name, config, worktree_root, permission_policy, event_tx).await
             }
             Transport::Tcp { host, port } => Err(SurgeError::AgentConnection(format!(
                 "TCP transport not yet implemented ({}:{})",
@@ -97,6 +98,7 @@ impl AgentConnection {
         config: &AgentConfig,
         worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
+        event_tx: Option<tokio::sync::broadcast::Sender<surge_core::SurgeEvent>>,
     ) -> Result<Self, SurgeError> {
         // On Windows, script-based commands (npx, npm, etc.) need cmd /C
         // because CreateProcessW doesn't resolve .cmd/.bat via PATHEXT.
@@ -156,7 +158,10 @@ impl AgentConnection {
         let async_stdout = stdout.compat();
 
         // Create SurgeClient for this connection
-        let client = SurgeClient::new(worktree_root.clone(), permission_policy);
+        let mut client = SurgeClient::new(worktree_root.clone(), permission_policy);
+        if let Some(tx) = event_tx {
+            client = client.with_events(tx);
+        }
 
         // Establish ACP connection
         let (connection, io_task) = ClientSideConnection::new(
