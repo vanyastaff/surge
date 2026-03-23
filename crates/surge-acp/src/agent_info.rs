@@ -159,7 +159,7 @@ pub struct ConfiguredAgent {
     pub recent_sessions: Vec<SessionEntry>,
 }
 
-/// Display data for an agent available for installation.
+/// Display data for an agent available for installation / on-demand use.
 #[derive(Debug, Clone)]
 pub struct AvailableAgent {
     pub name: String,
@@ -170,6 +170,10 @@ pub struct AvailableAgent {
     pub install_command: String,
     pub install_method: String,
     pub badges: Vec<AgentBadge>,
+    /// Whether this agent can be launched right now (e.g. npx available).
+    pub runnable: bool,
+    /// How it would be launched (npx/uvx/binary).
+    pub run_via: Option<InstallStatus>,
 }
 
 /// A badge to display on an agent card.
@@ -239,6 +243,17 @@ pub fn build_configured_agent(
 /// Build an `AvailableAgent` from a registry entry.
 #[must_use]
 pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
+    let runnable = entry.is_runnable();
+    let run_via = if entry.is_npx() {
+        Some(InstallStatus::Npx)
+    } else if entry.is_uvx() {
+        Some(InstallStatus::Uvx)
+    } else if runnable {
+        Some(InstallStatus::Installed)
+    } else {
+        None
+    };
+
     AvailableAgent {
         name: entry.id.clone(),
         display_name: entry.display_name.clone(),
@@ -248,6 +263,8 @@ pub fn build_available_agent(entry: &RegistryEntry) -> AvailableAgent {
         install_command: entry.install_instructions.clone(),
         install_method: extract_install_method(&entry.install_instructions),
         badges: build_badges(entry),
+        runnable,
+        run_via,
     }
 }
 

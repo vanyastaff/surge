@@ -414,13 +414,18 @@ impl AgentHubScreen {
                         .max_h(px(48.0)).overflow_hidden()
                         .child(agent.description.clone()),
                 )
-                // Install method label
+                // Status + install method
                 .child(
-                    div().flex_shrink_0().w(px(60.0))
-                        .text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
-                        .child(format!("via {}", agent.install_method)),
+                    div().flex_shrink_0().w(px(70.0))
+                        .text_xs()
+                        .text_color(if agent.runnable { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.5) })
+                        .child(if agent.runnable {
+                            format!("Ready · {}", agent.run_via.map_or("—", |s| s.label()))
+                        } else {
+                            format!("via {}", agent.install_method)
+                        }),
                 )
-                // Install button (filled primary)
+                // Action button
                 .child(
                     div()
                         .id(SharedString::from(format!("install-{}", agent.name)))
@@ -428,15 +433,23 @@ impl AgentHubScreen {
                         .on_click(cx.listener(move |_this, _e, _window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
                         }))
-                        .child(
+                        .child(if agent.runnable {
+                            div().h_flex().gap_1().items_center()
+                                .px(px(12.0)).py(px(5.0)).rounded_md()
+                                .bg(theme::SUCCESS.opacity(0.15))
+                                .text_color(theme::SUCCESS)
+                                .hover(|s: StyleRefinement| s.bg(theme::SUCCESS.opacity(0.25)))
+                                .child(Icon::new(IconName::Check).size_3().text_color(theme::SUCCESS))
+                                .child(div().text_xs().font_weight(FontWeight::BOLD).child("Use"))
+                        } else {
                             div().h_flex().gap_1().items_center()
                                 .px(px(12.0)).py(px(5.0)).rounded_md()
                                 .bg(theme::PRIMARY)
                                 .text_color(hsla(0.0, 0.0, 1.0, 1.0))
                                 .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
                                 .child(Icon::new(IconName::ArrowDown).size_3().text_color(hsla(0.0, 0.0, 1.0, 1.0)))
-                                .child(div().text_xs().font_weight(FontWeight::BOLD).child("Install".to_string())),
-                        ),
+                                .child(div().text_xs().font_weight(FontWeight::BOLD).child("Install"))
+                        }),
                 )
         }).collect();
 
