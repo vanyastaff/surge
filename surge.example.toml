@@ -20,3 +20,34 @@ after_spec = true           # Wait for user approval after spec generation
 after_plan = true           # Wait for user approval after plan generation
 after_each_subtask = false  # Don't pause between subtasks
 after_qa = true             # Wait for user approval after QA
+
+# Resilience and retry configuration
+[resilience]
+connect_timeout_secs = 30        # Timeout for agent process spawn and ACP init
+session_timeout_secs = 60        # Timeout for new_session ACP call
+prompt_timeout_secs = 300        # Timeout for prompt ACP call (5 minutes)
+prompt_retries = 3               # Max retries for failed prompts
+shutdown_grace_secs = 5          # Grace period before SIGKILL
+circuit_breaker_threshold = 5    # Trip circuit breaker after N consecutive failures
+auth_failure_immediate_fail = true  # Don't retry on 401 auth errors
+
+# Retry policy with exponential backoff (default)
+[resilience.retry_policy]
+max_retries = 3                  # Maximum retry attempts
+initial_delay_ms = 1000          # Initial delay: 1 second
+max_delay_ms = 60000             # Maximum delay: 60 seconds
+backoff_strategy = "exponential" # Options: "linear", "exponential", "exponential_jitter"
+
+# Example: Aggressive retry with jitter (uncomment to use)
+# [resilience.retry_policy]
+# max_retries = 5
+# initial_delay_ms = 500
+# max_delay_ms = 30000
+# backoff_strategy = "exponential_jitter"  # Adds randomness to prevent thundering herd
+
+# Example: Conservative retry with linear backoff (uncomment to use)
+# [resilience.retry_policy]
+# max_retries = 2
+# initial_delay_ms = 2000
+# max_delay_ms = 10000
+# backoff_strategy = "linear"  # Fixed delay between retries
