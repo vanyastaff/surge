@@ -42,6 +42,7 @@ enum AppMode {
 /// Root application view.
 pub struct SurgeApp {
     state: Entity<AppState>,
+    focus: FocusHandle,
     mode: AppMode,
     // Project mode state:
     active_screen: Screen,
@@ -69,6 +70,7 @@ pub struct SurgeApp {
 
 impl SurgeApp {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let focus = cx.focus_handle();
         let active_screen = Screen::Dashboard;
         let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, cx));
 
@@ -91,6 +93,7 @@ impl SurgeApp {
 
         Self {
             state,
+            focus,
             mode: AppMode::Welcome(welcome),
             active_screen,
             sidebar_collapsed: false,
@@ -696,10 +699,14 @@ impl SurgeApp {
 
 impl Render for SurgeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Ensure our root div has focus so keybindings work.
+        self.focus.focus(window);
+
         match &self.mode {
             AppMode::Welcome(welcome) => {
                 div()
                     .key_context("SurgeApp")
+                    .track_focus(&self.focus)
                     .size_full()
                     .child(welcome.clone())
                     .into_any_element()
@@ -707,6 +714,7 @@ impl Render for SurgeApp {
             AppMode::Project { .. } => {
                 div()
                     .key_context("SurgeApp")
+                    .track_focus(&self.focus)
                     .size_full()
                     .bg(theme::BACKGROUND)
                     .text_color(theme::TEXT_PRIMARY)
