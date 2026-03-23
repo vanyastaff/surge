@@ -328,6 +328,10 @@ impl Client for SurgeClient {
                     tool = %tool_call.title,
                     "tool call initiated"
                 );
+                self.emit_event(SurgeEvent::ToolCallStarted {
+                    session_id,
+                    title: tool_call.title.clone(),
+                });
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 debug!(
@@ -335,6 +339,12 @@ impl Client for SurgeClient {
                     tool_id = %update.tool_call_id,
                     "tool call updated"
                 );
+                // Check if tool call is finished
+                if update.fields.status.is_some() {
+                    self.emit_event(SurgeEvent::ToolCallFinished {
+                        session_id,
+                    });
+                }
             }
             SessionUpdate::UserMessageChunk(_) => {}
             SessionUpdate::Plan(_) => {

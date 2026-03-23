@@ -129,33 +129,72 @@ impl AgentTerminalScreen {
                 }
             };
 
-            // Add empty agent message that we'll append chunks to
-            cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.messages.push(TerminalMessage {
-                        role: MessageRole::Agent,
-                        content: String::new(),
-                        timestamp: "just now".into(),
-                    });
-                    cx.notify();
-                });
-            }).ok();
-
-            // Spawn event listener for streaming chunks
+            // Spawn event listener for streaming chunks and tool call activity
             let this_for_events = this.clone();
             let event_task = cx.spawn(async move |cx: &mut AsyncApp| {
                 while let Ok(event) = event_rx.recv().await {
-                    if let surge_core::SurgeEvent::AgentMessageChunk { text, .. } = event {
-                        let _ = cx.update(|cx| {
-                            let _ = this_for_events.update(cx, |this, cx| {
-                                if let Some(last) = this.messages.last_mut() {
-                                    if last.role == MessageRole::Agent {
-                                        last.content.push_str(&text);
-                                        cx.notify();
+                    match &event {
+                        surge_core::SurgeEvent::AgentMessageChunk { text, .. } => {
+                            let text = text.clone();
+                            let _ = cx.update(|cx| {
+                                let _ = this_for_events.update(cx, |this, cx| {
+                                    // Find last Agent message to append to, or create one
+                                    let needs_new = this.messages.last()
+                                        .map_or(true, |m| m.role != MessageRole::Agent);
+                                    if needs_new {
+                                        this.messages.push(TerminalMessage {
+                                            role: MessageRole::Agent,
+                                            content: String::new(),
+                                            timestamp: "just now".into(),
+                                        });
                                     }
-                                }
+                                    if let Some(last) = this.messages.last_mut() {
+                                        last.content.push_str(&text);
+                                    }
+                                    cx.notify();
+                                });
                             });
-                        });
+                        }
+                        surge_core::SurgeEvent::ToolCallStarted { title, .. } => {
+                            let title = title.clone();
+                            let _ = cx.update(|cx| {
+                                let _ = this_for_events.update(cx, |this, cx| {
+                                    this.messages.push(TerminalMessage {
+                                        role: MessageRole::System,
+                                        content: format!("🔧 {title}"),
+                                        timestamp: String::new(),
+                                    });
+                                    cx.notify();
+                                });
+                            });
+                        }
+                        surge_core::SurgeEvent::ToolCallFinished { .. } => {
+                            let _ = cx.update(|cx| {
+                                let _ = this_for_events.update(cx, |this, cx| {
+                                    // Update last system message to show completion
+                                    if let Some(last) = this.messages.last_mut() {
+                                        if last.role == MessageRole::System && last.content.starts_with("🔧") {
+                                            last.content.push_str(" ✓");
+                                            cx.notify();
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                        surge_core::SurgeEvent::PermissionRequested { description } => {
+                            let desc = description.clone();
+                            let _ = cx.update(|cx| {
+                                let _ = this_for_events.update(cx, |this, cx| {
+                                    this.messages.push(TerminalMessage {
+                                        role: MessageRole::System,
+                                        content: format!("🔐 Permission: {desc}"),
+                                        timestamp: String::new(),
+                                    });
+                                    cx.notify();
+                                });
+                            });
+                        }
+                        _ => {}
                     }
                 }
             });

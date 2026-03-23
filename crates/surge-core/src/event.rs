@@ -69,6 +69,18 @@ pub enum SurgeEvent {
     /// Terminal was killed.
     TerminalKilled { terminal_id: String },
 
+    // --- Tool call events ---
+    /// Agent initiated a tool call.
+    ToolCallStarted {
+        session_id: String,
+        title: String,
+    },
+
+    /// Tool call completed.
+    ToolCallFinished {
+        session_id: String,
+    },
+
     // --- Streaming events ---
     /// Agent message chunk received during prompt streaming.
     AgentMessageChunk { session_id: String, text: String },
