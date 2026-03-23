@@ -1,7 +1,8 @@
 //! AgentConnection — manages agent process lifecycle and ACP connection.
 //!
-//! This module handles spawning agent processes, establishing ACP connections
-//! over stdio transport, and managing the agent lifecycle.
+//! Process spawning and I/O setup is handled by the transport layer
+//! ([`crate::transport`]). This module performs the ACP handshake and owns
+//! the connection for the lifetime of the agent.
 
 use agent_client_protocol::{
     Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, Implementation,
@@ -9,13 +10,14 @@ use agent_client_protocol::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
-use surge_core::config::{AgentConfig, Transport};
+use surge_core::config::AgentConfig;
 use surge_core::SurgeError;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tracing::{debug, info};
 
 use crate::client::{PermissionPolicy, SurgeClient};
+use crate::registry::{AgentCapability, Registry, RegistryEntry};
+use crate::transport::{AgentIo, AgentTransport, StdioTransport, TcpTransport};
 
 /// State of an active agent session.
 #[derive(Debug, Clone)]
@@ -27,6 +29,67 @@ pub struct SessionState {
     /// Current mode (if any).
     pub mode: Option<String>,
 }
+
+// ── EffectiveCapabilities ────────────────────────────────────────────
+
+/// Merged view of ACP-reported and registry-declared agent capabilities.
+///
+/// ACP capabilities describe what the agent *can do at the protocol level*
+/// (filesystem, terminal). Registry capabilities describe *what tasks* the
+/// agent is designed to handle (code, plan, review, …).
+#[derive(Debug, Clone)]
+pub struct EffectiveCapabilities {
+    /// Capabilities reported by the agent during the ACP initialization handshake.
+    pub acp: AgentCapabilities,
+    /// High-level task capabilities from the builtin registry.
+    ///
+    /// `None` if the agent is not listed in the builtin catalog (e.g. a custom
+    /// agent configured by the user).  In that case callers should assume the
+    /// agent is capable of any task rather than blocking it.
+    pub registry: Option<Vec<AgentCapability>>,
+}
+
+impl EffectiveCapabilities {
+    /// Whether the agent declares a specific task capability in the registry.
+    ///
+    /// Returns `true` for agents not in the builtin catalog — custom agents are
+    /// assumed capable of any task rather than being blocked.
+    #[must_use]
+    pub fn has(&self, cap: &AgentCapability) -> bool {
+        self.registry
+            .as_deref()
+            .map(|caps| caps.contains(cap))
+            .unwrap_or(true)
+    }
+
+    // ── ACP-level protocol capabilities ─────────────────────────────
+
+    /// Whether the agent supports resuming prior sessions via `session/load`.
+    #[must_use]
+    pub fn can_load_session(&self) -> bool {
+        self.acp.load_session
+    }
+
+    /// Whether the agent accepts image content blocks in prompts.
+    #[must_use]
+    pub fn supports_images(&self) -> bool {
+        self.acp.prompt_capabilities.image
+    }
+
+    /// Whether the agent accepts audio content blocks in prompts.
+    #[must_use]
+    pub fn supports_audio(&self) -> bool {
+        self.acp.prompt_capabilities.audio
+    }
+
+    /// Whether the agent can be given additional MCP server configuration.
+    #[must_use]
+    pub fn supports_mcp(&self) -> bool {
+        self.acp.mcp_capabilities.http || self.acp.mcp_capabilities.sse
+    }
+}
+
+// ── AgentConnection ──────────────────────────────────────────────────
 
 /// Manages connection to a single agent.
 ///
@@ -44,8 +107,11 @@ pub struct AgentConnection {
     /// Active sessions tracked by this connection.
     sessions: HashMap<String, SessionState>,
 
-    /// Agent capabilities from initialization handshake.
+    /// ACP capabilities from the initialization handshake.
     capabilities: AgentCapabilities,
+
+    /// Builtin registry entry for this agent, if found.
+    registry_entry: Option<RegistryEntry>,
 }
 
 impl AgentConnection {
@@ -79,113 +145,56 @@ impl AgentConnection {
         permission_policy: PermissionPolicy,
         event_tx: Option<tokio::sync::broadcast::Sender<surge_core::SurgeEvent>>,
     ) -> Result<Self, SurgeError> {
-        info!("Spawning agent '{}' with command: {}", name, config.command);
+        use surge_core::config::Transport;
 
-        match &config.transport {
-            Transport::Stdio => {
-                Self::spawn_stdio(name, config, worktree_root, permission_policy, event_tx).await
-            }
-            Transport::Tcp { host, port } => Err(SurgeError::AgentConnection(format!(
-                "TCP transport not yet implemented ({}:{})",
-                host, port
-            ))),
-        }
+        let io = match &config.transport {
+            Transport::Stdio => StdioTransport::connect(&name, config, &worktree_root).await?,
+            Transport::Tcp { .. } => TcpTransport::connect(&name, config, &worktree_root).await?,
+        };
+
+        Self::connect_with_io(name, io, worktree_root, permission_policy, event_tx).await
     }
 
-    /// Spawn agent with stdio transport.
-    async fn spawn_stdio(
+    /// Perform the ACP handshake on top of a transport-supplied I/O channel.
+    async fn connect_with_io(
         name: String,
-        config: &AgentConfig,
+        io: AgentIo,
         worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
         event_tx: Option<tokio::sync::broadcast::Sender<surge_core::SurgeEvent>>,
     ) -> Result<Self, SurgeError> {
-        // On Windows, script-based commands (npx, npm, etc.) need cmd /C
-        // because CreateProcessW doesn't resolve .cmd/.bat via PATHEXT.
-        #[cfg(windows)]
-        let mut cmd = {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(&config.command);
-            c.args(&config.args);
-            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            c
-        };
-        #[cfg(not(windows))]
-        let mut cmd = {
-            let mut c = Command::new(&config.command);
-            c.args(&config.args);
-            c
-        };
+        // Compute declared capabilities before permission_policy is moved.
+        let declared_caps = surge_client_capabilities(&permission_policy);
 
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        cmd.current_dir(&worktree_root);
+        let AgentIo { reader, writer, child } = io;
 
-        debug!("Spawning command: {:?}", cmd);
-
-        let mut child = cmd.spawn().map_err(|e| {
-            SurgeError::AgentConnection(format!(
-                "Failed to spawn agent '{}' ({}): {}",
-                name, config.command, e
-            ))
-        })?;
-
-        // Extract stdio handles — tokio::process::Child yields async handles directly
-        let stdin = child.stdin.take().ok_or_else(|| {
-            SurgeError::AgentConnection("Failed to capture agent stdin".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            SurgeError::AgentConnection("Failed to capture agent stdout".to_string())
-        })?;
-
-        // Drain stderr to tracing::warn in background.
-        // Uses tokio::spawn (not spawn_local) since ChildStderr is Send.
-        if let Some(stderr) = child.stderr.take() {
-            let agent_name = name.clone();
-            tokio::spawn(async move {
-                use tokio::io::{AsyncBufReadExt, BufReader};
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::warn!(agent = %agent_name, "[stderr] {}", line);
-                }
-            });
-        }
-
-        // Wrap in futures AsyncRead/AsyncWrite as required by ACP SDK
-        use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-        let async_stdin = stdin.compat_write();
-        let async_stdout = stdout.compat();
-
-        // Create SurgeClient for this connection
         let mut client = SurgeClient::new(worktree_root.clone(), permission_policy);
         if let Some(tx) = event_tx {
             client = client.with_events(tx);
         }
 
-        // Establish ACP connection
+        // Establish ACP connection over the transport I/O.
         let (connection, io_task) = ClientSideConnection::new(
             client,
-            async_stdin,
-            async_stdout,
+            writer,
+            reader,
             |fut| {
                 #[allow(clippy::let_underscore_future)]
                 let _ = tokio::task::spawn_local(fut);
             },
         );
 
-        // Spawn the IO task to handle RPC communication
         tokio::task::spawn_local(async move {
             if let Err(e) = io_task.await {
                 tracing::error!("ACP IO task failed: {:?}", e);
             }
         });
 
-        // Perform ACP initialization handshake
+        // ACP initialization handshake.
         info!("Performing ACP initialization handshake for '{}'", name);
 
         let mut init_request = InitializeRequest::new(ProtocolVersion::V1);
-        init_request.client_capabilities = surge_client_capabilities();
+        init_request.client_capabilities = declared_caps;
         init_request.client_info = Some(Implementation::new("surge", env!("CARGO_PKG_VERSION")));
 
         let init_response = connection
@@ -198,12 +207,15 @@ impl AgentConnection {
             name, init_response.agent_capabilities
         );
 
+        let registry_entry = Registry::builtin().find(&name).cloned();
+
         Ok(Self {
             name,
             connection,
-            process: Some(child),
+            process: child,
             sessions: HashMap::new(),
             capabilities: init_response.agent_capabilities,
+            registry_entry,
         })
     }
 
@@ -213,10 +225,22 @@ impl AgentConnection {
         &self.name
     }
 
-    /// Get the agent capabilities.
+    /// Get the raw ACP capabilities from the initialization handshake.
     #[must_use]
     pub fn capabilities(&self) -> &AgentCapabilities {
         &self.capabilities
+    }
+
+    /// Get the merged ACP + registry capabilities for this agent.
+    ///
+    /// Use this when making routing or permission decisions — it provides a
+    /// unified view of what the agent can do at both the protocol and task level.
+    #[must_use]
+    pub fn effective_capabilities(&self) -> EffectiveCapabilities {
+        EffectiveCapabilities {
+            acp: self.capabilities.clone(),
+            registry: self.registry_entry.as_ref().map(|e| e.capabilities.clone()),
+        }
     }
 
     /// Get access to the underlying ACP connection.
@@ -306,13 +330,27 @@ impl Drop for AgentConnection {
 }
 
 /// Build Surge client capabilities for ACP initialization.
-fn surge_client_capabilities() -> ClientCapabilities {
+///
+/// The declared capabilities reflect the active [`PermissionPolicy`] so agents
+/// do not attempt operations that Surge will never approve.
+fn surge_client_capabilities(policy: &PermissionPolicy) -> ClientCapabilities {
     use agent_client_protocol::FileSystemCapabilities;
+
+    let (allow_read, allow_write) = match policy {
+        // Full access or interactive (user decides per-request).
+        PermissionPolicy::AutoApprove | PermissionPolicy::Interactive => (true, true),
+        PermissionPolicy::Smart {
+            allow_read,
+            allow_write_in_worktree,
+            ..
+        } => (*allow_read, *allow_write_in_worktree),
+    };
+
     ClientCapabilities::new()
         .fs(
             FileSystemCapabilities::new()
-                .read_text_file(true)
-                .write_text_file(true),
+                .read_text_file(allow_read)
+                .write_text_file(allow_write),
         )
         .terminal(true)
 }
@@ -323,9 +361,23 @@ mod tests {
 
     #[test]
     fn test_surge_client_capabilities() {
-        let caps = surge_client_capabilities();
+        let caps = surge_client_capabilities(&PermissionPolicy::AutoApprove);
         assert!(caps.fs.read_text_file);
         assert!(caps.fs.write_text_file);
         assert!(caps.terminal);
+    }
+
+    #[test]
+    fn test_surge_client_capabilities_smart_read_only() {
+        let policy = PermissionPolicy::Smart {
+            allow_read: true,
+            allow_write_in_worktree: false,
+            allow_bash_safe: true,
+            deny_bash_dangerous: true,
+            deny_network: false,
+        };
+        let caps = surge_client_capabilities(&policy);
+        assert!(caps.fs.read_text_file);
+        assert!(!caps.fs.write_text_file);
     }
 }

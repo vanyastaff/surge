@@ -253,6 +253,22 @@ impl AgentPool {
         self.health.lock().await.set_fallback(primary, fallback);
     }
 
+    /// Pre-connect to the default agent in the background.
+    ///
+    /// Call immediately after pool creation to absorb agent startup latency
+    /// before the first [`create_session`][Self::create_session] call.
+    ///
+    /// Fire-and-forget — connection errors are silently ignored (the pool will
+    /// reconnect on the next real operation).
+    pub fn warm_up(&self) {
+        // Drop the receiver — the worker will try to respond but that's fine.
+        let (tx, _rx) = tokio::sync::oneshot::channel::<Result<(), SurgeError>>();
+        let _ = self.op_tx.send(PoolOp::Connect {
+            name: self.default_agent.clone(),
+            tx,
+        });
+    }
+
     // ── Private helpers ─────────────────────────────────────────────
 
     fn send(&self, op: PoolOp) -> Result<(), SurgeError> {
@@ -270,6 +286,13 @@ impl AgentPool {
 impl Drop for AgentPool {
     fn drop(&mut self) {
         debug!("AgentPool dropped");
+        if let Some(worker) = self._worker.take() {
+            // Signal the worker to shut down, then block until it exits so that
+            // agent processes are reaped before the pool disappears.
+            let (tx, _) = tokio::sync::oneshot::channel::<()>();
+            let _ = self.op_tx.send(PoolOp::Shutdown { tx });
+            let _ = worker.join();
+        }
     }
 }
 
@@ -364,22 +387,22 @@ fn run_worker(
 }
 
 // ── Worker operations (run inside LocalSet via spawn_local) ─────────
-//
-// The RefCell borrows held across await points below are safe because
-// the entire worker runs on a single-threaded LocalSet — no concurrent
-// task can access the RefCell while another holds an active borrow.
-#[allow(clippy::await_holding_refcell_ref)]
+
 async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), SurgeError> {
     // Fast path
     if state.borrow().connections.contains_key(name) {
         return Ok(());
     }
 
-    // Check if already being spawned
-    if state.borrow().spawning.contains(name) {
-        return Err(SurgeError::AgentConnection(format!(
-            "Agent '{name}' is already being spawned"
-        )));
+    // Atomically check-and-mark as spawning in a single borrow_mut
+    {
+        let mut s = state.borrow_mut();
+        if s.spawning.contains(name) {
+            return Err(SurgeError::AgentConnection(format!(
+                "Agent '{name}' is already being spawned"
+            )));
+        }
+        s.spawning.insert(name.to_string());
     }
 
     let (config, worktree_root, permission_policy, timeout) = {
@@ -398,7 +421,6 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     };
 
     info!("Connecting to agent '{}'", name);
-    state.borrow_mut().spawning.insert(name.to_string());
 
     let event_tx = state.borrow().event_tx.clone();
 
@@ -427,7 +449,6 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     Ok(())
 }
 
-#[allow(clippy::await_holding_refcell_ref)]
 async fn create_session(
     state: &Rc<RefCell<WorkerState>>,
     agent_name: &str,
@@ -436,9 +457,7 @@ async fn create_session(
 ) -> Result<SessionHandle, SurgeError> {
     connect(state, agent_name).await?;
 
-    let session_timeout = {
-        Duration::from_secs(state.borrow().resilience.session_timeout_secs)
-    };
+    let session_timeout = Duration::from_secs(state.borrow().resilience.session_timeout_secs);
 
     debug!(
         "Creating session with agent '{}' in {}",
@@ -448,21 +467,21 @@ async fn create_session(
 
     let request = NewSessionRequest::new(working_dir);
 
-    // Borrow for the ACP call, then drop before mutating
-    let session_id = {
-        let s = state.borrow();
-        let connection = s
-            .connections
-            .get(agent_name)
-            .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?;
+    // Temporarily remove the connection from the map so no RefCell borrow
+    // is held across the async ACP calls below.
+    let mut conn = {
+        let mut s = state.borrow_mut();
+        s.connections
+            .remove(agent_name)
+            .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
+    };
 
-        let response = tokio::time::timeout(
-            session_timeout,
-            connection.connection().new_session(request),
-        )
-        .await
-        .map_err(|_| SurgeError::Timeout("new_session".to_string()))?
-        .map_err(|e| SurgeError::Acp(format!("Failed to create session: {:?}", e)))?;
+    let session_id_result: Result<String, SurgeError> = async {
+        let response =
+            tokio::time::timeout(session_timeout, conn.connection().new_session(request))
+                .await
+                .map_err(|_| SurgeError::Timeout("new_session".to_string()))?
+                .map_err(|e| SurgeError::Acp(format!("Failed to create session: {:?}", e)))?;
 
         let session_id = response.session_id.to_string();
 
@@ -470,7 +489,7 @@ async fn create_session(
             debug!("Setting session mode to '{}'", m);
             match tokio::time::timeout(
                 session_timeout,
-                connection.connection().set_session_mode(
+                conn.connection().set_session_mode(
                     SetSessionModeRequest::new(session_id.clone(), SessionModeId::new(m)),
                 ),
             )
@@ -482,28 +501,25 @@ async fn create_session(
             }
         }
 
-        session_id
-    };
+        Ok(session_id)
+    }
+    .await;
 
-    // Now borrow_mut to track the session
+    // Track session on success, then restore the connection regardless of outcome.
+    if let Ok(ref session_id) = session_id_result {
+        conn.add_session(session_id.clone(), working_dir.to_path_buf(), mode.map(String::from));
+    }
     state
         .borrow_mut()
         .connections
-        .get_mut(agent_name)
-        .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
-        .add_session(
-            session_id.clone(),
-            working_dir.to_path_buf(),
-            mode.map(String::from),
-        );
+        .insert(agent_name.to_string(), conn);
 
     Ok(SessionHandle {
-        session_id,
+        session_id: session_id_result?,
         agent_name: agent_name.to_string(),
     })
 }
 
-#[allow(clippy::await_holding_refcell_ref)]
 async fn prompt(
     state: &Rc<RefCell<WorkerState>>,
     session: &SessionHandle,
@@ -517,12 +533,11 @@ async fn prompt(
         )
     };
 
-    // Resolve fallback
+    // Resolve fallback — clone Arc before awaiting the lock so no RefCell
+    // borrow is held across the await.
     let resolved_agent = {
-        let s = state.borrow();
-        let h = s.health.try_lock().ok();
-        h.map(|h| h.resolve_agent(&session.agent_name).to_string())
-            .unwrap_or_else(|| session.agent_name.clone())
+        let health = state.borrow().health.clone();
+        health.lock().await.resolve_agent(&session.agent_name).to_string()
     };
 
     let candidates: Vec<String> = if resolved_agent != session.agent_name {
@@ -545,32 +560,52 @@ async fn prompt(
                 continue;
             }
 
-            let request =
-                PromptRequest::new(session.session_id.clone(), content.clone());
+            let request = PromptRequest::new(session.session_id.clone(), content.clone());
 
             let start = Instant::now();
 
-            let result = {
-                let s = state.borrow();
-                let Some(connection) = s.connections.get(agent_name) else {
-                    continue;
-                };
-                tokio::time::timeout(prompt_timeout, connection.connection().prompt(request)).await
+            // Temporarily remove connection to avoid holding a RefCell borrow
+            // across the prompt await.
+            let conn = match state.borrow_mut().connections.remove(agent_name) {
+                Some(c) => c,
+                None => continue,
             };
+
+            let result =
+                tokio::time::timeout(prompt_timeout, conn.connection().prompt(request)).await;
+
+            // Restore connection before processing result.
+            state
+                .borrow_mut()
+                .connections
+                .insert(agent_name.to_string(), conn);
+
+            let health = state.borrow().health.clone();
 
             match result {
                 Ok(Ok(response)) => {
-                    let elapsed = start.elapsed();
-                    if let Ok(mut h) = state.borrow().health.try_lock() {
-                        h.record_success(agent_name, elapsed);
+                    health.lock().await.record_success(agent_name, start.elapsed());
+
+                    // Emit token usage if the agent reported it.
+                    if let Some(usage) = &response.usage {
+                        let event_tx = state.borrow().event_tx.clone();
+                        let _ = event_tx.send(SurgeEvent::TokensConsumed {
+                            session_id: session.session_id.clone(),
+                            agent_name: agent_name.clone(),
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            thought_tokens: usage.thought_tokens,
+                            cached_read_tokens: usage.cached_read_tokens,
+                            cached_write_tokens: usage.cached_write_tokens,
+                            estimated_cost_usd: None,
+                        });
                     }
+
                     return Ok(response);
                 }
                 Ok(Err(e)) => {
                     let msg = format!("{e:?}");
-                    if let Ok(mut h) = state.borrow().health.try_lock() {
-                        h.record_failure(agent_name, &msg);
-                    }
+                    health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
                     )));
@@ -578,9 +613,7 @@ async fn prompt(
                 }
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
-                    if let Ok(mut h) = state.borrow().health.try_lock() {
-                        h.record_failure(agent_name, &msg);
-                    }
+                    health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Timeout(msg));
                     warn!(agent = agent_name.as_str(), attempt, "prompt timed out");
                 }
@@ -652,5 +685,49 @@ mod tests {
 
         assert_eq!(handle.session_id, "test-session");
         assert_eq!(handle.agent_name, "test-agent");
+    }
+
+    /// `warm_up` must not panic or block — it fires and forgets.
+    #[test]
+    fn test_warm_up_does_not_block() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        // warm_up is synchronous and non-blocking — it just enqueues a connect op.
+        pool.warm_up();
+        // The agent won't actually connect (echo isn't an ACP agent), but the
+        // call must return immediately without panicking.
+    }
+
+    /// Dropping an AgentPool must join the worker thread, not detach it.
+    ///
+    /// If `Drop` hangs, the test runner will time out. If it panics, the test
+    /// fails. Either way we catch regressions in the shutdown path.
+    #[test]
+    fn test_pool_drop_joins_worker() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        // No connections were established, so Shutdown drains nothing.
+        // The worker should exit and join almost immediately.
+        drop(pool);
     }
 }

@@ -12,9 +12,10 @@ pub mod pool;
 pub mod registry;
 pub mod router;
 pub mod terminal;
+pub mod transport;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
-pub use connection::{AgentConnection, SessionState};
+pub use connection::{AgentConnection, EffectiveCapabilities, SessionState};
 pub use display::{
     detect_installed_version, AgentDetail, AgentSummary, Badge, BadgeKind, DisplayCapabilities,
     EffortConfig, EffortLevel, InstallMethod, Model, Permission, SessionEntry, SessionStatus,

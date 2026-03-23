@@ -187,4 +187,29 @@ pub enum SurgeEvent {
     // --- Spec events ---
     /// Spec was loaded or created.
     SpecLoaded { spec_id: SpecId },
+
+    // --- Usage events ---
+    /// Token usage reported by an agent at the end of a prompt turn.
+    ///
+    /// Aggregation, budgeting, and cost calculation are handled by
+    /// `surge-persistence`. `estimated_cost_usd` is `None` until pricing
+    /// data is integrated there.
+    TokensConsumed {
+        /// ACP session that generated the tokens.
+        session_id: String,
+        /// Agent that processed the turn.
+        agent_name: String,
+        /// Total input tokens for this turn.
+        input_tokens: u64,
+        /// Total output/generation tokens for this turn.
+        output_tokens: u64,
+        /// Extended thinking/reasoning tokens (Anthropic models).
+        thought_tokens: Option<u64>,
+        /// Cache-read tokens — reduce billing on repeated prompts.
+        cached_read_tokens: Option<u64>,
+        /// Cache-write tokens.
+        cached_write_tokens: Option<u64>,
+        /// Estimated cost in USD, populated by `surge-persistence`.
+        estimated_cost_usd: Option<f64>,
+    },
 }

@@ -28,6 +28,13 @@ pub enum PermissionPolicy {
     /// Automatically approve all requests (use with caution).
     AutoApprove,
 
+    /// Ask the user interactively for each permission request.
+    ///
+    /// # Note
+    ///
+    /// Not yet implemented — use [`PermissionPolicy::Smart`] instead.
+    Interactive,
+
     /// Smart policy with granular controls for different operation types.
     /// Unrecognized tool kinds default to deny (fail-closed).
     Smart {
@@ -101,7 +108,13 @@ impl SurgeClient {
     pub fn new(worktree_root: PathBuf, permission_policy: PermissionPolicy) -> Self {
         let worktree_root_canonical = worktree_root
             .canonicalize()
-            .unwrap_or_else(|_| worktree_root.clone());
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to canonicalize worktree root {}: {e}; sandbox path checks may be unreliable",
+                    worktree_root.display()
+                );
+                worktree_root.clone()
+            });
         let terminals = Arc::new(Mutex::new(Terminals::new(worktree_root.clone())));
         Self {
             worktree_root,
@@ -200,6 +213,10 @@ impl SurgeClient {
     fn evaluate_permission(&self, request: &RequestPermissionRequest) -> Option<PermissionOptionId> {
         let should_approve = match &self.permission_policy {
             PermissionPolicy::AutoApprove => true,
+
+            PermissionPolicy::Interactive => {
+                todo!("Interactive permission policy: prompt the user and return their choice")
+            }
 
             PermissionPolicy::Smart {
                 allow_read,
@@ -804,5 +821,48 @@ mod tests {
             Some(serde_json::json!({"command": "cargo test"})),
         );
         assert!(client.evaluate_permission(&request).is_some());
+    }
+
+    /// A path traversal attempt must be rejected regardless of how it is spelled.
+    ///
+    /// Either the sandbox check fires ("outside worktree bounds") or the
+    /// canonical resolution itself fails (parent directory does not exist).
+    /// Both outcomes are safe — the agent cannot access the target file.
+    #[test]
+    fn test_path_traversal_rejected() {
+        // Use a real existing directory so canonicalize() succeeds and the
+        // sandbox comparison is reliable.
+        let worktree = std::env::temp_dir();
+        let client = SurgeClient::new(worktree, PermissionPolicy::default());
+
+        for attempt in &[
+            "../../../etc/passwd",
+            "subdir/../../../../../../etc/shadow",
+            "/etc/passwd",
+        ] {
+            let result = client.resolve_path(std::path::Path::new(attempt));
+            assert!(
+                result.is_err(),
+                "expected traversal '{attempt}' to be rejected, got Ok"
+            );
+        }
+    }
+
+    /// `SurgeClient::new` must not panic when the worktree root does not yet
+    /// exist (canonicalize falls back with a warning). Subsequent `resolve_path`
+    /// calls must return a clear error rather than silently succeeding or panicking.
+    #[test]
+    fn test_new_with_nonexistent_path_does_not_panic() {
+        let client = SurgeClient::new(
+            PathBuf::from("/nonexistent/surge/worktree"),
+            PermissionPolicy::default(),
+        );
+
+        // resolve_path cannot canonicalize the parent either — expect an error.
+        let result = client.resolve_path(std::path::Path::new("some_file.rs"));
+        assert!(
+            result.is_err(),
+            "expected Err when worktree root does not exist"
+        );
     }
 }
