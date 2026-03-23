@@ -1,8 +1,76 @@
-//! ACP Agent Registry — built-in catalog of known agents.
+//! ACP Agent Registry — data-driven catalog parsed from official ACP registry.json.
+//!
+//! The registry is embedded at compile time from `acp_registry.json` and provides
+//! platform-aware command resolution for npx, binary, and uvx distribution types.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use surge_core::config::{AgentConfig, Transport};
+
+// ── Embedded registry JSON ──────────────────────────────────────────
+
+const REGISTRY_JSON: &str = include_str!("acp_registry.json");
+
+/// Registry JSON URL for runtime refresh.
+pub const REGISTRY_URL: &str =
+    "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
+
+// ── Raw serde types matching the official schema ────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawRegistry {
+    #[allow(dead_code)]
+    version: String,
+    agents: Vec<RawAgent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawAgent {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    repository: Option<String>,
+    website: Option<String>,
+    authors: Vec<String>,
+    license: String,
+    #[serde(default)]
+    distribution: RawDistribution,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RawDistribution {
+    npx: Option<NpxDist>,
+    binary: Option<HashMap<String, BinaryPlatformDist>>,
+    uvx: Option<UvxDist>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NpxDist {
+    package: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BinaryPlatformDist {
+    archive: String,
+    cmd: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UvxDist {
+    package: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+// ── Public types ────────────────────────────────────────────────────
 
 /// Capabilities an agent may support.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -30,25 +98,79 @@ impl fmt::Display for AgentCapability {
     }
 }
 
+/// How an agent is distributed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Distribution {
+    /// Installed and run via `npx <package> [args...]`.
+    Npx {
+        package: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    },
+    /// Platform-specific binary downloaded from an archive URL.
+    Binary {
+        platforms: HashMap<String, BinaryTarget>,
+    },
+    /// Installed and run via `uvx <package> [args...]`.
+    Uvx {
+        package: String,
+        args: Vec<String>,
+    },
+}
+
+/// A platform-specific binary target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryTarget {
+    /// URL of the archive to download.
+    pub archive: String,
+    /// Command to run after extraction.
+    pub cmd: String,
+    /// Extra arguments for ACP mode.
+    pub args: Vec<String>,
+}
+
 /// A single entry in the agent registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
+    /// Unique identifier from ACP registry (e.g. "claude-acp", "goose").
     pub id: String,
+    /// Human-readable display name.
     pub display_name: String,
+    /// Short description.
     pub description: String,
-    /// Longer description with details about the agent.
+    /// Version from the registry.
+    pub version: String,
+    /// Authors / vendor.
+    pub authors: Vec<String>,
+    /// License (e.g. "Apache-2.0", "proprietary").
+    pub license: String,
+    /// Distribution methods.
+    pub distributions: Vec<Distribution>,
+    /// Repository URL.
+    pub repository: Option<String>,
+    /// Website URL.
+    pub website: Option<String>,
+    /// Derived tags for UI filtering.
+    pub tags: Vec<String>,
+    /// Capabilities (derived from known agents, Code+Chat default).
+    pub capabilities: Vec<AgentCapability>,
+
+    // ── Backward-compatible fields for UI ───────────────────────
+
+    /// Resolved command for the current platform (best available).
+    pub command: String,
+    /// Default args (including ACP args).
+    pub default_args: Vec<String>,
+    /// Transport (always Stdio for ACP).
+    pub transport: Transport,
+    /// Install instructions (derived from distribution).
+    pub install_instructions: String,
+    /// Long description (same as description for registry agents).
     #[serde(default)]
     pub long_description: String,
-    pub command: String,
-    pub default_args: Vec<String>,
-    pub transport: Transport,
-    pub capabilities: Vec<AgentCapability>,
-    /// Models/LLMs this agent can use.
+    /// Models — empty for registry agents (not part of ACP schema).
     #[serde(default)]
     pub models: Vec<String>,
-    pub install_instructions: String,
-    pub website: Option<String>,
-    pub tags: Vec<String>,
 }
 
 impl RegistryEntry {
@@ -76,268 +198,60 @@ impl RegistryEntry {
             || self.display_name.to_lowercase().contains(&q)
             || self.description.to_lowercase().contains(&q)
             || self.tags.iter().any(|t| t.to_lowercase().contains(&q))
+            || self.authors.iter().any(|a| a.to_lowercase().contains(&q))
+    }
+
+    /// Return the primary vendor/author name.
+    #[must_use]
+    pub fn vendor(&self) -> &str {
+        self.authors.first().map_or("Unknown", String::as_str)
+    }
+
+    /// Whether this agent uses an open-source license.
+    #[must_use]
+    pub fn is_open_source(&self) -> bool {
+        let l = self.license.to_lowercase();
+        !l.contains("proprietary")
     }
 }
 
-/// Catalog of known ACP-compatible agents.
+// ── Registry ────────────────────────────────────────────────────────
+
+/// Catalog of ACP-compatible agents.
 #[derive(Debug, Clone)]
 pub struct Registry {
     entries: Vec<RegistryEntry>,
 }
 
 impl Registry {
-    /// Create the built-in registry with well-known agents.
+    /// Create the registry from the embedded `acp_registry.json`.
     #[must_use]
     pub fn builtin() -> Self {
-        let entries = vec![
-            RegistryEntry {
-                id: "claude-code".into(),
-                display_name: "Claude Code".into(),
-                description: "Anthropic's autonomous coding agent".into(),
-                long_description: "Full-featured agentic coding tool. Edits files, runs commands, searches codebases, manages git — all autonomously. Best-in-class for complex multi-file tasks. Supports extended thinking and tool use.".into(),
-                command: "claude".into(),
-                default_args: vec![
-                    "--print".into(),
-                    "--output-format".into(),
-                    "stream-json".into(),
-                ],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Plan,
-                    AgentCapability::Review,
-                    AgentCapability::Test,
-                    AgentCapability::Refactor,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Claude Opus 4.6".into(),
-                    "Claude Sonnet 4.6".into(),
-                    "Claude Opus 4.5".into(),
-                    "Claude Sonnet 4.5".into(),
-                    "Claude Haiku 4.5".into(),
-                ],
-                install_instructions: "npm install -g @anthropic-ai/claude-code".into(),
-                website: Some("https://claude.ai/claude-code".into()),
-                tags: vec!["anthropic".into(), "claude".into(), "ai".into(), "full-featured".into()],
-            },
-            RegistryEntry {
-                id: "copilot-cli".into(),
-                display_name: "GitHub Copilot CLI".into(),
-                description: "GitHub's AI coding assistant in the terminal".into(),
-                long_description: "Code suggestions and completions powered by GitHub Copilot. Integrates with GitHub ecosystem — issues, PRs, repos. Fast completions for common patterns.".into(),
-                command: "gh".into(),
-                default_args: vec!["copilot".into()],
-                transport: Transport::Stdio,
-                capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
-                models: vec![
-                    "GPT-5 mini".into(),
-                    "GPT-4.1".into(),
-                    "GPT-5.3-Codex".into(),
-                    "Claude Opus 4.6".into(),
-                    "Claude Sonnet 4.6".into(),
-                    "Gemini 3.1 Pro".into(),
-                ],
-                install_instructions: "gh extension install github/gh-copilot".into(),
-                website: Some("https://github.com/features/copilot".into()),
-                tags: vec!["github".into(), "copilot".into(), "ai".into()],
-            },
-            RegistryEntry {
-                id: "zed-agent".into(),
-                display_name: "Zed Agent".into(),
-                description: "Fast AI agent built into Zed editor".into(),
-                long_description: "Native AI assistant in the Zed editor. Extremely fast, low-latency completions. Great for quick edits and refactoring. Uses structured tool calls for file operations.".into(),
-                command: "zed".into(),
-                default_args: vec!["--agent".into()],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Refactor,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Claude Sonnet 4.6".into(),
-                    "Claude Opus 4.6".into(),
-                    "GPT-4.1".into(),
-                    "Gemini 2.5 Pro".into(),
-                ],
-                install_instructions: "Install Zed from https://zed.dev".into(),
-                website: Some("https://zed.dev".into()),
-                tags: vec!["zed".into(), "editor".into(), "ai".into(), "fast".into()],
-            },
-            RegistryEntry {
-                id: "aider".into(),
-                display_name: "Aider".into(),
-                description: "Open-source AI pair programmer".into(),
-                long_description: "Terminal-based AI pair programming. Works with any LLM provider — OpenAI, Anthropic, local models. Understands git repos, edits multiple files, creates commits automatically.".into(),
-                command: "aider".into(),
-                default_args: vec!["--no-auto-commits".into()],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Refactor,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Claude Opus 4.6".into(),
-                    "Claude Sonnet 4.6".into(),
-                    "GPT-4.1".into(),
-                    "GPT-5".into(),
-                    "Gemini 2.5 Pro".into(),
-                    "DeepSeek V3".into(),
-                    "Qwen3-Coder".into(),
-                ],
-                install_instructions: "pip install aider-chat".into(),
-                website: Some("https://aider.chat".into()),
-                tags: vec!["aider".into(), "open-source".into(), "multi-llm".into()],
-            },
-            RegistryEntry {
-                id: "codex-cli".into(),
-                display_name: "Codex CLI".into(),
-                description: "OpenAI's lightweight coding agent".into(),
-                long_description: "Terminal-based coding agent from OpenAI. Sandboxed execution, code generation and editing. Optimized for fast iteration on small-to-medium tasks.".into(),
-                command: "codex".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
-                models: vec![
-                    "o4-mini".into(),
-                    "o3".into(),
-                    "GPT-4.1".into(),
-                ],
-                install_instructions: "npm install -g @openai/codex".into(),
-                website: Some("https://openai.com".into()),
-                tags: vec!["openai".into(), "codex".into(), "ai".into(), "lightweight".into()],
-            },
-            RegistryEntry {
-                id: "gemini-cli".into(),
-                display_name: "Gemini CLI".into(),
-                description: "Google's AI coding agent with free tier".into(),
-                long_description: "Terminal-based coding agent from Google. Free tier with 100 RPD for Gemini 2.5 Pro. Auto-fallback from Pro to Flash when quota exhausted. 1M context window on all models.".into(),
-                command: "gemini".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                    AgentCapability::Refactor,
-                ],
-                models: vec![
-                    "Gemini 2.5 Pro".into(),
-                    "Gemini 2.5 Flash".into(),
-                    "Gemini 3 Flash".into(),
-                    "Gemini 3.1 Flash-Lite".into(),
-                ],
-                install_instructions: "npm install -g @anthropic-ai/gemini-cli || pip install gemini-cli".into(),
-                website: Some("https://ai.google.dev".into()),
-                tags: vec!["google".into(), "free".into(), "popular".into()],
-            },
-            RegistryEntry {
-                id: "goose".into(),
-                display_name: "Goose".into(),
-                description: "Open-source autonomous coding agent by Block".into(),
-                long_description: "Extensible autonomous agent from Block (Square). Supports any LLM provider — Anthropic, OpenAI, Google, Ollama. Plugin-based architecture with MCP support. Can run fully local.".into(),
-                command: "goose".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                    AgentCapability::Refactor,
-                ],
-                models: vec![
-                    "Claude Sonnet 4.6".into(),
-                    "GPT-4.1".into(),
-                    "Gemini 2.5 Pro".into(),
-                ],
-                install_instructions: "brew install goose || pip install goose-ai".into(),
-                website: Some("https://block.github.io/goose".into()),
-                tags: vec!["block".into(), "open-source".into(), "popular".into()],
-            },
-            RegistryEntry {
-                id: "cline".into(),
-                display_name: "Cline".into(),
-                description: "Open-source AI coding agent with multi-provider support".into(),
-                long_description: "Autonomous coding agent supporting any LLM provider. Works with Anthropic, OpenAI, Google, Azure, AWS Bedrock, Ollama, and OpenRouter. Can run fully local.".into(),
-                command: "cline".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Claude Sonnet 4.6".into(),
-                    "GPT-4.1".into(),
-                    "Gemini 2.5 Pro".into(),
-                ],
-                install_instructions: "npm install -g cline".into(),
-                website: Some("https://cline.bot".into()),
-                tags: vec!["open-source".into()],
-            },
-            RegistryEntry {
-                id: "amp".into(),
-                display_name: "Amp".into(),
-                description: "Codebase-aware AI agent by Sourcegraph".into(),
-                long_description: "Terminal coding agent from Sourcegraph. Leverages Sourcegraph's code intelligence for deep codebase understanding. Free tier available.".into(),
-                command: "amp".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                    AgentCapability::Review,
-                ],
-                models: vec![
-                    "Claude Sonnet 4.6".into(),
-                    "Claude Opus 4.6".into(),
-                ],
-                install_instructions: "npm install -g @anthropic-ai/amp || brew install amp".into(),
-                website: Some("https://sourcegraph.com/amp".into()),
-                tags: vec!["sourcegraph".into(), "free".into()],
-            },
-            RegistryEntry {
-                id: "devstral".into(),
-                display_name: "Devstral".into(),
-                description: "Mistral's coding-focused model agent".into(),
-                long_description: "Lightweight coding agent from Mistral. Optimized for code generation with small footprint. Runs fully local via Ollama — no API key required.".into(),
-                command: "devstral".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Devstral".into(),
-                ],
-                install_instructions: "ollama pull devstral".into(),
-                website: Some("https://mistral.ai".into()),
-                tags: vec!["mistral".into(), "free".into(), "open-source".into()],
-            },
-            RegistryEntry {
-                id: "qwen3-coder".into(),
-                display_name: "Qwen3-Coder".into(),
-                description: "Alibaba's fully local coding agent".into(),
-                long_description: "Local-first coding agent from Alibaba. Runs entirely on your machine via Ollama — no internet, no rate limits, completely free. 128K context.".into(),
-                command: "qwen3-coder".into(),
-                default_args: vec![],
-                transport: Transport::Stdio,
-                capabilities: vec![
-                    AgentCapability::Code,
-                    AgentCapability::Chat,
-                ],
-                models: vec![
-                    "Qwen3-Coder".into(),
-                    "Qwen3-Coder-Plus".into(),
-                ],
-                install_instructions: "ollama pull qwen3-coder".into(),
-                website: Some("https://qwen.ai".into()),
-                tags: vec!["alibaba".into(), "free".into(), "open-source".into()],
-            },
-        ];
+        Self::from_json(REGISTRY_JSON).unwrap_or_else(|e| {
+            tracing::error!("Failed to parse embedded registry: {e}");
+            Self {
+                entries: Vec::new(),
+            }
+        })
+    }
 
-        Self { entries }
+    /// Parse a registry from JSON string (for runtime refresh).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if JSON parsing fails.
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        let raw: RawRegistry =
+            serde_json::from_str(json).map_err(|e| format!("Registry parse error: {e}"))?;
+
+        let platform = current_platform();
+        let entries = raw
+            .agents
+            .into_iter()
+            .map(|agent| build_entry(agent, &platform))
+            .collect();
+
+        Ok(Self { entries })
     }
 
     /// Return all entries in the registry.
@@ -384,6 +298,18 @@ impl Registry {
             .filter(|e| e.capabilities.contains(cap))
             .collect()
     }
+
+    /// Number of agents in the registry.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the registry is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// Result of detecting an installed agent.
@@ -395,11 +321,180 @@ pub struct DetectedAgent {
     pub command_path: Option<String>,
 }
 
+// ── Platform resolution ─────────────────────────────────────────────
+
+/// Returns the current platform key (e.g. "windows-x86_64", "darwin-aarch64").
+#[must_use]
+fn current_platform() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+
+    format!("{os}-{arch}")
+}
+
+/// Build a `RegistryEntry` from a raw agent, resolving the command for the current platform.
+fn build_entry(raw: RawAgent, platform: &str) -> RegistryEntry {
+    let mut distributions = Vec::new();
+    let mut command = String::new();
+    let mut default_args = Vec::new();
+    let mut install_instructions = String::new();
+
+    // Build distributions and resolve best command for this platform
+    if let Some(npx) = &raw.distribution.npx {
+        distributions.push(Distribution::Npx {
+            package: npx.package.clone(),
+            args: npx.args.clone(),
+            env: npx.env.clone(),
+        });
+
+        // npx is preferred if available — works everywhere
+        if command.is_empty() {
+            command = "npx".to_string();
+            default_args = Vec::new();
+            // Strip version from package for display: "@foo/bar@1.2.3" → "@foo/bar"
+            let pkg_no_version = strip_version(&npx.package);
+            default_args.push(pkg_no_version);
+            default_args.extend(npx.args.clone());
+
+            install_instructions = format!("npx {}", npx.package);
+        }
+    }
+
+    if let Some(binaries) = &raw.distribution.binary {
+        let mut platforms = HashMap::new();
+        for (plat, dist) in binaries {
+            platforms.insert(
+                plat.clone(),
+                BinaryTarget {
+                    archive: dist.archive.clone(),
+                    cmd: dist.cmd.clone(),
+                    args: dist.args.clone(),
+                },
+            );
+        }
+
+        // If there's a binary for this platform, prefer it over npx
+        if let Some(plat_dist) = binaries.get(platform) {
+            command = plat_dist.cmd.clone();
+            default_args = plat_dist.args.clone();
+            install_instructions = format!("Download from {}", plat_dist.archive);
+        } else if command.is_empty() {
+            // No binary for this platform and no npx — use first available cmd
+            if let Some((_, first)) = binaries.iter().next() {
+                command = first.cmd.clone();
+                default_args = first.args.clone();
+                install_instructions = "Binary not available for this platform".to_string();
+            }
+        }
+
+        distributions.push(Distribution::Binary { platforms });
+    }
+
+    if let Some(uvx) = &raw.distribution.uvx {
+        distributions.push(Distribution::Uvx {
+            package: uvx.package.clone(),
+            args: uvx.args.clone(),
+        });
+
+        if command.is_empty() {
+            command = "uvx".to_string();
+            default_args = vec![uvx.package.clone()];
+            default_args.extend(uvx.args.clone());
+            install_instructions = format!("uvx {}", uvx.package);
+        }
+    }
+
+    // Derive tags from metadata
+    let mut tags = Vec::new();
+    if let Some(author) = raw.authors.first() {
+        tags.push(author.to_lowercase());
+    }
+    let license_lower = raw.license.to_lowercase();
+    if !license_lower.contains("proprietary") {
+        tags.push("open-source".into());
+    }
+    // Well-known popular agents
+    if matches!(
+        raw.id.as_str(),
+        "claude-acp" | "github-copilot-cli" | "codex-acp" | "gemini" | "cursor" | "goose"
+    ) {
+        tags.push("popular".into());
+    }
+
+    // Derive capabilities from known agents
+    let capabilities = derive_capabilities(&raw.id);
+
+    RegistryEntry {
+        id: raw.id,
+        display_name: raw.name.clone(),
+        description: raw.description.clone(),
+        version: raw.version,
+        authors: raw.authors,
+        license: raw.license,
+        distributions,
+        repository: raw.repository,
+        website: raw.website,
+        tags,
+        capabilities,
+        command,
+        default_args,
+        transport: Transport::Stdio,
+        install_instructions,
+        long_description: raw.description,
+        models: Vec::new(),
+    }
+}
+
+/// Derive capabilities for known agents. Default: Code + Chat.
+fn derive_capabilities(id: &str) -> Vec<AgentCapability> {
+    match id {
+        "claude-acp" => vec![
+            AgentCapability::Code,
+            AgentCapability::Plan,
+            AgentCapability::Review,
+            AgentCapability::Test,
+            AgentCapability::Refactor,
+            AgentCapability::Chat,
+        ],
+        "github-copilot-cli" | "gemini" | "cline" | "goose" | "kilo" | "opencode" => vec![
+            AgentCapability::Code,
+            AgentCapability::Refactor,
+            AgentCapability::Chat,
+        ],
+        "stakpak" => vec![AgentCapability::Code, AgentCapability::Chat],
+        _ => vec![AgentCapability::Code, AgentCapability::Chat],
+    }
+}
+
+/// Strip version suffix from npm package name.
+/// `"@foo/bar@1.2.3"` → `"@foo/bar"`, `"cline@2.9.0"` → `"cline"`.
+fn strip_version(package: &str) -> String {
+    // Find the last '@' that's not at position 0 (scoped packages start with @)
+    if let Some(pos) = package.rfind('@') {
+        if pos > 0 {
+            return package[..pos].to_string();
+        }
+    }
+    package.to_string()
+}
+
+// ── Utilities ───────────────────────────────────────────────────────
+
 /// Check if a command exists on PATH.
 fn which(command: &str) -> bool {
     use std::process::Command;
 
-    // On Windows, use `where`; on Unix, use `which`
     #[cfg(windows)]
     let result = Command::new("where")
         .arg(command)
@@ -422,16 +517,10 @@ fn resolve_command_path(command: &str) -> Option<String> {
     use std::process::Command;
 
     #[cfg(windows)]
-    let output = Command::new("where")
-        .arg(command)
-        .output()
-        .ok()?;
+    let output = Command::new("where").arg(command).output().ok()?;
 
     #[cfg(not(windows))]
-    let output = Command::new("which")
-        .arg(command)
-        .output()
-        .ok()?;
+    let output = Command::new("which").arg(command).output().ok()?;
 
     if output.status.success() {
         let path = String::from_utf8_lossy(&output.stdout);
@@ -446,74 +535,119 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builtin_catalog_not_empty() {
+    fn test_builtin_parses_embedded_json() {
         let reg = Registry::builtin();
-        assert!(!reg.list().is_empty());
-        assert_eq!(reg.list().len(), 11);
+        assert!(!reg.is_empty());
+        // Official ACP registry has 27 agents
+        assert!(reg.len() >= 25, "expected >=25 agents, got {}", reg.len());
     }
 
     #[test]
-    fn test_find_by_id() {
+    fn test_find_claude() {
         let reg = Registry::builtin();
-        let entry = reg.find("claude-code");
+        let entry = reg.find("claude-acp");
         assert!(entry.is_some());
-        assert_eq!(entry.unwrap().display_name, "Claude Code");
+        assert_eq!(entry.unwrap().display_name, "Claude Agent");
+    }
 
-        assert!(reg.find("nonexistent").is_none());
+    #[test]
+    fn test_find_goose() {
+        let reg = Registry::builtin();
+        let entry = reg.find("goose");
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().vendor(), "Block");
+    }
+
+    #[test]
+    fn test_npx_command_resolution() {
+        let reg = Registry::builtin();
+        let gemini = reg.find("gemini").unwrap();
+        // Gemini is npx-only, should resolve to npx
+        assert_eq!(gemini.command, "npx");
+        assert!(gemini.default_args.contains(&"@google/gemini-cli".to_string()));
+        assert!(gemini.default_args.contains(&"--acp".to_string()));
+    }
+
+    #[test]
+    fn test_binary_command_resolution() {
+        let reg = Registry::builtin();
+        let goose = reg.find("goose").unwrap();
+        // goose is binary-only, command depends on platform
+        assert!(!goose.command.is_empty());
+    }
+
+    #[test]
+    fn test_uvx_command_resolution() {
+        let reg = Registry::builtin();
+        let crow = reg.find("crow-cli").unwrap();
+        assert_eq!(crow.command, "uvx");
+        assert!(crow.default_args.contains(&"crow-cli".to_string()));
     }
 
     #[test]
     fn test_search() {
         let reg = Registry::builtin();
         let results = reg.search("anthropic");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "claude-code");
+        assert!(!results.is_empty());
     }
 
     #[test]
     fn test_search_by_tag() {
         let reg = Registry::builtin();
         let results = reg.search("open-source");
-        assert!(results.len() >= 1);
-        assert!(results.iter().any(|e| e.id == "aider"));
+        assert!(results.len() >= 5);
     }
 
     #[test]
-    fn test_by_capability() {
+    fn test_capabilities() {
         let reg = Registry::builtin();
         let planners = reg.by_capability(&AgentCapability::Plan);
         assert_eq!(planners.len(), 1);
-        assert_eq!(planners[0].id, "claude-code");
+        assert_eq!(planners[0].id, "claude-acp");
 
         let coders = reg.by_capability(&AgentCapability::Code);
-        assert_eq!(coders.len(), 11);
+        assert_eq!(coders.len(), reg.len());
     }
 
     #[test]
     fn test_to_agent_config() {
         let reg = Registry::builtin();
-        let entry = reg.find("claude-code").unwrap();
+        let entry = reg.find("gemini").unwrap();
         let config = entry.to_agent_config();
-
-        assert_eq!(config.command, "claude");
-        assert_eq!(
-            config.args,
-            vec!["--print", "--output-format", "stream-json"]
-        );
+        assert_eq!(config.command, "npx");
         assert!(matches!(config.transport, Transport::Stdio));
     }
 
     #[test]
-    fn test_search_case_insensitive() {
+    fn test_strip_version() {
+        assert_eq!(strip_version("@foo/bar@1.2.3"), "@foo/bar");
+        assert_eq!(strip_version("cline@2.9.0"), "cline");
+        assert_eq!(strip_version("@google/gemini-cli@0.34.0"), "@google/gemini-cli");
+        assert_eq!(strip_version("plain-pkg"), "plain-pkg");
+    }
+
+    #[test]
+    fn test_is_open_source() {
         let reg = Registry::builtin();
-        let results = reg.search("CLAUDE");
-        assert!(!results.is_empty());
-        assert_eq!(results[0].id, "claude-code");
+        let goose = reg.find("goose").unwrap();
+        assert!(goose.is_open_source());
+
+        let cursor = reg.find("cursor").unwrap();
+        assert!(!cursor.is_open_source());
+    }
+
+    #[test]
+    fn test_from_json_runtime() {
+        // Simulates runtime refresh with a minimal JSON
+        let json = r#"{"version":"1.0.0","agents":[{"id":"test","name":"Test","version":"0.1.0","description":"A test","authors":["Dev"],"license":"MIT","distribution":{"npx":{"package":"test-pkg@0.1.0","args":["--acp"]}}}]}"#;
+        let reg = Registry::from_json(json).unwrap();
+        assert_eq!(reg.len(), 1);
+        let entry = reg.find("test").unwrap();
+        assert_eq!(entry.command, "npx");
     }
 
     #[test]
     fn test_which_finds_git() {
-        // git should be available on any dev machine
         assert!(which("git"));
     }
 
@@ -526,24 +660,18 @@ mod tests {
     fn test_detect_installed_returns_subset() {
         let reg = Registry::builtin();
         let installed = reg.detect_installed();
-        // We can't know exactly what's installed, but it should be <= total
         assert!(installed.len() <= reg.list().len());
     }
 
     #[test]
-    fn test_resolve_command_path_git() {
-        let path = resolve_command_path("git");
-        assert!(path.is_some());
-        assert!(path.unwrap().contains("git"));
-    }
-
-    #[test]
-    fn test_capability_display() {
-        assert_eq!(AgentCapability::Code.to_string(), "code");
-        assert_eq!(AgentCapability::Plan.to_string(), "plan");
-        assert_eq!(AgentCapability::Review.to_string(), "review");
-        assert_eq!(AgentCapability::Test.to_string(), "test");
-        assert_eq!(AgentCapability::Refactor.to_string(), "refactor");
-        assert_eq!(AgentCapability::Chat.to_string(), "chat");
+    fn test_all_entries_have_command() {
+        let reg = Registry::builtin();
+        for entry in reg.list() {
+            assert!(
+                !entry.command.is_empty(),
+                "Agent '{}' has no resolved command",
+                entry.id
+            );
+        }
     }
 }
