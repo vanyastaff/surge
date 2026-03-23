@@ -7,12 +7,39 @@ use crate::app_state::AppState;
 use crate::markdown;
 use crate::theme;
 
+// ── Message model ───────────────────────────────────────────────────
+
+/// A tool call activity shown inline within an agent response.
+#[derive(Debug, Clone)]
+pub struct ToolActivity {
+    pub title: String,
+    pub done: bool,
+}
+
 /// A message in the terminal conversation.
 #[derive(Debug, Clone)]
 pub struct TerminalMessage {
     pub role: MessageRole,
     pub content: String,
     pub timestamp: String,
+    /// Tool activities (only for Agent messages).
+    pub activities: Vec<ToolActivity>,
+}
+
+impl TerminalMessage {
+    fn new(role: MessageRole, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            timestamp: String::new(),
+            activities: Vec::new(),
+        }
+    }
+
+    fn with_timestamp(mut self, ts: impl Into<String>) -> Self {
+        self.timestamp = ts.into();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +48,8 @@ pub enum MessageRole {
     Agent,
     System,
 }
+
+// ── Screen ──────────────────────────────────────────────────────────
 
 /// Agent Terminal screen — send prompts, see streaming responses.
 pub struct AgentTerminalScreen {
@@ -44,17 +73,29 @@ impl AgentTerminalScreen {
         Self {
             state,
             messages: vec![
-                TerminalMessage {
-                    role: MessageRole::System,
-                    content: format!("Terminal ready. Agent: {agent_name}. Type a message and press Enter to send."),
-                    timestamp: String::new(),
-                },
+                TerminalMessage::new(
+                    MessageRole::System,
+                    format!("Terminal ready. Agent: {agent_name}. Type a message and press Enter to send."),
+                ),
             ],
             input_state: None,
             is_sending: false,
             agent_name,
             session_active: false,
         }
+    }
+
+    /// Find or create the current Agent message to append to.
+    fn ensure_agent_message(&mut self) -> &mut TerminalMessage {
+        let needs_new = self.messages.last()
+            .map_or(true, |m| m.role != MessageRole::Agent);
+        if needs_new {
+            self.messages.push(
+                TerminalMessage::new(MessageRole::Agent, "")
+                    .with_timestamp("just now"),
+            );
+        }
+        self.messages.last_mut().unwrap()
     }
 
     fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -65,31 +106,26 @@ impl AgentTerminalScreen {
             return;
         }
 
-        // Add user message.
-        self.messages.push(TerminalMessage {
-            role: MessageRole::User,
-            content: input.clone(),
-            timestamp: "now".into(),
-        });
-        // Clear input.
+        self.messages.push(
+            TerminalMessage::new(MessageRole::User, input.clone())
+                .with_timestamp("now"),
+        );
         input_entity.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
         self.is_sending = true;
         cx.notify();
 
-        // Get pool from state.
         let pool = {
             let state = self.state.read(cx);
             state.agent_pool.clone()
         };
 
         let Some(pool) = pool else {
-            self.messages.push(TerminalMessage {
-                role: MessageRole::System,
-                content: "No agent pool configured. Open a project with surge.toml first.".into(),
-                timestamp: String::new(),
-            });
+            self.messages.push(TerminalMessage::new(
+                MessageRole::System,
+                "No agent pool configured. Open a project with surge.toml first.",
+            ));
             self.is_sending = false;
             cx.notify();
             return;
@@ -101,10 +137,8 @@ impl AgentTerminalScreen {
             state.project_path.clone().unwrap_or_else(|| std::path::PathBuf::from("."))
         };
 
-        // Subscribe to events for streaming chunks
         let mut event_rx = pool.subscribe();
 
-        // Spawn async task — pool is Send-safe, no separate thread needed.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             // Create session
             let session = match pool
@@ -116,11 +150,7 @@ impl AgentTerminalScreen {
                     let err = format!("Session error: {e}");
                     cx.update(|cx| {
                         let _ = this.update(cx, |this, cx| {
-                            this.messages.push(TerminalMessage {
-                                role: MessageRole::System,
-                                content: err,
-                                timestamp: String::new(),
-                            });
+                            this.messages.push(TerminalMessage::new(MessageRole::System, err));
                             this.is_sending = false;
                             cx.notify();
                         });
@@ -129,7 +159,7 @@ impl AgentTerminalScreen {
                 }
             };
 
-            // Spawn event listener for streaming chunks and tool call activity
+            // Event listener — tool calls go inline into Agent message
             let this_for_events = this.clone();
             let event_task = cx.spawn(async move |cx: &mut AsyncApp| {
                 while let Ok(event) = event_rx.recv().await {
@@ -138,19 +168,8 @@ impl AgentTerminalScreen {
                             let text = text.clone();
                             let _ = cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
-                                    // Find last Agent message to append to, or create one
-                                    let needs_new = this.messages.last()
-                                        .map_or(true, |m| m.role != MessageRole::Agent);
-                                    if needs_new {
-                                        this.messages.push(TerminalMessage {
-                                            role: MessageRole::Agent,
-                                            content: String::new(),
-                                            timestamp: "just now".into(),
-                                        });
-                                    }
-                                    if let Some(last) = this.messages.last_mut() {
-                                        last.content.push_str(&text);
-                                    }
+                                    let msg = this.ensure_agent_message();
+                                    msg.content.push_str(&text);
                                     cx.notify();
                                 });
                             });
@@ -159,10 +178,10 @@ impl AgentTerminalScreen {
                             let title = title.clone();
                             let _ = cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
-                                    this.messages.push(TerminalMessage {
-                                        role: MessageRole::System,
-                                        content: format!("🔧 {title}"),
-                                        timestamp: String::new(),
+                                    let msg = this.ensure_agent_message();
+                                    msg.activities.push(ToolActivity {
+                                        title,
+                                        done: false,
                                     });
                                     cx.notify();
                                 });
@@ -171,25 +190,11 @@ impl AgentTerminalScreen {
                         surge_core::SurgeEvent::ToolCallFinished { .. } => {
                             let _ = cx.update(|cx| {
                                 let _ = this_for_events.update(cx, |this, cx| {
-                                    // Update last system message to show completion
-                                    if let Some(last) = this.messages.last_mut() {
-                                        if last.role == MessageRole::System && last.content.starts_with("🔧") {
-                                            last.content.push_str(" ✓");
-                                            cx.notify();
-                                        }
+                                    let msg = this.ensure_agent_message();
+                                    // Mark the last unfinished activity as done
+                                    if let Some(act) = msg.activities.iter_mut().rev().find(|a| !a.done) {
+                                        act.done = true;
                                     }
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::PermissionRequested { description } => {
-                            let desc = description.clone();
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    this.messages.push(TerminalMessage {
-                                        role: MessageRole::System,
-                                        content: format!("🔐 Permission: {desc}"),
-                                        timestamp: String::new(),
-                                    });
                                     cx.notify();
                                 });
                             });
@@ -206,16 +211,16 @@ impl AgentTerminalScreen {
 
             let result = pool.prompt(&session, content).await;
 
-            // Drop event task
             drop(event_task);
 
             cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     match result {
-                        Ok(_response) => {
-                            // If no streaming text was received, show stop reason
+                        Ok(_) => {
                             if let Some(last) = this.messages.last() {
-                                if last.role == MessageRole::Agent && last.content.is_empty() {
+                                if last.role == MessageRole::Agent && last.content.is_empty()
+                                    && last.activities.is_empty()
+                                {
                                     if let Some(msg) = this.messages.last_mut() {
                                         msg.content = "(Agent completed with no text output)".into();
                                     }
@@ -224,11 +229,10 @@ impl AgentTerminalScreen {
                             this.session_active = true;
                         }
                         Err(err) => {
-                            this.messages.push(TerminalMessage {
-                                role: MessageRole::System,
-                                content: format!("Error: {err}"),
-                                timestamp: String::new(),
-                            });
+                            this.messages.push(TerminalMessage::new(
+                                MessageRole::System,
+                                format!("Error: {err}"),
+                            ));
                         }
                     }
                     this.is_sending = false;
@@ -238,6 +242,8 @@ impl AgentTerminalScreen {
         })
         .detach();
     }
+
+    // ── Rendering ───────────────────────────────────────────────────
 
     fn render_header(&self) -> Div {
         div()
@@ -282,6 +288,48 @@ impl AgentTerminalScreen {
             )
     }
 
+    fn render_activity(activity: &ToolActivity) -> Div {
+        let status_icon = if activity.done {
+            IconName::Check
+        } else {
+            IconName::LoaderCircle
+        };
+
+        let status_color = if activity.done {
+            theme::SUCCESS
+        } else {
+            theme::WARNING
+        };
+
+        div()
+            .w_full()
+            .px(px(10.0))
+            .py(px(5.0))
+            .my(px(2.0))
+            .rounded(px(6.0))
+            .bg(hsla(0.0, 0.0, 0.1, 1.0))
+            .border_1()
+            .border_color(hsla(0.0, 0.0, 0.18, 1.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(Icon::new(status_icon).size_3().text_color(status_color))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::TEXT_MUTED)
+                    .child(activity.title.clone()),
+            )
+            .when(activity.done, |d| {
+                d.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::SUCCESS)
+                        .child("✓"),
+                )
+            })
+    }
+
     fn render_message(&self, msg: &TerminalMessage) -> Div {
         let (icon, color, label) = match msg.role {
             MessageRole::User => (IconName::User, theme::PRIMARY, "You"),
@@ -295,11 +343,12 @@ impl AgentTerminalScreen {
             MessageRole::System => theme::SIDEBAR_BG.opacity(0.5),
         };
 
-        div()
+        let mut message_div = div()
             .w_full()
             .overflow_x_hidden()
             .p(px(12.0))
             .bg(bg)
+            // Header row: icon + role + timestamp
             .child(
                 div()
                     .flex()
@@ -321,8 +370,27 @@ impl AgentTerminalScreen {
                                 .child(msg.timestamp.clone()),
                         )
                     }),
-            )
-            .child(
+            );
+
+        // Tool activities — inline, compact, Copilot-style
+        if !msg.activities.is_empty() {
+            let mut activities_container = div()
+                .mt(px(6.0))
+                .mb(px(4.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0));
+
+            for activity in &msg.activities {
+                activities_container = activities_container.child(Self::render_activity(activity));
+            }
+
+            message_div = message_div.child(activities_container);
+        }
+
+        // Message content
+        if !msg.content.is_empty() {
+            message_div = message_div.child(
                 div()
                     .mt(px(4.0))
                     .text_sm()
@@ -332,13 +400,15 @@ impl AgentTerminalScreen {
                     } else {
                         div().child(msg.content.clone())
                     }),
-            )
+            );
+        }
+
+        message_div
     }
 }
 
 impl Render for AgentTerminalScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Lazily create InputState (needs Window).
         if self.input_state.is_none() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -358,9 +428,7 @@ impl Render for AgentTerminalScreen {
         div()
             .size_full()
             .v_flex()
-            // Header
             .child(self.render_header())
-            // Messages area
             .child(
                 div()
                     .id("terminal-messages")
@@ -371,7 +439,6 @@ impl Render for AgentTerminalScreen {
                     .bg(theme::BACKGROUND)
                     .children(messages),
             )
-            // Input area — pinned to bottom
             .child(
                 div()
                     .w_full()
