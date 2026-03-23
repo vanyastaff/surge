@@ -16,6 +16,7 @@ use surge_spec::{validate_spec, DependencyGraph, SpecFile};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
+use crate::budget::{start_budget_listener, BudgetStatus, BudgetTracker};
 use crate::executor::ExecutorConfig;
 use crate::gates::{GateAction, GateManager};
 use crate::parallel::ParallelExecutor;
@@ -95,6 +96,14 @@ impl Orchestrator {
         let aggregator = UsageAggregator::new(store);
         let aggregator_rx = self.event_tx.subscribe();
         let _aggregator_handle = aggregator.start_listening(aggregator_rx);
+
+        // Set up budget tracker for token/cost limits.
+        let budget = BudgetTracker::new(&self.config.surge_config.pipeline);
+        if budget.has_limits() {
+            let budget_rx = self.event_tx.subscribe();
+            let _budget_handle = start_budget_listener(budget.clone(), budget_rx);
+            info!("budget tracking enabled");
+        }
 
         // Create git worktree
         let git = match GitManager::new(self.config.working_dir.clone()) {
@@ -321,6 +330,34 @@ impl Orchestrator {
         let mut pending_human_input: Option<String> = None;
 
         for (i, batch) in batches.iter().enumerate() {
+            // Budget check before each batch.
+            match budget.check() {
+                BudgetStatus::TokensExceeded { used, limit } => {
+                    warn!(used, limit, "token budget exceeded, stopping pipeline");
+                    aggregator.unregister_session(&session.session_id).await;
+                    pool.shutdown().await;
+                    let _ = git.discard(&spec_id_str);
+                    return PipelineResult::Failed {
+                        reason: format!("Token budget exceeded: {used} / {limit}"),
+                    };
+                }
+                BudgetStatus::CostExceeded {
+                    used_micro_usd,
+                    limit_micro_usd,
+                } => {
+                    let used_usd = used_micro_usd as f64 / 1_000_000.0;
+                    let limit_usd = limit_micro_usd as f64 / 1_000_000.0;
+                    warn!(used_usd, limit_usd, "cost budget exceeded, stopping pipeline");
+                    aggregator.unregister_session(&session.session_id).await;
+                    pool.shutdown().await;
+                    let _ = git.discard(&spec_id_str);
+                    return PipelineResult::Failed {
+                        reason: format!("Cost budget exceeded: ${used_usd:.4} / ${limit_usd:.4}"),
+                    };
+                }
+                BudgetStatus::Ok => {}
+            }
+
             match gate_manager.check_gate(Phase::Executing, spec_id) {
                 GateAction::Pause { reason } => {
                     pool.shutdown().await;

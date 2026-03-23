@@ -390,6 +390,92 @@ description = "criterion text"
 
         criteria
     }
+
+    // ── Interactive clarification ───────────────────────────────────
+
+    /// Build a prompt that asks an agent to generate clarifying questions
+    /// before creating requirements.
+    ///
+    /// Used for complex features where the user description may be ambiguous.
+    /// The agent returns 2-3 focused questions; answers are fed into phase 1.
+    #[must_use]
+    pub fn build_clarification_prompt(
+        user_description: &str,
+        worktree_root: &Path,
+    ) -> String {
+        let project_structure = Self::read_project_structure(worktree_root);
+
+        format!(
+            r#"You are a product analyst. Before writing requirements, you need
+to clarify the feature request with the user.
+
+## Project Structure
+{project_structure}
+
+## Feature Request
+{user_description}
+
+## Your Task
+
+Generate 2-3 clarifying questions that would help you write better
+requirements. Focus on:
+
+1. **Scope ambiguity** — what's included vs excluded
+2. **User impact** — who benefits and how
+3. **Constraints** — performance, compatibility, deadlines
+
+## Output Format
+
+Return ONLY a numbered list of questions, nothing else:
+1. [question]
+2. [question]
+3. [question]
+"#
+        )
+    }
+
+    /// Parse clarifying questions from agent response.
+    ///
+    /// Extracts numbered items (1. ... , 2. ... , etc.).
+    #[must_use]
+    pub fn parse_clarification_questions(response: &str) -> Vec<String> {
+        response
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                // Match lines like "1. question" or "1) question"
+                if trimmed.len() > 2
+                    && trimmed.as_bytes()[0].is_ascii_digit()
+                    && (trimmed.as_bytes()[1] == b'.' || trimmed.as_bytes()[1] == b')')
+                {
+                    Some(trimmed[2..].trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|q| !q.is_empty())
+            .collect()
+    }
+
+    /// Build an enriched requirements prompt that includes user answers to
+    /// clarifying questions.
+    #[must_use]
+    pub fn build_requirements_prompt_with_answers(
+        user_description: &str,
+        qa_pairs: &[(String, String)],
+        worktree_root: &Path,
+    ) -> String {
+        let mut base = Self::build_requirements_prompt(user_description, worktree_root);
+
+        if !qa_pairs.is_empty() {
+            base.push_str("\n## Clarifications from the user\n\n");
+            for (question, answer) in qa_pairs {
+                base.push_str(&format!("**Q:** {question}\n**A:** {answer}\n\n"));
+            }
+        }
+
+        base
+    }
 }
 
 #[cfg(test)]
@@ -547,5 +633,63 @@ mod tests {
         assert!(structure.contains("src"));
         assert!(!structure.contains("target"));
         assert!(!structure.contains(".git"));
+    }
+
+    #[test]
+    fn test_build_clarification_prompt_contains_key_parts() {
+        let prompt = PlannerPhase::build_clarification_prompt(
+            "Add user auth",
+            &PathBuf::from("/tmp/fake"),
+        );
+
+        assert!(prompt.contains("Add user auth"));
+        assert!(prompt.contains("Scope ambiguity"));
+        assert!(prompt.contains("2-3 clarifying questions"));
+    }
+
+    #[test]
+    fn test_parse_clarification_questions() {
+        let response = "Sure, here are my questions:\n\
+            1. Should we support OAuth or just password auth?\n\
+            2. What user roles are needed?\n\
+            3. Is there a deadline for this feature?\n";
+
+        let questions = PlannerPhase::parse_clarification_questions(response);
+        assert_eq!(questions.len(), 3);
+        assert!(questions[0].contains("OAuth"));
+        assert!(questions[1].contains("roles"));
+        assert!(questions[2].contains("deadline"));
+    }
+
+    #[test]
+    fn test_parse_clarification_questions_parenthesis_format() {
+        let response = "1) First question?\n2) Second question?\n";
+        let questions = PlannerPhase::parse_clarification_questions(response);
+        assert_eq!(questions.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_clarification_questions_empty() {
+        let questions = PlannerPhase::parse_clarification_questions("No questions here.");
+        assert!(questions.is_empty());
+    }
+
+    #[test]
+    fn test_build_requirements_prompt_with_answers() {
+        let qa_pairs = vec![
+            ("OAuth or password?".to_string(), "OAuth only".to_string()),
+            ("Deadline?".to_string(), "End of Q1".to_string()),
+        ];
+        let prompt = PlannerPhase::build_requirements_prompt_with_answers(
+            "Add auth",
+            &qa_pairs,
+            &PathBuf::from("/tmp/fake"),
+        );
+
+        assert!(prompt.contains("Add auth"));
+        assert!(prompt.contains("Clarifications from the user"));
+        assert!(prompt.contains("OAuth or password?"));
+        assert!(prompt.contains("OAuth only"));
+        assert!(prompt.contains("End of Q1"));
     }
 }

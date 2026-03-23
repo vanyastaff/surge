@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod id;
+pub mod roadmap;
 pub mod spec;
 pub mod state;
 
@@ -14,5 +15,6 @@ pub use event::{
     ToolLocation, VersionedEvent,
 };
 pub use id::{SpecId, SubtaskId, TaskId};
+pub use roadmap::{Priority, RoadmapItem, RoadmapStatus, Timeline, TimelineBatch};
 pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, SubtaskState};
 pub use state::TaskState;
