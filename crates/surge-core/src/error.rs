@@ -23,6 +23,9 @@ pub enum SurgeError {
     #[error("ACP protocol error: {0}")]
     Acp(String),
 
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

@@ -102,11 +102,7 @@ impl ParallelExecutor {
             let ctx = SubtaskContext::new(spec, subtask);
             let prompt_text = ctx.build_prompt();
 
-            let content = vec![ContentBlock::Text(TextContent {
-                text: prompt_text,
-                annotations: None,
-                meta: None,
-            })];
+            let content = vec![ContentBlock::Text(TextContent::new(prompt_text))];
 
             let mut last_error = String::from("unknown error");
             let mut succeeded = false;

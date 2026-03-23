@@ -17,6 +17,8 @@ pub struct SurgeConfig {
     pub cleanup: CleanupPolicy,
     #[serde(default)]
     pub ide: IdeConfig,
+    #[serde(default)]
+    pub resilience: ResilienceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +215,44 @@ pub struct IdeConfig {
     pub editor: Option<String>,
 }
 
+/// Resilience configuration for agent connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceConfig {
+    /// Timeout for spawning and ACP-initializing an agent process (seconds).
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    /// Timeout for a single `new_session` ACP call (seconds).
+    #[serde(default = "default_session_timeout_secs")]
+    pub session_timeout_secs: u64,
+    /// Timeout for a single `prompt` ACP call (seconds).
+    #[serde(default = "default_prompt_timeout_secs")]
+    pub prompt_timeout_secs: u64,
+    /// How many times to retry a failed prompt before giving up.
+    #[serde(default = "default_prompt_retries")]
+    pub prompt_retries: u32,
+    /// Seconds to wait for a process to exit cleanly before SIGKILL.
+    #[serde(default = "default_shutdown_grace_secs")]
+    pub shutdown_grace_secs: u64,
+}
+
+impl Default for ResilienceConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_secs: default_connect_timeout_secs(),
+            session_timeout_secs: default_session_timeout_secs(),
+            prompt_timeout_secs: default_prompt_timeout_secs(),
+            prompt_retries: default_prompt_retries(),
+            shutdown_grace_secs: default_shutdown_grace_secs(),
+        }
+    }
+}
+
+fn default_connect_timeout_secs() -> u64 { 30 }
+fn default_session_timeout_secs() -> u64 { 10 }
+fn default_prompt_timeout_secs() -> u64 { 300 }
+fn default_prompt_retries() -> u32 { 1 }
+fn default_shutdown_grace_secs() -> u64 { 5 }
+
 impl Default for SurgeConfig {
     fn default() -> Self {
         Self {
@@ -222,6 +262,7 @@ impl Default for SurgeConfig {
             routing: RoutingConfig::default(),
             cleanup: CleanupPolicy::default(),
             ide: IdeConfig::default(),
+            resilience: ResilienceConfig::default(),
         }
     }
 }
@@ -980,6 +1021,7 @@ after_spec = false
             routing: RoutingConfig::default(),
             cleanup: CleanupPolicy::default(),
             ide: IdeConfig::default(),
+            resilience: ResilienceConfig::default(),
         };
         // Should be valid because agents map is empty
         assert!(config.validate().is_ok());

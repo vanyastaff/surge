@@ -77,11 +77,7 @@ impl QaReviewer {
 
             // Build and send QA prompt
             let qa_prompt = build_qa_prompt(spec, &diff);
-            let content = vec![ContentBlock::Text(TextContent {
-                text: qa_prompt,
-                annotations: None,
-                meta: None,
-            })];
+            let content = vec![ContentBlock::Text(TextContent::new(qa_prompt))];
 
             let response = match pool.prompt(session, content).await {
                 Ok(r) => r,
@@ -113,11 +109,7 @@ impl QaReviewer {
                         "The QA review found issues that need fixing:\n\n{issues}\n\n\
                          Please fix these issues now."
                     );
-                    let fix_content = vec![ContentBlock::Text(TextContent {
-                        text: fix_prompt,
-                        annotations: None,
-                        meta: None,
-                    })];
+                    let fix_content = vec![ContentBlock::Text(TextContent::new(fix_prompt))];
 
                     if let Err(e) = pool.prompt(session, fix_content).await {
                         warn!(error = %e, "fix prompt failed");

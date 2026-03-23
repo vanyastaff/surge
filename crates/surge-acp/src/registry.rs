@@ -8,6 +8,116 @@ use surge_core::config::{AgentConfig, Transport};
 
 // ── Public types ────────────────────────────────────────────────────
 
+/// Known agent variants in the Surge ecosystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKind {
+    Claude,
+    Copilot,
+    Codex,
+    Gemini,
+}
+
+impl AgentKind {
+    /// All known agent kinds.
+    pub const ALL: [Self; 4] = [Self::Claude, Self::Copilot, Self::Codex, Self::Gemini];
+
+    /// String identifier used in configs and registry.
+    #[must_use]
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Claude => "claude-acp",
+            Self::Copilot => "github-copilot-cli",
+            Self::Codex => "codex-acp",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    /// Try to parse from a string identifier.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "claude-acp" => Some(Self::Claude),
+            "github-copilot-cli" => Some(Self::Copilot),
+            "codex-acp" => Some(Self::Codex),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+
+    /// Human-readable display name.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Agent",
+            Self::Copilot => "GitHub Copilot",
+            Self::Codex => "Codex CLI",
+            Self::Gemini => "Gemini CLI",
+        }
+    }
+
+    /// One-line description / tagline.
+    #[must_use]
+    pub fn tagline(self) -> &'static str {
+        match self {
+            Self::Claude => "Anthropic's autonomous coding agent — deepest reasoning, largest context",
+            Self::Copilot => "GitHub's multi-model terminal agent with native repo integration",
+            Self::Codex => "OpenAI's cloud-native coding agent with sandboxed parallel execution",
+            Self::Gemini => "Google's CLI with the most generous free tier — 1M context on all models",
+        }
+    }
+
+    /// Vendor / company name.
+    #[must_use]
+    pub fn vendor(self) -> &'static str {
+        match self {
+            Self::Claude => "Anthropic",
+            Self::Copilot => "GitHub",
+            Self::Codex => "OpenAI",
+            Self::Gemini => "Google",
+        }
+    }
+
+    /// Default model name.
+    #[must_use]
+    pub fn default_model(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Sonnet 4.6",
+            Self::Copilot => "GPT-5 mini",
+            Self::Codex => "GPT-5.3-Codex",
+            Self::Gemini => "Gemini 2.5 Pro",
+        }
+    }
+
+    /// Vendor brand color as (r, g, b) in 0.0–1.0.
+    #[must_use]
+    pub fn color(self) -> (f32, f32, f32) {
+        match self {
+            Self::Claude => (0.851, 0.467, 0.341),  // #D97757
+            Self::Copilot => (0.431, 0.251, 0.788), // #6E40C9
+            Self::Codex => (0.063, 0.639, 0.498),   // #10A37F
+            Self::Gemini => (0.259, 0.522, 0.957),  // #4285F4
+        }
+    }
+
+    /// Version detection command: (args, is_wrapper, cli_name).
+    #[must_use]
+    pub fn version_command(self) -> (&'static [&'static str], bool, &'static str) {
+        match self {
+            Self::Claude => (&["claude", "--version"], true, "Claude Code"),
+            Self::Copilot => (&["gh", "copilot", "--version"], false, ""),
+            Self::Codex => (&["codex", "--version"], true, "Codex CLI"),
+            Self::Gemini => (&["gemini", "--version"], false, ""),
+        }
+    }
+}
+
+impl fmt::Display for AgentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.id())
+    }
+}
+
 /// Capabilities an agent may support.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +147,7 @@ impl fmt::Display for AgentCapability {
 /// A single entry in the agent registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
+    pub kind: AgentKind,
     pub id: String,
     pub display_name: String,
     pub description: String,
@@ -215,6 +326,7 @@ pub struct DetectedAgent {
 fn builtin_agents() -> Vec<RegistryEntry> {
     vec![
         RegistryEntry {
+            kind: AgentKind::Claude,
             id: "claude-acp".into(),
             display_name: "Claude Agent".into(),
             description: "ACP wrapper for Anthropic's Claude".into(),
@@ -242,6 +354,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
+            kind: AgentKind::Copilot,
             id: "github-copilot-cli".into(),
             display_name: "GitHub Copilot".into(),
             description: "GitHub's AI pair programmer".into(),
@@ -268,6 +381,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
+            kind: AgentKind::Codex,
             id: "codex-acp".into(),
             display_name: "Codex CLI".into(),
             description: "ACP adapter for OpenAI's coding assistant".into(),
@@ -291,6 +405,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
+            kind: AgentKind::Gemini,
             id: "gemini".into(),
             display_name: "Gemini CLI".into(),
             description: "Google's official CLI for Gemini".into(),
@@ -331,12 +446,10 @@ fn which(command: &str) -> bool {
 
 /// Resolve the full path of a command (cached).
 fn resolve_command_path(command: &str) -> Option<String> {
+    if let Ok(cache) = WHICH_CACHE.lock()
+        && let Some(result) = cache.get(command)
     {
-        if let Ok(cache) = WHICH_CACHE.lock() {
-            if let Some(result) = cache.get(command) {
-                return result.clone();
-            }
-        }
+        return result.clone();
     }
 
     let result = resolve_command_uncached(command);

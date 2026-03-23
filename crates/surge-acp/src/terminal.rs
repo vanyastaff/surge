@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 /// Managed terminal process.
-pub(crate) struct ManagedTerminal {
+pub(crate) struct Terminal {
     /// Child process handle.
     child: Child,
     /// Accumulated output.
@@ -22,12 +22,12 @@ pub(crate) struct ManagedTerminal {
     /// Maximum output bytes to retain.
     output_byte_limit: Option<u64>,
     /// Cached exit status (set once on exit).
-    exit_status: Option<TerminalExit>,
+    exit_status: Option<ExitStatus>,
 }
 
 /// Terminal exit information.
 #[derive(Debug, Clone)]
-pub struct TerminalExit {
+pub struct ExitStatus {
     /// Process exit code (None if killed by signal).
     pub exit_code: Option<u32>,
     /// Signal name (None if exited normally).
@@ -38,13 +38,13 @@ pub struct TerminalExit {
 ///
 /// Each terminal lives behind its own `Arc<Mutex<_>>` so that operations
 /// on one terminal (e.g. `wait_for_exit`) don't block operations on others.
-pub struct TerminalManager {
-    terminals: HashMap<String, Arc<Mutex<ManagedTerminal>>>,
+pub struct Terminals {
+    terminals: HashMap<String, Arc<Mutex<Terminal>>>,
     next_id: u64,
     worktree_root: PathBuf,
 }
 
-impl TerminalManager {
+impl Terminals {
     /// Create a new terminal manager.
     #[must_use]
     pub fn new(worktree_root: PathBuf) -> Self {
@@ -75,16 +75,25 @@ impl TerminalManager {
             .cloned()
             .unwrap_or_else(|| self.worktree_root.clone());
 
-        // Validate cwd is within worktree
-        if let Ok(canonical) = work_dir.canonicalize() {
-            if let Ok(root_canonical) = self.worktree_root.canonicalize() {
-                if !canonical.starts_with(&root_canonical) {
-                    return Err(format!(
-                        "Terminal cwd {} is outside worktree bounds",
-                        work_dir.display()
-                    ));
-                }
-            }
+        // Validate cwd is within worktree. Fail closed: if we cannot
+        // canonicalize either path, refuse to spawn.
+        let canonical_work_dir = work_dir.canonicalize().map_err(|e| {
+            format!(
+                "Cannot canonicalize terminal cwd {}: {e}",
+                work_dir.display()
+            )
+        })?;
+        let canonical_root = self.worktree_root.canonicalize().map_err(|e| {
+            format!(
+                "Cannot canonicalize worktree root {}: {e}",
+                self.worktree_root.display()
+            )
+        })?;
+        if !canonical_work_dir.starts_with(&canonical_root) {
+            return Err(format!(
+                "Terminal cwd {} is outside worktree bounds",
+                work_dir.display()
+            ));
         }
 
         self.next_id += 1;
@@ -133,7 +142,7 @@ impl TerminalManager {
             });
         }
 
-        let terminal = ManagedTerminal {
+        let terminal = Terminal {
             child,
             output,
             output_byte_limit,
@@ -148,38 +157,38 @@ impl TerminalManager {
 
     /// Get an `Arc` handle to a terminal. The caller locks it independently.
     #[must_use]
-    pub(crate) fn get_terminal(&self, terminal_id: &str) -> Option<Arc<Mutex<ManagedTerminal>>> {
+    pub(crate) fn get_terminal(&self, terminal_id: &str) -> Option<Arc<Mutex<Terminal>>> {
         self.terminals.get(terminal_id).cloned()
     }
 
     /// Remove a terminal from the map (for release). Returns the handle if found.
-    pub(crate) fn remove_terminal(&mut self, terminal_id: &str) -> Option<Arc<Mutex<ManagedTerminal>>> {
+    pub(crate) fn remove_terminal(&mut self, terminal_id: &str) -> Option<Arc<Mutex<Terminal>>> {
         self.terminals.remove(terminal_id)
     }
 }
 
-impl std::fmt::Debug for TerminalManager {
+impl std::fmt::Debug for Terminals {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TerminalManager")
+        f.debug_struct("Terminals")
             .field("active_terminals", &self.terminals.len())
             .field("worktree_root", &self.worktree_root)
             .finish()
     }
 }
 
-// ── Per-terminal operations (called on the locked ManagedTerminal) ───
+// ── Per-terminal operations (called on the locked Terminal) ───
 
-impl ManagedTerminal {
+impl Terminal {
     /// Get accumulated output. Also non-blocking check for exit.
-    async fn get_output(&mut self) -> (String, bool, Option<TerminalExit>) {
+    async fn get_output(&mut self) -> (String, bool, Option<ExitStatus>) {
         // Non-blocking exit check
-        if self.exit_status.is_none() {
-            if let Ok(Some(status)) = self.child.try_wait() {
-                self.exit_status = Some(TerminalExit {
-                    exit_code: status.code().map(|c| c as u32),
-                    signal: None,
-                });
-            }
+        if self.exit_status.is_none()
+            && let Ok(Some(status)) = self.child.try_wait()
+        {
+            self.exit_status = Some(ExitStatus {
+                exit_code: status.code().map(|c| c as u32),
+                signal: None,
+            });
         }
 
         let output = self.output.lock().await;
@@ -191,7 +200,7 @@ impl ManagedTerminal {
     }
 
     /// Block until child exits.
-    async fn wait_for_exit(&mut self) -> Result<TerminalExit, String> {
+    async fn wait_for_exit(&mut self) -> Result<ExitStatus, String> {
         if let Some(exit) = &self.exit_status {
             return Ok(exit.clone());
         }
@@ -202,7 +211,7 @@ impl ManagedTerminal {
             .await
             .map_err(|e| format!("Failed to wait for terminal: {e}"))?;
 
-        let exit = TerminalExit {
+        let exit = ExitStatus {
             exit_code: status.code().map(|c| c as u32),
             signal: None,
         };
@@ -217,7 +226,7 @@ impl ManagedTerminal {
             .await
             .map_err(|e| format!("Failed to kill terminal: {e}"))?;
 
-        self.exit_status = Some(TerminalExit {
+        self.exit_status = Some(ExitStatus {
             exit_code: None,
             signal: Some("SIGKILL".to_string()),
         });
@@ -229,9 +238,9 @@ impl ManagedTerminal {
 
 /// Get output from a terminal by ID. Acquires only the per-terminal lock.
 pub async fn terminal_get_output(
-    mgr: &Mutex<TerminalManager>,
+    mgr: &Mutex<Terminals>,
     terminal_id: &str,
-) -> Result<(String, bool, Option<TerminalExit>), String> {
+) -> Result<(String, bool, Option<ExitStatus>), String> {
     let handle = {
         let m = mgr.lock().await;
         m.get_terminal(terminal_id)
@@ -244,9 +253,9 @@ pub async fn terminal_get_output(
 
 /// Wait for terminal exit by ID. Acquires only the per-terminal lock.
 pub async fn terminal_wait_for_exit(
-    mgr: &Mutex<TerminalManager>,
+    mgr: &Mutex<Terminals>,
     terminal_id: &str,
-) -> Result<TerminalExit, String> {
+) -> Result<ExitStatus, String> {
     let handle = {
         let m = mgr.lock().await;
         m.get_terminal(terminal_id)
@@ -258,7 +267,7 @@ pub async fn terminal_wait_for_exit(
 
 /// Kill terminal by ID. Acquires only the per-terminal lock.
 pub async fn terminal_kill(
-    mgr: &Mutex<TerminalManager>,
+    mgr: &Mutex<Terminals>,
     terminal_id: &str,
 ) -> Result<(), String> {
     let handle = {
@@ -272,7 +281,7 @@ pub async fn terminal_kill(
 
 /// Release (remove + kill if running) a terminal by ID.
 pub async fn terminal_release(
-    mgr: &Mutex<TerminalManager>,
+    mgr: &Mutex<Terminals>,
     terminal_id: &str,
 ) -> Result<(), String> {
     let handle = {
@@ -281,10 +290,10 @@ pub async fn terminal_release(
             .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
     };
     let mut term = handle.lock().await;
-    if term.exit_status.is_none() {
-        if term.child.try_wait().ok().flatten().is_none() {
-            let _ = term.child.kill().await;
-        }
+    if term.exit_status.is_none()
+        && term.child.try_wait().ok().flatten().is_none()
+    {
+        let _ = term.child.kill().await;
     }
     debug!(terminal_id, "terminal released");
     Ok(())
@@ -341,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_and_wait() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "echo hello".into()]);
@@ -362,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_terminal() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "timeout /t 60".into()]);
@@ -378,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_release_terminal() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "echo test".into()]);
@@ -394,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_byte_limit() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = (
@@ -418,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_not_found() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
         assert!(terminal_get_output(&mgr, "nonexistent").await.is_err());
         assert!(terminal_kill(&mgr, "nonexistent").await.is_err());
         assert!(terminal_wait_for_exit(&mgr, "nonexistent").await.is_err());
@@ -426,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_terminals() {
-        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd1, args1) = ("cmd", vec!["/C".into(), "echo first".into()]);

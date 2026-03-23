@@ -2,8 +2,8 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_acp::{
-    build_available_agent, build_configured_agent, vendor_color, AgentUsage, AvailableAgent,
-    BadgeKind, ConfiguredAgent, EffortLevel, InstallStatus, SessionStatus,
+    AgentDetail, AgentKind, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus,
+    Usage,
 };
 
 use crate::app_state::AppState;
@@ -35,8 +35,8 @@ pub struct AgentHubScreen {
     search: String,
     filter: CatalogFilter,
     /// Cached display data — rebuilt only when state changes.
-    cached_configured: Vec<ConfiguredAgent>,
-    cached_available: Vec<AvailableAgent>,
+    cached_configured: Vec<AgentDetail>,
+    cached_available: Vec<AgentSummary>,
     cache_valid: bool,
 }
 
@@ -62,26 +62,26 @@ impl AgentHubScreen {
 
         self.cached_configured = state.installed_agents.iter().map(|detected| {
             let health = state.health.get_health(&detected.entry.id);
-            build_configured_agent(detected, health)
+            AgentDetail::from_detected(detected, health)
         }).collect();
 
         let installed_ids: Vec<&str> = state.installed_agents.iter()
             .map(|a| a.entry.id.as_str()).collect();
         self.cached_available = state.registry.list().iter()
             .filter(|e| !installed_ids.contains(&e.id.as_str()))
-            .map(|entry| build_available_agent(entry))
+            .map(|entry| AgentSummary::from_entry(entry))
             .collect();
 
         self.cache_valid = true;
     }
 
     /// Get configured agents (from cache).
-    fn configured(&self) -> &[ConfiguredAgent] {
+    fn configured(&self) -> &[AgentDetail] {
         &self.cached_configured
     }
 
     /// Get available agents (from cache).
-    fn available(&self) -> &[AvailableAgent] {
+    fn available(&self) -> &[AgentSummary] {
         &self.cached_available
     }
 
@@ -110,7 +110,7 @@ impl AgentHubScreen {
 
     // ── Configured: Agent List (left) ────────────────────────
 
-    fn render_agent_item(&self, idx: usize, agent: &ConfiguredAgent, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_agent_item(&self, idx: usize, agent: &AgentDetail, cx: &mut Context<Self>) -> Stateful<Div> {
         let is_selected = self.selected == Some(idx);
         let is_active = agent.active_sessions > 0;
 
@@ -123,7 +123,7 @@ impl AgentHubScreen {
             .on_click(cx.listener(move |this, _e, _w, cx| { this.selected = Some(idx); cx.notify(); }))
             // Status dot — green for installed binary, blue for npx/uvx
             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(
-                if agent.install_status == InstallStatus::Installed { theme::SUCCESS } else { theme::PRIMARY }
+                if agent.install_method == InstallMethod::Installed { theme::SUCCESS } else { theme::PRIMARY }
             ))
             // Name
             .child(div().flex_1().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
@@ -142,7 +142,7 @@ impl AgentHubScreen {
 
     // ── Detail Panel (right, read-only) ──────────────────────
 
-    fn render_detail(&self, configured: &[ConfiguredAgent]) -> Div {
+    fn render_detail(&self, configured: &[AgentDetail]) -> Div {
         let Some(idx) = self.selected else {
             return div().flex_1().v_flex().items_center().justify_center().gap_2()
                 .child(Icon::new(IconName::Bot).size_8().text_color(theme::TEXT_MUTED.opacity(0.15)))
@@ -164,10 +164,10 @@ impl AgentHubScreen {
                             .child(Icon::new(IconName::Bot).size_5().text_color(theme::PRIMARY))
                             .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
                             .child({
-                                let (color, label) = match agent.install_status {
-                                    InstallStatus::Installed => (theme::SUCCESS, "Installed"),
-                                    InstallStatus::Npx => (theme::PRIMARY, "npx"),
-                                    InstallStatus::Uvx => (theme::PRIMARY, "uvx"),
+                                let (color, label) = match agent.install_method {
+                                    InstallMethod::Installed => (theme::SUCCESS, "Installed"),
+                                    InstallMethod::Npx => (theme::PRIMARY, "npx"),
+                                    InstallMethod::Uvx => (theme::PRIMARY, "uvx"),
                                 };
                                 div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(3.0)).rounded_full()
                                     .bg(color.opacity(0.1))
@@ -256,7 +256,7 @@ impl AgentHubScreen {
                     .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06));
 
                 match &agent.usage {
-                    AgentUsage::ClaudeCode { five_hour_pct, five_hour_reset, weekly_pct, weekly_reset, extra_usage_enabled, extra_usage_cost } => {
+                    Usage::ClaudeCode { five_hour_pct, five_hour_reset, weekly_pct, weekly_reset, extra_usage_enabled, extra_usage_cost } => {
                         let fh_color = quota_color(*five_hour_pct);
                         let wk_color = quota_color(*weekly_pct);
                         section = section
@@ -276,7 +276,7 @@ impl AgentHubScreen {
                                     ),
                             );
                     }
-                    AgentUsage::Estimated { provider, estimated_tokens, estimated_cost, is_local } => {
+                    Usage::Estimated { provider, estimated_tokens, estimated_cost, is_local } => {
                         section = section
                             .child(
                                 div().h_flex().justify_between()
@@ -298,7 +298,7 @@ impl AgentHubScreen {
                                         .child(format!("${:.2} today (~{} tokens)", estimated_cost, format_tokens(*estimated_tokens)))),
                             );
                     }
-                    AgentUsage::Unknown => {
+                    Usage::Unknown => {
                         section = section.child(
                             div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("No usage data available".to_string()),
                         );
@@ -364,7 +364,7 @@ impl AgentHubScreen {
 
     // ── Available Tab ────────────────────────────────────────
 
-    fn filtered_available<'a>(&self, available: &'a [AvailableAgent]) -> Vec<&'a AvailableAgent> {
+    fn filtered_available<'a>(&self, available: &'a [AgentSummary]) -> Vec<&'a AgentSummary> {
         available.iter().filter(|a| {
             if !self.search.is_empty() {
                 let q = self.search.to_lowercase();
@@ -389,13 +389,16 @@ impl AgentHubScreen {
             let cmd = agent.install_command.clone();
             let is_even = i % 2 == 0;
             let initial = agent.display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
-            let vc = vendor_color(&agent.name)
-                .map(|(r, g, b)| gpui::rgba(
-                    ((r * 255.0) as u32) << 24
-                        | ((g * 255.0) as u32) << 16
-                        | ((b * 255.0) as u32) << 8
-                        | 0xFF,
-                ).into())
+            let vc = AgentKind::from_id(&agent.name)
+                .map(|kind| {
+                    let (r, g, b) = kind.color();
+                    gpui::rgba(
+                        ((r * 255.0) as u32) << 24
+                            | ((g * 255.0) as u32) << 16
+                            | ((b * 255.0) as u32) << 8
+                            | 0xFF,
+                    ).into()
+                })
                 .unwrap_or(theme::TEXT_MUTED);
 
             div()

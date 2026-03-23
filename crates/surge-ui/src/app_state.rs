@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use surge_acp::{AgentHealth, AgentPool, DetectedAgent, HealthMonitor, PermissionPolicy, Registry, RegistryEntry};
+use surge_acp::{AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry};
 use surge_core::{Spec, SpecId, SurgeConfig, SurgeEvent, TaskId, TaskState};
 
 /// Central application state shared across all UI screens.
@@ -21,7 +21,7 @@ pub struct AppState {
     /// Agents detected on system PATH.
     pub installed_agents: Vec<DetectedAgent>,
     /// Health metrics per agent.
-    pub health: HealthMonitor,
+    pub health: HealthTracker,
 
     // ── Tasks ──
     pub tasks: Vec<TaskEntry>,
@@ -72,7 +72,7 @@ impl AppState {
         let installed_agents = registry.detect_installed_with_paths();
 
         // Register installed agents in health monitor.
-        let mut health = HealthMonitor::new();
+        let mut health = HealthTracker::new();
         for agent in &installed_agents {
             health.register(&agent.entry.id);
         }
@@ -113,6 +113,7 @@ impl AppState {
                         config.default_agent.clone(),
                         path.to_path_buf(),
                         PermissionPolicy::default(),
+                        config.resilience.clone(),
                     ) {
                         self.agent_pool = Some(Arc::new(pool));
                     }
@@ -135,7 +136,7 @@ impl AppState {
                 }
                 agents.insert(detected.entry.id.clone(), config);
             }
-            if let Ok(pool) = AgentPool::new(agents, default_agent, path.to_path_buf(), PermissionPolicy::default()) {
+            if let Ok(pool) = AgentPool::new(agents, default_agent, path.to_path_buf(), PermissionPolicy::default(), surge_core::config::ResilienceConfig::default()) {
                 self.agent_pool = Some(Arc::new(pool));
             }
         }

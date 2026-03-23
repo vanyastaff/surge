@@ -55,13 +55,13 @@ impl AgentHealth {
 
 /// Monitors agent health and provides fallback routing.
 #[derive(Debug, Default)]
-pub struct HealthMonitor {
+pub struct HealthTracker {
     agents: HashMap<String, AgentHealth>,
     fallback_map: HashMap<String, String>,
 }
 
-impl HealthMonitor {
-    /// Creates a new empty `HealthMonitor`.
+impl HealthTracker {
+    /// Creates a new empty `HealthTracker`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_healthy_by_default() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         let health = monitor.get_health("claude").unwrap();
         assert!(health.is_healthy());
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_error_rate() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         // 10 requests, 3 failures → 30%
         for _ in 0..7 {
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_unhealthy_on_high_errors() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         // 60% error rate
         for _ in 0..4 {
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_rate_limit_detection() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         monitor.record_failure("claude", "429 Too Many Requests");
         let health = monitor.get_health("claude").unwrap();
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_fallback_routing() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         monitor.register("copilot");
         monitor.set_fallback("claude", "copilot");
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_success_recording() {
-        let mut monitor = HealthMonitor::new();
+        let mut monitor = HealthTracker::new();
         monitor.register("claude");
         monitor.record_success("claude", Duration::from_millis(100));
         monitor.record_success("claude", Duration::from_millis(200));

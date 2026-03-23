@@ -100,6 +100,7 @@ impl Orchestrator {
             self.config.surge_config.default_agent.clone(),
             worktree_path.clone(),
             PermissionPolicy::default(),
+            self.config.surge_config.resilience.clone(),
         ) {
             Ok(p) => p,
             Err(e) => {

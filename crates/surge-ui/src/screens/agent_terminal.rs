@@ -302,11 +302,7 @@ fn send_prompt_blocking(
 
         // Send prompt.
         let content = vec![agent_client_protocol::ContentBlock::Text(
-            agent_client_protocol::TextContent {
-                text: prompt,
-                annotations: None,
-                meta: None,
-            },
+            agent_client_protocol::TextContent::new(prompt),
         )];
 
         let response = pool

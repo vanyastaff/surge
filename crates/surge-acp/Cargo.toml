@@ -9,9 +9,11 @@ surge-core = { workspace = true }
 agent-client-protocol = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 async-trait = "0.1"
 futures = "0.3"
 tokio-util = { version = "0.7", features = ["compat"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

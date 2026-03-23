@@ -4,19 +4,18 @@
 //! over stdio transport, and managing the agent lifecycle.
 
 use agent_client_protocol::{
-    Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, FileSystemCapability,
-    InitializeRequest,
+    Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, Implementation,
+    InitializeRequest, ProtocolVersion,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use surge_core::config::{AgentConfig, Transport};
 use surge_core::SurgeError;
+use tokio::process::{Child, Command};
 use tracing::{debug, info};
 
 use crate::client::{PermissionPolicy, SurgeClient};
-
-// Note: agent_client_protocol re-exports VERSION constant from schema
 
 /// State of an active agent session.
 #[derive(Debug, Clone)]
@@ -64,7 +63,13 @@ impl AgentConnection {
     /// Returns error if:
     /// - Process spawn fails
     /// - ACP initialization handshake fails
-    /// - Only stdio transport is currently supported
+    /// - TCP transport is recognized in [`surge_core::config::Transport`] but not yet
+    ///   implemented; passing a TCP config returns [`SurgeError::AgentConnection`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a `tokio::task::LocalSet` context, because the
+    /// ACP SDK's `ClientSideConnection` requires `spawn_local` for internal tasks.
     pub async fn spawn(
         name: String,
         config: &AgentConfig,
@@ -73,17 +78,14 @@ impl AgentConnection {
     ) -> Result<Self, SurgeError> {
         info!("Spawning agent '{}' with command: {}", name, config.command);
 
-        // Currently only stdio transport is supported
         match &config.transport {
             Transport::Stdio => {
                 Self::spawn_stdio(name, config, worktree_root, permission_policy).await
             }
-            Transport::Tcp { host, port } => {
-                Err(SurgeError::AgentConnection(format!(
-                    "TCP transport not yet implemented ({}:{})",
-                    host, port
-                )))
-            }
+            Transport::Tcp { host, port } => Err(SurgeError::AgentConnection(format!(
+                "TCP transport not yet implemented ({}:{})",
+                host, port
+            ))),
         }
     }
 
@@ -94,19 +96,19 @@ impl AgentConnection {
         worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
     ) -> Result<Self, SurgeError> {
-        // Build command
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-
-        // Set working directory to worktree root
         cmd.current_dir(&worktree_root);
+
+        // On Windows, suppress console window
+        #[cfg(windows)]
+        cmd.creation_flags(0x00000008); // CREATE_NO_WINDOW
 
         debug!("Spawning command: {:?}", cmd);
 
-        // Spawn process
         let mut child = cmd.spawn().map_err(|e| {
             SurgeError::AgentConnection(format!(
                 "Failed to spawn agent '{}' ({}): {}",
@@ -114,7 +116,7 @@ impl AgentConnection {
             ))
         })?;
 
-        // Extract stdio handles
+        // Extract stdio handles — tokio::process::Child yields async handles directly
         let stdin = child.stdin.take().ok_or_else(|| {
             SurgeError::AgentConnection("Failed to capture agent stdin".to_string())
         })?;
@@ -122,37 +124,39 @@ impl AgentConnection {
             SurgeError::AgentConnection("Failed to capture agent stdout".to_string())
         })?;
 
-        // Wrap in tokio async I/O and then use futures AsyncRead/AsyncWrite compat
+        // Drain stderr to tracing::warn in background.
+        // Uses tokio::spawn (not spawn_local) since ChildStderr is Send.
+        if let Some(stderr) = child.stderr.take() {
+            let agent_name = name.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::warn!(agent = %agent_name, "[stderr] {}", line);
+                }
+            });
+        }
+
+        // Wrap in futures AsyncRead/AsyncWrite as required by ACP SDK
         use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-        let async_stdin = tokio::process::ChildStdin::from_std(stdin).map_err(|e| {
-            SurgeError::AgentConnection(format!("Failed to create async stdin: {}", e))
-        })?.compat_write();
-
-        let async_stdout = tokio::process::ChildStdout::from_std(stdout).map_err(|e| {
-            SurgeError::AgentConnection(format!("Failed to create async stdout: {}", e))
-        })?.compat();
+        let async_stdin = stdin.compat_write();
+        let async_stdout = stdout.compat();
 
         // Create SurgeClient for this connection
         let client = SurgeClient::new(worktree_root.clone(), permission_policy);
 
         // Establish ACP connection
-        // ClientSideConnection::new returns (connection, io_task)
-        // The spawn function is used by the library to spawn internal tasks
         let (connection, io_task) = ClientSideConnection::new(
             client,
             async_stdin,
             async_stdout,
-            // Use tokio::task::spawn_local for LocalBoxFuture tasks
-            // These are protocol-internal tasks that don't need to be Send
-            // Caller must ensure a LocalSet is active (e.g. via tokio::task::LocalSet)
             |fut| {
                 #[allow(clippy::let_underscore_future)]
                 let _ = tokio::task::spawn_local(fut);
             },
         );
 
-        // Spawn the IO task to handle the RPC communication
+        // Spawn the IO task to handle RPC communication
         tokio::task::spawn_local(async move {
             if let Err(e) = io_task.await {
                 tracing::error!("ACP IO task failed: {:?}", e);
@@ -162,11 +166,9 @@ impl AgentConnection {
         // Perform ACP initialization handshake
         info!("Performing ACP initialization handshake for '{}'", name);
 
-        let init_request = InitializeRequest {
-            protocol_version: agent_client_protocol::VERSION,
-            client_capabilities: surge_client_capabilities(),
-            meta: None,
-        };
+        let mut init_request = InitializeRequest::new(ProtocolVersion::V1);
+        init_request.client_capabilities = surge_client_capabilities();
+        init_request.client_info = Some(Implementation::new("surge", env!("CARGO_PKG_VERSION")));
 
         let init_response = connection
             .initialize(init_request)
@@ -200,8 +202,6 @@ impl AgentConnection {
     }
 
     /// Get access to the underlying ACP connection.
-    ///
-    /// This provides access to all Agent trait methods (ping, prompt, new_session, etc.).
     #[must_use]
     pub fn connection(&self) -> &ClientSideConnection {
         &self.connection
@@ -234,12 +234,29 @@ impl AgentConnection {
     #[must_use]
     pub fn is_running(&mut self) -> bool {
         if let Some(process) = &mut self.process {
-            // try_wait returns None if still running, Some(ExitStatus) if exited
             process.try_wait().ok().flatten().is_none()
         } else {
-            // No process means TCP transport (not yet implemented), assume connected
+            // No child process; connection is externally managed.
             true
         }
+    }
+
+    /// Attempt graceful shutdown: wait up to `grace` for exit, then kill.
+    pub async fn wait_or_kill(&mut self, grace: std::time::Duration) {
+        let Some(process) = self.process.as_mut() else {
+            return;
+        };
+        match tokio::time::timeout(grace, process.wait()).await {
+            Ok(Ok(_)) => {
+                // Exited cleanly
+            }
+            _ => {
+                // Timed out or wait error — force kill and reap
+                let _ = process.kill().await;
+                let _ = process.wait().await;
+            }
+        }
+        self.process = None;
     }
 
     /// Kill the agent process.
@@ -247,37 +264,39 @@ impl AgentConnection {
     /// # Errors
     ///
     /// Returns error if process kill fails.
-    pub fn kill(&mut self) -> Result<(), SurgeError> {
-        if let Some(process) = &mut self.process {
+    pub async fn kill(&mut self) -> Result<(), SurgeError> {
+        if let Some(process) = self.process.as_mut() {
             process
                 .kill()
+                .await
                 .map_err(|e| SurgeError::AgentConnection(format!("Failed to kill agent: {}", e)))?;
+            let _ = process.wait().await;
         }
+        self.process = None;
         Ok(())
     }
 }
 
 impl Drop for AgentConnection {
     fn drop(&mut self) {
-        // Attempt to cleanly terminate the agent process
-        if let Some(mut process) = self.process.take() {
+        if let Some(process) = self.process.as_mut() {
             debug!("Dropping AgentConnection '{}', killing process", self.name);
-            let _ = process.kill();
+            // start_kill sends the signal synchronously (no await needed)
+            let _ = process.start_kill();
         }
     }
 }
 
 /// Build Surge client capabilities for ACP initialization.
 fn surge_client_capabilities() -> ClientCapabilities {
-    ClientCapabilities {
-        fs: FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    }
+    use agent_client_protocol::FileSystemCapabilities;
+    ClientCapabilities::new()
+        .fs(
+            FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true),
+        )
+        .terminal(true)
 }
 
 #[cfg(test)]
@@ -291,7 +310,4 @@ mod tests {
         assert!(caps.fs.write_text_file);
         assert!(caps.terminal);
     }
-
-    // Note: Full integration tests require a real agent binary and are tested
-    // in integration tests or through CLI commands.
 }

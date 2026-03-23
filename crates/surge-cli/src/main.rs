@@ -233,6 +233,7 @@ async fn main() -> Result<()> {
                 config.default_agent.clone(),
                 cwd,
                 surge_acp::PermissionPolicy::default(),
+                config.resilience.clone(),
             )?;
 
             match pool.ping(agent_name).await {
@@ -265,16 +266,13 @@ async fn main() -> Result<()> {
                 config.default_agent.clone(),
                 cwd.clone(),
                 surge_acp::PermissionPolicy::default(),
+                config.resilience.clone(),
             )?;
 
             let session = pool.create_session(Some(agent_name), None, &cwd).await?;
 
             let content = vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: message,
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new(message),
             )];
 
             let response = pool.prompt(&session, content).await?;
@@ -335,6 +333,7 @@ async fn main() -> Result<()> {
                     config.default_agent.clone(),
                     cwd,
                     surge_acp::PermissionPolicy::default(),
+                    config.resilience.clone(),
                 )?;
 
                 match pool.ping(&name).await {
