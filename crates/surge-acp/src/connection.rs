@@ -66,10 +66,12 @@ impl AgentConnection {
     /// - TCP transport is recognized in [`surge_core::config::Transport`] but not yet
     ///   implemented; passing a TCP config returns [`SurgeError::AgentConnection`]
     ///
-    /// # Panics
+    /// # Note
     ///
-    /// Panics if called outside a `tokio::task::LocalSet` context, because the
-    /// ACP SDK's `ClientSideConnection` requires `spawn_local` for internal tasks.
+    /// All async operations on `AgentConnection` (and the returned
+    /// `ClientSideConnection`) must run inside a `tokio::task::LocalSet`
+    /// because the ACP SDK uses `spawn_local` internally.
+    /// Use [`AgentPool`] which handles this automatically.
     pub async fn spawn(
         name: String,
         config: &AgentConfig,

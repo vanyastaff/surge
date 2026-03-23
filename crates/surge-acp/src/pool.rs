@@ -1,20 +1,20 @@
 //! AgentPool — multi-agent management with resilience.
 //!
-//! This module provides a pool for managing multiple agent connections,
-//! handling lazy initialization with spawn-gating, session creation,
-//! health-based fallback routing, and configurable timeouts.
+//! All ACP operations run on a dedicated thread with a `LocalSet` to satisfy
+//! the `!Send` requirement of `ClientSideConnection`. The pool API is fully
+//! `Send`-safe and can be called from any tokio context.
 
 use agent_client_protocol::{
     Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SetSessionModeRequest,
     SessionModeId,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, ResilienceConfig};
 use surge_core::SurgeError;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
@@ -30,46 +30,54 @@ pub struct SessionHandle {
     pub agent_name: String,
 }
 
+// ── Internal message types for the LocalSet worker ──────────────────
+
+enum PoolOp {
+    Connect {
+        name: String,
+        tx: oneshot::Sender<Result<(), SurgeError>>,
+    },
+    CreateSession {
+        agent_name: String,
+        mode: Option<String>,
+        working_dir: PathBuf,
+        tx: oneshot::Sender<Result<SessionHandle, SurgeError>>,
+    },
+    Prompt {
+        session: SessionHandle,
+        content: Vec<ContentBlock>,
+        tx: oneshot::Sender<Result<PromptResponse, SurgeError>>,
+    },
+    Shutdown {
+        tx: oneshot::Sender<()>,
+    },
+}
+
 /// Pool for managing multiple agent connections.
 ///
 /// Provides lazy initialization of agent connections, session management,
 /// health-based fallback routing, and configurable timeouts.
+///
+/// Internally runs a dedicated thread with `tokio::task::LocalSet` for ACP
+/// operations, so all public methods are `Send`-safe.
 pub struct AgentPool {
-    /// Configuration for available agents.
-    configs: HashMap<String, AgentConfig>,
+    /// Channel to the LocalSet worker.
+    op_tx: std::sync::mpsc::Sender<PoolOp>,
 
-    /// Active agent connections (lazily initialized).
-    connections: Arc<RwLock<HashMap<String, AgentConnection>>>,
+    /// Worker thread handle.
+    _worker: Option<std::thread::JoinHandle<()>>,
 
-    /// Guards against concurrent spawn of the same agent name.
-    spawning: Arc<Mutex<HashSet<String>>>,
-
-    /// Default agent name for tasks without explicit agent specification.
+    /// Default agent name.
     default_agent: String,
 
-    /// Root directory for worktree operations.
-    worktree_root: std::path::PathBuf,
-
-    /// Default permission policy for agent connections.
-    permission_policy: PermissionPolicy,
-
-    /// Health monitor for tracking agent reliability and fallback routing.
+    /// Health monitor (Send-safe, shared).
     health: Arc<Mutex<HealthTracker>>,
-
-    /// Resilience configuration (timeouts, retries, shutdown grace).
-    resilience: ResilienceConfig,
 }
 
 impl AgentPool {
     /// Create a new agent pool.
     ///
-    /// # Arguments
-    ///
-    /// * `configs` - Map of agent name to configuration
-    /// * `default_agent` - Name of the default agent
-    /// * `worktree_root` - Root directory for file operations
-    /// * `permission_policy` - Policy for controlling agent permissions
-    /// * `resilience` - Resilience configuration for timeouts and retries
+    /// Spawns a dedicated worker thread with a `LocalSet` for ACP operations.
     ///
     /// # Errors
     ///
@@ -77,7 +85,7 @@ impl AgentPool {
     pub fn new(
         configs: HashMap<String, AgentConfig>,
         default_agent: String,
-        worktree_root: std::path::PathBuf,
+        worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
         resilience: ResilienceConfig,
     ) -> Result<Self, SurgeError> {
@@ -88,20 +96,119 @@ impl AgentPool {
             )));
         }
 
-        let mut health_monitor = HealthTracker::new();
+        let mut health_tracker = HealthTracker::new();
         for name in configs.keys() {
-            health_monitor.register(name);
+            health_tracker.register(name);
         }
+        let health = Arc::new(Mutex::new(health_tracker));
+
+        let (op_tx, op_rx) = std::sync::mpsc::channel::<PoolOp>();
+
+        let worker_health = Arc::clone(&health);
+        let worker_resilience = resilience.clone();
+
+        let worker = std::thread::Builder::new()
+            .name("surge-acp-pool".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build ACP runtime");
+
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&rt, async move {
+                    let mut connections: HashMap<String, AgentConnection> = HashMap::new();
+                    let mut spawning: HashSet<String> = HashSet::new();
+
+                    loop {
+                        // Yield to let ACP IO tasks run between operations
+                        tokio::task::yield_now().await;
+
+                        let op = match op_rx.try_recv() {
+                            Ok(op) => op,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                                continue;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                        };
+
+                        match op {
+                            PoolOp::Connect { name, tx } => {
+                                let result = do_connect(
+                                    &name,
+                                    &configs,
+                                    &mut connections,
+                                    &mut spawning,
+                                    &worktree_root,
+                                    &permission_policy,
+                                    &worker_resilience,
+                                )
+                                .await;
+                                let _ = tx.send(result);
+                            }
+                            PoolOp::CreateSession {
+                                agent_name,
+                                mode,
+                                working_dir,
+                                tx,
+                            } => {
+                                let result = do_create_session(
+                                    &agent_name,
+                                    mode.as_deref(),
+                                    &working_dir,
+                                    &configs,
+                                    &mut connections,
+                                    &mut spawning,
+                                    &worktree_root,
+                                    &permission_policy,
+                                    &worker_resilience,
+                                )
+                                .await;
+                                let _ = tx.send(result);
+                            }
+                            PoolOp::Prompt {
+                                session,
+                                content,
+                                tx,
+                            } => {
+                                let result = do_prompt(
+                                    &session,
+                                    content,
+                                    &configs,
+                                    &mut connections,
+                                    &mut spawning,
+                                    &worktree_root,
+                                    &permission_policy,
+                                    &worker_resilience,
+                                    &worker_health,
+                                )
+                                .await;
+                                let _ = tx.send(result);
+                            }
+                            PoolOp::Shutdown { tx } => {
+                                let grace =
+                                    Duration::from_secs(worker_resilience.shutdown_grace_secs);
+                                for (name, mut conn) in connections.drain() {
+                                    debug!(agent = name.as_str(), "shutting down agent");
+                                    conn.wait_or_kill(grace).await;
+                                }
+                                let _ = tx.send(());
+                                break;
+                            }
+                        }
+                    }
+                });
+            })
+            .map_err(|e| {
+                SurgeError::AgentConnection(format!("Failed to spawn pool worker: {e}"))
+            })?;
 
         Ok(Self {
-            configs,
-            connections: Arc::new(RwLock::new(HashMap::new())),
-            spawning: Arc::new(Mutex::new(HashSet::new())),
+            op_tx,
+            _worker: Some(worker),
             default_agent,
-            worktree_root,
-            permission_policy,
-            health: Arc::new(Mutex::new(health_monitor)),
-            resilience,
+            health,
         })
     }
 
@@ -109,96 +216,6 @@ impl AgentPool {
     #[must_use]
     pub fn default_agent(&self) -> &str {
         &self.default_agent
-    }
-
-    /// Get list of available agent names.
-    #[must_use]
-    pub fn available_agents(&self) -> Vec<&str> {
-        self.configs.keys().map(String::as_str).collect()
-    }
-
-    /// Get or create a connection to an agent.
-    ///
-    /// Uses a spawn-gate to prevent TOCTOU races: only one caller can
-    /// spawn a given agent name at a time.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if agent is not found, spawn fails, or connection times out.
-    pub async fn get_or_connect(&self, name: &str) -> Result<(), SurgeError> {
-        // Fast path: already connected
-        if self.connections.read().await.contains_key(name) {
-            return Ok(());
-        }
-
-        // Acquire spawn-gate
-        let mut spawning = self.spawning.lock().await;
-        if spawning.contains(name) {
-            // Another task is spawning this agent — wait for it with bounded polling
-            drop(spawning);
-            let max_wait = Duration::from_secs(self.resilience.connect_timeout_secs);
-            let deadline = Instant::now() + max_wait;
-            loop {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                if self.connections.read().await.contains_key(name) {
-                    return Ok(());
-                }
-                if Instant::now() >= deadline {
-                    return Err(SurgeError::Timeout(format!(
-                        "waiting for another task to connect agent '{name}'"
-                    )));
-                }
-                let s = self.spawning.lock().await;
-                if !s.contains(name) {
-                    break;
-                }
-            }
-            if self.connections.read().await.contains_key(name) {
-                return Ok(());
-            }
-            spawning = self.spawning.lock().await;
-        }
-
-        // Double-check after acquiring gate
-        if self.connections.read().await.contains_key(name) {
-            return Ok(());
-        }
-
-        spawning.insert(name.to_string());
-        drop(spawning);
-
-        info!("Connecting to agent '{}'", name);
-
-        let config = self
-            .configs
-            .get(name)
-            .ok_or_else(|| SurgeError::AgentNotFound(name.to_string()))?;
-
-        let timeout = Duration::from_secs(self.resilience.connect_timeout_secs);
-        let spawn_result = tokio::time::timeout(
-            timeout,
-            AgentConnection::spawn(
-                name.to_string(),
-                config,
-                self.worktree_root.clone(),
-                self.permission_policy.clone(),
-            ),
-        )
-        .await
-        .map_err(|_| SurgeError::Timeout(format!("connecting to agent '{name}'")))
-        .and_then(|r| r);
-
-        // Always remove from spawning set
-        self.spawning.lock().await.remove(name);
-
-        let connection = spawn_result?;
-        self.connections
-            .write()
-            .await
-            .insert(name.to_string(), connection);
-
-        info!("Agent '{}' connected successfully", name);
-        Ok(())
     }
 
     /// Check if an agent is responsive by ensuring connection.
@@ -210,9 +227,24 @@ impl AgentPool {
         self.get_or_connect(name).await
     }
 
-    /// Create a new session with an agent.
+    /// Get or create a connection to an agent.
     ///
-    /// Uses read-lock for ACP calls, write-lock only for session tracking insertion.
+    /// # Errors
+    ///
+    /// Returns error if agent is not found, spawn fails, or timeout.
+    pub async fn get_or_connect(&self, name: &str) -> Result<(), SurgeError> {
+        let (tx, rx) = oneshot::channel();
+        self.op_tx
+            .send(PoolOp::Connect {
+                name: name.to_string(),
+                tx,
+            })
+            .map_err(|_| SurgeError::AgentConnection("Pool worker stopped".to_string()))?;
+        rx.await
+            .map_err(|_| SurgeError::AgentConnection("Pool worker dropped response".to_string()))?
+    }
+
+    /// Create a new session with an agent.
     ///
     /// # Errors
     ///
@@ -224,74 +256,20 @@ impl AgentPool {
         working_dir: &Path,
     ) -> Result<SessionHandle, SurgeError> {
         let agent_name = agent_name.unwrap_or(&self.default_agent).to_string();
-        self.get_or_connect(&agent_name).await?;
-
-        let session_timeout = Duration::from_secs(self.resilience.session_timeout_secs);
-
-        // ACP calls under read-lock — concurrent sessions allowed
-        let (session_id, mode_string) = {
-            let connections = self.connections.read().await;
-            let connection = connections.get(&agent_name).ok_or_else(|| {
-                SurgeError::AgentConnection("Connection disappeared".to_string())
-            })?;
-
-            debug!(
-                "Creating session with agent '{}' in {}",
+        let (tx, rx) = oneshot::channel();
+        self.op_tx
+            .send(PoolOp::CreateSession {
                 agent_name,
-                working_dir.display()
-            );
-
-            let request = NewSessionRequest::new(working_dir);
-
-            let response = tokio::time::timeout(
-                session_timeout,
-                connection.connection().new_session(request),
-            )
-            .await
-            .map_err(|_| SurgeError::Timeout("new_session".to_string()))?
-            .map_err(|e| SurgeError::Acp(format!("Failed to create session: {:?}", e)))?;
-
-            let session_id = response.session_id.to_string();
-
-            if let Some(m) = mode {
-                debug!("Setting session mode to '{}'", m);
-                match tokio::time::timeout(
-                    session_timeout,
-                    connection.connection().set_session_mode(
-                        SetSessionModeRequest::new(
-                            session_id.clone(),
-                            SessionModeId::new(m),
-                        ),
-                    ),
-                )
-                .await
-                {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => warn!("Failed to set session mode '{}': {:?}", m, e),
-                    Err(_) => warn!("Timeout setting session mode '{}'", m),
-                }
-            }
-
-            (session_id, mode.map(String::from))
-        }; // read-lock dropped
-
-        // Write-lock only for cheap in-memory insertion
-        self.connections
-            .write()
-            .await
-            .get_mut(&agent_name)
-            .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
-            .add_session(session_id.clone(), working_dir.to_path_buf(), mode_string);
-
-        Ok(SessionHandle {
-            session_id,
-            agent_name,
-        })
+                mode: mode.map(String::from),
+                working_dir: working_dir.to_path_buf(),
+                tx,
+            })
+            .map_err(|_| SurgeError::AgentConnection("Pool worker stopped".to_string()))?;
+        rx.await
+            .map_err(|_| SurgeError::AgentConnection("Pool worker dropped response".to_string()))?
     }
 
     /// Send a prompt to an agent session.
-    ///
-    /// Attempts health-based fallback routing and retries with exponential backoff.
     ///
     /// # Errors
     ///
@@ -301,114 +279,29 @@ impl AgentPool {
         session: &SessionHandle,
         content: Vec<ContentBlock>,
     ) -> Result<PromptResponse, SurgeError> {
-        let prompt_timeout = Duration::from_secs(self.resilience.prompt_timeout_secs);
-        let max_retries = self.resilience.prompt_retries;
-
-        // Resolve which agent to use (may be fallback)
-        let resolved_agent = {
-            let health = self.health.lock().await;
-            health.resolve_agent(&session.agent_name).to_string()
-        };
-
-        let candidates: Vec<String> = if resolved_agent != session.agent_name {
-            warn!(
-                primary = session.agent_name.as_str(),
-                fallback = resolved_agent.as_str(),
-                "primary agent unhealthy, trying fallback first"
-            );
-            vec![resolved_agent, session.agent_name.clone()]
-        } else {
-            vec![session.agent_name.clone()]
-        };
-
-        let mut last_error: Option<SurgeError> = None;
-
-        for attempt in 0..=max_retries {
-            for agent_name in &candidates {
-                if let Err(e) = self.get_or_connect(agent_name).await {
-                    last_error = Some(e);
-                    continue;
-                }
-
-                let connections = self.connections.read().await;
-                let Some(connection) = connections.get(agent_name) else {
-                    continue;
-                };
-
-                let request = PromptRequest::new(
-                    session.session_id.clone(),
-                    content.clone(),
-                );
-
-                let start = Instant::now();
-                let result = tokio::time::timeout(
-                    prompt_timeout,
-                    connection.connection().prompt(request),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok(response)) => {
-                        let elapsed = start.elapsed();
-                        drop(connections);
-                        self.health.lock().await.record_success(agent_name, elapsed);
-                        return Ok(response);
-                    }
-                    Ok(Err(e)) => {
-                        let msg = format!("{e:?}");
-                        drop(connections);
-                        self.health.lock().await.record_failure(agent_name, &msg);
-                        last_error =
-                            Some(SurgeError::Acp(format!("Prompt failed on '{agent_name}': {msg}")));
-                        warn!(agent = agent_name.as_str(), attempt, "prompt failed");
-                    }
-                    Err(_) => {
-                        drop(connections);
-                        let msg = format!("prompt timed out on '{agent_name}'");
-                        self.health.lock().await.record_failure(agent_name, &msg);
-                        last_error = Some(SurgeError::Timeout(msg));
-                        warn!(agent = agent_name.as_str(), attempt, "prompt timed out");
-                    }
-                }
-            }
-
-            if attempt < max_retries {
-                tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+        let (tx, rx) = oneshot::channel();
+        self.op_tx
+            .send(PoolOp::Prompt {
+                session: session.clone(),
+                content,
+                tx,
+            })
+            .map_err(|_| SurgeError::AgentConnection("Pool worker stopped".to_string()))?;
+        rx.await
+            .map_err(|_| SurgeError::AgentConnection("Pool worker dropped response".to_string()))?
     }
 
     /// Gracefully shutdown all agents.
-    ///
-    /// Waits up to `shutdown_grace_secs` for each process to exit, then kills.
     pub async fn shutdown(&self) {
         info!("Shutting down agent pool");
-        let grace = Duration::from_secs(self.resilience.shutdown_grace_secs);
-
-        let mut connections = self.connections.write().await;
-        for (name, mut conn) in connections.drain() {
-            debug!(agent = name.as_str(), "waiting for agent to exit");
-            conn.wait_or_kill(grace).await;
+        let (tx, rx) = oneshot::channel();
+        if self.op_tx.send(PoolOp::Shutdown { tx }).is_ok() {
+            let _ = rx.await;
         }
-
         info!("Agent pool shutdown complete");
     }
 
-    /// Get the number of active connections.
-    #[must_use]
-    pub async fn active_connections(&self) -> usize {
-        self.connections.read().await.len()
-    }
-
-    /// Check if a specific agent is connected.
-    #[must_use]
-    pub async fn is_connected(&self, name: &str) -> bool {
-        self.connections.read().await.contains_key(name)
-    }
-
-    /// Get a reference to the health monitor.
+    /// Get a reference to the health tracker.
     #[must_use]
     pub fn health(&self) -> &Arc<Mutex<HealthTracker>> {
         &self.health
@@ -430,17 +323,234 @@ impl std::fmt::Debug for AgentPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentPool")
             .field("default_agent", &self.default_agent)
-            .field("worktree_root", &self.worktree_root)
-            .field("available_agents", &self.configs.keys().collect::<Vec<_>>())
-            .field("permission_policy", &self.permission_policy)
             .finish_non_exhaustive()
     }
+}
+
+// ── Worker-internal operations (run inside LocalSet) ────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn do_connect(
+    name: &str,
+    configs: &HashMap<String, AgentConfig>,
+    connections: &mut HashMap<String, AgentConnection>,
+    spawning: &mut HashSet<String>,
+    worktree_root: &Path,
+    permission_policy: &PermissionPolicy,
+    resilience: &ResilienceConfig,
+) -> Result<(), SurgeError> {
+    if connections.contains_key(name) {
+        return Ok(());
+    }
+
+    if spawning.contains(name) {
+        return Err(SurgeError::AgentConnection(format!(
+            "Agent '{name}' is already being spawned"
+        )));
+    }
+
+    let config = configs
+        .get(name)
+        .ok_or_else(|| SurgeError::AgentNotFound(name.to_string()))?;
+
+    info!("Connecting to agent '{}'", name);
+    spawning.insert(name.to_string());
+
+    let timeout = Duration::from_secs(resilience.connect_timeout_secs);
+    let result = tokio::time::timeout(
+        timeout,
+        AgentConnection::spawn(
+            name.to_string(),
+            config,
+            worktree_root.to_path_buf(),
+            permission_policy.clone(),
+        ),
+    )
+    .await
+    .map_err(|_| SurgeError::Timeout(format!("connecting to agent '{name}'")))
+    .and_then(|r| r);
+
+    spawning.remove(name);
+
+    let connection = result?;
+    connections.insert(name.to_string(), connection);
+    info!("Agent '{}' connected successfully", name);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_create_session(
+    agent_name: &str,
+    mode: Option<&str>,
+    working_dir: &Path,
+    configs: &HashMap<String, AgentConfig>,
+    connections: &mut HashMap<String, AgentConnection>,
+    spawning: &mut HashSet<String>,
+    worktree_root: &Path,
+    permission_policy: &PermissionPolicy,
+    resilience: &ResilienceConfig,
+) -> Result<SessionHandle, SurgeError> {
+    do_connect(
+        agent_name,
+        configs,
+        connections,
+        spawning,
+        worktree_root,
+        permission_policy,
+        resilience,
+    )
+    .await?;
+
+    let session_timeout = Duration::from_secs(resilience.session_timeout_secs);
+
+    let connection = connections.get(agent_name).ok_or_else(|| {
+        SurgeError::AgentConnection("Connection disappeared".to_string())
+    })?;
+
+    debug!(
+        "Creating session with agent '{}' in {}",
+        agent_name,
+        working_dir.display()
+    );
+
+    let request = NewSessionRequest::new(working_dir);
+    let response = tokio::time::timeout(
+        session_timeout,
+        connection.connection().new_session(request),
+    )
+    .await
+    .map_err(|_| SurgeError::Timeout("new_session".to_string()))?
+    .map_err(|e| SurgeError::Acp(format!("Failed to create session: {:?}", e)))?;
+
+    let session_id = response.session_id.to_string();
+
+    if let Some(m) = mode {
+        debug!("Setting session mode to '{}'", m);
+        match tokio::time::timeout(
+            session_timeout,
+            connection.connection().set_session_mode(
+                SetSessionModeRequest::new(session_id.clone(), SessionModeId::new(m)),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!("Failed to set session mode '{}': {:?}", m, e),
+            Err(_) => warn!("Timeout setting session mode '{}'", m),
+        }
+    }
+
+    // Track session
+    connections
+        .get_mut(agent_name)
+        .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
+        .add_session(session_id.clone(), working_dir.to_path_buf(), mode.map(String::from));
+
+    Ok(SessionHandle {
+        session_id,
+        agent_name: agent_name.to_string(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_prompt(
+    session: &SessionHandle,
+    content: Vec<ContentBlock>,
+    configs: &HashMap<String, AgentConfig>,
+    connections: &mut HashMap<String, AgentConnection>,
+    spawning: &mut HashSet<String>,
+    worktree_root: &Path,
+    permission_policy: &PermissionPolicy,
+    resilience: &ResilienceConfig,
+    health: &Arc<Mutex<HealthTracker>>,
+) -> Result<PromptResponse, SurgeError> {
+    let prompt_timeout = Duration::from_secs(resilience.prompt_timeout_secs);
+    let max_retries = resilience.prompt_retries;
+
+    let resolved_agent = {
+        let h = health.lock().await;
+        h.resolve_agent(&session.agent_name).to_string()
+    };
+
+    let candidates: Vec<String> = if resolved_agent != session.agent_name {
+        warn!(
+            primary = session.agent_name.as_str(),
+            fallback = resolved_agent.as_str(),
+            "primary agent unhealthy, trying fallback first"
+        );
+        vec![resolved_agent, session.agent_name.clone()]
+    } else {
+        vec![session.agent_name.clone()]
+    };
+
+    let mut last_error: Option<SurgeError> = None;
+
+    for attempt in 0..=max_retries {
+        for agent_name in &candidates {
+            if let Err(e) = do_connect(
+                agent_name,
+                configs,
+                connections,
+                spawning,
+                worktree_root,
+                permission_policy,
+                resilience,
+            )
+            .await
+            {
+                last_error = Some(e);
+                continue;
+            }
+
+            let Some(connection) = connections.get(agent_name) else {
+                continue;
+            };
+
+            let request = PromptRequest::new(
+                session.session_id.clone(),
+                content.clone(),
+            );
+
+            let start = Instant::now();
+            let result = tokio::time::timeout(
+                prompt_timeout,
+                connection.connection().prompt(request),
+            )
+            .await;
+
+            match result {
+                Ok(Ok(response)) => {
+                    let elapsed = start.elapsed();
+                    health.lock().await.record_success(agent_name, elapsed);
+                    return Ok(response);
+                }
+                Ok(Err(e)) => {
+                    let msg = format!("{e:?}");
+                    health.lock().await.record_failure(agent_name, &msg);
+                    last_error =
+                        Some(SurgeError::Acp(format!("Prompt failed on '{agent_name}': {msg}")));
+                    warn!(agent = agent_name.as_str(), attempt, "prompt failed");
+                }
+                Err(_) => {
+                    let msg = format!("prompt timed out on '{agent_name}'");
+                    health.lock().await.record_failure(agent_name, &msg);
+                    last_error = Some(SurgeError::Timeout(msg));
+                    warn!(agent = agent_name.as_str(), attempt, "prompt timed out");
+                }
+            }
+        }
+
+        if attempt < max_retries {
+            tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use surge_core::config::Transport;
 
     fn test_agent_config() -> AgentConfig {
@@ -467,7 +577,6 @@ mod tests {
         assert!(pool.is_ok());
         let pool = pool.unwrap();
         assert_eq!(pool.default_agent(), "test-agent");
-        assert_eq!(pool.available_agents(), vec!["test-agent"]);
     }
 
     #[test]
