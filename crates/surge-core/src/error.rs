@@ -31,8 +31,13 @@ pub enum SurgeError {
     Timeout(String),
 
     /// Agent returned HTTP 429 — rate limit hit.
-    #[error("Rate limit exceeded for agent '{agent}': retry after {retry_after_secs}s")]
-    RateLimit { agent: String, retry_after_secs: u64 },
+    #[error("Rate limit exceeded for agent '{agent}': retry after {retry_after_secs}s (attempt {attempt_count})")]
+    RateLimit {
+        agent: String,
+        retry_after_secs: u64,
+        attempt_count: u32,
+        next_retry_time: Option<std::time::SystemTime>,
+    },
 
     /// Authentication failed with remediation guidance.
     #[error("Authentication failed for agent '{agent}': {remediation}")]
@@ -74,10 +79,13 @@ mod tests {
         let err = SurgeError::RateLimit {
             agent: "claude".to_string(),
             retry_after_secs: 30,
+            attempt_count: 2,
+            next_retry_time: None,
         };
         let msg = err.to_string();
         assert!(msg.contains("claude"));
         assert!(msg.contains("30"));
+        assert!(msg.contains("attempt 2"));
     }
 
     #[test]
