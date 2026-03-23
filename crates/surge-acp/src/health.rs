@@ -98,7 +98,9 @@ impl HealthTracker {
 
             // Clear rate limit if past reset time
             if health.rate_limited
-                && health.rate_limit_reset.is_some_and(|reset| Instant::now() >= reset)
+                && health
+                    .rate_limit_reset
+                    .is_some_and(|reset| Instant::now() >= reset)
             {
                 info!(agent, "rate limit reset, clearing");
                 health.rate_limited = false;
@@ -116,8 +118,7 @@ impl HealthTracker {
             health.last_error = Some(error.to_string());
 
             let lower = error.to_lowercase();
-            if lower.contains("429") || lower.contains("rate limit") || lower.contains("too many")
-            {
+            if lower.contains("429") || lower.contains("rate limit") || lower.contains("too many") {
                 warn!(agent, error, "rate limit detected");
                 health.rate_limited = true;
                 health.rate_limit_reset = Some(Instant::now() + Duration::from_secs(60));

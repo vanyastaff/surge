@@ -269,31 +269,102 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
     match kind {
         AgentKind::Claude => DisplayCapabilities {
             models: Some(vec![
-                Model { name: "Claude Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Deep reasoning".into(), enabled: true },
-                Model { name: "Claude Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
-                Model { name: "Claude Haiku 4.5".into(), price: "$0.80/$4".into(), context: "200K".into(), note: "Quick tasks".into(), enabled: true },
+                Model {
+                    name: "Claude Opus 4.6".into(),
+                    price: "$5/$25".into(),
+                    context: "1M ctx".into(),
+                    note: "Deep reasoning".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Claude Sonnet 4.6".into(),
+                    price: "$3/$15".into(),
+                    context: "1M ctx".into(),
+                    note: "Daily driver".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Claude Haiku 4.5".into(),
+                    price: "$0.80/$4".into(),
+                    context: "200K".into(),
+                    note: "Quick tasks".into(),
+                    enabled: true,
+                },
             ]),
             effort: Some(EffortConfig {
-                default: EffortLevel::Adaptive, planning: EffortLevel::High,
-                coding: EffortLevel::Adaptive, qa_review: EffortLevel::Low,
+                default: EffortLevel::Adaptive,
+                planning: EffortLevel::High,
+                coding: EffortLevel::Adaptive,
+                qa_review: EffortLevel::Low,
             }),
             permissions: Some(vec![
-                Permission { name: "File read".into(), enabled: true },
-                Permission { name: "File write".into(), enabled: true },
-                Permission { name: "Bash commands".into(), enabled: true },
-                Permission { name: "Network access".into(), enabled: false },
-                Permission { name: "Git push".into(), enabled: false },
+                Permission {
+                    name: "File read".into(),
+                    enabled: true,
+                },
+                Permission {
+                    name: "File write".into(),
+                    enabled: true,
+                },
+                Permission {
+                    name: "Bash commands".into(),
+                    enabled: true,
+                },
+                Permission {
+                    name: "Network access".into(),
+                    enabled: false,
+                },
+                Permission {
+                    name: "Git push".into(),
+                    enabled: false,
+                },
             ]),
             dangerous_ops: Some("Ask permission".into()),
         },
         AgentKind::Copilot => DisplayCapabilities {
             models: Some(vec![
-                Model { name: "Claude Opus 4.6".into(), price: "1x".into(), context: "1M ctx".into(), note: "Deep reasoning".into(), enabled: true },
-                Model { name: "Claude Sonnet 4.6".into(), price: "1x".into(), context: "1M ctx".into(), note: "Fast coding".into(), enabled: true },
-                Model { name: "GPT-5.3-Codex".into(), price: "1x".into(), context: "—".into(), note: "Terminal workflows".into(), enabled: true },
-                Model { name: "GPT-5 mini".into(), price: "included".into(), context: "—".into(), note: "Free with subscription".into(), enabled: true },
-                Model { name: "GPT-4.1".into(), price: "included".into(), context: "—".into(), note: "General coding".into(), enabled: true },
-                Model { name: "Gemini 3 Pro".into(), price: "1x".into(), context: "—".into(), note: "Large context, multimodal".into(), enabled: true },
+                Model {
+                    name: "Claude Opus 4.6".into(),
+                    price: "1x".into(),
+                    context: "1M ctx".into(),
+                    note: "Deep reasoning".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Claude Sonnet 4.6".into(),
+                    price: "1x".into(),
+                    context: "1M ctx".into(),
+                    note: "Fast coding".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "GPT-5.3-Codex".into(),
+                    price: "1x".into(),
+                    context: "—".into(),
+                    note: "Terminal workflows".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "GPT-5 mini".into(),
+                    price: "included".into(),
+                    context: "—".into(),
+                    note: "Free with subscription".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "GPT-4.1".into(),
+                    price: "included".into(),
+                    context: "—".into(),
+                    note: "General coding".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Gemini 3 Pro".into(),
+                    price: "1x".into(),
+                    context: "—".into(),
+                    note: "Large context, multimodal".into(),
+                    enabled: true,
+                },
             ]),
             effort: None,
             permissions: None,
@@ -301,10 +372,34 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
         },
         AgentKind::Codex => DisplayCapabilities {
             models: Some(vec![
-                Model { name: "GPT-5.3-Codex".into(), price: "—".into(), context: "200K".into(), note: "Terminal workflows, polyglot".into(), enabled: true },
-                Model { name: "o4-mini".into(), price: "—".into(), context: "200K".into(), note: "Deep reasoning".into(), enabled: true },
-                Model { name: "o3".into(), price: "—".into(), context: "200K".into(), note: "Advanced reasoning".into(), enabled: true },
-                Model { name: "GPT-4.1".into(), price: "—".into(), context: "200K".into(), note: "General coding".into(), enabled: true },
+                Model {
+                    name: "GPT-5.3-Codex".into(),
+                    price: "—".into(),
+                    context: "200K".into(),
+                    note: "Terminal workflows, polyglot".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "o4-mini".into(),
+                    price: "—".into(),
+                    context: "200K".into(),
+                    note: "Deep reasoning".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "o3".into(),
+                    price: "—".into(),
+                    context: "200K".into(),
+                    note: "Advanced reasoning".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "GPT-4.1".into(),
+                    price: "—".into(),
+                    context: "200K".into(),
+                    note: "General coding".into(),
+                    enabled: true,
+                },
             ]),
             effort: None,
             permissions: None,
@@ -312,9 +407,27 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
         },
         AgentKind::Gemini => DisplayCapabilities {
             models: Some(vec![
-                Model { name: "Gemini 2.5 Pro".into(), price: "free".into(), context: "1M ctx".into(), note: "Flagship, reasoning".into(), enabled: true },
-                Model { name: "Gemini 2.5 Flash".into(), price: "free".into(), context: "1M ctx".into(), note: "Fast, cost-effective".into(), enabled: true },
-                Model { name: "Gemini 3 Flash".into(), price: "free".into(), context: "1M ctx".into(), note: "Latest generation".into(), enabled: true },
+                Model {
+                    name: "Gemini 2.5 Pro".into(),
+                    price: "free".into(),
+                    context: "1M ctx".into(),
+                    note: "Flagship, reasoning".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Gemini 2.5 Flash".into(),
+                    price: "free".into(),
+                    context: "1M ctx".into(),
+                    note: "Fast, cost-effective".into(),
+                    enabled: true,
+                },
+                Model {
+                    name: "Gemini 3 Flash".into(),
+                    price: "free".into(),
+                    context: "1M ctx".into(),
+                    note: "Latest generation".into(),
+                    enabled: true,
+                },
             ]),
             effort: None,
             permissions: None,
@@ -326,9 +439,12 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
 fn usage(kind: AgentKind) -> Usage {
     match kind {
         AgentKind::Claude => Usage::ClaudeCode {
-            five_hour_pct: 0.0, five_hour_reset: "—".into(),
-            weekly_pct: 0.0, weekly_reset: "—".into(),
-            extra_usage_enabled: false, extra_usage_cost: 0.0,
+            five_hour_pct: 0.0,
+            five_hour_reset: "—".into(),
+            weekly_pct: 0.0,
+            weekly_reset: "—".into(),
+            extra_usage_enabled: false,
+            extra_usage_cost: 0.0,
         },
         _ => Usage::Unknown,
     }
@@ -337,10 +453,16 @@ fn usage(kind: AgentKind) -> Usage {
 fn badges(entry: &RegistryEntry) -> Vec<Badge> {
     let mut result = Vec::new();
     if entry.tags.contains(&"popular".to_string()) {
-        result.push(Badge { label: "Popular".into(), kind: BadgeKind::Popular });
+        result.push(Badge {
+            label: "Popular".into(),
+            kind: BadgeKind::Popular,
+        });
     }
     if entry.is_open_source() {
-        result.push(Badge { label: "OSS".into(), kind: BadgeKind::OpenSource });
+        result.push(Badge {
+            label: "OSS".into(),
+            kind: BadgeKind::OpenSource,
+        });
     }
     result
 }
@@ -380,7 +502,11 @@ pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<VersionIn
         ver.clone()
     };
 
-    Some(VersionInfo { version: ver, display, is_wrapper })
+    Some(VersionInfo {
+        version: ver,
+        display,
+        is_wrapper,
+    })
 }
 
 fn extract_version_string(text: &str) -> Option<String> {

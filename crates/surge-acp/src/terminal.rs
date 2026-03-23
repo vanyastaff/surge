@@ -71,9 +71,7 @@ impl Terminals {
         cwd: Option<&PathBuf>,
         output_byte_limit: Option<u64>,
     ) -> Result<String, String> {
-        let work_dir = cwd
-            .cloned()
-            .unwrap_or_else(|| self.worktree_root.clone());
+        let work_dir = cwd.cloned().unwrap_or_else(|| self.worktree_root.clone());
 
         // Validate cwd is within worktree. Fail closed: if we cannot
         // canonicalize either path, refuse to spawn.
@@ -101,8 +99,7 @@ impl Terminals {
 
         debug!(
             terminal_id = terminal_id.as_str(),
-            command,
-            "spawning terminal process"
+            command, "spawning terminal process"
         );
 
         let mut cmd = Command::new(command);
@@ -120,9 +117,9 @@ impl Terminals {
             cmd.env(key, value);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!("Failed to spawn terminal command '{command}': {e}")
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn terminal command '{command}': {e}"))?;
 
         let output = Arc::new(Mutex::new(String::new()));
 
@@ -266,10 +263,7 @@ pub async fn terminal_wait_for_exit(
 }
 
 /// Kill terminal by ID. Acquires only the per-terminal lock.
-pub async fn terminal_kill(
-    mgr: &Mutex<Terminals>,
-    terminal_id: &str,
-) -> Result<(), String> {
+pub async fn terminal_kill(mgr: &Mutex<Terminals>, terminal_id: &str) -> Result<(), String> {
     let handle = {
         let m = mgr.lock().await;
         m.get_terminal(terminal_id)
@@ -280,19 +274,14 @@ pub async fn terminal_kill(
 }
 
 /// Release (remove + kill if running) a terminal by ID.
-pub async fn terminal_release(
-    mgr: &Mutex<Terminals>,
-    terminal_id: &str,
-) -> Result<(), String> {
+pub async fn terminal_release(mgr: &Mutex<Terminals>, terminal_id: &str) -> Result<(), String> {
     let handle = {
         let mut m = mgr.lock().await;
         m.remove_terminal(terminal_id)
             .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
     };
     let mut term = handle.lock().await;
-    if term.exit_status.is_none()
-        && term.child.try_wait().ok().flatten().is_none()
-    {
+    if term.exit_status.is_none() && term.child.try_wait().ok().flatten().is_none() {
         let _ = term.child.kill().await;
     }
     debug!(terminal_id, "terminal released");
@@ -408,7 +397,10 @@ mod tests {
         #[cfg(windows)]
         let (cmd, args) = (
             "cmd",
-            vec!["/C".into(), "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
+            vec![
+                "/C".into(),
+                "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            ],
         );
         #[cfg(not(windows))]
         let (cmd, args) = (
@@ -416,7 +408,11 @@ mod tests {
             vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
         );
 
-        let id = mgr.lock().await.spawn(cmd, &args, &[], None, Some(10)).unwrap();
+        let id = mgr
+            .lock()
+            .await
+            .spawn(cmd, &args, &[], None, Some(10))
+            .unwrap();
         let _ = terminal_wait_for_exit(&mgr, &id).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -447,8 +443,16 @@ mod tests {
         #[cfg(not(windows))]
         let (cmd2, args2) = ("echo", vec!["second".into()]);
 
-        let id1 = mgr.lock().await.spawn(cmd1, &args1, &[], None, None).unwrap();
-        let id2 = mgr.lock().await.spawn(cmd2, &args2, &[], None, None).unwrap();
+        let id1 = mgr
+            .lock()
+            .await
+            .spawn(cmd1, &args1, &[], None, None)
+            .unwrap();
+        let id2 = mgr
+            .lock()
+            .await
+            .spawn(cmd2, &args2, &[], None, None)
+            .unwrap();
 
         // Wait on both concurrently — no deadlock
         let mgr1 = Arc::clone(&mgr);

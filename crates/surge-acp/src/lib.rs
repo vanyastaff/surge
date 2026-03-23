@@ -20,9 +20,9 @@ pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, EffectiveCapabilities, SessionState};
 pub use discovery::{AgentDiscovery, Platform};
 pub use display::{
-    detect_installed_version, AgentDetail, AgentSummary, Badge, BadgeKind, DisplayCapabilities,
-    EffortConfig, EffortLevel, InstallMethod, Model, Permission, SessionEntry, SessionStatus,
-    Usage, VersionInfo,
+    AgentDetail, AgentSummary, Badge, BadgeKind, DisplayCapabilities, EffortConfig, EffortLevel,
+    InstallMethod, Model, Permission, SessionEntry, SessionStatus, Usage, VersionInfo,
+    detect_installed_version,
 };
 pub use health::{AgentHealth, HealthTracker};
 pub use pool::{AgentPool, SessionHandle};

@@ -8,18 +8,19 @@
 //! and `spawn_local` per-operation for concurrent ACP I/O.
 
 use agent_client_protocol::{
-    Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SetSessionModeRequest,
-    SessionModeId,
+    Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionModeId,
+    SetSessionModeRequest,
 };
+use rand::Rng;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use surge_core::config::{AgentConfig, ResilienceConfig};
+use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
 use surge_core::{SurgeError, SurgeEvent};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
@@ -336,9 +337,7 @@ fn run_worker(
         while let Some(op) = op_rx.recv().await {
             match op {
                 PoolOp::Shutdown { tx } => {
-                    let grace = Duration::from_secs(
-                        state.borrow().resilience.shutdown_grace_secs,
-                    );
+                    let grace = Duration::from_secs(state.borrow().resilience.shutdown_grace_secs);
                     let conns: Vec<_> = state.borrow_mut().connections.drain().collect();
                     for (name, mut conn) in conns {
                         debug!(agent = name.as_str(), "shutting down agent");
@@ -489,9 +488,11 @@ async fn create_session(
             debug!("Setting session mode to '{}'", m);
             match tokio::time::timeout(
                 session_timeout,
-                conn.connection().set_session_mode(
-                    SetSessionModeRequest::new(session_id.clone(), SessionModeId::new(m)),
-                ),
+                conn.connection()
+                    .set_session_mode(SetSessionModeRequest::new(
+                        session_id.clone(),
+                        SessionModeId::new(m),
+                    )),
             )
             .await
             {
@@ -507,7 +508,11 @@ async fn create_session(
 
     // Track session on success, then restore the connection regardless of outcome.
     if let Ok(ref session_id) = session_id_result {
-        conn.add_session(session_id.clone(), working_dir.to_path_buf(), mode.map(String::from));
+        conn.add_session(
+            session_id.clone(),
+            working_dir.to_path_buf(),
+            mode.map(String::from),
+        );
     }
     state
         .borrow_mut()
@@ -537,7 +542,11 @@ async fn prompt(
     // borrow is held across the await.
     let resolved_agent = {
         let health = state.borrow().health.clone();
-        health.lock().await.resolve_agent(&session.agent_name).to_string()
+        health
+            .lock()
+            .await
+            .resolve_agent(&session.agent_name)
+            .to_string()
     };
 
     let candidates: Vec<String> = if resolved_agent != session.agent_name {
@@ -584,7 +593,10 @@ async fn prompt(
 
             match result {
                 Ok(Ok(response)) => {
-                    health.lock().await.record_success(agent_name, start.elapsed());
+                    health
+                        .lock()
+                        .await
+                        .record_success(agent_name, start.elapsed());
 
                     // Emit token usage if the agent reported it.
                     if let Some(usage) = &response.usage {
@@ -623,12 +635,63 @@ async fn prompt(
         }
 
         if attempt < max_retries {
-            tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+            let delay = {
+                let s = state.borrow();
+                calculate_backoff(
+                    attempt,
+                    s.resilience.retry_policy.initial_delay_ms,
+                    s.resilience.retry_policy.max_delay_ms,
+                    &s.resilience.retry_policy.backoff_strategy,
+                )
+            };
+            tokio::time::sleep(delay).await;
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+    Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+}
+
+// ── Backoff calculation ─────────────────────────────────────────────
+
+/// Calculate backoff delay for a retry attempt.
+///
+/// # Arguments
+///
+/// * `attempt` - Zero-based retry attempt number (0 = first retry)
+/// * `initial_delay_ms` - Base delay in milliseconds
+/// * `max_delay_ms` - Maximum delay cap in milliseconds
+/// * `strategy` - Backoff strategy to use
+///
+/// # Returns
+///
+/// Duration to wait before the next retry attempt.
+fn calculate_backoff(
+    attempt: u32,
+    initial_delay_ms: u64,
+    max_delay_ms: u64,
+    strategy: &BackoffStrategy,
+) -> Duration {
+    let delay_ms = match strategy {
+        BackoffStrategy::Linear => initial_delay_ms,
+
+        BackoffStrategy::Exponential => {
+            // delay = initial_delay * 2^attempt, capped at max_delay
+            let exponential = initial_delay_ms.saturating_mul(2u64.saturating_pow(attempt));
+            exponential.min(max_delay_ms)
+        }
+
+        BackoffStrategy::ExponentialWithJitter => {
+            // Calculate exponential backoff
+            let exponential = initial_delay_ms.saturating_mul(2u64.saturating_pow(attempt));
+            let capped = exponential.min(max_delay_ms);
+
+            // Add random jitter: uniform random value in [0, capped]
+            let mut rng = rand::rng();
+            rng.random_range(0..=capped)
+        }
+    };
+
+    Duration::from_millis(delay_ms)
 }
 
 #[cfg(test)]
@@ -732,5 +795,164 @@ mod tests {
         // No connections were established, so Shutdown drains nothing.
         // The worker should exit and join almost immediately.
         drop(pool);
+    }
+
+    // ── Backoff calculation tests ──────────────────────────────────
+
+    #[test]
+    fn test_calculate_backoff_linear() {
+        let strategy = BackoffStrategy::Linear;
+        let initial = 1000;
+        let max = 60000;
+
+        // Linear backoff should always return the initial delay
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(5, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = 60000;
+
+        // Exponential: 1000 * 2^attempt
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000) // 1000 * 2^0 = 1000
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(2000) // 1000 * 2^1 = 2000
+        );
+        assert_eq!(
+            calculate_backoff(2, initial, max, &strategy),
+            Duration::from_millis(4000) // 1000 * 2^2 = 4000
+        );
+        assert_eq!(
+            calculate_backoff(3, initial, max, &strategy),
+            Duration::from_millis(8000) // 1000 * 2^3 = 8000
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential_capped() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = 5000;
+
+        // Should be capped at max_delay
+        assert_eq!(
+            calculate_backoff(0, initial, max, &strategy),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            calculate_backoff(1, initial, max, &strategy),
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            calculate_backoff(2, initial, max, &strategy),
+            Duration::from_millis(4000)
+        );
+        assert_eq!(
+            calculate_backoff(3, initial, max, &strategy),
+            Duration::from_millis(5000) // capped at 5000
+        );
+        assert_eq!(
+            calculate_backoff(10, initial, max, &strategy),
+            Duration::from_millis(5000) // still capped
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_exponential_overflow_protection() {
+        let strategy = BackoffStrategy::Exponential;
+        let initial = 1000;
+        let max = u64::MAX;
+
+        // Very large attempt should saturate, not overflow
+        let result = calculate_backoff(100, initial, max, &strategy);
+        assert!(result.as_millis() > 0);
+        assert!(result.as_millis() <= u128::from(u64::MAX));
+    }
+
+    #[test]
+    fn test_calculate_backoff_jitter() {
+        let strategy = BackoffStrategy::ExponentialWithJitter;
+        let initial = 1000;
+        let max = 60000;
+
+        // Jitter should return a value in range [0, exponential_delay]
+        for attempt in 0..5 {
+            let delay = calculate_backoff(attempt, initial, max, &strategy);
+            let expected_max = (initial * 2u64.pow(attempt)).min(max);
+
+            assert!(
+                delay.as_millis() <= u128::from(expected_max),
+                "Jitter delay {} exceeds max {} for attempt {}",
+                delay.as_millis(),
+                expected_max,
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_calculate_backoff_jitter_distribution() {
+        let strategy = BackoffStrategy::ExponentialWithJitter;
+        let initial = 1000;
+        let max = 60000;
+        let attempt = 2; // 1000 * 2^2 = 4000ms max
+
+        // Run multiple times to verify randomness
+        let mut delays = Vec::new();
+        for _ in 0..100 {
+            let delay = calculate_backoff(attempt, initial, max, &strategy);
+            delays.push(delay.as_millis());
+        }
+
+        // All delays should be in valid range
+        for delay in &delays {
+            assert!(*delay <= 4000, "Delay {} exceeds maximum", delay);
+        }
+
+        // Should have some variation (not all the same value)
+        let unique_values: std::collections::HashSet<_> = delays.iter().collect();
+        assert!(
+            unique_values.len() > 1,
+            "Jitter produced no variation in 100 attempts"
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_zero_initial_delay() {
+        // Edge case: zero initial delay should work
+        assert_eq!(
+            calculate_backoff(0, 0, 1000, &BackoffStrategy::Linear),
+            Duration::from_millis(0)
+        );
+        assert_eq!(
+            calculate_backoff(5, 0, 1000, &BackoffStrategy::Exponential),
+            Duration::from_millis(0)
+        );
+    }
+
+    #[test]
+    fn test_calculate_backoff_zero_max_delay() {
+        // Edge case: zero max delay should cap everything to zero
+        assert_eq!(
+            calculate_backoff(5, 1000, 0, &BackoffStrategy::Exponential),
+            Duration::from_millis(0)
+        );
     }
 }

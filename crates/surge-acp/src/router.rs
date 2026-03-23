@@ -236,8 +236,7 @@ mod tests {
         use crate::registry::{AgentCapability, Registry};
         let registry = Registry::builtin();
         // "my-custom-agent" is not in the builtin registry — assumed capable
-        let router =
-            AgentRouter::new(RoutingConfig::default(), "my-custom-agent".to_string());
+        let router = AgentRouter::new(RoutingConfig::default(), "my-custom-agent".to_string());
         let subtask = make_subtask(Complexity::Standard);
         let decision =
             router.route_with_capability(&subtask, None, Some(&AgentCapability::Plan), &registry);
