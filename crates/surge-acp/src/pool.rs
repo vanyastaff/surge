@@ -530,11 +530,12 @@ async fn prompt(
     session: &SessionHandle,
     content: Vec<ContentBlock>,
 ) -> Result<PromptResponse, SurgeError> {
-    let (prompt_timeout, max_retries) = {
+    let (prompt_timeout, max_retries, auth_failure_immediate) = {
         let s = state.borrow();
         (
             Duration::from_secs(s.resilience.prompt_timeout_secs),
             s.resilience.prompt_retries,
+            s.resilience.auth_failure_immediate_fail,
         )
     };
 
@@ -619,6 +620,16 @@ async fn prompt(
                 }
                 Ok(Err(e)) => {
                     let msg = format!("{e:?}");
+
+                    // Check for authentication failures (401) and fail immediately if configured
+                    if auth_failure_immediate && is_auth_failure(&msg) {
+                        health.lock().await.record_failure(agent_name, &msg);
+                        return Err(SurgeError::AuthFailure {
+                            agent: agent_name.clone(),
+                            remediation: "Check API key configuration in surge.toml".to_string(),
+                        });
+                    }
+
                     health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
@@ -649,6 +660,24 @@ async fn prompt(
     }
 
     Err(last_error.unwrap_or_else(|| SurgeError::Acp("All prompt candidates failed".to_string())))
+}
+
+// ── Error detection helpers ─────────────────────────────────────────
+
+/// Check if an error message indicates an authentication failure (401).
+///
+/// Common patterns:
+/// - HTTP 401 status code
+/// - "Unauthorized" or "authentication failed"
+/// - API key errors
+fn is_auth_failure(error_msg: &str) -> bool {
+    let msg_lower = error_msg.to_lowercase();
+    msg_lower.contains("401")
+        || msg_lower.contains("unauthorized")
+        || msg_lower.contains("authentication failed")
+        || msg_lower.contains("invalid api key")
+        || msg_lower.contains("invalid_api_key")
+        || msg_lower.contains("authentication_error")
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
@@ -954,5 +983,53 @@ mod tests {
             calculate_backoff(5, 1000, 0, &BackoffStrategy::Exponential),
             Duration::from_millis(0)
         );
+    }
+
+    // ── Auth failure detection tests ──────────────────────────────
+
+    #[test]
+    fn test_is_auth_failure_http_401() {
+        assert!(is_auth_failure("HTTP 401 Unauthorized"));
+        assert!(is_auth_failure("Error: status code 401"));
+        assert!(is_auth_failure("Request failed with 401"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_unauthorized() {
+        assert!(is_auth_failure("Unauthorized access"));
+        assert!(is_auth_failure("UNAUTHORIZED"));
+        assert!(is_auth_failure("Authentication failed: Unauthorized"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_api_key() {
+        assert!(is_auth_failure("Invalid API key provided"));
+        assert!(is_auth_failure("Error: invalid_api_key"));
+        assert!(is_auth_failure("INVALID_API_KEY"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_authentication_error() {
+        assert!(is_auth_failure("authentication failed"));
+        assert!(is_auth_failure("Authentication Failed"));
+        assert!(is_auth_failure("Error: authentication_error"));
+    }
+
+    #[test]
+    fn test_is_auth_failure_negative_cases() {
+        // These should NOT be detected as auth failures
+        assert!(!is_auth_failure("Connection timeout"));
+        assert!(!is_auth_failure("500 Internal Server Error"));
+        assert!(!is_auth_failure("Rate limit exceeded"));
+        assert!(!is_auth_failure("Network error"));
+        assert!(!is_auth_failure("404 Not Found"));
+        assert!(!is_auth_failure("403 Forbidden")); // 403 is different from 401
+    }
+
+    #[test]
+    fn test_is_auth_failure_case_insensitive() {
+        assert!(is_auth_failure("uNaUtHoRiZeD"));
+        assert!(is_auth_failure("AUTHENTICATION FAILED"));
+        assert!(is_auth_failure("InVaLiD aPi KeY"));
     }
 }
