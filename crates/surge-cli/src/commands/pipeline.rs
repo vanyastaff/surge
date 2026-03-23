@@ -26,6 +26,7 @@ pub async fn run(
     parallel: Option<usize>,
     _planner: Option<String>,
     _coder: Option<String>,
+    _resume: bool,
 ) -> Result<()> {
     let mut config = SurgeConfig::load_or_default()?;
     config.apply_env_overrides();
