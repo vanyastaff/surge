@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use surge_acp::Registry;
 use surge_core::SurgeConfig;
 
 #[derive(Subcommand)]
@@ -130,8 +131,9 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             }
         }
         AgentCommands::Refresh => {
-            // TODO: Implementation in next subtask
             println!("⚡ Refreshing agent discovery cache...");
+            Registry::refresh_discovery();
+            println!("✅ Agent discovery cache cleared. Next 'surge agent list' will re-scan.");
         }
     }
     Ok(())
