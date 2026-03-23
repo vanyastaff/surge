@@ -719,7 +719,7 @@ fn latency_color(ms: u32) -> Hsla {
 /// Build agent-specific capabilities (models, effort, permissions) based on agent ID.
 fn build_agent_capabilities(agent_id: &str) -> AgentCapabilities {
     match agent_id {
-        "claude-code" => AgentCapabilities {
+        "claude-acp" | "claude-code" => AgentCapabilities {
             models: Some(vec![
                 ModelOption { name: "Opus 4.6".into(), price: "$5/$25".into(), context: "1M ctx".into(), note: "Heavy reasoning".into(), enabled: true },
                 ModelOption { name: "Sonnet 4.6".into(), price: "$3/$15".into(), context: "1M ctx".into(), note: "Daily driver".into(), enabled: true },
@@ -748,7 +748,7 @@ fn build_agent_capabilities(agent_id: &str) -> AgentCapabilities {
 /// Build agent-specific usage display based on agent ID.
 fn build_agent_usage(agent_id: &str) -> AgentUsage {
     match agent_id {
-        "claude-code" => AgentUsage::ClaudeCode {
+        "claude-acp" | "claude-code" => AgentUsage::ClaudeCode {
             five_hour_pct: 0.0, five_hour_reset: "—".into(),
             weekly_pct: 0.0, weekly_reset: "—".into(),
             extra_usage_enabled: false, extra_usage_cost: 0.0,
@@ -762,35 +762,45 @@ fn build_agent_usage(agent_id: &str) -> AgentUsage {
 
 fn vendor_color_for(agent_id: &str) -> Hsla {
     match agent_id {
-        "claude-code" => hsla(263.0/360.0, 0.85, 0.58, 1.0),
-        "copilot-cli" => hsla(210.0/360.0, 0.7, 0.5, 1.0),
-        "gemini-cli" => hsla(217.0/360.0, 0.9, 0.6, 1.0),
-        "codex-cli" => hsla(150.0/360.0, 0.6, 0.45, 1.0),
+        "claude-acp" => hsla(263.0/360.0, 0.85, 0.58, 1.0),
+        "github-copilot-cli" => hsla(210.0/360.0, 0.7, 0.5, 1.0),
+        "gemini" => hsla(217.0/360.0, 0.9, 0.6, 1.0),
+        "codex-acp" => hsla(150.0/360.0, 0.6, 0.45, 1.0),
         "goose" => hsla(25.0/360.0, 0.8, 0.55, 1.0),
-        "aider" => hsla(120.0/360.0, 0.5, 0.5, 1.0),
         "cline" => hsla(340.0/360.0, 0.7, 0.55, 1.0),
-        "amp" => hsla(280.0/360.0, 0.6, 0.55, 1.0),
-        "devstral" => hsla(35.0/360.0, 0.9, 0.55, 1.0),
-        "qwen3-coder" => hsla(200.0/360.0, 0.7, 0.5, 1.0),
+        "amp-acp" => hsla(280.0/360.0, 0.6, 0.55, 1.0),
+        "mistral-vibe" => hsla(35.0/360.0, 0.9, 0.55, 1.0),
+        "cursor" => hsla(50.0/360.0, 0.8, 0.5, 1.0),
+        "junie" => hsla(310.0/360.0, 0.7, 0.5, 1.0),
+        "kimi" => hsla(190.0/360.0, 0.7, 0.5, 1.0),
+        "qwen-code" => hsla(200.0/360.0, 0.7, 0.5, 1.0),
+        "kilo" => hsla(160.0/360.0, 0.6, 0.5, 1.0),
+        "opencode" => hsla(120.0/360.0, 0.5, 0.5, 1.0),
+        "factory-droid" => hsla(0.0/360.0, 0.7, 0.55, 1.0),
+        "auggie" => hsla(270.0/360.0, 0.5, 0.6, 1.0),
+        "codebuddy-code" => hsla(200.0/360.0, 0.8, 0.45, 1.0),
+        "stakpak" => hsla(140.0/360.0, 0.6, 0.45, 1.0),
         _ => theme::TEXT_MUTED,
     }
 }
 
 fn extract_install_method(instructions: &str) -> String {
     let lower = instructions.to_lowercase();
-    if lower.contains("npm") { "npm".into() }
+    if lower.starts_with("npx ") { "npx".into() }
+    else if lower.starts_with("uvx ") { "uvx".into() }
+    else if lower.contains("npm") { "npm".into() }
     else if lower.contains("brew") { "brew".into() }
     else if lower.contains("pip") { "pip".into() }
     else if lower.contains("cargo") { "cargo".into() }
     else if lower.contains("ollama") { "ollama".into() }
     else if lower.contains("download") { "download".into() }
-    else { "manual".into() }
+    else { "binary".into() }
 }
 
 fn build_badges(entry: &surge_acp::RegistryEntry) -> Vec<(String, Hsla)> {
     let mut badges = Vec::new();
     // Popular agents
-    if entry.tags.contains(&"popular".to_string()) || ["claude-code", "copilot-cli", "codex-cli"].contains(&entry.id.as_str()) {
+    if entry.tags.contains(&"popular".to_string()) {
         badges.push(("Popular".into(), theme::WARNING));
     }
     // OSS tag

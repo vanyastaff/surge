@@ -189,10 +189,43 @@ impl RegistryEntry {
         }
     }
 
-    /// Check if this agent's command is available on the system PATH.
+    /// Check if this agent is locally installed.
+    ///
+    /// For npx/uvx agents: checks if the runtime (npx/uvx) is available.
+    /// These agents are "runnable on demand" — npx downloads them automatically.
+    /// For binary agents: checks if the actual binary is on PATH.
     #[must_use]
     pub fn is_installed(&self) -> bool {
+        // Binary agents: check the actual command
+        if self.has_binary_dist() {
+            return which(&self.command);
+        }
+        // npx/uvx: available if the runtime is installed
         which(&self.command)
+    }
+
+    /// Whether this agent can be run (runtime available for npx/uvx, binary on PATH).
+    #[must_use]
+    pub fn is_runnable(&self) -> bool {
+        which(&self.command)
+    }
+
+    /// Whether this agent has a binary distribution for the current platform.
+    #[must_use]
+    pub fn has_binary_dist(&self) -> bool {
+        self.distributions.iter().any(|d| matches!(d, Distribution::Binary { .. }))
+    }
+
+    /// Whether this agent uses npx distribution.
+    #[must_use]
+    pub fn is_npx(&self) -> bool {
+        self.command == "npx"
+    }
+
+    /// Whether this agent uses uvx distribution.
+    #[must_use]
+    pub fn is_uvx(&self) -> bool {
+        self.command == "uvx"
     }
 
     /// Return `true` if the entry matches a case-insensitive search query.
