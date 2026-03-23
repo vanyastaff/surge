@@ -318,29 +318,41 @@ impl AgentHubScreen {
                             .line_height(relative(1.5))
                             .child(agent.description.clone()),
                     )
-                    // Config info
+                    // Config info (2x2 grid)
                     .child(
                         div()
-                            .h_flex()
-                            .gap_4()
+                            .v_flex()
+                            .gap_2()
                             .pt_2()
                             .border_t_1()
                             .border_color(theme::TEXT_MUTED.opacity(0.06))
-                            .child(self.config_item("Model", agent.model.as_deref().unwrap_or("—")))
-                            .child(self.config_item("Transport", &agent.transport))
-                            .child(self.config_item("Command", &agent.command))
-                            .child(self.config_item("Uptime", &agent.uptime)),
+                            .child(
+                                div().h_flex().gap_4()
+                                    .child(self.config_item("Model", agent.model.as_deref().unwrap_or("—")))
+                                    .child(self.config_item("Transport", &agent.transport))
+                                    .child(self.config_item("Uptime", &agent.uptime)),
+                            )
+                            .child(
+                                div().h_flex().gap_4()
+                                    .child(self.config_item("Command", &agent.command)),
+                            ),
                     ),
             )
-            // ── Stats grid ──
+            // ── Stats grid (2x2) ──
             .child(
                 div()
-                    .h_flex()
+                    .v_flex()
                     .gap_3()
-                    .child(self.stat_card("Requests", &format!("{}", agent.requests_today), IconName::ArrowUp, theme::PRIMARY))
-                    .child(self.stat_card("Tokens", &format_tokens(agent.tokens_today), IconName::Asterisk, theme::PRIMARY))
-                    .child(self.stat_card("Cost", &format!("${:.2}", agent.cost_today), IconName::Star, theme::WARNING))
-                    .child(self.stat_card("Latency", &format!("{}ms", agent.avg_latency_ms), IconName::Loader, latency_color(agent.avg_latency_ms))),
+                    .child(
+                        div().h_flex().gap_3()
+                            .child(self.stat_card("Requests", &format!("{}", agent.requests_today), IconName::ArrowUp, theme::PRIMARY))
+                            .child(self.stat_card("Tokens", &format_tokens(agent.tokens_today), IconName::Asterisk, theme::PRIMARY)),
+                    )
+                    .child(
+                        div().h_flex().gap_3()
+                            .child(self.stat_card("Cost", &format!("${:.2}", agent.cost_today), IconName::Star, theme::WARNING))
+                            .child(self.stat_card("Latency", &format!("{}ms", agent.avg_latency_ms), IconName::Loader, latency_color(agent.avg_latency_ms))),
+                    ),
             )
             // ── Rate limit bar ──
             .when(agent.rate_limit_total.is_some(), |el: Div| {
@@ -590,48 +602,54 @@ impl Render for AgentHubScreen {
 
         div()
             .size_full()
-            .v_flex()
-            .gap_4()
-            .p_4()
-            // Main content: agent list + detail
+            .h_flex()
+            .gap_0()
+            .overflow_hidden()
+            // Left panel: agent list (fixed width)
             .child(
                 div()
-                    .flex_1()
-                    .h_flex()
-                    .gap_4()
-                    .overflow_hidden()
-                    // Left: agent cards
+                    .w(px(300.0))
+                    .flex_shrink_0()
+                    .h_full()
+                    .v_flex()
+                    .gap_2()
+                    .p_3()
+                    .border_r_1()
+                    .border_color(theme::TEXT_MUTED.opacity(0.06))
+                    // Header
                     .child(
                         div()
-                            .w(px(320.0))
-                            .flex_shrink_0()
-                            .v_flex()
-                            .gap_2()
-                            // Section header
+                            .h_flex()
+                            .justify_between()
+                            .items_center()
+                            .pb_1()
                             .child(
-                                div()
-                                    .h_flex()
-                                    .justify_between()
-                                    .items_center()
-                                    .pb_1()
-                                    .child(
-                                        div().h_flex().gap_2().items_center()
-                                            .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
-                                                .child(format!("Agents ({})", self.agents.len()))),
-                                    )
-                                    .child(
-                                        Button::new("add-agent")
-                                            .primary()
-                                            .compact()
-                                            .label("+ Add"),
-                                    ),
+                                div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
+                                    .child(format!("Agents ({})", self.agents.len())),
                             )
-                            .children(cards),
+                            .child(
+                                Button::new("add-agent")
+                                    .primary()
+                                    .compact()
+                                    .label("+ Add"),
+                            ),
                     )
-                    // Right: detail panel
-                    .child(self.render_detail_panel(cx)),
+                    // Cards
+                    .children(cards),
             )
-            // Bottom: routing rules
-            .child(self.render_routing_rules())
+            // Right panel: detail + routing rules (scrollable)
+            .child(
+                div()
+                    .id("agent-detail-scroll")
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .v_flex()
+                    .gap_4()
+                    .p_4()
+                    .overflow_y_scroll()
+                    .child(self.render_detail_panel(cx))
+                    .child(self.render_routing_rules()),
+            )
     }
 }
