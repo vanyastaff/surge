@@ -12,6 +12,9 @@ pub use error::{PersistenceError, Result};
 /// Data models for token usage tracking
 pub mod models;
 
+/// Pricing models for AI providers
+pub mod pricing;
+
 /// SQLite-based storage implementation
 pub mod store;
 
