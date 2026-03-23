@@ -275,6 +275,7 @@ impl SurgeApp {
 
     pub fn bind_actions(cx: &mut App) {
         cx.bind_keys([
+            // Navigation: Ctrl+1..9
             KeyBinding::new("ctrl-1", GoToDashboard, None),
             KeyBinding::new("ctrl-2", GoToKanban, None),
             KeyBinding::new("ctrl-3", GoToSpecs, None),
@@ -284,8 +285,16 @@ impl SurgeApp {
             KeyBinding::new("ctrl-7", GoToDiff, None),
             KeyBinding::new("ctrl-8", GoToInsights, None),
             KeyBinding::new("ctrl-9", GoToSettings, None),
+            // UI toggles
             KeyBinding::new("ctrl-b", ToggleSidebarAction, None),
             KeyBinding::new("ctrl-k", ToggleCommandPalette, None),
+            // Project
+            KeyBinding::new("ctrl-shift-p", SwitchProject, None),
+            // Tasks
+            KeyBinding::new("ctrl-n", NewTask, None),
+            KeyBinding::new("ctrl-enter", ApproveGate, None),
+            // Diff
+            KeyBinding::new("ctrl-d", OpenDiffViewer, None),
         ]);
     }
 
@@ -454,6 +463,17 @@ impl Render for SurgeApp {
                     .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| this.navigate(Screen::Settings, cx)))
                     .on_action(cx.listener(|this, _: &ToggleSidebarAction, _w, cx| this.toggle_sidebar(cx)))
                     .on_action(cx.listener(|this, _: &ToggleCommandPalette, _w, cx| this.toggle_palette(cx)))
+                    .on_action(cx.listener(|this, _: &SwitchProject, _w, cx| {
+                        // Toggle project switcher in top bar.
+                        if let Some(top_bar) = &this.top_bar {
+                            top_bar.update(cx, |tb, cx| tb.toggle_switcher(cx));
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &NewTask, _w, cx| this.navigate(Screen::SpecWizard, cx)))
+                    .on_action(cx.listener(|this, _: &OpenDiffViewer, _w, cx| this.navigate(Screen::DiffViewer, cx)))
+                    .on_action(cx.listener(|_this, _: &ApproveGate, _w, _cx| {
+                        // TODO: approve current gate in orchestrator
+                    }))
                     .child(
                         div()
                             .size_full()
