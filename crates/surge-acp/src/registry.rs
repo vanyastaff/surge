@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, Transport};
 use tracing::{debug, warn};
 
@@ -313,14 +313,23 @@ impl Registry {
     }
 
     pub fn detect_runnable_with_paths(&self) -> Vec<DetectedAgent> {
-        self.entries
+        // Serve from cache when fresh.
+        if let Some(cached) = load_discovery_cache() {
+            return cached;
+        }
+
+        let agents: Vec<DetectedAgent> = self
+            .entries
             .iter()
             .filter(|e| e.is_runnable())
             .map(|e| DetectedAgent {
                 entry: e.clone(),
                 command_path: resolve_command_path(&e.command),
             })
-            .collect()
+            .collect();
+
+        save_discovery_cache(agents.clone());
+        agents
     }
 
     #[must_use]
@@ -597,6 +606,45 @@ fn save_registry_cache(entries: &[RegistryEntry]) {
 /// Cache for `which`/`resolve_command_path` results.
 static WHICH_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Discovery cache entry with timestamp.
+#[derive(Debug, Clone)]
+struct DiscoveryCacheEntry {
+    agents: Vec<DetectedAgent>,
+    timestamp: Instant,
+}
+
+/// Cache for discovered agents with 5-minute TTL.
+static DISCOVERY_CACHE: LazyLock<Mutex<Option<DiscoveryCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+const DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Load cached discovered agents if cache is still valid.
+fn load_discovery_cache() -> Option<Vec<DetectedAgent>> {
+    if let Ok(cache_guard) = DISCOVERY_CACHE.lock()
+        && let Some(entry) = cache_guard.as_ref()
+    {
+        let age = entry.timestamp.elapsed();
+        if age <= DISCOVERY_CACHE_TTL {
+            debug!("discovery cache hit (age: {age:?})");
+            return Some(entry.agents.clone());
+        }
+        debug!("discovery cache expired (age: {age:?})");
+    }
+    None
+}
+
+/// Save discovered agents to cache with current timestamp.
+fn save_discovery_cache(agents: Vec<DetectedAgent>) {
+    if let Ok(mut cache_guard) = DISCOVERY_CACHE.lock() {
+        *cache_guard = Some(DiscoveryCacheEntry {
+            agents,
+            timestamp: Instant::now(),
+        });
+        debug!("discovery cache updated");
+    }
+}
 
 /// Check if a command exists on PATH (cached).
 fn which(command: &str) -> bool {

@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "002-working-cli-commands-ping-prompt-agent",
+  "spec": "001-automatic-agent-discovery-configuration",
   "state": "building",
   "subtasks": {
-    "completed": 3,
-    "total": 12,
+    "completed": 4,
+    "total": 14,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "ACP Infrastructure",
+    "current": "Registry Integration",
     "id": null,
-    "total": 5
+    "total": 4
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 5,
-    "started_at": "2026-03-22T08:17:22.479718"
+    "number": 3,
+    "started_at": "2026-03-23T14:26:05.607201"
   },
-  "last_update": "2026-03-22T08:44:04.015028"
+  "last_update": "2026-03-23T14:31:45.231121"
 }
