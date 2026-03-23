@@ -47,6 +47,9 @@ pub struct RegistryEntry {
     pub default_args: Vec<String>,
     pub transport: Transport,
     pub install_instructions: String,
+    /// The actual CLI binary name (e.g. "claude" for claude-acp, "gh" for copilot).
+    /// Used to detect if the underlying tool is installed, even for npx wrappers.
+    pub cli_binary: Option<String>,
     pub website: Option<String>,
     pub tags: Vec<String>,
     pub capabilities: Vec<AgentCapability>,
@@ -71,6 +74,11 @@ impl RegistryEntry {
     /// npx/uvx agents are never "installed" — they run on-demand.
     #[must_use]
     pub fn is_installed(&self) -> bool {
+        // Check the real CLI binary if specified (e.g. "claude" for claude-acp)
+        if let Some(bin) = &self.cli_binary {
+            return which(bin);
+        }
+        // For npx/uvx without cli_binary — not locally installed
         if self.is_npx() || self.is_uvx() {
             return false;
         }
@@ -219,6 +227,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             ],
             transport: Transport::Stdio,
             install_instructions: "npx @zed-industries/claude-agent-acp".into(),
+            cli_binary: Some("claude".into()),
             website: Some("https://claude.ai/claude-code".into()),
             tags: vec!["anthropic".into(), "popular".into()],
             capabilities: vec![
@@ -246,6 +255,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             ],
             transport: Transport::Stdio,
             install_instructions: "npx @github/copilot --acp".into(),
+            cli_binary: Some("gh".into()),
             website: Some("https://github.com/features/copilot/cli/".into()),
             tags: vec!["github".into(), "popular".into()],
             capabilities: vec![
@@ -270,6 +280,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             ],
             transport: Transport::Stdio,
             install_instructions: "npx @zed-industries/codex-acp".into(),
+            cli_binary: Some("codex".into()),
             website: Some("https://openai.com".into()),
             tags: vec!["openai".into(), "popular".into(), "open-source".into()],
             capabilities: vec![
@@ -293,6 +304,7 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             ],
             transport: Transport::Stdio,
             install_instructions: "npx @google/gemini-cli --acp".into(),
+            cli_binary: Some("gemini".into()),
             website: Some("https://geminicli.com".into()),
             tags: vec!["google".into(), "popular".into(), "open-source".into()],
             capabilities: vec![
@@ -394,10 +406,13 @@ mod tests {
     }
 
     #[test]
-    fn test_npx_agents_not_installed() {
+    fn test_installed_checks_cli_binary() {
         let reg = Registry::builtin();
-        // All 4 are npx — none should be "installed"
-        assert_eq!(reg.detect_installed().len(), 0);
+        let claude = reg.find("claude-acp").unwrap();
+        // claude-acp has cli_binary="claude" — installed if `claude` is on PATH
+        assert_eq!(claude.cli_binary.as_deref(), Some("claude"));
+        // Actual result depends on system — just check it doesn't panic
+        let _ = claude.is_installed();
     }
 
     #[test]
