@@ -20,15 +20,8 @@ pub struct ConfiguredAgent {
     pub cost_today: f64,
     pub avg_latency_ms: u32,
     pub sessions_today: u32,
-    // Usage & Limits
-    pub rate_limit_remaining: Option<u32>,
-    pub rate_limit_total: Option<u32>,
-    pub rate_limit_reset_secs: Option<u64>,
-    pub five_hour_quota_pct: Option<f32>,
-    pub daily_quota_pct: Option<f32>,
-    pub context_used_pct: Option<f32>,
-    pub context_used_tokens: Option<u64>,
-    pub context_total_tokens: Option<u64>,
+    // Usage & Limits — varies per agent
+    pub usage: AgentUsage,
     // Today stats
     pub subtasks_completed: u32,
     pub subtasks_failed: u32,
@@ -50,6 +43,29 @@ pub struct SessionEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStatus { Running, Completed, Failed }
+
+/// Usage data varies by agent — Level 1 (native API), Level 2 (estimated), Level 3 (429 detection).
+#[derive(Debug, Clone)]
+pub enum AgentUsage {
+    /// Claude Code: native statusline data
+    ClaudeCode {
+        five_hour_pct: f32,
+        five_hour_reset: String,   // "2h 14m"
+        weekly_pct: f32,
+        weekly_reset: String,      // "Mon"
+        extra_usage_enabled: bool,
+        extra_usage_cost: f64,
+    },
+    /// Estimated from ACP response tokens (Aider, Goose, Cline)
+    Estimated {
+        provider: String,          // "Anthropic API", "OpenAI API", "Local (Ollama)"
+        estimated_tokens: u64,
+        estimated_cost: f64,
+        is_local: bool,
+    },
+    /// No data yet
+    Unknown,
+}
 
 #[derive(Debug, Clone)]
 pub struct AvailableAgent {
@@ -102,9 +118,11 @@ impl AgentHubScreen {
                     model: Some("claude-sonnet-4-5".into()), binary: "claude".into(), version: Some("v2.3.1".into()),
                     active_sessions: 2, requests_today: 42, tokens_today: 156_800,
                     cost_today: 2.34, avg_latency_ms: 1200, sessions_today: 12,
-                    rate_limit_remaining: Some(158), rate_limit_total: Some(200), rate_limit_reset_secs: Some(1800),
-                    five_hour_quota_pct: Some(0.32), daily_quota_pct: Some(0.18),
-                    context_used_pct: Some(0.48), context_used_tokens: Some(96_000), context_total_tokens: Some(200_000),
+                    usage: AgentUsage::ClaudeCode {
+                        five_hour_pct: 0.62, five_hour_reset: "2h 14m".into(),
+                        weekly_pct: 0.18, weekly_reset: "Mon".into(),
+                        extra_usage_enabled: true, extra_usage_cost: 0.0,
+                    },
                     subtasks_completed: 8, subtasks_failed: 0, avg_subtask_secs: 45, qa_first_pass_rate: 0.87,
                     uptime: "4h 23m".into(), last_seen: None,
                     recent_sessions: vec![
@@ -120,9 +138,10 @@ impl AgentHubScreen {
                     model: Some("claude-sonnet-4-5".into()), binary: "aider".into(), version: Some("v0.82.1".into()),
                     active_sessions: 0, requests_today: 0, tokens_today: 0,
                     cost_today: 0.0, avg_latency_ms: 0, sessions_today: 0,
-                    rate_limit_remaining: None, rate_limit_total: None, rate_limit_reset_secs: None,
-                    five_hour_quota_pct: None, daily_quota_pct: None,
-                    context_used_pct: None, context_used_tokens: None, context_total_tokens: None,
+                    usage: AgentUsage::Estimated {
+                        provider: "Anthropic API (claude-sonnet-4-5)".into(),
+                        estimated_tokens: 0, estimated_cost: 0.0, is_local: false,
+                    },
                     subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
                     uptime: "—".into(), last_seen: None, recent_sessions: vec![],
                 },
@@ -280,49 +299,58 @@ impl AgentHubScreen {
             )
             // Usage & Limits
             .child({
-                let has_api_data = agent.rate_limit_total.is_some();
                 let mut section = div().v_flex().gap(px(8.0)).p_3().rounded_lg()
                     .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
                     .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Usage & Limits".to_string()));
 
-                if has_api_data {
-                    // Rate Limit bar
-                    if let (Some(rem), Some(total)) = (agent.rate_limit_remaining, agent.rate_limit_total) {
-                        let pct = rem as f32 / total as f32;
-                        let color = if pct > 0.5 { theme::SUCCESS } else if pct > 0.2 { theme::WARNING } else { theme::ERROR };
-                        let reset = agent.rate_limit_reset_secs.unwrap_or(0);
-                        section = section.child(usage_bar("Rate Limit", &format!("{rem}/{total} req · resets {}m", reset / 60), pct, color));
+                match &agent.usage {
+                    AgentUsage::ClaudeCode { five_hour_pct, five_hour_reset, weekly_pct, weekly_reset, extra_usage_enabled, extra_usage_cost } => {
+                        let fh_color = quota_color(*five_hour_pct);
+                        let wk_color = quota_color(*weekly_pct);
+                        section = section
+                            .child(usage_bar("5-Hour Window", &format!("{:.0}% used · resets {five_hour_reset}", five_hour_pct * 100.0), *five_hour_pct, fh_color))
+                            .child(usage_bar("Weekly Quota", &format!("{:.0}% used · resets {weekly_reset}", weekly_pct * 100.0), *weekly_pct, wk_color))
+                            .child(
+                                div().h_flex().gap_2().items_center()
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("Extra Usage".to_string()))
+                                    .child(
+                                        if *extra_usage_enabled {
+                                            div().text_xs().text_color(theme::SUCCESS)
+                                                .child(format!("Enabled · ${:.2} this period", extra_usage_cost))
+                                        } else {
+                                            div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4))
+                                                .child("Disabled".to_string())
+                                        },
+                                    ),
+                            );
                     }
-                    // 5-Hour Quota
-                    if let Some(pct) = agent.five_hour_quota_pct {
-                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
-                        section = section.child(usage_bar("5-Hour Quota", &format!("{:.0}% used", pct * 100.0), pct, color));
+                    AgentUsage::Estimated { provider, estimated_tokens, estimated_cost, is_local } => {
+                        section = section
+                            .child(
+                                div().h_flex().justify_between()
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Provider".to_string()))
+                                    .child(div().text_xs().text_color(theme::TEXT_PRIMARY).child(provider.clone())),
+                            )
+                            .child(
+                                div().h_flex().justify_between()
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Provider Limits".to_string()))
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6)).child(
+                                        if *is_local { "No limits (local model)".to_string() }
+                                        else { "Inherited from provider API".to_string() }
+                                    )),
+                            )
+                            .child(
+                                div().h_flex().justify_between()
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Estimated Cost".to_string()))
+                                    .child(div().text_xs().text_color(theme::TEXT_PRIMARY)
+                                        .child(format!("${:.2} today (~{} tokens)", estimated_cost, format_tokens(*estimated_tokens)))),
+                            );
                     }
-                    // Daily Quota
-                    if let Some(pct) = agent.daily_quota_pct {
-                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
-                        section = section.child(usage_bar("Daily Quota", &format!("{:.0}% used", pct * 100.0), pct, color));
-                    }
-                    // Context Window
-                    if let Some(pct) = agent.context_used_pct {
-                        let used = agent.context_used_tokens.unwrap_or(0);
-                        let total = agent.context_total_tokens.unwrap_or(0);
-                        let color = if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR };
-                        section = section.child(usage_bar(
-                            "Context Window",
-                            &format!("{:.0}% · {}K/{}K tokens", pct * 100.0, used / 1000, total / 1000),
-                            pct, color,
-                        ));
-                    }
-                } else {
-                    // No API data — show estimated
-                    section = section
-                        .child(usage_bar("Rate Limit", "Unknown (no API)", 0.0, theme::TEXT_MUTED))
-                        .child(
-                            div().h_flex().gap_2().items_center()
-                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
-                                    .child(format!("Estimated usage: ~{} tokens today (based on responses)", format_tokens(agent.tokens_today)))),
+                    AgentUsage::Unknown => {
+                        section = section.child(
+                            div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("No usage data available".to_string()),
                         );
+                    }
                 }
                 section
             })
@@ -519,6 +547,10 @@ fn info_item(label: &str, value: &str) -> Div {
     div().v_flex().gap(px(2.0))
         .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(label.to_string()))
         .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
+}
+
+fn quota_color(pct: f32) -> Hsla {
+    if pct < 0.5 { theme::SUCCESS } else if pct < 0.8 { theme::WARNING } else { theme::ERROR }
 }
 
 fn usage_bar(label: &str, detail: &str, pct: f32, color: Hsla) -> Div {
