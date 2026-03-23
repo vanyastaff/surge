@@ -74,10 +74,10 @@ impl SpecWizardScreen {
             description: String::new(),
             title: String::new(),
             planned_subtasks: vec![
-                PlannedSubtask { title: "Parse requirements".into(), agent: "claude-code".into() },
-                PlannedSubtask { title: "Create data models".into(), agent: "claude-code".into() },
-                PlannedSubtask { title: "Implement core logic".into(), agent: "claude-code".into() },
-                PlannedSubtask { title: "Write tests".into(), agent: "claude-code".into() },
+                PlannedSubtask { title: "Parse requirements".into(), agent: "claude-acp".into() },
+                PlannedSubtask { title: "Create data models".into(), agent: "claude-acp".into() },
+                PlannedSubtask { title: "Implement core logic".into(), agent: "claude-acp".into() },
+                PlannedSubtask { title: "Write tests".into(), agent: "claude-acp".into() },
             ],
             criteria: vec![
                 "All endpoints return correct status codes".into(),
@@ -188,7 +188,7 @@ impl SpecWizardScreen {
                 .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_PRIMARY).child("Ready to create".to_string()))
                 .child(self.summary_row("Subtasks", &format!("{}", self.planned_subtasks.len())))
                 .child(self.summary_row("Criteria", &format!("{}", self.criteria.len())))
-                .child(self.summary_row("Agent", "claude-code")),
+                .child(self.summary_row("Agent", "claude-acp")),
         }
     }
 

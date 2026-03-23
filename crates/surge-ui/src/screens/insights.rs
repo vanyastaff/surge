@@ -371,7 +371,7 @@ fn format_tokens(tokens: u64) -> String {
 fn demo_usage() -> Vec<AgentUsage> {
     vec![
         AgentUsage {
-            name: "claude-code".into(),
+            name: "claude-acp".into(),
             requests: 42,
             input_tokens: 856_000,
             output_tokens: 312_000,

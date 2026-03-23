@@ -58,26 +58,26 @@ impl TaskDetailScreen {
             title: "Add auth middleware".to_string(),
             status: "Executing".to_string(),
             complexity: "Standard".to_string(),
-            agent: Some("claude-code".to_string()),
+            agent: Some("claude-acp".to_string()),
             description: "Implement JWT-based authentication middleware for all API endpoints. \
                 Must support token refresh and role-based access control.".to_string(),
             subtasks: vec![
                 SubtaskInfo {
                     title: "Create JWT validation module".into(),
                     status: "Completed".into(),
-                    agent: Some("claude-code".into()),
+                    agent: Some("claude-acp".into()),
                     duration: Some("2m 15s".into()),
                 },
                 SubtaskInfo {
                     title: "Add middleware to router".into(),
                     status: "Completed".into(),
-                    agent: Some("claude-code".into()),
+                    agent: Some("claude-acp".into()),
                     duration: Some("1m 45s".into()),
                 },
                 SubtaskInfo {
                     title: "Implement role-based guards".into(),
                     status: "Executing".into(),
-                    agent: Some("claude-code".into()),
+                    agent: Some("claude-acp".into()),
                     duration: None,
                 },
                 SubtaskInfo {

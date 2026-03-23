@@ -113,7 +113,7 @@ impl InitWizard {
             project_name: String::new(),
             description: String::new(),
             detected_language: None,
-            agent_name: "claude-code".to_string(),
+            agent_name: "claude-acp".to_string(),
             agent_command: "claude".to_string(),
             pipeline_preset: PipelinePreset::Fast,
         }

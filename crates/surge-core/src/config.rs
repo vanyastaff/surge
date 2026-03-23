@@ -256,7 +256,7 @@ fn default_shutdown_grace_secs() -> u64 { 5 }
 impl Default for SurgeConfig {
     fn default() -> Self {
         Self {
-            default_agent: "claude-code".to_string(),
+            default_agent: "claude-acp".to_string(),
             agents: HashMap::new(),
             pipeline: PipelineConfig::default(),
             routing: RoutingConfig::default(),
@@ -447,7 +447,7 @@ command = "test"
         // Test that Default provides sensible values
         let config = SurgeConfig::default();
 
-        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.default_agent, "claude-acp");
         assert!(config.agents.is_empty());
         assert_eq!(config.pipeline.max_qa_iterations, 10);
         assert_eq!(config.pipeline.max_parallel, 3);
@@ -490,7 +490,7 @@ max_parallel = 2
         std::env::set_current_dir(&no_config_dir).unwrap();
 
         let config = SurgeConfig::load_or_default().unwrap();
-        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.default_agent, "claude-acp");
         assert_eq!(config.pipeline.max_qa_iterations, 10);
         assert_eq!(config.pipeline.max_parallel, 3);
 
@@ -506,7 +506,7 @@ max_parallel = 2
     fn test_config_validation() {
         // Test 1: Valid configuration passes validation
         let mut valid_config = SurgeConfig::default();
-        valid_config.agents.insert("claude-code".to_string(), AgentConfig {
+        valid_config.agents.insert("claude-acp".to_string(), AgentConfig {
             command: "claude".to_string(),
             args: vec![],
             transport: Transport::Stdio,
@@ -624,7 +624,7 @@ max_parallel = 2
         let mut config = SurgeConfig::default();
 
         // Verify defaults before override
-        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.default_agent, "claude-acp");
         assert_eq!(config.pipeline.max_qa_iterations, 10);
         assert_eq!(config.pipeline.max_parallel, 3);
         assert!(config.pipeline.gates.after_spec);
@@ -695,9 +695,9 @@ default_agent = "test-agent"
     fn test_toml_serialization_complete() {
         // Test complete config with all fields
         let toml_str = r#"
-default_agent = "claude-code"
+default_agent = "claude-acp"
 
-[agents.claude-code]
+[agents.claude-acp]
 command = "claude"
 args = ["--stdio"]
 transport = "stdio"
@@ -722,11 +722,11 @@ after_qa = false
 "#;
         let config: SurgeConfig = toml::from_str(toml_str).unwrap();
 
-        assert_eq!(config.default_agent, "claude-code");
+        assert_eq!(config.default_agent, "claude-acp");
         assert_eq!(config.agents.len(), 3);
 
         // Check claude-code agent
-        let claude = config.agents.get("claude-code").unwrap();
+        let claude = config.agents.get("claude-acp").unwrap();
         assert_eq!(claude.command, "claude");
         assert_eq!(claude.args, vec!["--stdio"]);
         assert!(matches!(claude.transport, Transport::Stdio));

@@ -64,9 +64,9 @@ impl LiveExecutionScreen {
         Self {
             spec_title: "Auth Middleware".into(),
             nodes: vec![
-                ExecutionNode { id: "n1".into(), title: "Create JWT module".into(), state: NodeState::Done, agent: Some("claude-code".into()), lane: 0 },
-                ExecutionNode { id: "n2".into(), title: "Add middleware".into(), state: NodeState::Done, agent: Some("claude-code".into()), lane: 0 },
-                ExecutionNode { id: "n3".into(), title: "Role-based guards".into(), state: NodeState::Running, agent: Some("claude-code".into()), lane: 0 },
+                ExecutionNode { id: "n1".into(), title: "Create JWT module".into(), state: NodeState::Done, agent: Some("claude-acp".into()), lane: 0 },
+                ExecutionNode { id: "n2".into(), title: "Add middleware".into(), state: NodeState::Done, agent: Some("claude-acp".into()), lane: 0 },
+                ExecutionNode { id: "n3".into(), title: "Role-based guards".into(), state: NodeState::Running, agent: Some("claude-acp".into()), lane: 0 },
                 ExecutionNode { id: "n4".into(), title: "Token refresh".into(), state: NodeState::Pending, agent: None, lane: 1 },
                 ExecutionNode { id: "n5".into(), title: "Integration tests".into(), state: NodeState::Pending, agent: None, lane: 1 },
             ],

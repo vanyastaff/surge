@@ -39,7 +39,7 @@ impl AgentTerminalScreen {
             let s = state.read(_cx);
             s.config.as_ref()
                 .map(|c| c.default_agent.clone())
-                .unwrap_or_else(|| "claude-code".to_string())
+                .unwrap_or_else(|| "claude-acp".to_string())
         };
 
         Self {

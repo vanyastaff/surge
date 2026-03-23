@@ -83,16 +83,16 @@ mod tests {
 
     #[test]
     fn test_default_routing() {
-        let router = AgentRouter::new(RoutingConfig::default(), "claude-code".to_string());
+        let router = AgentRouter::new(RoutingConfig::default(), "claude-acp".to_string());
         let subtask = make_subtask(Complexity::Standard);
         let decision = router.route(&subtask, None);
-        assert_eq!(decision.agent_name, "claude-code");
+        assert_eq!(decision.agent_name, "claude-acp");
         assert_eq!(decision.reason, "default");
     }
 
     #[test]
     fn test_phase_routing() {
-        let mut router = AgentRouter::new(RoutingConfig::default(), "claude-code".to_string());
+        let mut router = AgentRouter::new(RoutingConfig::default(), "claude-acp".to_string());
         router.set_phase_agent("qa", "copilot");
         let subtask = make_subtask(Complexity::Standard);
         let decision = router.route(&subtask, Some("qa"));
@@ -108,7 +108,7 @@ mod tests {
             strategy: surge_core::config::RoutingStrategy::Complexity,
             agent_preferences: prefs,
         };
-        let router = AgentRouter::new(config, "claude-code".to_string());
+        let router = AgentRouter::new(config, "claude-acp".to_string());
         let subtask = make_subtask(Complexity::Complex);
         let decision = router.route(&subtask, None);
         assert_eq!(decision.agent_name, "claude-opus");
@@ -123,10 +123,10 @@ mod tests {
             strategy: surge_core::config::RoutingStrategy::Complexity,
             agent_preferences: prefs,
         };
-        let router = AgentRouter::new(config, "claude-code".to_string());
+        let router = AgentRouter::new(config, "claude-acp".to_string());
         let subtask = make_subtask(Complexity::Simple);
         let decision = router.route(&subtask, None);
-        assert_eq!(decision.agent_name, "claude-code");
+        assert_eq!(decision.agent_name, "claude-acp");
         assert_eq!(decision.reason, "default");
     }
 }
