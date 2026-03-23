@@ -345,17 +345,7 @@ impl AgentHubScreen {
             .child(
                 div().h_flex().gap_2()
                     .child(Button::new("agent-test").primary().compact().label("Test Connection"))
-                    .child(Button::new("agent-configure").compact().label("Configure"))
-                    .child(Button::new("agent-logs").compact().label("View Logs"))
-                    .when(agent.status == AgentStatus::Connected, |el: Div| {
-                        el.child(Button::new("agent-disconnect").ghost().compact().label("Disconnect"))
-                    })
-                    .when(agent.status == AgentStatus::Offline, |el: Div| {
-                        el.child(Button::new("agent-reconnect").compact().label("Reconnect"))
-                    })
-                    .when(agent.status == AgentStatus::NotInstalled, |el: Div| {
-                        el.child(Button::new("agent-setup").primary().compact().label("Setup"))
-                    }),
+                    .child(Button::new("agent-configure").compact().label("Configure")),
             )
     }
 
@@ -545,14 +535,13 @@ impl Render for AgentHubScreen {
 
 impl AgentHubScreen {
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        div().h_flex().justify_between().items_center().px_4().pt_3().pb_1()
+        div().h_flex().items_center().px_4().pt_3().pb_1()
             .child(
                 div().h_flex().gap_3().items_center()
                     .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
                         .child(format!("Agents ({})", self.agents.len())))
                     .child(self.render_tabs(cx)),
             )
-            .child(Button::new("add-agent").primary().compact().label("+ Add"))
     }
 
     fn render_configured_tab(&mut self, cx: &mut Context<Self>) -> Div {
