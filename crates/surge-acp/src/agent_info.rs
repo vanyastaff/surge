@@ -105,7 +105,30 @@ pub enum SessionStatus {
     Failed,
 }
 
-/// Fully assembled display data for an installed (configured) agent.
+/// How an agent is available on the system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallStatus {
+    /// Binary installed locally on PATH.
+    Installed,
+    /// Available via npx (downloaded on-demand).
+    Npx,
+    /// Available via uvx (downloaded on-demand).
+    Uvx,
+}
+
+impl InstallStatus {
+    /// Human-readable label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Installed => "Installed",
+            Self::Npx => "npx",
+            Self::Uvx => "uvx",
+        }
+    }
+}
+
+/// Fully assembled display data for a runnable agent.
 #[derive(Debug, Clone)]
 pub struct ConfiguredAgent {
     pub name: String,
@@ -114,6 +137,8 @@ pub struct ConfiguredAgent {
     pub model: Option<String>,
     pub binary: String,
     pub version: Option<String>,
+    /// How this agent is available.
+    pub install_status: InstallStatus,
     pub active_sessions: u32,
     pub requests_today: u32,
     pub tokens_today: u64,
@@ -173,6 +198,14 @@ pub fn build_configured_agent(
         None => (0, 0, 0),
     };
 
+    let install_status = if detected.entry.is_npx() {
+        InstallStatus::Npx
+    } else if detected.entry.is_uvx() {
+        InstallStatus::Uvx
+    } else {
+        InstallStatus::Installed
+    };
+
     ConfiguredAgent {
         name: detected.entry.id.clone(),
         display_name: detected.entry.display_name.clone(),
@@ -180,6 +213,7 @@ pub fn build_configured_agent(
         model: detected.entry.models.first().cloned(),
         binary: detected.entry.command.clone(),
         version: Some(detected.entry.version.clone()),
+        install_status,
         active_sessions: 0,
         requests_today: requests as u32,
         tokens_today: 0,

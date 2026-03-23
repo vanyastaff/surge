@@ -189,22 +189,23 @@ impl RegistryEntry {
         }
     }
 
-    /// Check if this agent is locally installed.
+    /// Check if this agent is locally installed (binary on PATH).
     ///
-    /// For npx/uvx agents: checks if the runtime (npx/uvx) is available.
-    /// These agents are "runnable on demand" — npx downloads them automatically.
-    /// For binary agents: checks if the actual binary is on PATH.
+    /// npx/uvx agents are never "installed" — they run on-demand.
+    /// Use `is_runnable()` to check if an agent can be launched.
     #[must_use]
     pub fn is_installed(&self) -> bool {
-        // Binary agents: check the actual command
-        if self.has_binary_dist() {
-            return which(&self.command);
+        if self.is_npx() || self.is_uvx() {
+            return false;
         }
-        // npx/uvx: available if the runtime is installed
         which(&self.command)
     }
 
-    /// Whether this agent can be run (runtime available for npx/uvx, binary on PATH).
+    /// Whether this agent can be launched right now.
+    ///
+    /// - Binary agents: the command is on PATH
+    /// - npx agents: `npx` is available (package downloaded on-demand)
+    /// - uvx agents: `uvx` is available
     #[must_use]
     pub fn is_runnable(&self) -> bool {
         which(&self.command)
@@ -416,11 +417,25 @@ impl Registry {
         self.entries.iter().filter(|e| e.is_installed()).collect()
     }
 
-    /// Detect installed agents with their resolved paths.
+    /// Detect installed agents (binary on PATH) with their resolved paths.
     pub fn detect_installed_with_paths(&self) -> Vec<DetectedAgent> {
         self.entries
             .iter()
             .filter(|e| e.is_installed())
+            .map(|e| DetectedAgent {
+                entry: e.clone(),
+                command_path: resolve_command_path(&e.command),
+            })
+            .collect()
+    }
+
+    /// Detect all agents that can be launched right now.
+    ///
+    /// Includes binary agents on PATH + npx/uvx agents (if runtime available).
+    pub fn detect_runnable_with_paths(&self) -> Vec<DetectedAgent> {
+        self.entries
+            .iter()
+            .filter(|e| e.is_runnable())
             .map(|e| DetectedAgent {
                 entry: e.clone(),
                 command_path: resolve_command_path(&e.command),

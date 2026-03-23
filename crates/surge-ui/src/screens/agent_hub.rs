@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_acp::{
     build_available_agent, build_configured_agent, vendor_hue, AgentUsage, AvailableAgent,
-    BadgeKind, ConfiguredAgent, EffortLevel, SessionStatus,
+    BadgeKind, ConfiguredAgent, EffortLevel, InstallStatus, SessionStatus,
 };
 
 use crate::app_state::AppState;
@@ -103,8 +103,10 @@ impl AgentHubScreen {
             .bg(if is_selected { theme::PRIMARY.opacity(0.08) } else { gpui::transparent_black() })
             .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
             .on_click(cx.listener(move |this, _e, _w, cx| { this.selected = Some(idx); cx.notify(); }))
-            // Status dot
-            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(theme::SUCCESS))
+            // Status dot — green for installed binary, blue for npx/uvx
+            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(
+                if agent.install_status == InstallStatus::Installed { theme::SUCCESS } else { theme::PRIMARY }
+            ))
             // Name
             .child(div().flex_1().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
             // Right info
@@ -142,10 +144,17 @@ impl AgentHubScreen {
                         div().h_flex().gap_2().items_center()
                             .child(Icon::new(IconName::Bot).size_5().text_color(theme::PRIMARY))
                             .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
-                            .child(div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(3.0)).rounded_full()
-                                .bg(theme::SUCCESS.opacity(0.1))
-                                .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(theme::SUCCESS))
-                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::SUCCESS).child("Ready".to_string()))),
+                            .child({
+                                let (color, label) = match agent.install_status {
+                                    InstallStatus::Installed => (theme::SUCCESS, "Installed"),
+                                    InstallStatus::Npx => (theme::PRIMARY, "npx"),
+                                    InstallStatus::Uvx => (theme::PRIMARY, "uvx"),
+                                };
+                                div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(3.0)).rounded_full()
+                                    .bg(color.opacity(0.1))
+                                    .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(color))
+                                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(color).child(label.to_string()))
+                            }),
                     )
                     .child(
                         div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(version_str.to_string()),

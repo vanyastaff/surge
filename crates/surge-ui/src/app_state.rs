@@ -69,7 +69,7 @@ impl AppState {
     pub fn new() -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let registry = Registry::builtin();
-        let installed_agents = registry.detect_installed_with_paths();
+        let installed_agents = registry.detect_runnable_with_paths();
 
         // Register installed agents in health monitor.
         let mut health = HealthMonitor::new();
@@ -122,7 +122,7 @@ impl AppState {
         }
 
         // Re-detect installed agents (might have changed).
-        self.installed_agents = self.registry.detect_installed_with_paths();
+        self.installed_agents = self.registry.detect_runnable_with_paths();
 
         // If no pool yet (no surge.toml), create one from installed agents.
         if self.agent_pool.is_none() && !self.installed_agents.is_empty() {
