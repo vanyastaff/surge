@@ -69,7 +69,7 @@ impl AgentHubScreen {
             .map(|a| a.entry.id.as_str()).collect();
         self.cached_available = state.registry.list().iter()
             .filter(|e| !installed_ids.contains(&e.id.as_str()))
-            .map(|entry| AgentSummary::from_entry(entry))
+            .map(AgentSummary::from_entry)
             .collect();
 
         self.cache_valid = true;
@@ -384,7 +384,7 @@ impl AgentHubScreen {
 
     fn render_available(&self, cx: &mut Context<Self>) -> Div {
         let available = self.available();
-        let filtered = self.filtered_available(&available);
+        let filtered = self.filtered_available(available);
         let cards: Vec<Div> = filtered.iter().enumerate().map(|(i, agent)| {
             let cmd = agent.install_command.clone();
             let is_even = i % 2 == 0;
@@ -648,7 +648,7 @@ impl Render for AgentHubScreen {
                         .child(
                             div().id("detail-scroll").flex_1().h_full().min_w_0()
                                 .v_flex().gap_3().p_4().overflow_y_scroll()
-                                .child(self.render_detail(&configured)),
+                                .child(self.render_detail(configured)),
                         )
                 }
                 HubTab::Available => self.render_available(cx),

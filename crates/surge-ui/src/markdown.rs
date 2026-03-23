@@ -5,7 +5,6 @@
 //! tables, lists, blockquotes, and horizontal rules.
 
 use gpui::*;
-use gpui::prelude::FluentBuilder;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, CodeBlockKind};
 
 use crate::theme;

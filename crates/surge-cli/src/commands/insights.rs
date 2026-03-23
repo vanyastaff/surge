@@ -50,6 +50,19 @@ struct CostInsights {
     summary: SummaryData,
 }
 
+/// Data structure to group output parameters and reduce function argument count
+struct OutputData<'a> {
+    subtask_entries: &'a [(&'a String, &'a Vec<&'a SessionUsage>)],
+    sessions_without_subtask: &'a [&'a SessionUsage],
+    filtered_sessions: &'a [SessionUsage],
+    total_input: u64,
+    total_output: u64,
+    total_thought: u64,
+    total_cached_read: u64,
+    total_cached_write: u64,
+    total_cost: f64,
+}
+
 #[derive(Subcommand)]
 pub enum InsightsCommands {
     /// Show cost breakdown by subtask
@@ -163,23 +176,17 @@ fn show_cost(
         .into_iter()
         .filter(|session| {
             // Filter by agent
-            if let Some(ref agent) = agent_filter {
-                if &session.agent_name != agent {
-                    return false;
-                }
+            if let Some(ref agent) = agent_filter && &session.agent_name != agent {
+                return false;
             }
 
             // Filter by date range
-            if let Some(from) = from_ts {
-                if session.timestamp_ms < from {
-                    return false;
-                }
+            if let Some(from) = from_ts && session.timestamp_ms < from {
+                return false;
             }
 
-            if let Some(to) = to_ts {
-                if session.timestamp_ms > to {
-                    return false;
-                }
+            if let Some(to) = to_ts && session.timestamp_ms > to {
+                return false;
             }
 
             true
@@ -283,18 +290,29 @@ fn show_cost(
         .map(|s| s.estimated_cost_usd.unwrap_or(0.0))
         .sum();
 
+    // Prepare output data structure
+    let output_data = OutputData {
+        subtask_entries: &subtask_entries,
+        sessions_without_subtask: &sessions_without_subtask,
+        filtered_sessions: &filtered_sessions,
+        total_input,
+        total_output,
+        total_thought,
+        total_cached_read,
+        total_cached_write,
+        total_cost,
+    };
+
     // Output based on format
     match format {
         OutputFormat::Json => {
-            output_json(&subtask_entries, &sessions_without_subtask, &filtered_sessions,
-                total_input, total_output, total_thought, total_cached_read, total_cached_write, total_cost)?;
+            output_json(&output_data)?;
         }
         OutputFormat::Csv => {
             output_csv(&subtask_entries, &sessions_without_subtask)?;
         }
         OutputFormat::Text => {
-            output_text(&subtask_entries, &sessions_without_subtask, &filtered_sessions,
-                total_input, total_output, total_thought, total_cached_read, total_cached_write, total_cost);
+            output_text(&output_data);
         }
     }
 
@@ -302,21 +320,11 @@ fn show_cost(
 }
 
 /// Output cost insights in JSON format
-fn output_json(
-    subtask_entries: &[(&String, &Vec<&SessionUsage>)],
-    sessions_without_subtask: &[&SessionUsage],
-    filtered_sessions: &[SessionUsage],
-    total_input: u64,
-    total_output: u64,
-    total_thought: u64,
-    total_cached_read: u64,
-    total_cached_write: u64,
-    total_cost: f64,
-) -> Result<()> {
+fn output_json(data: &OutputData) -> Result<()> {
     let mut subtasks_data = Vec::new();
 
     // Add subtask data
-    for (subtask_id, sessions) in subtask_entries {
+    for (subtask_id, sessions) in data.subtask_entries {
         let input: u64 = sessions.iter().map(|s| s.input_tokens).sum();
         let output: u64 = sessions.iter().map(|s| s.output_tokens).sum();
         let thought: u64 = sessions.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
@@ -334,15 +342,15 @@ fn output_json(
     }
 
     // Sessions without subtask
-    let sessions_no_subtask = if !sessions_without_subtask.is_empty() {
-        let input: u64 = sessions_without_subtask.iter().map(|s| s.input_tokens).sum();
-        let output: u64 = sessions_without_subtask.iter().map(|s| s.output_tokens).sum();
-        let thought: u64 = sessions_without_subtask.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
-        let cost: f64 = sessions_without_subtask.iter().map(|s| s.estimated_cost_usd.unwrap_or(0.0)).sum();
+    let sessions_no_subtask = if !data.sessions_without_subtask.is_empty() {
+        let input: u64 = data.sessions_without_subtask.iter().map(|s| s.input_tokens).sum();
+        let output: u64 = data.sessions_without_subtask.iter().map(|s| s.output_tokens).sum();
+        let thought: u64 = data.sessions_without_subtask.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
+        let cost: f64 = data.sessions_without_subtask.iter().map(|s| s.estimated_cost_usd.unwrap_or(0.0)).sum();
 
         Some(SubtaskCostData {
             subtask_id: "(no subtask)".to_string(),
-            session_count: sessions_without_subtask.len(),
+            session_count: data.sessions_without_subtask.len(),
             input_tokens: input,
             output_tokens: output,
             thought_tokens: thought,
@@ -357,14 +365,14 @@ fn output_json(
         subtasks: subtasks_data,
         sessions_without_subtask: sessions_no_subtask,
         summary: SummaryData {
-            total_sessions: filtered_sessions.len(),
-            input_tokens: total_input,
-            output_tokens: total_output,
-            thought_tokens: total_thought,
-            cached_read_tokens: total_cached_read,
-            cached_write_tokens: total_cached_write,
-            total_tokens: total_input + total_output + total_thought,
-            total_cost_usd: total_cost,
+            total_sessions: data.filtered_sessions.len(),
+            input_tokens: data.total_input,
+            output_tokens: data.total_output,
+            thought_tokens: data.total_thought,
+            cached_read_tokens: data.total_cached_read,
+            cached_write_tokens: data.total_cached_write,
+            total_tokens: data.total_input + data.total_output + data.total_thought,
+            total_cost_usd: data.total_cost,
         },
     };
 
@@ -406,22 +414,12 @@ fn output_csv(
 }
 
 /// Output cost insights in text format
-fn output_text(
-    subtask_entries: &[(&String, &Vec<&SessionUsage>)],
-    sessions_without_subtask: &[&SessionUsage],
-    filtered_sessions: &[SessionUsage],
-    total_input: u64,
-    total_output: u64,
-    total_thought: u64,
-    total_cached_read: u64,
-    total_cached_write: u64,
-    total_cost: f64,
-) {
+fn output_text(data: &OutputData) {
     // Display subtask breakdown
-    if !subtask_entries.is_empty() {
+    if !data.subtask_entries.is_empty() {
         println!("\n📊 Subtask Breakdown:");
 
-        for (subtask_id, sessions) in subtask_entries {
+        for (subtask_id, sessions) in data.subtask_entries {
             let input: u64 = sessions.iter().map(|s| s.input_tokens).sum();
             let output: u64 = sessions.iter().map(|s| s.output_tokens).sum();
             let thought: u64 = sessions.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
@@ -440,14 +438,14 @@ fn output_text(
     }
 
     // Display sessions without subtask
-    if !sessions_without_subtask.is_empty() {
+    if !data.sessions_without_subtask.is_empty() {
         println!("\n📊 Sessions without subtask:");
-        let input: u64 = sessions_without_subtask.iter().map(|s| s.input_tokens).sum();
-        let output: u64 = sessions_without_subtask.iter().map(|s| s.output_tokens).sum();
-        let thought: u64 = sessions_without_subtask.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
-        let cost: f64 = sessions_without_subtask.iter().map(|s| s.estimated_cost_usd.unwrap_or(0.0)).sum();
+        let input: u64 = data.sessions_without_subtask.iter().map(|s| s.input_tokens).sum();
+        let output: u64 = data.sessions_without_subtask.iter().map(|s| s.output_tokens).sum();
+        let thought: u64 = data.sessions_without_subtask.iter().map(|s| s.thought_tokens.unwrap_or(0)).sum();
+        let cost: f64 = data.sessions_without_subtask.iter().map(|s| s.estimated_cost_usd.unwrap_or(0.0)).sum();
 
-        println!("   Sessions: {}", sessions_without_subtask.len());
+        println!("   Sessions: {}", data.sessions_without_subtask.len());
         println!("   Input tokens: {}", format_tokens(input));
         println!("   Output tokens: {}", format_tokens(output));
         if thought > 0 {
@@ -459,20 +457,20 @@ fn output_text(
 
     // Overall summary
     println!("\n📈 Summary:");
-    println!("   Total sessions: {}", filtered_sessions.len());
-    println!("   Input tokens: {}", format_tokens(total_input));
-    println!("   Output tokens: {}", format_tokens(total_output));
-    if total_thought > 0 {
-        println!("   Thought tokens: {}", format_tokens(total_thought));
+    println!("   Total sessions: {}", data.filtered_sessions.len());
+    println!("   Input tokens: {}", format_tokens(data.total_input));
+    println!("   Output tokens: {}", format_tokens(data.total_output));
+    if data.total_thought > 0 {
+        println!("   Thought tokens: {}", format_tokens(data.total_thought));
     }
-    if total_cached_read > 0 {
-        println!("   Cached read tokens: {}", format_tokens(total_cached_read));
+    if data.total_cached_read > 0 {
+        println!("   Cached read tokens: {}", format_tokens(data.total_cached_read));
     }
-    if total_cached_write > 0 {
-        println!("   Cached write tokens: {}", format_tokens(total_cached_write));
+    if data.total_cached_write > 0 {
+        println!("   Cached write tokens: {}", format_tokens(data.total_cached_write));
     }
-    println!("   Total tokens: {}", format_tokens(total_input + total_output + total_thought));
-    println!("   Total cost: ${:.4}", total_cost);
+    println!("   Total tokens: {}", format_tokens(data.total_input + data.total_output + data.total_thought));
+    println!("   Total cost: ${:.4}", data.total_cost);
 }
 
 /// Format token count with thousands separator

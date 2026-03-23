@@ -478,7 +478,7 @@ impl InitWizard {
 
 impl Render for InitWizard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_next = self.step.next().is_some();
+        let _has_next = self.step.next().is_some();
         let has_prev = self.step.prev().is_some();
         let is_last = self.step == Step::Confirm;
 

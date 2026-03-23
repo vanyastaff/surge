@@ -1,3 +1,7 @@
+// UI code under development - suppress dead code warnings temporarily
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 mod actions;
 mod app;
 mod app_state;

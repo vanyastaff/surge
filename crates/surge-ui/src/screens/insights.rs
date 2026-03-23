@@ -1,6 +1,4 @@
 use gpui::*;
-use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::StyledExt;
 
 use crate::theme;
