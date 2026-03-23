@@ -6,6 +6,7 @@ use gpui_component::WindowExt as _;
 use gpui_component::StyledExt as _;
 
 use crate::actions::*;
+use crate::app_state::AppState;
 use crate::command_palette::{CommandPalette, CommandSelected};
 use gpui_component::Icon;
 use crate::notifications::SurgeNotification;
@@ -39,6 +40,7 @@ enum AppMode {
 
 /// Root application view.
 pub struct SurgeApp {
+    state: Entity<AppState>,
     mode: AppMode,
     // Project mode state:
     active_screen: Screen,
@@ -63,7 +65,7 @@ pub struct SurgeApp {
 }
 
 impl SurgeApp {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let active_screen = Screen::Dashboard;
         let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, cx));
 
@@ -85,6 +87,7 @@ impl SurgeApp {
         .detach();
 
         Self {
+            state,
             mode: AppMode::Welcome(welcome),
             active_screen,
             sidebar_collapsed: false,
@@ -191,10 +194,29 @@ impl SurgeApp {
         recent.touch(&name, path);
         let _ = recent.save();
 
+        // Load project data into AppState.
+        self.state.update(cx, |state, _cx| {
+            state.load_project(path);
+        });
+
         // Create top bar.
         let name_clone = name.clone();
         let top_bar = cx.new(|cx| TopBar::new(&name_clone, Screen::Dashboard, cx));
         self.top_bar = Some(top_bar);
+
+        // Reset screen entities so they re-read from AppState.
+        self.dashboard = None;
+        self.kanban = None;
+        self.agent_hub = None;
+        self.spec_explorer = None;
+        self.spec_wizard = None;
+        self.live_execution = None;
+        self.diff_viewer = None;
+        self.file_explorer = None;
+        self.worktrees = None;
+        self.github_prs = None;
+        self.insights = None;
+        self.settings = None;
 
         self.mode = AppMode::Project {
             path: path.to_path_buf(),

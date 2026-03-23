@@ -1,5 +1,6 @@
 mod actions;
 mod app;
+mod app_state;
 mod command_palette;
 mod notifications;
 mod project;
@@ -13,6 +14,7 @@ use gpui::*;
 use gpui_component::Root;
 
 use app::SurgeApp;
+use app_state::AppState;
 
 fn main() {
     let app = Application::new().with_assets(gpui_component_assets::Assets);
@@ -35,7 +37,8 @@ fn main() {
             };
 
             cx.open_window(options, |window, cx| {
-                let view = cx.new(SurgeApp::new);
+                let state = cx.new(|_| AppState::new());
+                let view = cx.new(|cx| SurgeApp::new(state, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })
             .expect("Failed to open window");
