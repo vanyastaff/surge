@@ -321,6 +321,7 @@ impl Registry {
             .map(|e| DetectedAgent {
                 entry: e.clone(),
                 command_path: resolve_command_path(&e.command),
+                detected_version: None,
             })
             .collect();
 
@@ -443,6 +444,9 @@ impl Registry {
 pub struct DetectedAgent {
     pub entry: RegistryEntry,
     pub command_path: Option<String>,
+    /// Detected version string from running `--version` command.
+    /// None if version detection failed or was not attempted.
+    pub detected_version: Option<String>,
 }
 
 // ── Hardcoded agents ────────────────────────────────────────────────

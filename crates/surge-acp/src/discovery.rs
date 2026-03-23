@@ -264,9 +264,11 @@ impl AgentDiscovery {
             // Skip if already cached
             if let Some(cached_path) = self.cache.get(&entry.kind) {
                 if let Some(path) = cached_path {
+                    let version = self.detect_version(entry.kind, path);
                     detected.push(DetectedAgent {
                         entry: entry.clone(),
                         command_path: Some(path.to_string_lossy().to_string()),
+                        detected_version: version,
                     });
                 }
                 continue;
@@ -282,9 +284,11 @@ impl AgentDiscovery {
 
             if let Some(found_path) = path {
                 debug!("Discovered {} at {:?}", entry.kind, found_path);
+                let version = self.detect_version(entry.kind, &found_path);
                 detected.push(DetectedAgent {
                     entry: entry.clone(),
                     command_path: Some(found_path.to_string_lossy().to_string()),
+                    detected_version: version,
                 });
             } else {
                 warn!("Agent {} not found", entry.kind);
