@@ -85,6 +85,10 @@ pub struct Subtask {
     /// Dependencies on other subtask IDs (must complete first).
     #[serde(default)]
     pub depends_on: Vec<SubtaskId>,
+    /// Relative path to the story file (e.g. `stories/story-001.md`).
+    /// When set, the agent receives the story file content instead of field-assembled prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_file: Option<String>,
     /// Which agent to use for this subtask (overrides routing config).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -122,6 +126,7 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on: vec![],
+            story_file: None,
             agent: None,
             execution: SubtaskExecution::default(),
         }

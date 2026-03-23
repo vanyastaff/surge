@@ -71,11 +71,11 @@ impl GateManager {
 
         // Check configured gates for this phase
         let gate_enabled = match phase {
-            Phase::Planning => self.config.after_spec,
+            Phase::SpecCreation => self.config.after_spec,
+            Phase::Planning => self.config.after_plan,
             Phase::Executing => self.config.after_each_subtask,
             Phase::QaReview => self.config.after_qa,
-            Phase::HumanReview => self.config.after_plan,
-            Phase::QaFix | Phase::Merging => false,
+            Phase::HumanReview | Phase::QaFix | Phase::Merging => false,
         };
 
         if gate_enabled {

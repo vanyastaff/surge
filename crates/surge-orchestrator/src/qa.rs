@@ -1,5 +1,7 @@
 //! QA review loop.
 
+use std::path::Path;
+
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
@@ -50,6 +52,7 @@ impl QaReviewer {
     /// 5. Parse response for APPROVED / NEEDS_FIX
     /// 6. If `NeedsFix`, send a fix prompt, commit, and re-review
     /// 7. Repeat until approved or max iterations reached — max iterations is a failure
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         spec: &Spec,
@@ -58,6 +61,7 @@ impl QaReviewer {
         session: &SessionHandle,
         git: &GitManager,
         event_tx: &broadcast::Sender<SurgeEvent>,
+        spec_dir: Option<&Path>,
     ) -> QaCycleResult {
         let spec_id_str = spec.id.to_string();
 
@@ -79,7 +83,7 @@ impl QaReviewer {
             // Subscribe before prompt so we capture every AgentMessageChunk
             let mut event_rx = event_tx.subscribe();
 
-            let qa_prompt = build_qa_prompt(spec, &diff);
+            let qa_prompt = build_qa_prompt(spec, &diff, spec_dir);
             let content = vec![ContentBlock::Text(TextContent::new(qa_prompt))];
 
             match pool.prompt(session, content).await {

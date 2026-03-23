@@ -145,6 +145,7 @@ impl SubtaskBuilder {
             files: self.files,
             acceptance_criteria: self.acceptance_criteria,
             depends_on: self.depends_on,
+            story_file: None,
             agent: None,
             execution: surge_core::spec::SubtaskExecution::default(),
         })

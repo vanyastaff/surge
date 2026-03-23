@@ -161,6 +161,7 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on,
+            story_file: None,
             agent: None,
             execution: surge_core::spec::SubtaskExecution::default(),
         }
@@ -236,6 +237,7 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on: vec![id_b],
+            story_file: None,
             agent: None,
             execution: surge_core::spec::SubtaskExecution::default(),
         };
@@ -247,6 +249,7 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on: vec![id_a],
+            story_file: None,
             agent: None,
             execution: surge_core::spec::SubtaskExecution::default(),
         };

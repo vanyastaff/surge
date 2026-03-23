@@ -1,23 +1,44 @@
 //! Subtask context — builds prompts for agent execution.
 
+use std::path::Path;
+
 use surge_core::spec::{Spec, Subtask};
 
 /// Context for building prompts for a single subtask execution.
 pub struct SubtaskContext<'a> {
     spec: &'a Spec,
     subtask: &'a Subtask,
+    spec_dir: Option<&'a Path>,
 }
 
 impl<'a> SubtaskContext<'a> {
     /// Create a new subtask context.
+    ///
+    /// When `spec_dir` is provided and the subtask has a `story_file`, the prompt
+    /// is read from that file instead of being assembled from struct fields.
     #[must_use]
-    pub fn new(spec: &'a Spec, subtask: &'a Subtask) -> Self {
-        Self { spec, subtask }
+    pub fn new(spec: &'a Spec, subtask: &'a Subtask, spec_dir: Option<&'a Path>) -> Self {
+        Self { spec, subtask, spec_dir }
     }
 
     /// Build the prompt string sent to the coding agent for this subtask.
+    ///
+    /// If the subtask has a `story_file` and `spec_dir` is set, returns the file
+    /// content directly. Otherwise falls back to field-assembled prompt.
     #[must_use]
     pub fn build_prompt(&self) -> String {
+        if let (Some(story_file), Some(spec_dir)) = (&self.subtask.story_file, self.spec_dir) {
+            let story_path = spec_dir.join(story_file);
+            if let Ok(content) = std::fs::read_to_string(&story_path) {
+                return content;
+            }
+        }
+
+        self.build_prompt_from_fields()
+    }
+
+    /// Build prompt from subtask struct fields (original approach).
+    fn build_prompt_from_fields(&self) -> String {
         let mut prompt = String::new();
 
         // Spec-level context
@@ -57,12 +78,24 @@ impl<'a> SubtaskContext<'a> {
 }
 
 /// Build a QA review prompt from all subtask acceptance criteria and the diff.
+///
+/// When `spec_dir` is provided, reads `requirements.md` and includes it for
+/// richer QA context.
 #[must_use]
-pub fn build_qa_prompt(spec: &Spec, diff: &str) -> String {
+pub fn build_qa_prompt(spec: &Spec, diff: &str, spec_dir: Option<&Path>) -> String {
     let mut prompt = String::new();
 
     prompt.push_str(&format!("# QA Review: {}\n\n", spec.title));
     prompt.push_str(&format!("{}\n\n", spec.description));
+
+    // Include requirements if available
+    if let Some(dir) = spec_dir
+        && let Ok(requirements) = std::fs::read_to_string(dir.join("requirements.md"))
+    {
+        prompt.push_str("## Requirements\n\n");
+        prompt.push_str(&requirements);
+        prompt.push_str("\n\n");
+    }
 
     // Collect acceptance criteria from all subtasks
     prompt.push_str("## Acceptance Criteria\n\n");
@@ -118,6 +151,7 @@ mod tests {
                     },
                 ],
                 depends_on: vec![],
+                story_file: None,
                 agent: None,
                 execution: surge_core::spec::SubtaskExecution::default(),
             }],
@@ -128,7 +162,7 @@ mod tests {
     fn test_subtask_prompt_contains_key_parts() {
         let spec = sample_spec();
         let subtask = &spec.subtasks[0];
-        let ctx = SubtaskContext::new(&spec, subtask);
+        let ctx = SubtaskContext::new(&spec, subtask, None);
         let prompt = ctx.build_prompt();
 
         assert!(prompt.contains("Add logging"), "should contain spec title");
@@ -160,7 +194,7 @@ mod tests {
     fn test_qa_prompt_contains_diff() {
         let spec = sample_spec();
         let diff = "+use tracing::info;\n-use println;";
-        let prompt = build_qa_prompt(&spec, diff);
+        let prompt = build_qa_prompt(&spec, diff, None);
 
         assert!(prompt.contains("QA Review"), "should contain QA header");
         assert!(
@@ -176,5 +210,62 @@ mod tests {
             prompt.contains("tracing subscriber is initialized"),
             "should contain criteria"
         );
+    }
+
+    #[test]
+    fn test_story_file_prompt_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let stories_dir = dir.path().join("stories");
+        std::fs::create_dir_all(&stories_dir).unwrap();
+        std::fs::write(stories_dir.join("story-001.md"), "# Story 001: Setup\n\nDo the thing.")
+            .unwrap();
+
+        let mut spec = sample_spec();
+        spec.subtasks[0].story_file = Some("stories/story-001.md".to_string());
+
+        let ctx = SubtaskContext::new(&spec, &spec.subtasks[0], Some(dir.path()));
+        let prompt = ctx.build_prompt();
+
+        assert!(prompt.contains("# Story 001: Setup"), "should read story file");
+        assert!(prompt.contains("Do the thing."));
+        assert!(!prompt.contains("## Instructions"), "should NOT have field-based sections");
+    }
+
+    #[test]
+    fn test_story_file_fallback_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = sample_spec();
+        spec.subtasks[0].story_file = Some("stories/nonexistent.md".to_string());
+
+        let ctx = SubtaskContext::new(&spec, &spec.subtasks[0], Some(dir.path()));
+        let prompt = ctx.build_prompt();
+
+        // Falls back to field-based prompt
+        assert!(prompt.contains("## Instructions"), "should fall back to field-based prompt");
+    }
+
+    #[test]
+    fn test_no_spec_dir_uses_field_prompt() {
+        let mut spec = sample_spec();
+        spec.subtasks[0].story_file = Some("stories/story-001.md".to_string());
+
+        let ctx = SubtaskContext::new(&spec, &spec.subtasks[0], None);
+        let prompt = ctx.build_prompt();
+
+        assert!(prompt.contains("## Instructions"), "should use field-based prompt without spec_dir");
+    }
+
+    #[test]
+    fn test_qa_prompt_includes_requirements_when_available() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.md"), "## Overview\nDo great things.")
+            .unwrap();
+
+        let spec = sample_spec();
+        let diff = "+new code";
+        let prompt = build_qa_prompt(&spec, diff, Some(dir.path()));
+
+        assert!(prompt.contains("## Requirements"), "should include requirements section");
+        assert!(prompt.contains("Do great things."), "should include requirements content");
     }
 }

@@ -18,6 +18,7 @@ use crate::executor::ExecutorConfig;
 use crate::gates::{GateAction, GateManager};
 use crate::parallel::ParallelExecutor;
 use crate::phases::Phase;
+use crate::planner::PlannerPhase;
 use crate::qa::{QaReviewer, QaVerdict};
 
 /// Configuration for the Orchestrator.
@@ -64,22 +65,20 @@ impl Orchestrator {
     /// `spec_file` is taken by mutable reference so that subtask execution
     /// states can be persisted to disk after each batch.
     pub async fn execute(&self, spec_file: &mut SpecFile) -> PipelineResult {
-        // Clone the spec so we can hold a read-only reference while also
-        // mutably updating spec_file for state persistence within the loop.
-        let spec = spec_file.spec.clone();
         let task_id = TaskId::new();
-        let spec_id_str = spec.id.to_string();
+        let spec_id_str = spec_file.spec.id.to_string();
+        let spec_id = spec_file.spec.id;
 
-        // 1. Validate spec
-        let validation = validate_spec(&spec);
-        if !validation.is_ok() {
+        // Spec directory for artefacts (requirements.md, architecture.md, stories/).
+        let specs_dir = self.config.working_dir.join(".surge").join("specs");
+        let spec_dir = specs_dir.join(&spec_id_str);
+        if let Err(e) = std::fs::create_dir_all(&spec_dir) {
             return PipelineResult::Failed {
-                reason: format!("Spec validation failed: {}", validation.errors.join("; ")),
+                reason: format!("Failed to create spec directory: {e}"),
             };
         }
-        info!(spec_id = %spec.id, "spec validated");
 
-        // 2. Create git worktree
+        // 1. Create git worktree
         let git = match GitManager::new(self.config.working_dir.clone()) {
             Ok(g) => g,
             Err(e) => {
@@ -100,7 +99,7 @@ impl Orchestrator {
         let worktree_path = worktree_info.path.clone();
         info!(path = %worktree_path.display(), "worktree created");
 
-        // 3. Create AgentPool
+        // 2. Create AgentPool
         let pool = match AgentPool::new(
             self.config.surge_config.agents.clone(),
             self.config.surge_config.default_agent.clone(),
@@ -128,7 +127,7 @@ impl Orchestrator {
 
         pool.warm_up();
 
-        // 4. Create ACP session
+        // 3. Create ACP session
         let session = match pool.create_session(None, None, &worktree_path).await {
             Ok(s) => s,
             Err(e) => {
@@ -141,7 +140,103 @@ impl Orchestrator {
         };
         info!("ACP session created");
 
-        // 5. Build dependency graph and topological batches
+        // Gate manager (shared across all phases).
+        let gate_manager = GateManager::new(
+            self.config.surge_config.pipeline.gates.clone(),
+            specs_dir,
+        );
+
+        // ── Phase 1: Spec Creation ──────────────────────────────────────
+        let req_path = spec_dir.join("requirements.md");
+        if !req_path.exists() {
+            let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
+                task_id,
+                old_state: TaskState::Draft,
+                new_state: TaskState::Planning,
+            });
+
+            if let Err(e) = PlannerPhase::create_requirements(
+                &spec_dir,
+                &spec_file.spec.description,
+                &pool,
+                &session,
+                &worktree_path,
+            )
+            .await
+            {
+                pool.shutdown().await;
+                let _ = git.discard(&spec_id_str);
+                return PipelineResult::Failed {
+                    reason: format!("Spec creation failed: {e}"),
+                };
+            }
+            info!("requirements.md created");
+
+            // Gate: user reviews requirements before planning.
+            match gate_manager.check_gate(Phase::SpecCreation, spec_id) {
+                GateAction::Pause { reason } => {
+                    pool.shutdown().await;
+                    return PipelineResult::Paused {
+                        phase: Phase::SpecCreation,
+                        reason,
+                    };
+                }
+                GateAction::HumanInput { .. } | GateAction::Continue => {}
+            }
+        }
+
+        // ── Phase 2: Planning ───────────────────────────────────────────
+        if spec_file.spec.subtasks.is_empty() {
+            if let Err(e) = PlannerPhase::create_plan(
+                spec_file,
+                &spec_dir,
+                &pool,
+                &session,
+                &worktree_path,
+            )
+            .await
+            {
+                pool.shutdown().await;
+                let _ = git.discard(&spec_id_str);
+                return PipelineResult::Failed {
+                    reason: format!("Planning failed: {e}"),
+                };
+            }
+            info!(
+                stories = spec_file.spec.subtasks.len(),
+                "plan created"
+            );
+
+            // Gate: user reviews plan (architecture.md + stories) before execution.
+            match gate_manager.check_gate(Phase::Planning, spec_id) {
+                GateAction::Pause { reason } => {
+                    pool.shutdown().await;
+                    return PipelineResult::Paused {
+                        phase: Phase::Planning,
+                        reason,
+                    };
+                }
+                GateAction::HumanInput { .. } | GateAction::Continue => {}
+            }
+        }
+
+        // ── Phase 3: Execution ──────────────────────────────────────────
+
+        // Re-read spec after planning may have populated subtasks.
+        let spec = spec_file.spec.clone();
+
+        // Validate spec (subtasks now populated).
+        let validation = validate_spec(&spec);
+        if !validation.is_ok() {
+            pool.shutdown().await;
+            let _ = git.discard(&spec_id_str);
+            return PipelineResult::Failed {
+                reason: format!("Spec validation failed: {}", validation.errors.join("; ")),
+            };
+        }
+        info!(spec_id = %spec.id, "spec validated");
+
+        // Build dependency graph and topological batches.
         let graph = match DependencyGraph::from_spec(&spec) {
             Ok(g) => g,
             Err(e) => {
@@ -175,33 +270,22 @@ impl Orchestrator {
 
         let total: usize = batches.iter().map(|b| b.len()).sum();
 
-        // 6. Create parallel executor and gate manager
         let parallel_exec = ParallelExecutor::new(
             self.config.surge_config.pipeline.max_parallel,
             ExecutorConfig::default(),
         );
 
-        let specs_dir = self.config.working_dir.join(".surge").join("specs");
-        let gate_manager = GateManager::new(
-            self.config.surge_config.pipeline.gates.clone(),
-            specs_dir,
-        );
-
-        // 7. Execute subtasks in batches
-        let spec_id = spec.id;
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
-            old_state: TaskState::Draft,
+            old_state: TaskState::Planning,
             new_state: TaskState::Executing { completed: 0, total },
         });
 
         let mut completed: usize = 0;
         let mut failed_batches: usize = 0;
-        // Human input to inject into the next batch's first subtask (consumed once).
         let mut pending_human_input: Option<String> = None;
 
         for (i, batch) in batches.iter().enumerate() {
-            // Gate check between batches (including before the first).
             match gate_manager.check_gate(Phase::Executing, spec_id) {
                 GateAction::Pause { reason } => {
                     pool.shutdown().await;
@@ -229,15 +313,14 @@ impl Orchestrator {
                     &git,
                     &self.event_tx,
                     pending_human_input.as_deref(),
+                    Some(&spec_dir),
                 )
                 .await;
 
-            // Human input consumed after first batch that received it.
             pending_human_input = None;
-
             completed += result.successes.len();
 
-            // Persist subtask states to disk (best-effort — log and continue on error).
+            // Persist subtask states to disk.
             if let Some(ref path) = spec_file.path.clone() {
                 for subtask_id in &result.successes {
                     if let Err(e) =
@@ -270,7 +353,7 @@ impl Orchestrator {
             warn!(completed, "some subtasks failed during batch execution");
         }
 
-        // 8. QA review
+        // ── Phase 4: QA Review ──────────────────────────────────────────
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Executing { completed, total },
@@ -279,7 +362,7 @@ impl Orchestrator {
 
         let qa_reviewer = QaReviewer::new(self.config.surge_config.pipeline.max_qa_iterations);
         let qa_result = qa_reviewer
-            .run(&spec, task_id, &pool, &session, &git, &self.event_tx)
+            .run(&spec, task_id, &pool, &session, &git, &self.event_tx, Some(&spec_dir))
             .await;
 
         info!(
@@ -288,7 +371,6 @@ impl Orchestrator {
             "QA review complete"
         );
 
-        // 9. If QA approved → merge
         match qa_result.verdict {
             QaVerdict::Approved => {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
@@ -315,7 +397,7 @@ impl Orchestrator {
             }
         }
 
-        // 10. Cleanup
+        // ── Cleanup ─────────────────────────────────────────────────────
         let _ = git.discard(&spec_id_str);
         pool.shutdown().await;
 

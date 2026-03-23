@@ -1,5 +1,7 @@
 //! Subtask executor — runs a single subtask via ACP agent.
 
+use std::path::Path;
+
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
@@ -83,6 +85,7 @@ impl SubtaskExecutor {
         git: &GitManager,
         event_tx: &broadcast::Sender<SurgeEvent>,
         human_input: Option<&str>,
+        spec_dir: Option<&Path>,
     ) -> SubtaskResult {
         let subtask_id = subtask.id;
 
@@ -91,7 +94,7 @@ impl SubtaskExecutor {
             subtask_id,
         });
 
-        let ctx = SubtaskContext::new(spec, subtask);
+        let ctx = SubtaskContext::new(spec, subtask, spec_dir);
         let mut prompt_text = ctx.build_prompt();
 
         if let Some(input) = human_input {

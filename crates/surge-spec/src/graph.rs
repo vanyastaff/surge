@@ -135,6 +135,7 @@ mod tests {
             files: vec![],
             acceptance_criteria: vec![],
             depends_on,
+            story_file: None,
             agent: None,
             execution: surge_core::spec::SubtaskExecution::default(),
         }

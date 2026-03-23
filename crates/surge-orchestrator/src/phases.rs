@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Pipeline phases for task execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
+    SpecCreation,
     Planning,
     Executing,
     QaReview,
@@ -16,6 +17,7 @@ pub enum Phase {
 impl std::fmt::Display for Phase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SpecCreation => write!(f, "Spec Creation"),
             Self::Planning => write!(f, "Planning"),
             Self::Executing => write!(f, "Executing"),
             Self::QaReview => write!(f, "QA Review"),

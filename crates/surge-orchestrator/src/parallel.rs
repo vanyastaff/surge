@@ -1,5 +1,7 @@
 //! Parallel batch executor — runs subtask batches with bounded concurrency.
 
+use std::path::Path;
+
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
@@ -80,6 +82,7 @@ impl ParallelExecutor {
         git: &GitManager,
         event_tx: &broadcast::Sender<SurgeEvent>,
         human_input: Option<&str>,
+        spec_dir: Option<&Path>,
     ) -> BatchResult {
         let semaphore = Semaphore::new(self.max_parallel);
         let mut executor = SubtaskExecutor::new(self.executor_config.clone());
@@ -102,7 +105,7 @@ impl ParallelExecutor {
             let input = if i == 0 { human_input } else { None };
 
             match executor
-                .execute(spec, subtask, task_id, pool, session, git, event_tx, input)
+                .execute(spec, subtask, task_id, pool, session, git, event_tx, input, spec_dir)
                 .await
             {
                 SubtaskResult::Success { subtask_id } => successes.push(subtask_id),
