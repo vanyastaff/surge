@@ -275,7 +275,7 @@ fn surge_client_capabilities() -> ClientCapabilities {
             write_text_file: true,
             meta: None,
         },
-        terminal: false, // Terminal support not yet implemented
+        terminal: true,
         meta: None,
     }
 }
@@ -289,7 +289,7 @@ mod tests {
         let caps = surge_client_capabilities();
         assert!(caps.fs.read_text_file);
         assert!(caps.fs.write_text_file);
-        assert!(!caps.terminal);
+        assert!(caps.terminal);
     }
 
     // Note: Full integration tests require a real agent binary and are tested

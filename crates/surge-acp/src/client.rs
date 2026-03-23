@@ -20,7 +20,7 @@ use surge_core::SurgeEvent;
 use tokio::sync::{broadcast, Mutex};
 use tracing::debug;
 
-use crate::terminal::TerminalManager;
+use crate::terminal::{self, TerminalManager};
 
 /// Permission policy for controlling agent access to system resources.
 #[derive(Debug, Clone)]
@@ -273,8 +273,28 @@ impl Client for SurgeClient {
                     "tool call updated"
                 );
             }
-            _ => {
-                debug!(session_id = session_id.as_str(), "session update received");
+            SessionUpdate::UserMessageChunk(_) => {}
+            SessionUpdate::Plan(_) => {
+                debug!(session_id = session_id.as_str(), "plan update received");
+            }
+            SessionUpdate::AvailableCommandsUpdate(_) => {
+                debug!(session_id = session_id.as_str(), "commands update received");
+            }
+            SessionUpdate::CurrentModeUpdate(mode) => {
+                debug!(
+                    session_id = session_id.as_str(),
+                    mode = ?mode,
+                    "session mode changed"
+                );
+            }
+            // non_exhaustive — future ACP variants will trigger this
+            #[allow(unreachable_patterns)]
+            other => {
+                debug!(
+                    session_id = session_id.as_str(),
+                    update = ?other,
+                    "unhandled session update variant"
+                );
             }
         }
         Ok(())
@@ -375,15 +395,15 @@ impl Client for SurgeClient {
     ) -> AcpResult<TerminalOutputResponse> {
         let terminal_id = args.terminal_id.to_string();
 
-        let (output, truncated, exit) = self
-            .terminals
-            .lock()
-            .await
-            .get_output(&terminal_id)
-            .await
-            .map_err(|e| {
-                agent_client_protocol::Error::new((-32603, format!("Terminal output failed: {e}")))
-            })?;
+        let (output, truncated, exit) =
+            terminal::terminal_get_output(&self.terminals, &terminal_id)
+                .await
+                .map_err(|e| {
+                    agent_client_protocol::Error::new((
+                        -32603,
+                        format!("Terminal output failed: {e}"),
+                    ))
+                })?;
 
         self.emit_event(SurgeEvent::TerminalOutput {
             terminal_id: terminal_id.clone(),
@@ -411,10 +431,7 @@ impl Client for SurgeClient {
         let terminal_id = args.terminal_id.to_string();
         debug!(terminal_id = terminal_id.as_str(), "releasing terminal");
 
-        self.terminals
-            .lock()
-            .await
-            .release(&terminal_id)
+        terminal::terminal_release(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
                 agent_client_protocol::Error::new((-32603, format!("Terminal release failed: {e}")))
@@ -430,11 +447,7 @@ impl Client for SurgeClient {
         let terminal_id = args.terminal_id.to_string();
         debug!(terminal_id = terminal_id.as_str(), "waiting for terminal exit");
 
-        let exit = self
-            .terminals
-            .lock()
-            .await
-            .wait_for_exit(&terminal_id)
+        let exit = terminal::terminal_wait_for_exit(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
                 agent_client_protocol::Error::new((-32603, format!("Terminal wait failed: {e}")))
@@ -462,10 +475,7 @@ impl Client for SurgeClient {
         let terminal_id = args.terminal_id.to_string();
         debug!(terminal_id = terminal_id.as_str(), "killing terminal");
 
-        self.terminals
-            .lock()
-            .await
-            .kill(&terminal_id)
+        terminal::terminal_kill(&self.terminals, &terminal_id)
             .await
             .map_err(|e| {
                 agent_client_protocol::Error::new((-32603, format!("Terminal kill failed: {e}")))

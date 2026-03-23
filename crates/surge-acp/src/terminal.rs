@@ -1,7 +1,8 @@
 //! Terminal manager for ACP terminal operations.
 //!
 //! Manages child processes spawned by agents, tracking their output
-//! and lifecycle within worktree boundaries.
+//! and lifecycle within worktree boundaries. Each terminal is independently
+//! lockable to avoid blocking concurrent operations.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,21 +10,19 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, Notify};
-use tracing::{debug, warn};
+use tokio::sync::Mutex;
+use tracing::debug;
 
 /// Managed terminal process.
-struct ManagedTerminal {
+pub(crate) struct ManagedTerminal {
     /// Child process handle.
     child: Child,
     /// Accumulated output.
     output: Arc<Mutex<String>>,
     /// Maximum output bytes to retain.
     output_byte_limit: Option<u64>,
-    /// Whether the process has exited.
-    exit_status: Arc<Mutex<Option<TerminalExit>>>,
-    /// Notification for exit event.
-    exit_notify: Arc<Notify>,
+    /// Cached exit status (set once on exit).
+    exit_status: Option<TerminalExit>,
 }
 
 /// Terminal exit information.
@@ -36,8 +35,11 @@ pub struct TerminalExit {
 }
 
 /// Manages terminal processes for a single client.
+///
+/// Each terminal lives behind its own `Arc<Mutex<_>>` so that operations
+/// on one terminal (e.g. `wait_for_exit`) don't block operations on others.
 pub struct TerminalManager {
-    terminals: HashMap<String, ManagedTerminal>,
+    terminals: HashMap<String, Arc<Mutex<ManagedTerminal>>>,
     next_id: u64,
     worktree_root: PathBuf,
 }
@@ -53,11 +55,14 @@ impl TerminalManager {
         }
     }
 
-    /// Spawn a new terminal process.
+    /// Spawn a new terminal process. Returns the terminal ID.
+    ///
+    /// This method only needs `&mut self` briefly to insert into the map;
+    /// all async work happens in background tasks or per-terminal locks.
     ///
     /// # Errors
     ///
-    /// Returns error string if process spawn fails.
+    /// Returns error string if process spawn fails or cwd is outside worktree.
     pub fn spawn(
         &mut self,
         command: &str,
@@ -111,10 +116,8 @@ impl TerminalManager {
         })?;
 
         let output = Arc::new(Mutex::new(String::new()));
-        let exit_status: Arc<Mutex<Option<TerminalExit>>> = Arc::new(Mutex::new(None));
-        let exit_notify = Arc::new(Notify::new());
 
-        // Spawn background task to collect stdout
+        // Spawn background tasks to collect stdout and stderr
         if let Some(stdout) = child.stdout.take() {
             let out = Arc::clone(&output);
             let limit = output_byte_limit;
@@ -122,8 +125,6 @@ impl TerminalManager {
                 collect_output(stdout, out, limit).await;
             });
         }
-
-        // Spawn background task to collect stderr (merged into output)
         if let Some(stderr) = child.stderr.take() {
             let out = Arc::clone(&output);
             let limit = output_byte_limit;
@@ -132,134 +133,28 @@ impl TerminalManager {
             });
         }
 
-        // Exit detection happens lazily in get_output() and wait_for_exit()
-        // rather than via a background polling task, since we can't move
-        // the child handle out of ManagedTerminal.
-
         let terminal = ManagedTerminal {
             child,
             output,
             output_byte_limit,
-            exit_status,
-            exit_notify,
+            exit_status: None,
         };
 
-        self.terminals.insert(terminal_id.clone(), terminal);
+        self.terminals
+            .insert(terminal_id.clone(), Arc::new(Mutex::new(terminal)));
 
         Ok(terminal_id)
     }
 
-    /// Get accumulated output from a terminal.
-    ///
-    /// Also checks if the process has exited and updates status.
-    pub async fn get_output(
-        &mut self,
-        terminal_id: &str,
-    ) -> Result<(String, bool, Option<TerminalExit>), String> {
-        let terminal = self
-            .terminals
-            .get_mut(terminal_id)
-            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?;
-
-        // Try to check if child has exited (non-blocking)
-        let exit = match terminal.child.try_wait() {
-            Ok(Some(status)) => {
-                let exit = TerminalExit {
-                    exit_code: status.code().map(|c| c as u32),
-                    signal: None,
-                };
-                *terminal.exit_status.lock().await = Some(exit.clone());
-                terminal.exit_notify.notify_waiters();
-                Some(exit)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                warn!(terminal_id, "failed to check terminal status: {e}");
-                None
-            }
-        };
-
-        let output = terminal.output.lock().await;
-        let truncated = terminal
-            .output_byte_limit
-            .is_some_and(|limit| output.len() as u64 >= limit);
-
-        Ok((output.clone(), truncated, exit))
+    /// Get an `Arc` handle to a terminal. The caller locks it independently.
+    #[must_use]
+    pub(crate) fn get_terminal(&self, terminal_id: &str) -> Option<Arc<Mutex<ManagedTerminal>>> {
+        self.terminals.get(terminal_id).cloned()
     }
 
-    /// Wait for a terminal to exit.
-    pub async fn wait_for_exit(
-        &mut self,
-        terminal_id: &str,
-    ) -> Result<TerminalExit, String> {
-        let terminal = self
-            .terminals
-            .get_mut(terminal_id)
-            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?;
-
-        // Check if already exited
-        {
-            let status = terminal.exit_status.lock().await;
-            if let Some(exit) = status.as_ref() {
-                return Ok(exit.clone());
-            }
-        }
-
-        // Wait for the child process
-        let status = terminal
-            .child
-            .wait()
-            .await
-            .map_err(|e| format!("Failed to wait for terminal '{terminal_id}': {e}"))?;
-
-        let exit = TerminalExit {
-            exit_code: status.code().map(|c| c as u32),
-            signal: None,
-        };
-
-        *terminal.exit_status.lock().await = Some(exit.clone());
-        terminal.exit_notify.notify_waiters();
-
-        Ok(exit)
-    }
-
-    /// Kill a terminal process.
-    pub async fn kill(&mut self, terminal_id: &str) -> Result<(), String> {
-        let terminal = self
-            .terminals
-            .get_mut(terminal_id)
-            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?;
-
-        debug!(terminal_id, "killing terminal process");
-
-        terminal
-            .child
-            .kill()
-            .await
-            .map_err(|e| format!("Failed to kill terminal '{terminal_id}': {e}"))?;
-
-        let exit = TerminalExit {
-            exit_code: None,
-            signal: Some("SIGKILL".to_string()),
-        };
-        *terminal.exit_status.lock().await = Some(exit);
-        terminal.exit_notify.notify_waiters();
-
-        Ok(())
-    }
-
-    /// Release (remove) a terminal, killing it if still running.
-    pub async fn release(&mut self, terminal_id: &str) -> Result<(), String> {
-        if let Some(mut terminal) = self.terminals.remove(terminal_id) {
-            debug!(terminal_id, "releasing terminal");
-            // Kill if still running
-            if terminal.child.try_wait().ok().flatten().is_none() {
-                let _ = terminal.child.kill().await;
-            }
-            Ok(())
-        } else {
-            Err(format!("Terminal '{terminal_id}' not found"))
-        }
+    /// Remove a terminal from the map (for release). Returns the handle if found.
+    pub(crate) fn remove_terminal(&mut self, terminal_id: &str) -> Option<Arc<Mutex<ManagedTerminal>>> {
+        self.terminals.remove(terminal_id)
     }
 }
 
@@ -272,7 +167,133 @@ impl std::fmt::Debug for TerminalManager {
     }
 }
 
+// ── Per-terminal operations (called on the locked ManagedTerminal) ───
+
+impl ManagedTerminal {
+    /// Get accumulated output. Also non-blocking check for exit.
+    async fn get_output(&mut self) -> (String, bool, Option<TerminalExit>) {
+        // Non-blocking exit check
+        if self.exit_status.is_none() {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                self.exit_status = Some(TerminalExit {
+                    exit_code: status.code().map(|c| c as u32),
+                    signal: None,
+                });
+            }
+        }
+
+        let output = self.output.lock().await;
+        let truncated = self
+            .output_byte_limit
+            .is_some_and(|limit| output.len() as u64 >= limit);
+
+        (output.clone(), truncated, self.exit_status.clone())
+    }
+
+    /// Block until child exits.
+    async fn wait_for_exit(&mut self) -> Result<TerminalExit, String> {
+        if let Some(exit) = &self.exit_status {
+            return Ok(exit.clone());
+        }
+
+        let status = self
+            .child
+            .wait()
+            .await
+            .map_err(|e| format!("Failed to wait for terminal: {e}"))?;
+
+        let exit = TerminalExit {
+            exit_code: status.code().map(|c| c as u32),
+            signal: None,
+        };
+        self.exit_status = Some(exit.clone());
+        Ok(exit)
+    }
+
+    /// Kill the child process.
+    async fn kill(&mut self) -> Result<(), String> {
+        self.child
+            .kill()
+            .await
+            .map_err(|e| format!("Failed to kill terminal: {e}"))?;
+
+        self.exit_status = Some(TerminalExit {
+            exit_code: None,
+            signal: Some("SIGKILL".to_string()),
+        });
+        Ok(())
+    }
+}
+
+// ── Free functions used by client.rs ────────────────────────────────
+
+/// Get output from a terminal by ID. Acquires only the per-terminal lock.
+pub async fn terminal_get_output(
+    mgr: &Mutex<TerminalManager>,
+    terminal_id: &str,
+) -> Result<(String, bool, Option<TerminalExit>), String> {
+    let handle = {
+        let m = mgr.lock().await;
+        m.get_terminal(terminal_id)
+            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
+    };
+    // Manager lock dropped — only per-terminal lock held
+    let mut term = handle.lock().await;
+    Ok(term.get_output().await)
+}
+
+/// Wait for terminal exit by ID. Acquires only the per-terminal lock.
+pub async fn terminal_wait_for_exit(
+    mgr: &Mutex<TerminalManager>,
+    terminal_id: &str,
+) -> Result<TerminalExit, String> {
+    let handle = {
+        let m = mgr.lock().await;
+        m.get_terminal(terminal_id)
+            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
+    };
+    let mut term = handle.lock().await;
+    term.wait_for_exit().await
+}
+
+/// Kill terminal by ID. Acquires only the per-terminal lock.
+pub async fn terminal_kill(
+    mgr: &Mutex<TerminalManager>,
+    terminal_id: &str,
+) -> Result<(), String> {
+    let handle = {
+        let m = mgr.lock().await;
+        m.get_terminal(terminal_id)
+            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
+    };
+    let mut term = handle.lock().await;
+    term.kill().await
+}
+
+/// Release (remove + kill if running) a terminal by ID.
+pub async fn terminal_release(
+    mgr: &Mutex<TerminalManager>,
+    terminal_id: &str,
+) -> Result<(), String> {
+    let handle = {
+        let mut m = mgr.lock().await;
+        m.remove_terminal(terminal_id)
+            .ok_or_else(|| format!("Terminal '{terminal_id}' not found"))?
+    };
+    let mut term = handle.lock().await;
+    if term.exit_status.is_none() {
+        if term.child.try_wait().ok().flatten().is_none() {
+            let _ = term.child.kill().await;
+        }
+    }
+    debug!(terminal_id, "terminal released");
+    Ok(())
+}
+
+// ── Output collection ───────────────────────────────────────────────
+
 /// Collect output from a reader into a shared buffer, respecting byte limit.
+/// Uses `floor_char_boundary` for safe UTF-8 truncation.
 async fn collect_output<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     output: Arc<Mutex<String>>,
@@ -291,7 +312,8 @@ async fn collect_output<R: tokio::io::AsyncRead + Unpin>(
                     if remaining == 0 {
                         break;
                     }
-                    let take = chunk.len().min(remaining);
+                    // Safe UTF-8 truncation — never split a multi-byte char
+                    let take = chunk.floor_char_boundary(remaining);
                     out.push_str(&chunk[..take]);
                     if take < chunk.len() {
                         break;
@@ -319,63 +341,61 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_and_wait() {
-        let mut mgr = TerminalManager::new(temp_dir());
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "echo hello".into()]);
         #[cfg(not(windows))]
         let (cmd, args) = ("echo", vec!["hello".into()]);
 
-        let id = mgr.spawn(cmd, &args, &[], None, None).unwrap();
-        let exit = mgr.wait_for_exit(&id).await.unwrap();
+        let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
+        let exit = terminal_wait_for_exit(&mgr, &id).await.unwrap();
         assert_eq!(exit.exit_code, Some(0));
 
         // Give collector time to finish
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let (output, truncated, _) = mgr.get_output(&id).await.unwrap();
+        let (output, truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
         assert!(output.contains("hello"));
         assert!(!truncated);
     }
 
     #[tokio::test]
     async fn test_kill_terminal() {
-        let mut mgr = TerminalManager::new(temp_dir());
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "timeout /t 60".into()]);
         #[cfg(not(windows))]
         let (cmd, args) = ("sleep", vec!["60".into()]);
 
-        let id = mgr.spawn(cmd, &args, &[], None, None).unwrap();
-        mgr.kill(&id).await.unwrap();
+        let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
+        terminal_kill(&mgr, &id).await.unwrap();
 
-        let exit = mgr.wait_for_exit(&id).await.unwrap();
-        // Killed processes may have non-zero or no exit code
+        let exit = terminal_wait_for_exit(&mgr, &id).await.unwrap();
         assert!(exit.signal.is_some() || exit.exit_code.is_some());
     }
 
     #[tokio::test]
     async fn test_release_terminal() {
-        let mut mgr = TerminalManager::new(temp_dir());
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
 
         #[cfg(windows)]
         let (cmd, args) = ("cmd", vec!["/C".into(), "echo test".into()]);
         #[cfg(not(windows))]
         let (cmd, args) = ("echo", vec!["test".into()]);
 
-        let id = mgr.spawn(cmd, &args, &[], None, None).unwrap();
-        mgr.release(&id).await.unwrap();
+        let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
+        terminal_release(&mgr, &id).await.unwrap();
 
         // Terminal should be gone
-        assert!(mgr.get_output(&id).await.is_err());
+        assert!(terminal_get_output(&mgr, &id).await.is_err());
     }
 
     #[tokio::test]
     async fn test_output_byte_limit() {
-        let mut mgr = TerminalManager::new(temp_dir());
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
 
-        // Generate output exceeding limit
         #[cfg(windows)]
         let (cmd, args) = (
             "cmd",
@@ -387,20 +407,52 @@ mod tests {
             vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
         );
 
-        let id = mgr.spawn(cmd, &args, &[], None, Some(10)).unwrap();
-        let _ = mgr.wait_for_exit(&id).await;
+        let id = mgr.lock().await.spawn(cmd, &args, &[], None, Some(10)).unwrap();
+        let _ = terminal_wait_for_exit(&mgr, &id).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let (output, truncated, _) = mgr.get_output(&id).await.unwrap();
+        let (output, truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
         assert!(output.len() <= 10);
         assert!(truncated);
     }
 
     #[tokio::test]
     async fn test_not_found() {
-        let mut mgr = TerminalManager::new(temp_dir());
-        assert!(mgr.get_output("nonexistent").await.is_err());
-        assert!(mgr.kill("nonexistent").await.is_err());
-        assert!(mgr.wait_for_exit("nonexistent").await.is_err());
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+        assert!(terminal_get_output(&mgr, "nonexistent").await.is_err());
+        assert!(terminal_kill(&mgr, "nonexistent").await.is_err());
+        assert!(terminal_wait_for_exit(&mgr, "nonexistent").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_terminals() {
+        let mgr = Arc::new(Mutex::new(TerminalManager::new(temp_dir())));
+
+        #[cfg(windows)]
+        let (cmd1, args1) = ("cmd", vec!["/C".into(), "echo first".into()]);
+        #[cfg(not(windows))]
+        let (cmd1, args1) = ("echo", vec!["first".into()]);
+
+        #[cfg(windows)]
+        let (cmd2, args2) = ("cmd", vec!["/C".into(), "echo second".into()]);
+        #[cfg(not(windows))]
+        let (cmd2, args2) = ("echo", vec!["second".into()]);
+
+        let id1 = mgr.lock().await.spawn(cmd1, &args1, &[], None, None).unwrap();
+        let id2 = mgr.lock().await.spawn(cmd2, &args2, &[], None, None).unwrap();
+
+        // Wait on both concurrently — no deadlock
+        let mgr1 = Arc::clone(&mgr);
+        let mgr2 = Arc::clone(&mgr);
+        let id1c = id1.clone();
+        let id2c = id2.clone();
+
+        let (r1, r2) = tokio::join!(
+            terminal_wait_for_exit(&mgr1, &id1c),
+            terminal_wait_for_exit(&mgr2, &id2c),
+        );
+
+        assert_eq!(r1.unwrap().exit_code, Some(0));
+        assert_eq!(r2.unwrap().exit_code, Some(0));
     }
 }
