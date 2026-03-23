@@ -586,8 +586,7 @@ impl AgentHubScreen {
                     .child(
                         div().id("detail-scroll").flex_1().h_full().min_w_0().v_flex().gap_3().p_4()
                             .overflow_y_scroll()
-                            .child(self.render_detail_panel())
-                            .child(self.render_routing_rules()),
+                            .child(self.render_detail_panel()),
                     ),
             )
     }
