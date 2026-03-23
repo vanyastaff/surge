@@ -94,6 +94,27 @@ impl SubtaskExecutor {
             subtask_id,
         });
 
+        // Check circuit breaker before attempting execution
+        if self.is_circuit_broken() {
+            warn!(
+                subtask_id = %subtask_id,
+                consecutive_failures = self.consecutive_failures,
+                "circuit breaker tripped, failing fast without retries"
+            );
+            let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
+                task_id,
+                subtask_id,
+                success: false,
+            });
+            return SubtaskResult::Failed {
+                subtask_id,
+                reason: format!(
+                    "circuit breaker tripped after {} consecutive failures",
+                    self.consecutive_failures
+                ),
+            };
+        }
+
         let ctx = SubtaskContext::new(spec, subtask, spec_dir);
         let mut prompt_text = ctx.build_prompt();
 
