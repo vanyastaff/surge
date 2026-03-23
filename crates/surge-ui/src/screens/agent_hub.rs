@@ -364,75 +364,58 @@ impl AgentHubScreen {
                     .child(info_item("Uptime", &agent.uptime))
                     .child(info_item("Sessions today", &format!("{}", agent.sessions_today))),
             )
-            // ── Models + Effort + Permissions in 2-column layout ──
-            .when(agent.capabilities.models.is_some() || agent.capabilities.effort.is_some() || agent.capabilities.permissions.is_some(), |el: Div| {
-                let caps = &agent.capabilities;
-
-                // Models — table rows like Recent Sessions
-                let models_section = caps.models.as_ref().map(|models| {
-                    let rows: Vec<Div> = models.iter().map(|m| {
-                        let opacity = if m.enabled { 1.0 } else { 0.4 };
-                        div().w_full().h_flex().items_center().px_3().py(px(6.0))
-                            .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
-                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
-                            .child(div().flex_shrink_0().w(px(20.0)).text_xs()
-                                .text_color(if m.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
-                                .child(if m.enabled { "☑" } else { "☐" }))
-                            .child(div().flex_1().min_w_0().text_xs().font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme::TEXT_PRIMARY.opacity(opacity)).child(m.name.clone()))
-                            .child(div().flex_shrink_0().w(px(65.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.7)).child(m.price.clone()))
-                            .child(div().flex_shrink_0().w(px(55.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.6)).child(m.context.clone()))
-                            .child(div().flex_shrink_0().w(px(100.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(opacity * 0.5)).child(m.note.clone()))
-                    }).collect();
-                    detail_section("Models",
-                        div().v_flex().rounded_lg().bg(theme::SURFACE)
-                            .border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden()
-                            .children(rows))
-                });
-
-                // Effort — table rows
-                let effort_section = caps.effort.as_ref().map(|eff| {
-                    detail_section("Effort / Thinking",
-                        div().v_flex().gap(px(4.0))
-                            .child(effort_row("Default effort", eff.default))
-                            .child(effort_row("Planning", eff.planning))
-                            .child(effort_row("Coding", eff.coding))
-                            .child(effort_row("QA Review", eff.qa_review)),
-                    )
-                });
-
-                // Permissions — horizontal chips
-                let perms_section = caps.permissions.as_ref().map(|perms| {
-                    let chips: Vec<Div> = perms.iter().map(|p| {
-                        div().h_flex().gap(px(4.0)).items_center()
-                            .px(px(8.0)).py(px(4.0)).rounded_md()
-                            .bg(if p.enabled { theme::SUCCESS.opacity(0.06) } else { theme::TEXT_MUTED.opacity(0.03) })
-                            .border_1().border_color(if p.enabled { theme::SUCCESS.opacity(0.12) } else { theme::TEXT_MUTED.opacity(0.05) })
-                            .child(div().text_xs().text_color(if p.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
-                                .child(if p.enabled { "✓" } else { "✕" }))
-                            .child(div().text_xs().text_color(if p.enabled { theme::TEXT_PRIMARY } else { theme::TEXT_MUTED.opacity(0.4) })
-                                .child(p.name.clone()))
-                    }).collect();
-                    let mut content = div().v_flex().gap(px(6.0))
-                        .child(div().h_flex().gap(px(4.0)).flex_wrap().children(chips));
-                    if let Some(dangerous) = &caps.dangerous_ops {
-                        content = content.child(
-                            div().h_flex().gap_2().items_center().pt_1()
-                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("Dangerous ops:".to_string()))
-                                .child(div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
-                                    .bg(theme::WARNING.opacity(0.1)).text_color(theme::WARNING)
-                                    .child(dangerous.clone())),
-                        );
-                    }
-                    detail_section("Permissions", content)
-                });
-
-                el
-                    .children(models_section)
-                    .children(effort_section)
-                    .children(perms_section)
+            // ── Models ── (label outside, card inside)
+            .when(agent.capabilities.models.is_some(), |el: Div| {
+                let rows: Vec<Div> = agent.capabilities.models.as_ref().unwrap().iter().map(|m| {
+                    let o = if m.enabled { 1.0 } else { 0.4 };
+                    div().w_full().h_flex().items_center().px_3().py(px(6.0))
+                        .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
+                        .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
+                        .child(div().flex_shrink_0().w(px(20.0)).text_xs()
+                            .text_color(if m.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
+                            .child(if m.enabled { "☑" } else { "☐" }))
+                        .child(div().flex_1().min_w_0().text_xs().font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::TEXT_PRIMARY.opacity(o)).child(m.name.clone()))
+                        .child(div().flex_shrink_0().w(px(65.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(o * 0.7)).child(m.price.clone()))
+                        .child(div().flex_shrink_0().w(px(55.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(o * 0.6)).child(m.context.clone()))
+                        .child(div().flex_shrink_0().w(px(100.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(o * 0.5)).child(m.note.clone()))
+                }).collect();
+                el.child(section_label("Models")).child(section_card(div().v_flex().children(rows)))
             })
-            // Stats (4 cards with period labels)
+            // ── Effort ── (label outside, card inside)
+            .when(agent.capabilities.effort.is_some(), |el: Div| {
+                let eff = agent.capabilities.effort.as_ref().unwrap();
+                el.child(section_label("Effort / Thinking"))
+                    .child(section_card(div().v_flex().gap(px(4.0)).p_3()
+                        .child(effort_row("Default effort", eff.default))
+                        .child(effort_row("Planning", eff.planning))
+                        .child(effort_row("Coding", eff.coding))
+                        .child(effort_row("QA Review", eff.qa_review))))
+            })
+            // ── Permissions ── (label outside, chips inside card)
+            .when(agent.capabilities.permissions.is_some(), |el: Div| {
+                let perms = agent.capabilities.permissions.as_ref().unwrap();
+                let chips: Vec<Div> = perms.iter().map(|p| {
+                    div().h_flex().gap(px(4.0)).items_center().px(px(8.0)).py(px(4.0)).rounded_md()
+                        .bg(if p.enabled { theme::SUCCESS.opacity(0.06) } else { theme::TEXT_MUTED.opacity(0.03) })
+                        .border_1().border_color(if p.enabled { theme::SUCCESS.opacity(0.12) } else { theme::TEXT_MUTED.opacity(0.05) })
+                        .child(div().text_xs().text_color(if p.enabled { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) })
+                            .child(if p.enabled { "✓" } else { "✕" }))
+                        .child(div().text_xs().text_color(if p.enabled { theme::TEXT_PRIMARY } else { theme::TEXT_MUTED.opacity(0.4) })
+                            .child(p.name.clone()))
+                }).collect();
+                let mut content = div().v_flex().gap(px(6.0)).p_3()
+                    .child(div().h_flex().gap(px(4.0)).flex_wrap().children(chips));
+                if let Some(d) = &agent.capabilities.dangerous_ops {
+                    content = content.child(div().h_flex().gap_2().items_center().pt_1()
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("Dangerous ops:".to_string()))
+                        .child(div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
+                            .bg(theme::WARNING.opacity(0.1)).text_color(theme::WARNING).child(d.clone())));
+                }
+                el.child(section_label("Permissions")).child(section_card(content))
+            })
+            // ── Stats ── (label outside)
+            .child(section_label("Stats"))
             .child(
                 div().h_flex().gap_2()
                     .child(stat_card_with_period("Requests", &format!("{}", agent.requests_today), "today", theme::PRIMARY))
@@ -440,11 +423,11 @@ impl AgentHubScreen {
                     .child(stat_card_with_period("Cost", &format!("${:.2}", agent.cost_today), "today", theme::WARNING))
                     .child(stat_card_with_period("Latency", &format!("{}ms", agent.avg_latency_ms), "avg", latency_color(agent.avg_latency_ms))),
             )
-            // Usage & Limits
+            // ── Usage & Limits ── (label outside)
+            .child(section_label("Usage & Limits"))
             .child({
                 let mut section = div().v_flex().gap(px(8.0)).p_3().rounded_lg()
-                    .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Usage & Limits".to_string()));
+                    .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06));
 
                 match &agent.usage {
                     AgentUsage::ClaudeCode { five_hour_pct, five_hour_reset, weekly_pct, weekly_reset, extra_usage_enabled, extra_usage_cost } => {
@@ -497,17 +480,14 @@ impl AgentHubScreen {
                 }
                 section
             })
-            // Today header + stats
+            // ── Today ── (label outside)
+            .child(section_label("Today"))
             .child(
-                div().v_flex().gap_2()
-                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Today".to_string()))
-                    .child(
-                        div().h_flex().gap_2()
-                            .child(stat_card_with_period("Subtasks", &format!("{}", agent.subtasks_completed), "completed", theme::SUCCESS))
-                            .child(stat_card_with_period("Failures", &format!("{}", agent.subtasks_failed), "", if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
-                            .child(stat_card_with_period("Avg time", &format!("{}s", agent.avg_subtask_secs), "/subtask", theme::TEXT_MUTED))
-                            .child(stat_card_with_period("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), "first-pass", if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING })),
-                    ),
+                div().h_flex().gap_2()
+                    .child(stat_card_with_period("Subtasks", &format!("{}", agent.subtasks_completed), "completed", theme::SUCCESS))
+                    .child(stat_card_with_period("Failures", &format!("{}", agent.subtasks_failed), "", if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
+                    .child(stat_card_with_period("Avg time", &format!("{}s", agent.avg_subtask_secs), "/subtask", theme::TEXT_MUTED))
+                    .child(stat_card_with_period("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), "first-pass", if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING })),
             )
             // Recent Sessions
             .when(!agent.recent_sessions.is_empty(), |el: Div| {
@@ -551,13 +531,8 @@ impl AgentHubScreen {
                         ))
                 }).collect();
 
-                el.child(
-                    div().v_flex().gap_2()
-                        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Recent Sessions".to_string()))
-                        .child(
-                            div().v_flex().rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden()
-                                .children(sessions)),
-                )
+                el.child(section_label("Recent Sessions"))
+                    .child(section_card(div().v_flex().children(sessions)))
             })
     }
 
@@ -701,11 +676,19 @@ fn info_item(label: &str, value: &str) -> Div {
         .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
 }
 
-fn detail_section(title: &str, content: Div) -> Div {
-    div().v_flex().gap(px(6.0)).p_3().rounded_lg()
-        .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
-        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(title.to_string()))
-        .child(content)
+fn section_label(title: &str) -> Div {
+    div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_MUTED.opacity(0.6))
+        .pt(px(4.0)).child(title.to_string())
+}
+
+fn section_card(content: Div) -> Div {
+    content.rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden()
+}
+
+fn kv_row(label: &str, value: &str) -> Div {
+    div().h_flex().justify_between()
+        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(label.to_string()))
+        .child(div().text_xs().text_color(theme::TEXT_PRIMARY).child(value.to_string()))
 }
 
 fn effort_color(level: EffortLevel) -> Hsla {
