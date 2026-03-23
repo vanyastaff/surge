@@ -13,6 +13,8 @@ pub enum AgentCommands {
     },
     /// Show agent health status by pinging all configured agents
     Status,
+    /// Refresh agent discovery cache
+    Refresh,
 }
 
 pub async fn run(command: AgentCommands) -> Result<()> {
@@ -126,6 +128,10 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             if any_offline {
                 std::process::exit(2);
             }
+        }
+        AgentCommands::Refresh => {
+            // TODO: Implementation in next subtask
+            println!("⚡ Refreshing agent discovery cache...");
         }
     }
     Ok(())
