@@ -384,16 +384,16 @@ impl AgentHubScreen {
                         s.duration.clone(),
                     ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
 
-                    div().h_flex().items_center().px_3().py(px(7.0))
+                    div().w_full().h_flex().items_center().px_3().py(px(7.0))
                         .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
                         .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
                         // Icon
-                        .child(div().w(px(20.0)).text_xs().text_color(color).child(icon.to_string()))
-                        // Label
-                        .child(div().w(px(220.0)).text_xs().text_color(theme::TEXT_PRIMARY).child(s.label.clone()))
+                        .child(div().flex_shrink_0().w(px(20.0)).text_xs().text_color(color).child(icon.to_string()))
+                        // Label (takes available space)
+                        .child(div().flex_1().min_w_0().text_xs().text_color(theme::TEXT_PRIMARY).child(s.label.clone()))
                         // Status badge
                         .child(
-                            div().w(px(80.0))
+                            div().flex_shrink_0().px_2()
                                 .child(
                                     div().text_xs().px(px(6.0)).py(px(1.0)).rounded(px(3.0))
                                         .bg(color.opacity(0.1)).text_color(color)
@@ -401,9 +401,9 @@ impl AgentHubScreen {
                                 ),
                         )
                         // Time ago
-                        .child(div().w(px(70.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(s.time_ago.clone()))
+                        .child(div().flex_shrink_0().w(px(70.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(s.time_ago.clone()))
                         // Tokens + duration
-                        .child(div().flex_1().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(
+                        .child(div().flex_shrink_0().w(px(130.0)).text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(
                             if detail.is_empty() { "—".to_string() } else { detail }
                         ))
                 }).collect();
