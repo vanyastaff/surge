@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 use gpui_component::button::Button;
 use gpui_component::WindowExt as _;
 use gpui_component::StyledExt as _;
@@ -18,7 +19,7 @@ use crate::screens::diff_viewer::DiffViewerScreen;
 use crate::screens::file_explorer::FileExplorerScreen;
 use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
-use crate::screens::kanban::KanbanScreen;
+use crate::screens::kanban::{KanbanScreen, TaskClicked};
 use crate::screens::live_execution::LiveExecutionScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
@@ -49,6 +50,8 @@ pub struct SurgeApp {
     top_bar: Option<Entity<TopBar>>,
     command_palette_open: bool,
     command_palette: Option<Entity<CommandPalette>>,
+    /// Task detail overlay — set when a kanban card is clicked.
+    task_detail_id: Option<String>,
     // Screen entities (created on demand).
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
@@ -95,6 +98,7 @@ impl SurgeApp {
             top_bar: None,
             command_palette_open: false,
             command_palette: None,
+            task_detail_id: None,
             dashboard: None,
             kanban: None,
             agent_hub: None,
@@ -310,7 +314,13 @@ impl SurgeApp {
             Screen::Kanban => {
                 let state = self.state.clone();
                 let kanban = self.kanban.get_or_insert_with(|| {
-                    cx.new(|cx| KanbanScreen::new(state, cx))
+                    let k = cx.new(|cx| KanbanScreen::new(state, cx));
+                    cx.subscribe(&k, |this: &mut Self, _kanban, event: &TaskClicked, cx| {
+                        this.task_detail_id = Some(event.0.clone());
+                        cx.notify();
+                    })
+                    .detach();
+                    k
                 });
                 kanban.clone().into_any_element()
             }
@@ -417,6 +427,254 @@ impl SurgeApp {
         }
     }
 
+    fn render_task_detail_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(task_id) = &self.task_detail_id {
+            let task = self
+                .state
+                .read(cx)
+                .tasks
+                .iter()
+                .find(|t| t.id.to_string() == *task_id)
+                .cloned();
+
+            let card_content = if let Some(task) = task {
+                let status_label = format!("{:?}", task.state);
+                let (sub_done, sub_total) = match &task.state {
+                    surge_core::TaskState::Executing { completed, total } => (*completed, *total),
+                    _ => (0, 0),
+                };
+
+                div()
+                    .id("task-detail-card")
+                    .v_flex()
+                    .gap_3()
+                    .p_5()
+                    .w(px(500.0))
+                    .max_h(px(500.0))
+                    .rounded_xl()
+                    .bg(theme::SURFACE)
+                    .border_1()
+                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .on_click(|_e, _w, _cx| {}) // absorb click
+                    // Header: title + close
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child(task.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id("task-detail-close")
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(theme::TEXT_MUTED)
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .hover(|s| s.bg(theme::TEXT_MUTED.opacity(0.1)))
+                                    .on_click(cx.listener(|this, _e, _w, cx| {
+                                        this.task_detail_id = None;
+                                        cx.notify();
+                                    }))
+                                    .child("X"),
+                            ),
+                    )
+                    // Badges row: ID + status
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(theme::PRIMARY.opacity(0.15))
+                                    .text_color(theme::PRIMARY)
+                                    .child(format!("#{}", task.id)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(theme::WARNING.opacity(0.15))
+                                    .text_color(theme::WARNING)
+                                    .child(status_label),
+                            ),
+                    )
+                    // Description
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::TEXT_MUTED)
+                                    .child("Description"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child(if task.description.is_empty() {
+                                        "(no description)".to_string()
+                                    } else {
+                                        task.description.clone()
+                                    }),
+                            ),
+                    )
+                    // Subtask progress (if executing)
+                    .when(sub_total > 0, |el: Stateful<Div>| {
+                        let pct = sub_done as f32 / sub_total as f32;
+                        el.child(
+                            div()
+                                .v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme::TEXT_MUTED)
+                                        .child(format!("Subtasks: {sub_done}/{sub_total}")),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(4.0))
+                                        .rounded_full()
+                                        .bg(theme::TEXT_MUTED.opacity(0.1))
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .rounded_full()
+                                                .bg(theme::PRIMARY)
+                                                .w(relative(pct)),
+                                        ),
+                                ),
+                        )
+                    })
+                    // Agent + Complexity
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::TEXT_MUTED)
+                                            .child("Agent"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme::TEXT_PRIMARY)
+                                            .child(task.agent.unwrap_or_else(|| "unassigned".to_string())),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::TEXT_MUTED)
+                                            .child("Complexity"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme::TEXT_PRIMARY)
+                                            .child(task.complexity.clone()),
+                                    ),
+                            ),
+                    )
+            } else {
+                // Task not found
+                div()
+                    .id("task-detail-card")
+                    .v_flex()
+                    .gap_3()
+                    .p_5()
+                    .w(px(500.0))
+                    .rounded_xl()
+                    .bg(theme::SURFACE)
+                    .border_1()
+                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .on_click(|_e, _w, _cx| {})
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child("Task not found"),
+                            )
+                            .child(
+                                div()
+                                    .id("task-detail-close-nf")
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(theme::TEXT_MUTED)
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .hover(|s| s.bg(theme::TEXT_MUTED.opacity(0.1)))
+                                    .on_click(cx.listener(|this, _e, _w, cx| {
+                                        this.task_detail_id = None;
+                                        cx.notify();
+                                    }))
+                                    .child("X"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::TEXT_MUTED)
+                            .child(format!("Task ID: {}", task_id)),
+                    )
+            };
+
+            div()
+                .id("task-detail-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0.0, 0.0, 0.0, 0.5))
+                .on_click(cx.listener(|this, _e, _w, cx| {
+                    this.task_detail_id = None;
+                    cx.notify();
+                }))
+                .child(card_content)
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        }
+    }
+
     fn render_palette_overlay(&self) -> AnyElement {
         if let Some(palette) = &self.command_palette {
             div()
@@ -498,6 +756,7 @@ impl Render for SurgeApp {
                             ),
                     )
                     .child(self.render_palette_overlay())
+                    .child(self.render_task_detail_overlay(cx))
                     .into_any_element()
             }
         }

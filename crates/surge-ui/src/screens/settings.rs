@@ -160,7 +160,7 @@ impl SettingsScreen {
             SettingsTab::General => self.render_general(cx),
             SettingsTab::Agents => self.render_agents(cx),
             SettingsTab::Pipeline => self.render_pipeline(cx),
-            SettingsTab::Git => self.render_git(),
+            SettingsTab::Git => self.render_git(cx),
             SettingsTab::Appearance => self.render_appearance(),
         }
     }
@@ -337,11 +337,15 @@ impl SettingsScreen {
             .child(self.setting_row("Max Parallel Tasks", &format!("{}", self.max_parallel(cx))))
     }
 
-    fn render_git(&self) -> Div {
+    fn render_git(&self, cx: &Context<Self>) -> Div {
+        let state = self.state.read(cx);
+        let current_branch = state.current_branch.clone();
+
         div()
             .v_flex()
             .gap_4()
             .child(self.section("Git Configuration"))
+            .child(self.setting_row("Current Branch", &current_branch))
             .child(self.setting_row("Branch Prefix", "surge/"))
             .child(self.setting_row("Auto-commit", "Enabled"))
             .child(self.setting_row("Worktree Directory", ".surge/worktrees/"))
