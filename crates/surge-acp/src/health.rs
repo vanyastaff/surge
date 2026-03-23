@@ -4,6 +4,25 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+/// Parses a `Retry-After` header value from an error message.
+/// Supports delay-seconds format (e.g., "Retry-After: 120").
+/// Returns `None` if not found or parsing fails.
+fn parse_retry_after(error: &str) -> Option<u64> {
+    // Look for "retry-after" (case-insensitive) followed by colon and number
+    let lower = error.to_lowercase();
+    if let Some(pos) = lower.find("retry-after") {
+        // Extract substring after "retry-after"
+        let after = &error[pos + "retry-after".len()..];
+        // Skip whitespace and colon
+        let trimmed = after.trim_start().strip_prefix(':')?.trim_start();
+        // Parse the first sequence of digits
+        let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse::<u64>().ok()
+    } else {
+        None
+    }
+}
+
 /// Health statistics for a single agent.
 #[derive(Debug)]
 pub struct AgentHealth {
@@ -111,6 +130,7 @@ impl HealthTracker {
 
     /// Records a failed request. Detects rate-limit errors by checking for
     /// "429", "rate limit", or "too many" in the error string (case-insensitive).
+    /// Parses `Retry-After` header if present, otherwise defaults to 60 seconds.
     pub fn record_failure(&mut self, agent: &str, error: &str) {
         if let Some(health) = self.agents.get_mut(agent) {
             health.total_requests += 1;
@@ -119,9 +139,10 @@ impl HealthTracker {
 
             let lower = error.to_lowercase();
             if lower.contains("429") || lower.contains("rate limit") || lower.contains("too many") {
-                warn!(agent, error, "rate limit detected");
+                let retry_after_secs = parse_retry_after(error).unwrap_or(60);
+                warn!(agent, error, retry_after_secs, "rate limit detected");
                 health.rate_limited = true;
-                health.rate_limit_reset = Some(Instant::now() + Duration::from_secs(60));
+                health.rate_limit_reset = Some(Instant::now() + Duration::from_secs(retry_after_secs));
             }
         }
     }
@@ -241,5 +262,41 @@ mod tests {
         assert_eq!(health.total_requests, 2);
         assert_eq!(health.total_failures, 0);
         assert_eq!(health.avg_latency_ms, 150);
+    }
+
+    #[test]
+    fn test_rate_limit_with_retry_after() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_failure("claude", "429 Too Many Requests; Retry-After: 120");
+        let health = monitor.get_health("claude").unwrap();
+        assert!(health.rate_limited);
+        assert!(health.rate_limit_reset.is_some());
+        // Verify reset time is approximately 120 seconds from now
+        let reset_duration = health.rate_limit_reset.unwrap().duration_since(Instant::now());
+        assert!(reset_duration.as_secs() >= 119 && reset_duration.as_secs() <= 121);
+    }
+
+    #[test]
+    fn test_rate_limit_without_retry_after() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_failure("claude", "429 Too Many Requests");
+        let health = monitor.get_health("claude").unwrap();
+        assert!(health.rate_limited);
+        // Should default to 60 seconds
+        let reset_duration = health.rate_limit_reset.unwrap().duration_since(Instant::now());
+        assert!(reset_duration.as_secs() >= 59 && reset_duration.as_secs() <= 61);
+    }
+
+    #[test]
+    fn test_parse_retry_after_various_formats() {
+        assert_eq!(parse_retry_after("Retry-After: 120"), Some(120));
+        assert_eq!(parse_retry_after("retry-after: 30"), Some(30));
+        assert_eq!(parse_retry_after("RETRY-AFTER:90"), Some(90));
+        assert_eq!(parse_retry_after("Retry-After:  180  "), Some(180));
+        assert_eq!(parse_retry_after("429 Too Many Requests; Retry-After: 60"), Some(60));
+        assert_eq!(parse_retry_after("no retry header here"), None);
+        assert_eq!(parse_retry_after("Retry-After: invalid"), None);
     }
 }
