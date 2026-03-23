@@ -247,7 +247,7 @@ impl Default for ResilienceConfig {
     }
 }
 
-fn default_connect_timeout_secs() -> u64 { 30 }
+fn default_connect_timeout_secs() -> u64 { 120 }
 fn default_session_timeout_secs() -> u64 { 10 }
 fn default_prompt_timeout_secs() -> u64 { 300 }
 fn default_prompt_retries() -> u32 { 1 }

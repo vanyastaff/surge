@@ -114,7 +114,7 @@ impl Terminals {
 
         // On Windows, create process without a visible console window
         #[cfg(windows)]
-        cmd.creation_flags(0x00000008); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
         for (key, value) in env {
             cmd.env(key, value);

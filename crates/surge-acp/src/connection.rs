@@ -103,7 +103,7 @@ impl AgentConnection {
             let mut c = Command::new("cmd");
             c.arg("/C").arg(&config.command);
             c.args(&config.args);
-            c.creation_flags(0x00000008); // CREATE_NO_WINDOW
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
             c
         };
         #[cfg(not(windows))]
