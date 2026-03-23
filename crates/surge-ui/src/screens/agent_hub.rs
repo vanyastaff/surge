@@ -34,37 +34,55 @@ pub struct AgentHubScreen {
     active_tab: HubTab,
     search: String,
     filter: CatalogFilter,
+    /// Cached display data — rebuilt only when state changes.
+    cached_configured: Vec<ConfiguredAgent>,
+    cached_available: Vec<AvailableAgent>,
+    cache_valid: bool,
 }
 
 impl AgentHubScreen {
-    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let mut screen = Self {
             state,
             selected: Some(0),
             active_tab: HubTab::Installed,
             search: String::new(),
             filter: CatalogFilter::All,
-        }
+            cached_configured: Vec::new(),
+            cached_available: Vec::new(),
+            cache_valid: false,
+        };
+        screen.rebuild_cache(cx);
+        screen
     }
 
-    /// Build ConfiguredAgent display data from real DetectedAgent + AgentHealth.
-    fn build_configured(&self, cx: &Context<Self>) -> Vec<ConfiguredAgent> {
+    /// Rebuild cached display data from AppState.
+    fn rebuild_cache(&mut self, cx: &Context<Self>) {
         let state = self.state.read(cx);
-        state.installed_agents.iter().map(|detected| {
+
+        self.cached_configured = state.installed_agents.iter().map(|detected| {
             let health = state.health.get_health(&detected.entry.id);
             build_configured_agent(detected, health)
-        }).collect()
-    }
+        }).collect();
 
-    /// Build AvailableAgent display data from registry entries NOT installed.
-    fn build_available(&self, cx: &Context<Self>) -> Vec<AvailableAgent> {
-        let state = self.state.read(cx);
-        let installed_ids: Vec<&str> = state.installed_agents.iter().map(|a| a.entry.id.as_str()).collect();
-
-        state.registry.list().iter()
+        let installed_ids: Vec<&str> = state.installed_agents.iter()
+            .map(|a| a.entry.id.as_str()).collect();
+        self.cached_available = state.registry.list().iter()
             .filter(|e| !installed_ids.contains(&e.id.as_str()))
             .map(|entry| build_available_agent(entry))
-            .collect()
+            .collect();
+
+        self.cache_valid = true;
+    }
+
+    /// Get configured agents (from cache).
+    fn configured(&self) -> &[ConfiguredAgent] {
+        &self.cached_configured
+    }
+
+    /// Get available agents (from cache).
+    fn available(&self) -> &[AvailableAgent] {
+        &self.cached_available
     }
 
     // ── Tabs ─────────────────────────────────────────────────
@@ -74,7 +92,7 @@ impl AgentHubScreen {
             let is_active = tab == self.active_tab;
             let label = match tab {
                 HubTab::Installed => format!("Installed ({})", self.state.read(cx).installed_agents.len()),
-                HubTab::Available => format!("Available ({})", self.build_available(cx).len()),
+                HubTab::Available => format!("Available ({})", self.cached_available.len()),
                 HubTab::Benchmarks => "Benchmarks".to_string(),
             };
             div()
@@ -365,7 +383,7 @@ impl AgentHubScreen {
     }
 
     fn render_available(&self, cx: &mut Context<Self>) -> Div {
-        let available = self.build_available(cx);
+        let available = self.available();
         let filtered = self.filtered_available(&available);
         let cards: Vec<Div> = filtered.iter().enumerate().map(|(i, agent)| {
             let cmd = agent.install_command.clone();
@@ -614,7 +632,7 @@ impl Render for AgentHubScreen {
             // Content
             .child(match self.active_tab {
                 HubTab::Installed => {
-                    let configured = self.build_configured(cx);
+                    let configured = self.configured();
                     let items: Vec<Stateful<Div>> = configured.iter().enumerate()
                         .map(|(i, a)| self.render_agent_item(i, a, cx)).collect();
 

@@ -672,29 +672,40 @@ fn dirs_path() -> Option<PathBuf> {
 
 // ── Utilities ───────────────────────────────────────────────────────
 
-/// Check if a command exists on PATH.
+use std::sync::{LazyLock, Mutex};
+
+/// Cache for `which`/`resolve_command_path` results.
+/// Avoids spawning `where.exe`/`which` subprocess per agent per call.
+static WHICH_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Check if a command exists on PATH (cached).
 fn which(command: &str) -> bool {
-    use std::process::Command;
-
-    #[cfg(windows)]
-    let result = Command::new("where")
-        .arg(command)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    #[cfg(not(windows))]
-    let result = Command::new("which")
-        .arg(command)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    result.is_ok_and(|s| s.success())
+    resolve_command_path(command).is_some()
 }
 
-/// Try to resolve the full path of a command.
+/// Resolve the full path of a command (cached).
+///
+/// First call runs `where`/`which` subprocess; subsequent calls return cached result.
 fn resolve_command_path(command: &str) -> Option<String> {
+    {
+        if let Ok(cache) = WHICH_CACHE.lock() {
+            if let Some(result) = cache.get(command) {
+                return result.clone();
+            }
+        }
+    }
+
+    let result = resolve_command_uncached(command);
+
+    if let Ok(mut cache) = WHICH_CACHE.lock() {
+        cache.insert(command.to_string(), result.clone());
+    }
+
+    result
+}
+
+fn resolve_command_uncached(command: &str) -> Option<String> {
     use std::process::Command;
 
     #[cfg(windows)]
