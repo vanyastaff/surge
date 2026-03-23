@@ -6,6 +6,9 @@ Cargo.lock
 .surge/
 *.pid
 
+# Claude Code local settings
+.claude/
+
 # IDE
 .idea/
 .vscode/
