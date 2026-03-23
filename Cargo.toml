@@ -19,7 +19,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # ACP
-agent-client-protocol = "0.10.2"
+agent-client-protocol = { version = "0.10.2", features = ["unstable_session_usage"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
