@@ -87,7 +87,7 @@ impl AgentRouter {
         // Agents absent from the registry are assumed capable.
         let capable = registry
             .find(&decision.agent_name)
-            .map_or(true, |e| e.capabilities.contains(cap));
+            .is_none_or(|e| e.capabilities.contains(cap));
 
         if capable {
             return decision;

@@ -111,6 +111,20 @@ impl Orchestrator {
             }
         };
 
+        // Forward pool events (TokensConsumed, AgentHealthChanged, etc.) to
+        // the orchestrator's broadcast channel so subscribers get full coverage.
+        let mut pool_rx = pool.subscribe();
+        let pipeline_event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            while let Ok(event) = pool_rx.recv().await {
+                let _ = pipeline_event_tx.send(event);
+            }
+        });
+
+        // Pre-connect the default agent in the background so the first prompt
+        // doesn't pay the full connection latency.
+        pool.warm_up();
+
         // 4. Create ACP session
         let session = match pool.create_session(None, None, &worktree_path).await {
             Ok(s) => s,
