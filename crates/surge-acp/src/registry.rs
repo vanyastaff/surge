@@ -346,6 +346,18 @@ impl Registry {
         self.entries.is_empty()
     }
 
+    /// Invalidate the discovery cache, forcing the next call to
+    /// [`Registry::detect_runnable_with_paths`] to re-scan the system.
+    ///
+    /// Use this when the environment has changed (new agent installed,
+    /// PATH updated, etc.) and you want fresh detection results.
+    pub fn refresh_discovery() {
+        if let Ok(mut cache_guard) = DISCOVERY_CACHE.lock() {
+            *cache_guard = None;
+            debug!("discovery cache invalidated");
+        }
+    }
+
     // ── Remote fetching ──────────────────────────────────────────────
 
     /// Fetch a registry from a remote URL, using a 24-hour file cache.
@@ -838,6 +850,30 @@ mod tests {
         assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
         assert!(AgentKind::Codex.mcp_config_env_var().is_none());
         assert!(AgentKind::Gemini.mcp_config_env_var().is_none());
+    }
+
+    #[test]
+    fn test_refresh_discovery() {
+        let reg = Registry::builtin();
+
+        // Populate the cache by calling detect_runnable_with_paths
+        let first_result = reg.detect_runnable_with_paths();
+
+        // Verify cache is populated
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_some());
+
+        // Invalidate the cache
+        Registry::refresh_discovery();
+
+        // Verify cache is cleared
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_none());
+
+        // Next call should re-populate the cache
+        let second_result = reg.detect_runnable_with_paths();
+        assert!(DISCOVERY_CACHE.lock().unwrap().is_some());
+
+        // Results should be consistent
+        assert_eq!(first_result.len(), second_result.len());
     }
 
     #[test]
