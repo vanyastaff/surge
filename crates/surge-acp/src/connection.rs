@@ -145,6 +145,7 @@ impl AgentConnection {
             async_stdout,
             // Use tokio::task::spawn_local for LocalBoxFuture tasks
             // These are protocol-internal tasks that don't need to be Send
+            // Caller must ensure a LocalSet is active (e.g. via tokio::task::LocalSet)
             |fut| {
                 #[allow(clippy::let_underscore_future)]
                 let _ = tokio::task::spawn_local(fut);
@@ -152,7 +153,7 @@ impl AgentConnection {
         );
 
         // Spawn the IO task to handle the RPC communication
-        tokio::spawn(async move {
+        tokio::task::spawn_local(async move {
             if let Err(e) = io_task.await {
                 tracing::error!("ACP IO task failed: {:?}", e);
             }

@@ -102,9 +102,18 @@ impl AgentTerminalScreen {
             state.project_path.clone().unwrap_or_else(|| std::path::PathBuf::from("."))
         };
 
-        // Spawn async task.
+        // Run ACP on a background thread with its own tokio runtime + LocalSet.
         cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = send_prompt_to_agent(pool, agent_name, cwd, input).await;
+            // Run blocking ACP call on a background thread (needs its own tokio LocalSet).
+            let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
+            std::thread::spawn(move || {
+                let result = send_prompt_blocking(pool, agent_name, cwd, input);
+                let _ = tx.send(result);
+            });
+            let result = match rx.await {
+                Ok(r) => r,
+                Err(_) => Err("Thread died".into()),
+            };
 
             cx.update(|cx| {
                 this.update(cx, |this: &mut Self, cx| {
@@ -268,37 +277,45 @@ impl AgentTerminalScreen {
     }
 }
 
-/// Async helper to send prompt via AgentPool.
-async fn send_prompt_to_agent(
+/// Send prompt to agent on a dedicated tokio runtime with LocalSet.
+/// This is needed because ACP library uses spawn_local internally.
+fn send_prompt_blocking(
     pool: Arc<surge_acp::AgentPool>,
     agent_name: String,
     cwd: std::path::PathBuf,
     prompt: String,
 ) -> Result<String, String> {
-    // Create session (or reuse — AgentPool handles lazy connect).
-    let session = pool
-        .create_session(Some(&agent_name), None, &cwd)
-        .await
-        .map_err(|e| format!("Session error: {e}"))?;
+    // Create a dedicated runtime with LocalSet for ACP's spawn_local requirement.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Runtime error: {e}"))?;
 
-    // Send prompt.
-    let content = vec![agent_client_protocol::ContentBlock::Text(
-        agent_client_protocol::TextContent {
-            text: prompt,
-            annotations: None,
-            meta: None,
-        },
-    )];
+    let local = tokio::task::LocalSet::new();
 
-    let response = pool
-        .prompt(&session, content)
-        .await
-        .map_err(|e| format!("Prompt error: {e}"))?;
+    local.block_on(&rt, async move {
+        // Create session.
+        let session = pool
+            .create_session(Some(&agent_name), None, &cwd)
+            .await
+            .map_err(|e| format!("Session error: {e}"))?;
 
-    // ACP PromptResponse only contains stop_reason.
-    // Actual content is delivered via session_update callbacks (SurgeEvent stream).
-    // For now, report the stop reason.
-    Ok(format!("Agent completed (stop_reason: {:?}). Response content delivered via ACP session notifications.", response.stop_reason))
+        // Send prompt.
+        let content = vec![agent_client_protocol::ContentBlock::Text(
+            agent_client_protocol::TextContent {
+                text: prompt,
+                annotations: None,
+                meta: None,
+            },
+        )];
+
+        let response = pool
+            .prompt(&session, content)
+            .await
+            .map_err(|e| format!("Prompt error: {e}"))?;
+
+        Ok(format!("Agent completed (stop_reason: {:?})", response.stop_reason))
+    })
 }
 
 impl Render for AgentTerminalScreen {
