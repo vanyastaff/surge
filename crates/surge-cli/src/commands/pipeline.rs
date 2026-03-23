@@ -95,6 +95,31 @@ pub fn status(spec_id: String) -> Result<()> {
         }
     }
 
+    // Show token and cost data if available
+    if let Ok(store_path) = surge_persistence::store::Store::default_path()
+        && store_path.exists()
+        && let Ok(store) = surge_persistence::store::Store::open(&store_path)
+        && let Ok(Some(spec_usage)) = store.get_spec(spec.id)
+    {
+        println!();
+        println!("💰 Token Usage:");
+        println!("   Sessions:       {}", spec_usage.session_count);
+        println!("   Input tokens:   {}", format_tokens(spec_usage.input_tokens));
+        println!("   Output tokens:  {}", format_tokens(spec_usage.output_tokens));
+        if spec_usage.thought_tokens > 0 {
+            println!("   Thought tokens: {}", format_tokens(spec_usage.thought_tokens));
+        }
+        if spec_usage.cached_read_tokens > 0 {
+            println!("   Cached read:    {}", format_tokens(spec_usage.cached_read_tokens));
+        }
+        if spec_usage.cached_write_tokens > 0 {
+            println!("   Cached write:   {}", format_tokens(spec_usage.cached_write_tokens));
+        }
+        let total_tokens = spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
+        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Estimated cost: ${:.4}", spec_usage.estimated_cost_usd);
+    }
+
     // Show worktree info if available
     if let Ok(git) = surge_git::GitManager::discover()
         && let Ok(worktrees) = git.list_worktrees()
@@ -240,4 +265,22 @@ fn resolve_spec_id_for_logs(id: &str, specs_dir: &std::path::Path) -> Result<Str
         }
     }
     Ok(id.to_string())
+}
+
+/// Format token count with thousands separator
+fn format_tokens(tokens: u64) -> String {
+    let s = tokens.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+
+    for c in s.chars().rev() {
+        if count == 3 {
+            result.push(',');
+            count = 0;
+        }
+        result.push(c);
+        count += 1;
+    }
+
+    result.chars().rev().collect()
 }
