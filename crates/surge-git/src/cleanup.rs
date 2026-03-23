@@ -112,7 +112,7 @@ mod tests {
         let gm = GitManager::new(path.clone()).unwrap();
 
         // Create a worktree then manually remove its directory
-        let info = gm.create_worktree("orphan-spec").unwrap();
+        let info = gm.create_worktree("orphan-spec", None).unwrap();
         assert!(info.path.exists());
         fs::remove_dir_all(&info.path).unwrap();
 
@@ -127,11 +127,11 @@ mod tests {
         let gm = GitManager::new(path.clone()).unwrap();
 
         // Create worktree, commit, merge, then discard worktree before cleanup
-        let info = gm.create_worktree("merged-spec").unwrap();
+        let info = gm.create_worktree("merged-spec", None).unwrap();
         let new_file = info.path.join("merged.txt");
         fs::write(&new_file, "content\n").unwrap();
         gm.commit("merged-spec", "add file").unwrap();
-        gm.merge("merged-spec", None).unwrap();
+        gm.merge("merged-spec", None, true).unwrap();
 
         // Discard the worktree (but not the branch — we'll recreate the branch
         // to simulate a leftover merged branch).

@@ -19,7 +19,7 @@ pub fn merge(spec_id: String, yes: bool) -> Result<()> {
     }
 
     let mgr = surge_git::GitManager::discover()?;
-    mgr.merge(&spec_id, None)?;
+    mgr.merge(&spec_id, None, true)?;
     println!("✅ Merged '{spec_id}' into current branch");
     Ok(())
 }

@@ -83,7 +83,7 @@ impl Orchestrator {
             }
         };
 
-        let worktree_info = match git.create_worktree(&spec_id_str) {
+        let worktree_info = match git.create_worktree(&spec_id_str, None) {
             Ok(wt) => wt,
             Err(e) => {
                 return PipelineResult::Failed {
@@ -249,7 +249,7 @@ impl Orchestrator {
                     new_state: TaskState::Merging,
                 });
 
-                if let Err(e) = git.merge(&spec_id_str, None) {
+                if let Err(e) = git.merge(&spec_id_str, None, true) {
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
                     return PipelineResult::Failed {
