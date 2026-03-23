@@ -710,9 +710,6 @@ impl SurgeApp {
 
 impl Render for SurgeApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Ensure our root div has focus so keybindings work.
-        self.focus.focus(window);
-
         match &self.mode {
             AppMode::Welcome(welcome) => {
                 div()
