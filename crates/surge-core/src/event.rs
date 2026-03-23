@@ -199,6 +199,10 @@ pub enum SurgeEvent {
         session_id: String,
         /// Agent that processed the turn.
         agent_name: String,
+        /// Spec context if this turn was part of a spec execution.
+        spec_id: Option<SpecId>,
+        /// Subtask context if this turn was part of a subtask execution.
+        subtask_id: Option<SubtaskId>,
         /// Total input tokens for this turn.
         input_tokens: u64,
         /// Total output/generation tokens for this turn.
@@ -274,10 +278,14 @@ mod tests {
 
     #[test]
     fn test_tokens_consumed_roundtrip() {
+        let spec_id = SpecId::new();
+        let subtask_id = SubtaskId::new();
         let versioned = VersionedEvent::new(
             SurgeEvent::TokensConsumed {
                 session_id: "sess-1".to_string(),
                 agent_name: "claude".to_string(),
+                spec_id: Some(spec_id),
+                subtask_id: Some(subtask_id),
                 input_tokens: 1000,
                 output_tokens: 500,
                 thought_tokens: Some(200),
@@ -288,9 +296,18 @@ mod tests {
             0,
         );
         let rt = roundtrip(&versioned);
-        if let SurgeEvent::TokensConsumed { input_tokens, output_tokens, .. } = rt.event {
+        if let SurgeEvent::TokensConsumed {
+            input_tokens,
+            output_tokens,
+            spec_id: rt_spec_id,
+            subtask_id: rt_subtask_id,
+            ..
+        } = rt.event
+        {
             assert_eq!(input_tokens, 1000);
             assert_eq!(output_tokens, 500);
+            assert_eq!(rt_spec_id, Some(spec_id));
+            assert_eq!(rt_subtask_id, Some(subtask_id));
         } else {
             panic!("wrong variant");
         }
