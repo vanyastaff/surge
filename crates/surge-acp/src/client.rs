@@ -11,7 +11,7 @@ use agent_client_protocol::{
     ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, Result as AcpResult, SelectedPermissionOutcome,
     SessionNotification, SessionUpdate, TerminalExitStatus, TerminalOutputRequest,
-    TerminalOutputResponse, WaitForTerminalExitRequest,
+    TerminalOutputResponse, ToolCallContent, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use std::path::{Path, PathBuf};
@@ -273,6 +273,77 @@ impl SurgeClient {
     }
 }
 
+// ── ACP type conversions ────────────────────────────────────────────
+
+fn convert_tool_kind(kind: &agent_client_protocol::ToolKind) -> surge_core::ToolKind {
+    match kind {
+        agent_client_protocol::ToolKind::Read => surge_core::ToolKind::Read,
+        agent_client_protocol::ToolKind::Edit => surge_core::ToolKind::Edit,
+        agent_client_protocol::ToolKind::Delete => surge_core::ToolKind::Delete,
+        agent_client_protocol::ToolKind::Move => surge_core::ToolKind::Move,
+        agent_client_protocol::ToolKind::Search => surge_core::ToolKind::Search,
+        agent_client_protocol::ToolKind::Execute => surge_core::ToolKind::Execute,
+        agent_client_protocol::ToolKind::Think => surge_core::ToolKind::Think,
+        agent_client_protocol::ToolKind::Fetch => surge_core::ToolKind::Fetch,
+        agent_client_protocol::ToolKind::SwitchMode => surge_core::ToolKind::SwitchMode,
+        _ => surge_core::ToolKind::Other,
+    }
+}
+
+fn convert_tool_status(status: &agent_client_protocol::ToolCallStatus) -> surge_core::ToolCallStatus {
+    match status {
+        agent_client_protocol::ToolCallStatus::Pending => surge_core::ToolCallStatus::Pending,
+        agent_client_protocol::ToolCallStatus::InProgress => surge_core::ToolCallStatus::InProgress,
+        agent_client_protocol::ToolCallStatus::Completed => surge_core::ToolCallStatus::Completed,
+        agent_client_protocol::ToolCallStatus::Failed => surge_core::ToolCallStatus::Failed,
+        _ => surge_core::ToolCallStatus::Pending,
+    }
+}
+
+fn convert_locations(locs: &[agent_client_protocol::ToolCallLocation]) -> Vec<surge_core::ToolLocation> {
+    locs.iter()
+        .map(|l| surge_core::ToolLocation {
+            path: l.path.clone(),
+            line: l.line,
+        })
+        .collect()
+}
+
+fn extract_diffs(content: &[ToolCallContent]) -> Vec<surge_core::ToolDiff> {
+    content
+        .iter()
+        .filter_map(|c| {
+            if let ToolCallContent::Diff(diff) = c {
+                Some(surge_core::ToolDiff {
+                    path: diff.path.clone(),
+                    old_text: diff.old_text.clone(),
+                    new_text: diff.new_text.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn convert_plan_priority(p: &agent_client_protocol::PlanEntryPriority) -> surge_core::PlanPriority {
+    match p {
+        agent_client_protocol::PlanEntryPriority::High => surge_core::PlanPriority::High,
+        agent_client_protocol::PlanEntryPriority::Medium => surge_core::PlanPriority::Medium,
+        agent_client_protocol::PlanEntryPriority::Low => surge_core::PlanPriority::Low,
+        _ => surge_core::PlanPriority::Medium,
+    }
+}
+
+fn convert_plan_status(s: &agent_client_protocol::PlanEntryStatus) -> surge_core::PlanStatus {
+    match s {
+        agent_client_protocol::PlanEntryStatus::Pending => surge_core::PlanStatus::Pending,
+        agent_client_protocol::PlanEntryStatus::InProgress => surge_core::PlanStatus::InProgress,
+        agent_client_protocol::PlanEntryStatus::Completed => surge_core::PlanStatus::Completed,
+        _ => surge_core::PlanStatus::Pending,
+    }
+}
+
 #[async_trait::async_trait(?Send)]
 impl Client for SurgeClient {
     async fn request_permission(
@@ -288,15 +359,28 @@ impl Client for SurgeClient {
             .clone()
             .unwrap_or_else(|| "Permission requested".to_string());
 
+        let session_id = args.session_id.to_string();
+        let tool_call_id = args.tool_call.tool_call_id.to_string();
+        let option_names: Vec<String> = args.options.iter().map(|o| o.name.clone()).collect();
+
         self.emit_event(SurgeEvent::PermissionRequested {
+            session_id: session_id.clone(),
             description: description.clone(),
+            tool_call_id: tool_call_id.clone(),
+            options: option_names,
         });
 
         let outcome = if let Some(option_id) = self.evaluate_permission(&args) {
-            self.emit_event(SurgeEvent::PermissionResolved { granted: true });
+            self.emit_event(SurgeEvent::PermissionResolved {
+                session_id,
+                granted: true,
+            });
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id))
         } else {
-            self.emit_event(SurgeEvent::PermissionResolved { granted: false });
+            self.emit_event(SurgeEvent::PermissionResolved {
+                session_id,
+                granted: false,
+            });
             RequestPermissionOutcome::Cancelled
         };
 
@@ -326,30 +410,77 @@ impl Client for SurgeClient {
                 debug!(
                     session_id = session_id.as_str(),
                     tool = %tool_call.title,
+                    kind = ?tool_call.kind,
                     "tool call initiated"
                 );
+                let raw_input = tool_call
+                    .raw_input
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string_pretty(v).ok());
                 self.emit_event(SurgeEvent::ToolCallStarted {
                     session_id,
+                    call_id: tool_call.tool_call_id.to_string(),
                     title: tool_call.title.clone(),
+                    kind: convert_tool_kind(&tool_call.kind),
+                    locations: convert_locations(&tool_call.locations),
+                    raw_input,
                 });
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 debug!(
                     session_id = session_id.as_str(),
                     tool_id = %update.tool_call_id,
+                    status = ?update.fields.status,
                     "tool call updated"
                 );
-                // Check if tool call is finished
-                if update.fields.status.is_some() {
-                    self.emit_event(SurgeEvent::ToolCallFinished {
-                        session_id,
-                    });
-                }
+                let diffs = update
+                    .fields
+                    .content
+                    .as_deref()
+                    .map(extract_diffs)
+                    .unwrap_or_default();
+                let locations = update
+                    .fields
+                    .locations
+                    .as_deref()
+                    .map(convert_locations)
+                    .unwrap_or_default();
+                let raw_output = update
+                    .fields
+                    .raw_output
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string_pretty(v).ok());
+                self.emit_event(SurgeEvent::ToolCallUpdated {
+                    session_id,
+                    call_id: update.tool_call_id.to_string(),
+                    status: update.fields.status.as_ref().map(convert_tool_status),
+                    title: update.fields.title.clone(),
+                    diffs,
+                    locations,
+                    raw_output,
+                });
+            }
+            SessionUpdate::Plan(plan) => {
+                debug!(
+                    session_id = session_id.as_str(),
+                    entries = plan.entries.len(),
+                    "plan update received"
+                );
+                let entries = plan
+                    .entries
+                    .iter()
+                    .map(|e| surge_core::PlanEntry {
+                        content: e.content.clone(),
+                        priority: convert_plan_priority(&e.priority),
+                        status: convert_plan_status(&e.status),
+                    })
+                    .collect();
+                self.emit_event(SurgeEvent::PlanUpdated {
+                    session_id,
+                    entries,
+                });
             }
             SessionUpdate::UserMessageChunk(_) => {}
-            SessionUpdate::Plan(_) => {
-                debug!(session_id = session_id.as_str(), "plan update received");
-            }
             SessionUpdate::AvailableCommandsUpdate(_) => {
                 debug!(session_id = session_id.as_str(), "commands update received");
             }

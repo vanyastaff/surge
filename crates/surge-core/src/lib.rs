@@ -9,7 +9,10 @@ pub mod state;
 
 pub use config::SurgeConfig;
 pub use error::SurgeError;
-pub use event::SurgeEvent;
+pub use event::{
+    PlanEntry, PlanPriority, PlanStatus, SurgeEvent, ToolCallStatus, ToolDiff, ToolKind,
+    ToolLocation,
+};
 pub use id::{SpecId, SubtaskId, TaskId};
 pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
 pub use state::TaskState;
