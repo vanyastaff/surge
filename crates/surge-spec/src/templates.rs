@@ -11,6 +11,10 @@ pub enum TemplateKind {
     Feature,
     Bugfix,
     Refactor,
+    Performance,
+    Security,
+    Docs,
+    Migration,
 }
 
 impl TemplateKind {
@@ -20,15 +24,21 @@ impl TemplateKind {
             "feature" => Ok(Self::Feature),
             "bugfix" | "fix" => Ok(Self::Bugfix),
             "refactor" => Ok(Self::Refactor),
+            "performance" | "perf" => Ok(Self::Performance),
+            "security" | "sec" => Ok(Self::Security),
+            "docs" | "doc" => Ok(Self::Docs),
+            "migration" | "migrate" => Ok(Self::Migration),
             _ => Err(SurgeError::Spec(format!(
-                "Unknown template '{}'. Available: feature, bugfix, refactor", s
+                "Unknown template '{}'. Available: {}",
+                s,
+                Self::all().join(", ")
             ))),
         }
     }
 
     /// List all available template names.
     pub fn all() -> &'static [&'static str] {
-        &["feature", "bugfix", "refactor"]
+        &["feature", "bugfix", "refactor", "performance", "security", "docs", "migration"]
     }
 }
 
@@ -124,9 +134,158 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .build()?
         }
+        TemplateKind::Performance => {
+            let sub1 = SubtaskBuilder::new()
+                .title("Profile and identify bottlenecks")
+                .description("Measure current performance, identify hot paths and bottlenecks")
+                .complexity(Complexity::Simple)
+                .criterion("Benchmark baseline established")
+                .criterion("Bottlenecks identified and documented")
+                .build()?;
+            let sub1_id = sub1.id;
+
+            let sub2 = SubtaskBuilder::new()
+                .title("Implement optimizations")
+                .description("Apply targeted optimizations to identified bottlenecks")
+                .complexity(Complexity::Standard)
+                .criterion("Optimizations implemented")
+                .criterion("No correctness regressions")
+                .depends_on(sub1_id)
+                .build()?;
+            let sub2_id = sub2.id;
+
+            let sub3 = SubtaskBuilder::new()
+                .title("Benchmark and validate")
+                .description("Run benchmarks to verify improvements, document results")
+                .complexity(Complexity::Simple)
+                .criterion("Measurable performance improvement confirmed")
+                .criterion("Benchmark results documented")
+                .depends_on(sub2_id)
+                .build()?;
+
+            SpecBuilder::new()
+                .title(description)
+                .description(format!("Performance: {description}"))
+                .complexity(Complexity::Standard)
+                .subtask(sub1)
+                .subtask(sub2)
+                .subtask(sub3)
+                .build()?
+        }
+        TemplateKind::Security => {
+            let sub1 = SubtaskBuilder::new()
+                .title("Security audit")
+                .description("Audit the target area for vulnerabilities, document findings")
+                .complexity(Complexity::Standard)
+                .criterion("Vulnerabilities identified and documented")
+                .build()?;
+            let sub1_id = sub1.id;
+
+            let sub2 = SubtaskBuilder::new()
+                .title("Implement fixes")
+                .description("Fix identified vulnerabilities with minimal surface area changes")
+                .complexity(Complexity::Standard)
+                .criterion("All identified vulnerabilities addressed")
+                .criterion("No new attack surface introduced")
+                .depends_on(sub1_id)
+                .build()?;
+            let sub2_id = sub2.id;
+
+            let sub3 = SubtaskBuilder::new()
+                .title("Security tests")
+                .description("Add tests verifying the fixes and covering edge cases")
+                .complexity(Complexity::Simple)
+                .criterion("Tests for each fixed vulnerability")
+                .criterion("Regression tests pass")
+                .depends_on(sub2_id)
+                .build()?;
+
+            SpecBuilder::new()
+                .title(description)
+                .description(format!("Security: {description}"))
+                .complexity(Complexity::Complex)
+                .subtask(sub1)
+                .subtask(sub2)
+                .subtask(sub3)
+                .build()?
+        }
+        TemplateKind::Docs => {
+            let sub1 = SubtaskBuilder::new()
+                .title("Research and outline")
+                .description("Understand the subject, identify audience, create outline")
+                .complexity(Complexity::Simple)
+                .criterion("Outline approved")
+                .build()?;
+            let sub1_id = sub1.id;
+
+            let sub2 = SubtaskBuilder::new()
+                .title("Write documentation")
+                .description("Write the documentation following the approved outline")
+                .complexity(Complexity::Standard)
+                .criterion("All sections written")
+                .criterion("Examples included")
+                .depends_on(sub1_id)
+                .build()?;
+            let sub2_id = sub2.id;
+
+            let sub3 = SubtaskBuilder::new()
+                .title("Review and publish")
+                .description("Review for accuracy, fix issues, publish or merge")
+                .complexity(Complexity::Simple)
+                .criterion("Technical accuracy verified")
+                .criterion("Documentation published")
+                .depends_on(sub2_id)
+                .build()?;
+
+            SpecBuilder::new()
+                .title(description)
+                .description(format!("Docs: {description}"))
+                .complexity(Complexity::Simple)
+                .subtask(sub1)
+                .subtask(sub2)
+                .subtask(sub3)
+                .build()?
+        }
+        TemplateKind::Migration => {
+            let sub1 = SubtaskBuilder::new()
+                .title("Migration plan")
+                .description("Document migration steps, data mapping, and rollback procedure")
+                .complexity(Complexity::Standard)
+                .criterion("Migration plan documented")
+                .criterion("Rollback plan documented")
+                .build()?;
+            let sub1_id = sub1.id;
+
+            let sub2 = SubtaskBuilder::new()
+                .title("Implement migration")
+                .description("Execute the migration according to the plan")
+                .complexity(Complexity::Complex)
+                .criterion("Migration executes without errors")
+                .criterion("Data integrity verified post-migration")
+                .depends_on(sub1_id)
+                .build()?;
+            let sub2_id = sub2.id;
+
+            let sub3 = SubtaskBuilder::new()
+                .title("Validate rollback plan")
+                .description("Test the rollback procedure to confirm it works correctly")
+                .complexity(Complexity::Simple)
+                .criterion("Rollback tested and confirmed working")
+                .depends_on(sub2_id)
+                .build()?;
+
+            SpecBuilder::new()
+                .title(description)
+                .description(format!("Migration: {description}"))
+                .complexity(Complexity::Complex)
+                .subtask(sub1)
+                .subtask(sub2)
+                .subtask(sub3)
+                .build()?
+        }
     };
 
-    Ok(SpecFile { spec })
+    Ok(SpecFile { spec, path: None })
 }
 
 #[cfg(test)]
@@ -139,6 +298,14 @@ mod tests {
         assert_eq!(TemplateKind::parse("bugfix").unwrap(), TemplateKind::Bugfix);
         assert_eq!(TemplateKind::parse("fix").unwrap(), TemplateKind::Bugfix);
         assert_eq!(TemplateKind::parse("refactor").unwrap(), TemplateKind::Refactor);
+        assert_eq!(TemplateKind::parse("performance").unwrap(), TemplateKind::Performance);
+        assert_eq!(TemplateKind::parse("perf").unwrap(), TemplateKind::Performance);
+        assert_eq!(TemplateKind::parse("security").unwrap(), TemplateKind::Security);
+        assert_eq!(TemplateKind::parse("sec").unwrap(), TemplateKind::Security);
+        assert_eq!(TemplateKind::parse("docs").unwrap(), TemplateKind::Docs);
+        assert_eq!(TemplateKind::parse("doc").unwrap(), TemplateKind::Docs);
+        assert_eq!(TemplateKind::parse("migration").unwrap(), TemplateKind::Migration);
+        assert_eq!(TemplateKind::parse("migrate").unwrap(), TemplateKind::Migration);
         assert!(TemplateKind::parse("unknown").is_err());
     }
 
@@ -162,6 +329,35 @@ mod tests {
     fn test_refactor_template() {
         let spec_file = generate(TemplateKind::Refactor, "Extract auth module").unwrap();
         assert_eq!(spec_file.spec.subtasks.len(), 2);
+    }
+
+    #[test]
+    fn test_performance_template() {
+        let spec_file = generate(TemplateKind::Performance, "Speed up query engine").unwrap();
+        assert_eq!(spec_file.spec.subtasks.len(), 3);
+        // profile → optimize → benchmark (linear chain)
+        assert_eq!(spec_file.spec.subtasks[1].depends_on[0], spec_file.spec.subtasks[0].id);
+        assert_eq!(spec_file.spec.subtasks[2].depends_on[0], spec_file.spec.subtasks[1].id);
+    }
+
+    #[test]
+    fn test_security_template() {
+        let spec_file = generate(TemplateKind::Security, "Fix auth bypass").unwrap();
+        assert_eq!(spec_file.spec.subtasks.len(), 3);
+        assert_eq!(spec_file.spec.complexity, Complexity::Complex);
+    }
+
+    #[test]
+    fn test_docs_template() {
+        let spec_file = generate(TemplateKind::Docs, "Write API reference").unwrap();
+        assert_eq!(spec_file.spec.subtasks.len(), 3);
+    }
+
+    #[test]
+    fn test_migration_template() {
+        let spec_file = generate(TemplateKind::Migration, "Migrate to Postgres").unwrap();
+        assert_eq!(spec_file.spec.subtasks.len(), 3);
+        assert_eq!(spec_file.spec.complexity, Complexity::Complex);
     }
 
     #[test]

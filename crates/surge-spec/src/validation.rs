@@ -47,6 +47,23 @@ pub fn validate(spec: &Spec) -> ValidationResult {
         return result;
     }
 
+    const RECOMMENDED_MAX_SUBTASKS: usize = 7;
+    const HARD_MAX_SUBTASKS: usize = 15;
+
+    if spec.subtasks.len() > HARD_MAX_SUBTASKS {
+        result.errors.push(format!(
+            "Too many subtasks: {}. Max is {}. Split into multiple specs.",
+            spec.subtasks.len(),
+            HARD_MAX_SUBTASKS
+        ));
+    } else if spec.subtasks.len() > RECOMMENDED_MAX_SUBTASKS {
+        result.warnings.push(format!(
+            "Many subtasks: {}. Consider splitting to avoid context overflow (recommended max: {}).",
+            spec.subtasks.len(),
+            RECOMMENDED_MAX_SUBTASKS
+        ));
+    }
+
     let valid_ids: HashSet<SubtaskId> = spec.subtasks.iter().map(|s| s.id).collect();
 
     if valid_ids.len() != spec.subtasks.len() {
@@ -242,6 +259,35 @@ mod tests {
         };
         let result = validate(&spec);
         assert!(result.errors.iter().any(|e| e.contains("cycle")));
+    }
+
+    #[test]
+    fn test_subtask_count_warning_at_eight() {
+        let subtasks: Vec<Subtask> = (0..8).map(|i| make_subtask(&format!("Step {i}"), vec![])).collect();
+        let spec = Spec {
+            id: SpecId::new(),
+            title: "Many subtasks".to_string(),
+            description: "Has 8 subtasks".to_string(),
+            complexity: Complexity::Complex,
+            subtasks,
+        };
+        let result = validate(&spec);
+        assert!(result.is_ok(), "errors: {:?}", result.errors);
+        assert!(result.warnings.iter().any(|w| w.contains("Consider splitting")));
+    }
+
+    #[test]
+    fn test_subtask_count_error_at_sixteen() {
+        let subtasks: Vec<Subtask> = (0..16).map(|i| make_subtask(&format!("Step {i}"), vec![])).collect();
+        let spec = Spec {
+            id: SpecId::new(),
+            title: "Too many subtasks".to_string(),
+            description: "Has 16 subtasks".to_string(),
+            complexity: Complexity::Complex,
+            subtasks,
+        };
+        let result = validate(&spec);
+        assert!(result.errors.iter().any(|e| e.contains("Too many subtasks")));
     }
 
     #[test]
