@@ -1,8 +1,9 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Icon, IconName, StyledExt};
+use surge_core::TaskState;
 
+use crate::app_state::AppState;
 use crate::theme;
 
 /// Kanban column state.
@@ -99,121 +100,72 @@ const COLUMN_MIN_W: f32 = 300.0;
 
 /// Kanban Board screen.
 pub struct KanbanScreen {
-    tasks: Vec<KanbanTask>,
+    state: Entity<AppState>,
+}
+
+fn state_to_column(state: &TaskState) -> KanbanColumn {
+    match state {
+        TaskState::Draft => KanbanColumn::Draft,
+        TaskState::Planning | TaskState::Planned { .. } => KanbanColumn::Planning,
+        TaskState::Executing { .. } => KanbanColumn::Executing,
+        TaskState::QaReview | TaskState::QaFix { .. } => KanbanColumn::QaReview,
+        TaskState::HumanReview => KanbanColumn::HumanReview,
+        TaskState::Completed | TaskState::Merging => KanbanColumn::Done,
+        TaskState::Failed { .. } | TaskState::Cancelled => KanbanColumn::Done,
+    }
+}
+
+fn state_label(state: &TaskState) -> &'static str {
+    match state {
+        TaskState::Draft => "Draft",
+        TaskState::Planning => "Planning",
+        TaskState::Planned { .. } => "Planned",
+        TaskState::Executing { .. } => "Executing",
+        TaskState::QaReview => "QA Review",
+        TaskState::QaFix { .. } => "QA Fix",
+        TaskState::HumanReview => "Human Review",
+        TaskState::Merging => "Merging",
+        TaskState::Completed => "Completed",
+        TaskState::Failed { .. } => "Failed",
+        TaskState::Cancelled => "Cancelled",
+    }
 }
 
 impl KanbanScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        Self {
-            tasks: vec![
-                KanbanTask {
-                    id: "task-01".into(),
-                    title: "Add auth middleware".into(),
-                    description: "Implement JWT-based authentication for all API endpoints with token refresh".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Standard".into(),
-                    status_label: "Executing".into(),
-                    subtasks_done: 3,
-                    subtasks_total: 5,
-                    tags: vec![
-                        ("Needs Review".into(), theme::WARNING),
-                    ],
-                    time_ago: "12m ago".into(),
-                    column: KanbanColumn::Executing,
-                },
-                KanbanTask {
-                    id: "task-02".into(),
-                    title: "Refactor DB layer".into(),
-                    description: "Migrate from raw SQL to query builder pattern for type safety".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Complex".into(),
-                    status_label: "Planning".into(),
-                    subtasks_done: 0,
-                    subtasks_total: 8,
-                    tags: vec![],
-                    time_ago: "1h ago".into(),
-                    column: KanbanColumn::Planning,
-                },
-                KanbanTask {
-                    id: "task-03".into(),
-                    title: "Fix login bug on mobile".into(),
-                    description: "Session token not refreshing correctly on iOS Safari. Users get logged out.".into(),
-                    agent: None,
-                    complexity: "Simple".into(),
-                    status_label: "Pending".into(),
-                    subtasks_done: 0,
-                    subtasks_total: 2,
-                    tags: vec![],
-                    time_ago: "3h ago".into(),
-                    column: KanbanColumn::Draft,
-                },
-                KanbanTask {
-                    id: "task-04".into(),
-                    title: "Update CI pipeline".into(),
-                    description: "Add lint, test and deploy stages to GitHub Actions workflow".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Simple".into(),
-                    status_label: "Completed".into(),
-                    subtasks_done: 3,
-                    subtasks_total: 3,
-                    tags: vec![
-                        ("Needs Review".into(), theme::WARNING),
-                        ("Completed".into(), theme::SUCCESS),
-                    ],
-                    time_ago: "2h ago".into(),
-                    column: KanbanColumn::HumanReview,
-                },
-                KanbanTask {
-                    id: "task-05".into(),
-                    title: "Add rate limiting".into(),
-                    description: "Per-user rate limiting on public API endpoints with Redis backend".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Standard".into(),
-                    status_label: "Completed".into(),
-                    subtasks_done: 4,
-                    subtasks_total: 4,
-                    tags: vec![
-                        ("Needs Review".into(), theme::WARNING),
-                        ("Completed".into(), theme::SUCCESS),
-                    ],
-                    time_ago: "1h ago".into(),
-                    column: KanbanColumn::HumanReview,
-                },
-                KanbanTask {
-                    id: "task-06".into(),
-                    title: "Implement virtualization for file tree".into(),
-                    description: "The FileTree component renders all file nodes in expanded directories...".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Standard".into(),
-                    status_label: "Complete".into(),
-                    subtasks_done: 8,
-                    subtasks_total: 8,
-                    tags: vec![
-                        ("Performance".into(), hsla(190.0 / 360.0, 0.8, 0.5, 1.0)),
-                        ("High Impact".into(), theme::ERROR),
-                    ],
-                    time_ago: "3h ago".into(),
-                    column: KanbanColumn::Done,
-                },
-                KanbanTask {
-                    id: "task-07".into(),
-                    title: "Add WebSocket events".into(),
-                    description: "Real-time notifications via WebSocket for task status changes".into(),
-                    agent: Some("claude-code".into()),
-                    complexity: "Complex".into(),
-                    status_label: "Executing".into(),
-                    subtasks_done: 1,
-                    subtasks_total: 6,
-                    tags: vec![],
-                    time_ago: "5m ago".into(),
-                    column: KanbanColumn::Executing,
-                },
-            ],
-        }
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
+        Self { state }
     }
 
-    fn tasks_in_column(&self, col: KanbanColumn) -> Vec<&KanbanTask> {
-        self.tasks.iter().filter(|t| t.column == col).collect()
+    /// Build kanban tasks from AppState.
+    fn build_tasks(&self, cx: &Context<Self>) -> Vec<KanbanTask> {
+        let app_state = self.state.read(cx);
+        app_state
+            .tasks
+            .iter()
+            .map(|t| {
+                let (subtasks_done, subtasks_total) = match &t.state {
+                    TaskState::Executing { completed, total } => (*completed, *total),
+                    _ => (0, 0),
+                };
+                KanbanTask {
+                    id: t.id.to_string(),
+                    title: t.title.clone(),
+                    description: t.description.clone(),
+                    agent: t.agent.clone(),
+                    complexity: t.complexity.clone(),
+                    status_label: state_label(&t.state).to_string(),
+                    subtasks_done,
+                    subtasks_total,
+                    tags: Vec::new(),
+                    time_ago: t.updated_at.clone(),
+                    column: state_to_column(&t.state),
+                }
+            })
+            .collect()
+    }
+
+    fn tasks_in_column<'a>(&self, col: KanbanColumn, tasks: &'a [KanbanTask]) -> Vec<&'a KanbanTask> {
+        tasks.iter().filter(|t| t.column == col).collect()
     }
 
     fn render_task_card(&self, task: &KanbanTask, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -392,8 +344,8 @@ impl KanbanScreen {
             )
     }
 
-    fn render_column(&self, col: KanbanColumn, cx: &mut Context<Self>) -> Div {
-        let tasks = self.tasks_in_column(col);
+    fn render_column_with_tasks(&self, col: KanbanColumn, all_tasks: &[KanbanTask], cx: &mut Context<Self>) -> Div {
+        let tasks = self.tasks_in_column(col, all_tasks);
         let count = tasks.len();
         let is_empty = tasks.is_empty();
 
@@ -474,9 +426,34 @@ impl KanbanScreen {
 
 impl Render for KanbanScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tasks = self.build_tasks(cx);
+        let is_empty = tasks.is_empty();
+
+        if is_empty {
+            return div()
+                .size_full()
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(
+                    Icon::new(IconName::Inbox)
+                        .size_8()
+                        .text_color(theme::TEXT_MUTED.opacity(0.3)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::TEXT_MUTED)
+                        .child("No tasks yet. Create a spec to get started.".to_string()),
+                )
+                .into_any_element();
+        }
+
+        // Store tasks temporarily for column rendering.
         let columns: Vec<Div> = KanbanColumn::all()
             .iter()
-            .map(|&col| self.render_column(col, cx))
+            .map(|&col| self.render_column_with_tasks(col, &tasks, cx))
             .collect();
 
         div()
@@ -496,5 +473,6 @@ impl Render for KanbanScreen {
                     .pb_2()
                     .children(columns),
             )
+            .into_any_element()
     }
 }

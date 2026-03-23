@@ -1,8 +1,9 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::StyledExt;
+use gpui_component::{Icon, IconName, StyledExt};
 
+use crate::app_state::AppState;
 use crate::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,77 +51,47 @@ pub struct SpecClicked(pub String);
 impl EventEmitter<SpecClicked> for SpecExplorerScreen {}
 
 pub struct SpecExplorerScreen {
-    specs: Vec<SpecCard>,
+    state: Entity<AppState>,
     search_query: String,
     filter_status: Option<SpecStatus>,
 }
 
 impl SpecExplorerScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
-            specs: vec![
-                SpecCard {
-                    id: "spec-01".into(),
-                    title: "Auth Middleware".into(),
-                    description: "Implement JWT-based auth for all API endpoints".into(),
-                    status: SpecStatus::Active,
-                    complexity: "Standard".into(),
-                    subtask_count: 5,
-                    agent: Some("claude-code".into()),
-                },
-                SpecCard {
-                    id: "spec-02".into(),
-                    title: "Database Migration".into(),
-                    description: "Migrate from SQLite to PostgreSQL".into(),
-                    status: SpecStatus::Draft,
-                    complexity: "Complex".into(),
-                    subtask_count: 8,
-                    agent: None,
-                },
-                SpecCard {
-                    id: "spec-03".into(),
-                    title: "Fix Login Bug".into(),
-                    description: "Session token not refreshing on mobile".into(),
-                    status: SpecStatus::Completed,
-                    complexity: "Simple".into(),
-                    subtask_count: 2,
-                    agent: Some("claude-code".into()),
-                },
-                SpecCard {
-                    id: "spec-04".into(),
-                    title: "Rate Limiting".into(),
-                    description: "Add per-user rate limiting to public API".into(),
-                    status: SpecStatus::Active,
-                    complexity: "Standard".into(),
-                    subtask_count: 4,
-                    agent: Some("claude-code".into()),
-                },
-                SpecCard {
-                    id: "spec-05".into(),
-                    title: "CI Pipeline".into(),
-                    description: "Setup GitHub Actions with test + lint + deploy".into(),
-                    status: SpecStatus::Completed,
-                    complexity: "Simple".into(),
-                    subtask_count: 3,
-                    agent: Some("claude-code".into()),
-                },
-                SpecCard {
-                    id: "spec-06".into(),
-                    title: "WebSocket Events".into(),
-                    description: "Real-time notifications via WebSocket".into(),
-                    status: SpecStatus::Draft,
-                    complexity: "Complex".into(),
-                    subtask_count: 0,
-                    agent: None,
-                },
-            ],
+            state,
             search_query: String::new(),
             filter_status: None,
         }
     }
 
-    fn filtered_specs(&self) -> Vec<&SpecCard> {
-        self.specs
+    /// Build SpecCards from AppState specs.
+    fn build_specs(&self, cx: &Context<Self>) -> Vec<SpecCard> {
+        let app_state = self.state.read(cx);
+        app_state
+            .specs
+            .iter()
+            .map(|spec| {
+                let complexity = match spec.complexity {
+                    surge_core::Complexity::Simple => "Simple",
+                    surge_core::Complexity::Standard => "Standard",
+                    surge_core::Complexity::Complex => "Complex",
+                };
+                SpecCard {
+                    id: spec.id.to_string(),
+                    title: spec.title.clone(),
+                    description: spec.description.clone(),
+                    status: SpecStatus::Draft, // All specs start as Draft; real status from tasks later.
+                    complexity: complexity.to_string(),
+                    subtask_count: spec.subtasks.len(),
+                    agent: None,
+                }
+            })
+            .collect()
+    }
+
+    fn filtered_specs<'a>(&self, specs: &'a [SpecCard]) -> Vec<&'a SpecCard> {
+        specs
             .iter()
             .filter(|s| {
                 if let Some(status) = self.filter_status {
@@ -263,7 +234,10 @@ impl SpecExplorerScreen {
 
 impl Render for SpecExplorerScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let specs = self.filtered_specs();
+        let all_specs = self.build_specs(cx);
+        let specs = self.filtered_specs(&all_specs);
+        let is_empty = specs.is_empty() && all_specs.is_empty();
+
         let cards: Vec<Stateful<Div>> = specs
             .iter()
             .map(|s| self.render_spec_card(s, cx))
@@ -295,19 +269,42 @@ impl Render for SpecExplorerScreen {
             )
             // Filters
             .child(self.render_filter_chips(cx))
-            // Grid
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_wrap()
-                    .gap_4()
-                    .content_start()
-                    .children(
-                        cards.into_iter().map(|card| {
-                            div().w(px(280.0)).child(card)
-                        }),
-                    ),
-            )
+            // Grid or empty state
+            .when(is_empty, |el: Div| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .v_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            Icon::new(IconName::File)
+                                .size_8()
+                                .text_color(theme::TEXT_MUTED.opacity(0.3)),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::TEXT_MUTED)
+                                .child("No specs yet".to_string()),
+                        ),
+                )
+            })
+            .when(!is_empty, |el: Div| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_wrap()
+                        .gap_4()
+                        .content_start()
+                        .children(
+                            cards.into_iter().map(|card| {
+                                div().w(px(280.0)).child(card)
+                            }),
+                        ),
+                )
+            })
     }
 }

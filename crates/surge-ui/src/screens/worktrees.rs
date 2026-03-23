@@ -1,8 +1,9 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::StyledExt;
+use gpui_component::{Icon, IconName, StyledExt};
 
+use crate::app_state::AppState;
 use crate::theme;
 
 /// Worktree status.
@@ -47,18 +48,40 @@ pub struct WorktreeInfo {
 
 /// Worktrees Panel screen.
 pub struct WorktreesScreen {
-    worktrees: Vec<WorktreeInfo>,
+    state: Entity<AppState>,
 }
 
 impl WorktreesScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        Self {
-            worktrees: demo_worktrees(),
-        }
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
+        Self { state }
     }
 
-    fn total_disk(&self) -> f32 {
-        self.worktrees.iter().map(|w| w.disk_mb).sum()
+    /// Build WorktreeInfo list from AppState.
+    fn build_worktrees(&self, cx: &Context<Self>) -> Vec<WorktreeInfo> {
+        let app_state = self.state.read(cx);
+        app_state
+            .worktrees
+            .iter()
+            .map(|wt| {
+                let status = if wt.exists {
+                    WorktreeStatus::Active
+                } else {
+                    WorktreeStatus::Error
+                };
+                WorktreeInfo {
+                    spec_name: wt.spec_id.clone(),
+                    branch: wt.branch.clone(),
+                    status,
+                    file_count: 0,
+                    disk_mb: 0.0,
+                    path: wt.path.display().to_string(),
+                }
+            })
+            .collect()
+    }
+
+    fn total_disk(worktrees: &[WorktreeInfo]) -> f32 {
+        worktrees.iter().map(|w| w.disk_mb).sum()
     }
 
     fn render_worktree_card(&self, idx: usize, wt: &WorktreeInfo) -> Div {
@@ -174,9 +197,11 @@ impl WorktreesScreen {
 }
 
 impl Render for WorktreesScreen {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let cards: Vec<Div> = self
-            .worktrees
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let worktrees = self.build_worktrees(cx);
+        let is_empty = worktrees.is_empty();
+
+        let cards: Vec<Div> = worktrees
             .iter()
             .enumerate()
             .map(|(idx, wt)| self.render_worktree_card(idx, wt))
@@ -212,8 +237,8 @@ impl Render for WorktreesScreen {
                                     .text_color(theme::TEXT_MUTED)
                                     .child(format!(
                                         "{} worktrees  {:.1} MB total",
-                                        self.worktrees.len(),
-                                        self.total_disk()
+                                        worktrees.len(),
+                                        Self::total_disk(&worktrees)
                                     )),
                             ),
                     )
@@ -234,56 +259,42 @@ impl Render for WorktreesScreen {
                             ),
                     ),
             )
-            // Cards grid: 2 columns
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_wrap()
-                    .gap_4()
-                    .overflow_hidden()
-                    .children(
-                        cards.into_iter().map(|card| {
-                            card.w(relative(0.48)).min_w(px(340.0))
-                        }),
-                    ),
-            )
+            // Empty state or cards grid
+            .when(is_empty, |el: Div| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .v_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            Icon::new(IconName::FolderOpen)
+                                .size_8()
+                                .text_color(theme::TEXT_MUTED.opacity(0.3)),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::TEXT_MUTED)
+                                .child("No active worktrees".to_string()),
+                        ),
+                )
+            })
+            .when(!is_empty, |el: Div| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_wrap()
+                        .gap_4()
+                        .overflow_hidden()
+                        .children(
+                            cards.into_iter().map(|card| {
+                                card.w(relative(0.48)).min_w(px(340.0))
+                            }),
+                        ),
+                )
+            })
     }
-}
-
-fn demo_worktrees() -> Vec<WorktreeInfo> {
-    vec![
-        WorktreeInfo {
-            spec_name: "auth-middleware".into(),
-            branch: "surge/auth-middleware".into(),
-            status: WorktreeStatus::Active,
-            file_count: 7,
-            disk_mb: 12.4,
-            path: ".surge/worktrees/auth-middleware".into(),
-        },
-        WorktreeInfo {
-            spec_name: "db-refactor".into(),
-            branch: "surge/db-refactor".into(),
-            status: WorktreeStatus::Idle,
-            file_count: 15,
-            disk_mb: 14.2,
-            path: ".surge/worktrees/db-refactor".into(),
-        },
-        WorktreeInfo {
-            spec_name: "ci-pipeline".into(),
-            branch: "surge/ci-pipeline".into(),
-            status: WorktreeStatus::Merging,
-            file_count: 3,
-            disk_mb: 8.7,
-            path: ".surge/worktrees/ci-pipeline".into(),
-        },
-        WorktreeInfo {
-            spec_name: "rate-limiting".into(),
-            branch: "surge/rate-limiting".into(),
-            status: WorktreeStatus::Error,
-            file_count: 4,
-            disk_mb: 10.1,
-            path: ".surge/worktrees/rate-limiting".into(),
-        },
-    ]
 }

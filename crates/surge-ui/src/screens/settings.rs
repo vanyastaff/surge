@@ -3,6 +3,7 @@ use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::StyledExt;
 
+use crate::app_state::AppState;
 use crate::theme;
 
 /// Settings tab.
@@ -50,72 +51,83 @@ pub struct GateToggle {
 
 /// Settings screen.
 pub struct SettingsScreen {
+    state: Entity<AppState>,
     active_tab: SettingsTab,
-    // General
-    default_ide: String,
-    project_path: String,
-    surge_dir: String,
-    // Agents
-    agents: Vec<AgentConfig>,
-    // Pipeline
+    // Pipeline (UI-only toggles, initialized from config)
     gates: Vec<GateToggle>,
-    max_parallel: u32,
-    // Appearance
-    theme_name: String,
 }
 
 impl SettingsScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
+            state,
             active_tab: SettingsTab::General,
-            default_ide: "VS Code".into(),
-            project_path: "/home/user/project".into(),
-            surge_dir: ".surge".into(),
-            agents: vec![
-                AgentConfig {
-                    name: "claude-code".into(),
-                    enabled: true,
-                    model: "claude-sonnet-4-5-20250514".into(),
-                    routing: "*.rs, *.ts, *.py".into(),
-                },
-                AgentConfig {
-                    name: "copilot-cli".into(),
-                    enabled: false,
-                    model: "gpt-4o".into(),
-                    routing: "*.js, *.jsx".into(),
-                },
-                AgentConfig {
-                    name: "zed-agent".into(),
-                    enabled: false,
-                    model: "—".into(),
-                    routing: "—".into(),
-                },
-            ],
             gates: vec![
                 GateToggle {
-                    name: "QA Review".into(),
-                    description: "Run automated QA checks before human review".into(),
+                    name: "After Spec".into(),
+                    description: "Review gate after spec creation".into(),
                     enabled: true,
                 },
                 GateToggle {
-                    name: "Human Review".into(),
-                    description: "Require manual approval before merging".into(),
+                    name: "After Plan".into(),
+                    description: "Review gate after planning phase".into(),
                     enabled: true,
                 },
                 GateToggle {
-                    name: "CI Checks".into(),
-                    description: "Wait for CI pipeline to pass".into(),
-                    enabled: true,
-                },
-                GateToggle {
-                    name: "Auto-Merge".into(),
-                    description: "Automatically merge when all gates pass".into(),
+                    name: "After Each Subtask".into(),
+                    description: "Review gate after each subtask completes".into(),
                     enabled: false,
                 },
+                GateToggle {
+                    name: "After QA".into(),
+                    description: "Review gate after QA review".into(),
+                    enabled: true,
+                },
             ],
-            max_parallel: 3,
-            theme_name: "Surge Dark".into(),
         }
+    }
+
+    /// Read general settings from AppState.
+    fn project_path(&self, cx: &Context<Self>) -> String {
+        let state = self.state.read(cx);
+        state
+            .project_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(no project)".to_string())
+    }
+
+    fn default_ide(&self, cx: &Context<Self>) -> String {
+        let state = self.state.read(cx);
+        state
+            .config
+            .as_ref()
+            .and_then(|c| c.ide.editor.clone())
+            .unwrap_or_else(|| "VS Code".to_string())
+    }
+
+    fn max_parallel(&self, cx: &Context<Self>) -> usize {
+        let state = self.state.read(cx);
+        state
+            .config
+            .as_ref()
+            .map(|c| c.pipeline.max_parallel)
+            .unwrap_or(3)
+    }
+
+    /// Build agent configs from AppState.
+    fn build_agent_configs(&self, cx: &Context<Self>) -> Vec<AgentConfig> {
+        let state = self.state.read(cx);
+        state
+            .installed_agents
+            .iter()
+            .map(|a| AgentConfig {
+                name: a.entry.id.clone(),
+                enabled: true, // Installed agents are "enabled".
+                model: a.entry.models.first().cloned().unwrap_or_else(|| "-".to_string()),
+                routing: "-".to_string(),
+            })
+            .collect()
     }
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> Div {
@@ -145,31 +157,33 @@ impl SettingsScreen {
 
     fn render_tab_content(&self, cx: &mut Context<Self>) -> Div {
         match self.active_tab {
-            SettingsTab::General => self.render_general(),
-            SettingsTab::Agents => self.render_agents(),
+            SettingsTab::General => self.render_general(cx),
+            SettingsTab::Agents => self.render_agents(cx),
             SettingsTab::Pipeline => self.render_pipeline(cx),
             SettingsTab::Git => self.render_git(),
             SettingsTab::Appearance => self.render_appearance(),
         }
     }
 
-    fn render_general(&self) -> Div {
+    fn render_general(&self, cx: &Context<Self>) -> Div {
+        let ide = self.default_ide(cx);
+        let project_path = self.project_path(cx);
         div()
             .v_flex()
             .gap_4()
             .child(self.section("Editor & IDE"))
-            .child(self.setting_row("Default IDE", &self.default_ide))
+            .child(self.setting_row("Default IDE", &ide))
             .child(self.section("Paths"))
-            .child(self.setting_row("Project Path", &self.project_path))
-            .child(self.setting_row("Surge Directory", &self.surge_dir))
+            .child(self.setting_row("Project Path", &project_path))
+            .child(self.setting_row("Surge Directory", ".surge"))
             .child(self.section("Spec Format"))
             .child(self.setting_row("Format", "TOML"))
             .child(self.setting_row("Spec Directory", "specs/"))
     }
 
-    fn render_agents(&self) -> Div {
-        let rows: Vec<Div> = self
-            .agents
+    fn render_agents(&self, cx: &Context<Self>) -> Div {
+        let agents = self.build_agent_configs(cx);
+        let rows: Vec<Div> = agents
             .iter()
             .map(|agent| {
                 let status_color = if agent.enabled { theme::SUCCESS } else { theme::TEXT_MUTED };
@@ -320,7 +334,7 @@ impl SettingsScreen {
                     .children(gate_rows),
             )
             .child(self.section("Concurrency"))
-            .child(self.setting_row("Max Parallel Tasks", &format!("{}", self.max_parallel)))
+            .child(self.setting_row("Max Parallel Tasks", &format!("{}", self.max_parallel(cx))))
     }
 
     fn render_git(&self) -> Div {
@@ -342,7 +356,7 @@ impl SettingsScreen {
             .v_flex()
             .gap_4()
             .child(self.section("Theme"))
-            .child(self.setting_row("Current Theme", &self.theme_name))
+            .child(self.setting_row("Current Theme", "Surge Dark"))
             .child(
                 div()
                     .v_flex()

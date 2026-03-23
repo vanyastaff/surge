@@ -292,14 +292,16 @@ impl SurgeApp {
     fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.active_screen {
             Screen::Dashboard => {
+                let state = self.state.clone();
                 let dashboard = self.dashboard.get_or_insert_with(|| {
-                    cx.new(DashboardScreen::new)
+                    cx.new(|cx| DashboardScreen::new(state, cx))
                 });
                 dashboard.clone().into_any_element()
             }
             Screen::Kanban => {
+                let state = self.state.clone();
                 let kanban = self.kanban.get_or_insert_with(|| {
-                    cx.new(KanbanScreen::new)
+                    cx.new(|cx| KanbanScreen::new(state, cx))
                 });
                 kanban.clone().into_any_element()
             }
@@ -311,8 +313,9 @@ impl SurgeApp {
                 agent_hub.clone().into_any_element()
             }
             Screen::SpecExplorer => {
+                let state = self.state.clone();
                 let spec_explorer = self.spec_explorer.get_or_insert_with(|| {
-                    cx.new(SpecExplorerScreen::new)
+                    cx.new(|cx| SpecExplorerScreen::new(state, cx))
                 });
                 spec_explorer.clone().into_any_element()
             }
@@ -337,7 +340,8 @@ impl SurgeApp {
                 s.clone().into_any_element()
             }
             Screen::Worktrees => {
-                let s = self.worktrees.get_or_insert_with(|| cx.new(WorktreesScreen::new));
+                let state = self.state.clone();
+                let s = self.worktrees.get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
                 s.clone().into_any_element()
             }
             Screen::GitHubPRs => {
@@ -349,7 +353,8 @@ impl SurgeApp {
                 s.clone().into_any_element()
             }
             Screen::Settings => {
-                let s = self.settings.get_or_insert_with(|| cx.new(SettingsScreen::new));
+                let state = self.state.clone();
+                let s = self.settings.get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
             }
             _ => {

@@ -2,7 +2,9 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::StyledExt;
+use surge_core::TaskState;
 
+use crate::app_state::AppState;
 use crate::theme;
 
 /// Summary counts for the Project Health card.
@@ -53,57 +55,82 @@ pub enum ActivityKind {
 
 /// Dashboard screen — project overview.
 pub struct DashboardScreen {
-    counts: TaskCounts,
-    agents: Vec<AgentSummary>,
-    activity: Vec<ActivityEntry>,
+    state: Entity<AppState>,
 }
 
 impl DashboardScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        // Demo data — will be replaced with real data from SurgeEvent subscription.
-        Self {
-            counts: TaskCounts {
-                draft: 2,
-                planning: 1,
-                executing: 3,
-                qa_review: 1,
-                human_review: 1,
-                completed: 8,
-                failed: 0,
-            },
-            agents: vec![
-                AgentSummary { name: "claude-code".into(), connected: true, active_tasks: 2 },
-                AgentSummary { name: "copilot-cli".into(), connected: false, active_tasks: 0 },
-            ],
-            activity: vec![
-                ActivityEntry {
-                    message: "Task 'auth-refactor' moved to Executing".into(),
-                    timestamp: "2m ago".into(),
-                    kind: ActivityKind::TaskUpdate,
-                },
-                ActivityEntry {
-                    message: "claude-code connected".into(),
-                    timestamp: "5m ago".into(),
-                    kind: ActivityKind::AgentEvent,
-                },
-                ActivityEntry {
-                    message: "Branch 'feat/auth' created".into(),
-                    timestamp: "10m ago".into(),
-                    kind: ActivityKind::GitEvent,
-                },
-            ],
-        }
+    pub fn new(state: Entity<AppState>, _cx: &mut Context<Self>) -> Self {
+        Self { state }
     }
 
-    fn render_health_card(&self) -> Div {
+    /// Build task counts from AppState tasks.
+    fn task_counts(&self, cx: &Context<Self>) -> TaskCounts {
+        let state = self.state.read(cx);
+        let mut counts = TaskCounts::default();
+        for task in &state.tasks {
+            match &task.state {
+                TaskState::Draft => counts.draft += 1,
+                TaskState::Planning | TaskState::Planned { .. } => counts.planning += 1,
+                TaskState::Executing { .. } => counts.executing += 1,
+                TaskState::QaReview | TaskState::QaFix { .. } => counts.qa_review += 1,
+                TaskState::HumanReview => counts.human_review += 1,
+                TaskState::Completed | TaskState::Merging => counts.completed += 1,
+                TaskState::Failed { .. } | TaskState::Cancelled => counts.failed += 1,
+            }
+        }
+        counts
+    }
+
+    /// Build agent summaries from AppState installed_agents.
+    fn agent_summaries(&self, cx: &Context<Self>) -> Vec<AgentSummary> {
+        let state = self.state.read(cx);
+        state
+            .installed_agents
+            .iter()
+            .map(|a| AgentSummary {
+                name: a.entry.id.clone(),
+                connected: false, // Real connection status will come from health monitor later.
+                active_tasks: 0,
+            })
+            .collect()
+    }
+
+    /// Build recent activity from AppState events.
+    fn recent_activity(&self, cx: &Context<Self>) -> Vec<ActivityEntry> {
+        let state = self.state.read(cx);
+        state
+            .recent_events
+            .iter()
+            .rev()
+            .take(10)
+            .map(|event| {
+                let (message, kind) = match event {
+                    surge_core::SurgeEvent::TaskStateChanged { task_id, new_state, .. } => {
+                        (format!("Task {} moved to {:?}", task_id, new_state), ActivityKind::TaskUpdate)
+                    }
+                    surge_core::SurgeEvent::AgentConnected { agent_name } => {
+                        (format!("{} connected", agent_name), ActivityKind::AgentEvent)
+                    }
+                    _ => (format!("{:?}", event), ActivityKind::TaskUpdate),
+                };
+                ActivityEntry {
+                    message,
+                    timestamp: String::new(),
+                    kind,
+                }
+            })
+            .collect()
+    }
+
+    fn render_health_card(&self, counts: &TaskCounts) -> Div {
         let items = [
-            ("Draft", self.counts.draft, theme::TEXT_MUTED),
-            ("Planning", self.counts.planning, theme::PRIMARY),
-            ("Executing", self.counts.executing, theme::WARNING),
-            ("QA Review", self.counts.qa_review, theme::PRIMARY),
-            ("Human Review", self.counts.human_review, theme::WARNING),
-            ("Completed", self.counts.completed, theme::SUCCESS),
-            ("Failed", self.counts.failed, theme::ERROR),
+            ("Draft", counts.draft, theme::TEXT_MUTED),
+            ("Planning", counts.planning, theme::PRIMARY),
+            ("Executing", counts.executing, theme::WARNING),
+            ("QA Review", counts.qa_review, theme::PRIMARY),
+            ("Human Review", counts.human_review, theme::WARNING),
+            ("Completed", counts.completed, theme::SUCCESS),
+            ("Failed", counts.failed, theme::ERROR),
         ];
 
         let bars: Vec<Div> = items
@@ -144,14 +171,13 @@ impl DashboardScreen {
 
         self.card(
             "Project Health",
-            &format!("{} total · {} active", self.counts.total(), self.counts.active()),
+            &format!("{} total · {} active", counts.total(), counts.active()),
             div().v_flex().gap_2().children(bars),
         )
     }
 
-    fn render_agents_card(&self) -> Div {
-        let items: Vec<Div> = self
-            .agents
+    fn render_agents_card(&self, agents: &[AgentSummary]) -> Div {
+        let items: Vec<Div> = agents
             .iter()
             .map(|a| {
                 let status_color = if a.connected { theme::SUCCESS } else { theme::ERROR };
@@ -208,7 +234,7 @@ impl DashboardScreen {
 
         self.card(
             "Active Agents",
-            &format!("{} configured", self.agents.len()),
+            &format!("{} configured", agents.len()),
             div().v_flex().gap_2().children(items),
         )
     }
@@ -239,9 +265,8 @@ impl DashboardScreen {
         )
     }
 
-    fn render_activity(&self) -> Div {
-        let items: Vec<Div> = self
-            .activity
+    fn render_activity(&self, activity: &[ActivityEntry]) -> Div {
+        let items: Vec<Div> = activity
             .iter()
             .map(|entry| {
                 let icon = match entry.kind {
@@ -317,7 +342,11 @@ impl DashboardScreen {
 }
 
 impl Render for DashboardScreen {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let counts = self.task_counts(cx);
+        let agents = self.agent_summaries(cx);
+        let activity = self.recent_activity(cx);
+
         div()
             .size_full()
             .p_6()
@@ -344,8 +373,8 @@ impl Render for DashboardScreen {
                             .flex_1()
                             .v_flex()
                             .gap_4()
-                            .child(self.render_health_card())
-                            .child(self.render_activity()),
+                            .child(self.render_health_card(&counts))
+                            .child(self.render_activity(&activity)),
                     )
                     // Right column
                     .child(
@@ -353,7 +382,7 @@ impl Render for DashboardScreen {
                             .w(px(300.0))
                             .v_flex()
                             .gap_4()
-                            .child(self.render_agents_card())
+                            .child(self.render_agents_card(&agents))
                             .child(self.render_quick_actions()),
                     ),
             )
