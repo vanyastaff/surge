@@ -114,6 +114,16 @@ impl AgentTransport for StdioTransport {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(worktree_root);
 
+        // Strip git environment variables inherited from the parent process.
+        // If Surge itself runs inside a git repo, the agent would otherwise
+        // inherit GIT_DIR / GIT_WORK_TREE and its git commands would target
+        // the wrong repository.
+        cmd.env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+
         // MCP server pass-through: write config to a temp file and set the
         // agent-specific env var before spawning.
         if !config.mcp_servers.is_empty() {

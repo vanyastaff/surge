@@ -52,6 +52,9 @@ git2 = "0.20"
 # HTTP client (remote registry fetching)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
+# Secret scanning
+regex = "1"
+
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }

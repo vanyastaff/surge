@@ -11,6 +11,7 @@ pub mod health;
 pub mod pool;
 pub mod registry;
 pub mod router;
+pub mod secrets;
 pub mod terminal;
 pub mod transport;
 

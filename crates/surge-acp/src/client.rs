@@ -156,6 +156,10 @@ impl SurgeClient {
             self.worktree_root.join(path)
         };
 
+        // Explicit symlink walk — defense-in-depth against symlinks that point
+        // outside the worktree even when canonicalize would also catch them.
+        Self::check_symlink_safety(&absolute, &self.worktree_root_canonical)?;
+
         // For existing paths, canonicalize directly.
         // For new files, canonicalize the parent and join the filename.
         let canonical = if absolute.exists() {
@@ -184,6 +188,49 @@ impl SurgeClient {
         }
 
         Ok(canonical)
+    }
+
+    /// Walk each component of `path` and reject any symlink whose resolved
+    /// target falls outside `allowed_root`.
+    ///
+    /// This is defense-in-depth on top of the canonicalize-based sandbox check:
+    /// an attacker planting a symlink inside the worktree pointing to `/etc`
+    /// is caught here before `canonicalize` is ever called.
+    fn check_symlink_safety(path: &Path, allowed_root: &Path) -> Result<(), String> {
+        let mut current = PathBuf::new();
+        for component in path.components() {
+            current.push(component);
+            let meta = match std::fs::symlink_metadata(&current) {
+                Ok(m) => m,
+                Err(_) => continue, // component doesn't exist yet — can't be a symlink
+            };
+            if !meta.file_type().is_symlink() {
+                continue;
+            }
+            let link_target = std::fs::read_link(&current).map_err(|e| {
+                format!("Cannot read symlink {}: {e}", current.display())
+            })?;
+            // Resolve relative targets against the symlink's parent directory.
+            let resolved = if link_target.is_absolute() {
+                link_target
+            } else {
+                let parent = current.parent().unwrap_or(Path::new("/"));
+                parent.join(&link_target)
+            };
+            let canonical_target = resolved.canonicalize().map_err(|_| {
+                format!(
+                    "Symlink {} has a non-existent or unresolvable target",
+                    current.display()
+                )
+            })?;
+            if !canonical_target.starts_with(allowed_root) {
+                return Err(format!(
+                    "Symlink {} points outside worktree bounds",
+                    current.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Check if a bash command is considered dangerous.
@@ -530,11 +577,14 @@ impl Client for SurgeClient {
 
         debug!("Reading file: {}", path.display());
 
-        let content: String = tokio::fs::read_to_string(&path).await.map_err(|e| {
+        let raw_content: String = tokio::fs::read_to_string(&path).await.map_err(|e| {
             agent_client_protocol::Error::new(-32603,
                 format!("Failed to read file: {e}"),
             )
         })?;
+
+        // Redact credentials before they enter the LLM context.
+        let (content, _) = crate::secrets::redact_secrets(&raw_content);
 
         self.emit_event(SurgeEvent::FileOperation {
             operation: "read".to_string(),
@@ -556,6 +606,15 @@ impl Client for SurgeClient {
         })?;
 
         debug!("Writing file: {}", path.display());
+
+        // Warn if the agent is attempting to write content that looks like credentials.
+        let (_, contains_secrets) = crate::secrets::redact_secrets(&args.content);
+        if contains_secrets {
+            tracing::warn!(
+                path = %path.display(),
+                "agent is writing content that matches secret patterns"
+            );
+        }
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
