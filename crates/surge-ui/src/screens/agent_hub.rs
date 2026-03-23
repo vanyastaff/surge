@@ -27,7 +27,21 @@ pub struct ConfiguredAgent {
     pub avg_subtask_secs: u32,
     pub qa_first_pass_rate: f32,
     pub uptime: String,
+    pub last_seen: Option<String>,
+    pub recent_sessions: Vec<SessionEntry>,
 }
+
+#[derive(Debug, Clone)]
+pub struct SessionEntry {
+    pub label: String,
+    pub status: SessionStatus,
+    pub time_ago: String,
+    pub tokens: Option<u64>,
+    pub duration: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStatus { Running, Completed, Failed }
 
 #[derive(Debug, Clone)]
 pub struct AvailableAgent {
@@ -80,7 +94,13 @@ impl AgentHubScreen {
                     cost_today: 2.34, avg_latency_ms: 1200, sessions_today: 12,
                     rate_limit_remaining: Some(158), rate_limit_total: Some(200), rate_limit_reset_secs: Some(1800),
                     subtasks_completed: 8, subtasks_failed: 0, avg_subtask_secs: 45, qa_first_pass_rate: 0.87,
-                    uptime: "4h 23m".into(),
+                    uptime: "4h 23m".into(), last_seen: None,
+                    recent_sessions: vec![
+                        SessionEntry { label: "auth-refactor / subtask 3".into(), status: SessionStatus::Running, time_ago: "12s ago".into(), tokens: None, duration: None },
+                        SessionEntry { label: "auth-refactor / subtask 2".into(), status: SessionStatus::Completed, time_ago: "2m ago".into(), tokens: Some(23_000), duration: Some("1m 12s".into()) },
+                        SessionEntry { label: "auth-refactor / subtask 1".into(), status: SessionStatus::Completed, time_ago: "4m ago".into(), tokens: Some(12_000), duration: Some("34s".into()) },
+                        SessionEntry { label: "fix-login / subtask 3".into(), status: SessionStatus::Failed, time_ago: "1h ago".into(), tokens: Some(31_000), duration: Some("2m 01s".into()) },
+                    ],
                 },
                 ConfiguredAgent {
                     name: "aider".into(), display_name: "Aider".into(),
@@ -90,7 +110,7 @@ impl AgentHubScreen {
                     cost_today: 0.0, avg_latency_ms: 0, sessions_today: 0,
                     rate_limit_remaining: None, rate_limit_total: None, rate_limit_reset_secs: None,
                     subtasks_completed: 0, subtasks_failed: 0, avg_subtask_secs: 0, qa_first_pass_rate: 0.0,
-                    uptime: "—".into(),
+                    uptime: "—".into(), last_seen: None, recent_sessions: vec![],
                 },
             ],
             available: vec![
@@ -165,8 +185,10 @@ impl AgentHubScreen {
                 div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.6))
                     .child(if is_active {
                         format!("{} active · {} tok", agent.active_sessions, format_tokens(agent.tokens_today))
+                    } else if agent.sessions_today > 0 {
+                        format!("idle · last {}", agent.last_seen.as_deref().unwrap_or("recently"))
                     } else {
-                        "idle".to_string()
+                        "never used".to_string()
                     }),
             )
     }
@@ -202,13 +224,13 @@ impl AgentHubScreen {
                     .child(info_item("Uptime", &agent.uptime))
                     .child(info_item("Sessions today", &format!("{}", agent.sessions_today))),
             )
-            // Stats (4 cards)
+            // Stats (4 cards with period labels)
             .child(
                 div().h_flex().gap_2()
-                    .child(stat_card("Requests", &format!("{}", agent.requests_today), theme::PRIMARY))
-                    .child(stat_card("Tokens", &format_tokens(agent.tokens_today), theme::PRIMARY))
-                    .child(stat_card("Cost", &format!("${:.2}", agent.cost_today), theme::WARNING))
-                    .child(stat_card("Latency", &format!("{}ms", agent.avg_latency_ms), latency_color(agent.avg_latency_ms))),
+                    .child(stat_card_with_period("Requests", &format!("{}", agent.requests_today), "today", theme::PRIMARY))
+                    .child(stat_card_with_period("Tokens", &format_tokens(agent.tokens_today), "today", theme::PRIMARY))
+                    .child(stat_card_with_period("Cost", &format!("${:.2}", agent.cost_today), "today", theme::WARNING))
+                    .child(stat_card_with_period("Latency", &format!("{}ms", agent.avg_latency_ms), "avg", latency_color(agent.avg_latency_ms))),
             )
             // Rate limit
             .when(agent.rate_limit_total.is_some(), |el: Div| {
@@ -226,14 +248,59 @@ impl AgentHubScreen {
                             .child(div().h_full().rounded_full().bg(color).w(relative(pct)))),
                 )
             })
-            // Today stats (4 cards)
+            // Today header + stats
             .child(
-                div().h_flex().gap_2()
-                    .child(stat_card("Subtasks", &format!("{}", agent.subtasks_completed), theme::SUCCESS))
-                    .child(stat_card("Failures", &format!("{}", agent.subtasks_failed), if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
-                    .child(stat_card("Avg time", &format!("{}s", agent.avg_subtask_secs), theme::TEXT_MUTED))
-                    .child(stat_card("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING })),
+                div().v_flex().gap_2()
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Today".to_string()))
+                    .child(
+                        div().h_flex().gap_2()
+                            .child(stat_card_with_period("Subtasks", &format!("{}", agent.subtasks_completed), "completed", theme::SUCCESS))
+                            .child(stat_card_with_period("Failures", &format!("{}", agent.subtasks_failed), "", if agent.subtasks_failed > 0 { theme::ERROR } else { theme::TEXT_MUTED }))
+                            .child(stat_card_with_period("Avg time", &format!("{}s", agent.avg_subtask_secs), "/subtask", theme::TEXT_MUTED))
+                            .child(stat_card_with_period("QA rate", &format!("{:.0}%", agent.qa_first_pass_rate * 100.0), "first-pass", if agent.qa_first_pass_rate > 0.8 { theme::SUCCESS } else { theme::WARNING })),
+                    ),
             )
+            // Recent Sessions
+            .when(!agent.recent_sessions.is_empty(), |el: Div| {
+                let sessions: Vec<Div> = agent.recent_sessions.iter().map(|s| {
+                    let (icon, color) = match s.status {
+                        SessionStatus::Running => ("⚡", theme::WARNING),
+                        SessionStatus::Completed => ("✓", theme::SUCCESS),
+                        SessionStatus::Failed => ("✕", theme::ERROR),
+                    };
+                    div().h_flex().gap_3().items_center().px_3().py(px(6.0))
+                        .border_b_1().border_color(theme::TEXT_MUTED.opacity(0.04))
+                        .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
+                        // Icon
+                        .child(div().text_xs().text_color(color).w(px(14.0)).child(icon.to_string()))
+                        // Label
+                        .child(div().flex_1().text_xs().text_color(theme::TEXT_PRIMARY).child(s.label.clone()))
+                        // Status
+                        .child(div().text_xs().text_color(color).w(px(70.0)).child(match s.status {
+                            SessionStatus::Running => "running".to_string(),
+                            SessionStatus::Completed => "completed".to_string(),
+                            SessionStatus::Failed => "failed".to_string(),
+                        }))
+                        // Time ago
+                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).w(px(60.0)).child(s.time_ago.clone()))
+                        // Tokens + duration
+                        .when(s.tokens.is_some() || s.duration.is_some(), |el: Div| {
+                            let info = [
+                                s.tokens.map(|t| format!("{} tok", format_tokens(t))),
+                                s.duration.clone(),
+                            ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(info))
+                        })
+                }).collect();
+
+                el.child(
+                    div().v_flex().gap_2()
+                        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child("Recent Sessions".to_string()))
+                        .child(
+                            div().v_flex().rounded_lg().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06)).overflow_hidden()
+                                .children(sessions)),
+                )
+            })
     }
 
     // ── Available Tab ────────────────────────────────────────
@@ -380,11 +447,17 @@ fn info_item(label: &str, value: &str) -> Div {
         .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
 }
 
-fn stat_card(label: &str, value: &str, color: Hsla) -> Div {
+fn stat_card_with_period(label: &str, value: &str, period: &str, color: Hsla) -> Div {
     div().flex_1().v_flex().gap(px(3.0)).p(px(10.0)).rounded_lg()
         .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.06))
         .child(div().text_xs().text_color(theme::TEXT_MUTED).child(label.to_string()))
-        .child(div().text_base().font_weight(FontWeight::BOLD).text_color(color).child(value.to_string()))
+        .child(
+            div().h_flex().gap(px(4.0)).items_end()
+                .child(div().text_base().font_weight(FontWeight::BOLD).text_color(color).child(value.to_string()))
+                .when(!period.is_empty(), |el: Div| {
+                    el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).pb(px(1.0)).child(period.to_string()))
+                }),
+        )
 }
 
 fn latency_color(ms: u32) -> Hsla {
