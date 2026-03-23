@@ -58,7 +58,8 @@ pub struct AgentTerminalScreen {
     input_state: Option<Entity<InputState>>,
     is_sending: bool,
     agent_name: String,
-    session_active: bool,
+    /// Reusable session handle — created on first prompt, reused for all subsequent ones.
+    session: Option<surge_acp::SessionHandle>,
 }
 
 impl AgentTerminalScreen {
@@ -81,7 +82,7 @@ impl AgentTerminalScreen {
             input_state: None,
             is_sending: false,
             agent_name,
-            session_active: false,
+            session: None,
         }
     }
 
@@ -138,24 +139,39 @@ impl AgentTerminalScreen {
         };
 
         let mut event_rx = pool.subscribe();
+        let existing_session = self.session.clone();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            // Create session
-            let session = match pool
-                .create_session(Some(&agent_name), None, &cwd)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    let err = format!("Session error: {e}");
-                    cx.update(|cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.messages.push(TerminalMessage::new(MessageRole::System, err));
-                            this.is_sending = false;
-                            cx.notify();
-                        });
-                    }).ok();
-                    return;
+            // Reuse existing session or create a new one
+            let session = if let Some(s) = existing_session {
+                s
+            } else {
+                match pool
+                    .create_session(Some(&agent_name), None, &cwd)
+                    .await
+                {
+                    Ok(s) => {
+                        // Save session for reuse
+                        let s_clone = s.clone();
+                        cx.update(|cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.session = Some(s_clone);
+                                cx.notify();
+                            });
+                        }).ok();
+                        s
+                    }
+                    Err(e) => {
+                        let err = format!("Session error: {e}");
+                        cx.update(|cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.messages.push(TerminalMessage::new(MessageRole::System, err));
+                                this.is_sending = false;
+                                cx.notify();
+                            });
+                        }).ok();
+                        return;
+                    }
                 }
             };
 
@@ -226,7 +242,7 @@ impl AgentTerminalScreen {
                                     }
                                 }
                             }
-                            this.session_active = true;
+                            // session stays active for reuse
                         }
                         Err(err) => {
                             this.messages.push(TerminalMessage::new(
