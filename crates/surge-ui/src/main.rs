@@ -2,6 +2,7 @@ mod actions;
 mod app;
 mod app_state;
 mod command_palette;
+mod markdown;
 mod notifications;
 mod project;
 mod router;

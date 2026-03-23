@@ -4,6 +4,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Icon, IconName, StyledExt};
 
 use crate::app_state::AppState;
+use crate::markdown;
 use crate::theme;
 
 /// A message in the terminal conversation.
@@ -287,7 +288,11 @@ impl AgentTerminalScreen {
                     .mt(px(4.0))
                     .text_sm()
                     .text_color(theme::TEXT_PRIMARY)
-                    .child(msg.content.clone()),
+                    .child(if msg.role == MessageRole::Agent {
+                        markdown::render_markdown(&msg.content)
+                    } else {
+                        div().child(msg.content.clone())
+                    }),
             )
     }
 }
