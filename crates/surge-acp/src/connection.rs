@@ -96,16 +96,27 @@ impl AgentConnection {
         worktree_root: PathBuf,
         permission_policy: PermissionPolicy,
     ) -> Result<Self, SurgeError> {
-        let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args);
+        // On Windows, script-based commands (npx, npm, etc.) need cmd /C
+        // because CreateProcessW doesn't resolve .cmd/.bat via PATHEXT.
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&config.command);
+            c.args(&config.args);
+            c.creation_flags(0x00000008); // CREATE_NO_WINDOW
+            c
+        };
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = Command::new(&config.command);
+            c.args(&config.args);
+            c
+        };
+
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.current_dir(&worktree_root);
-
-        // On Windows, suppress console window
-        #[cfg(windows)]
-        cmd.creation_flags(0x00000008); // CREATE_NO_WINDOW
 
         debug!("Spawning command: {:?}", cmd);
 
