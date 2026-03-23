@@ -143,8 +143,38 @@ impl AgentDiscovery {
     /// Returns the path to the agent binary if found in standard locations.
     #[must_use]
     pub fn from_standard_paths(&self, kind: AgentKind) -> Option<PathBuf> {
-        // TODO: Implement standard path probing in subtask-1-2
         debug!("Probing standard paths for {kind}");
+
+        // Get the binary name from version_command
+        let (version_args, _, _) = kind.version_command();
+        let binary_name = version_args.first()?;
+
+        // Get platform-specific standard paths
+        let standard_paths = self.platform.standard_paths();
+
+        // Probe each standard path
+        for base_path in standard_paths {
+            let candidate = base_path.join(binary_name);
+
+            // On Windows, also check for .exe extension
+            let paths_to_check = if self.platform == Platform::Windows {
+                vec![
+                    candidate.clone(),
+                    candidate.with_extension("exe"),
+                ]
+            } else {
+                vec![candidate]
+            };
+
+            for path in paths_to_check {
+                if path.exists() && path.is_file() {
+                    debug!("Found {kind} at {:?}", path);
+                    return Some(path);
+                }
+            }
+        }
+
+        debug!("Agent {kind} not found in standard paths");
         None
     }
 
@@ -248,5 +278,57 @@ mod tests {
 
         discovery.clear_cache();
         assert!(!discovery.is_cached(AgentKind::Claude));
+    }
+
+    #[test]
+    fn test_platform_paths() {
+        let discovery = AgentDiscovery::new();
+        let platform = discovery.platform();
+
+        // Test that standard paths are returned for the current platform
+        let paths = platform.standard_paths();
+        assert!(!paths.is_empty(), "Standard paths should not be empty");
+
+        // Verify path format is correct for the platform
+        match platform {
+            Platform::MacOS | Platform::Linux => {
+                // Unix-like paths should start with /
+                for path in &paths {
+                    let path_str = path.to_string_lossy();
+                    assert!(
+                        path_str.starts_with('/'),
+                        "Unix path should start with /: {:?}",
+                        path
+                    );
+                }
+            }
+            Platform::Windows => {
+                // Windows paths should contain :\ or start with appropriate prefix
+                for path in &paths {
+                    let path_str = path.to_string_lossy();
+                    assert!(
+                        path_str.contains(":\\") || path_str.contains("\\"),
+                        "Windows path should contain backslashes: {:?}",
+                        path
+                    );
+                }
+            }
+        }
+
+        // Test from_standard_paths returns None for non-existent agents
+        // (unless the agent happens to be installed, which is fine)
+        let result = discovery.from_standard_paths(AgentKind::Claude);
+        // We can't assert the result since the agent might or might not be installed
+        // Just verify the method runs without panicking
+        match result {
+            Some(path) => {
+                // If found, verify it's a valid path
+                assert!(path.exists(), "Found path should exist: {:?}", path);
+                assert!(path.is_file(), "Found path should be a file: {:?}", path);
+            }
+            None => {
+                // Not found, which is fine for testing
+            }
+        }
     }
 }
