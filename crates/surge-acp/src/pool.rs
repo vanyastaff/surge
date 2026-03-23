@@ -592,6 +592,8 @@ async fn prompt(
                         let _ = event_tx.send(SurgeEvent::TokensConsumed {
                             session_id: session.session_id.clone(),
                             agent_name: agent_name.clone(),
+                            spec_id: None,
+                            subtask_id: None,
                             input_tokens: usage.input_tokens,
                             output_tokens: usage.output_tokens,
                             thought_tokens: usage.thought_tokens,

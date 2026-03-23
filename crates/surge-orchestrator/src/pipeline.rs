@@ -10,6 +10,8 @@ use surge_core::spec::SubtaskState;
 use surge_core::state::TaskState;
 use surge_core::SurgeConfig;
 use surge_git::worktree::GitManager;
+use surge_persistence::aggregator::{SessionContext, UsageAggregator};
+use surge_persistence::store::Store;
 use surge_spec::{validate_spec, DependencyGraph, SpecFile};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -79,7 +81,23 @@ impl Orchestrator {
         }
         info!(spec_id = %spec.id, "spec validated");
 
-        // 2. Create git worktree
+        // 2. Set up persistence layer for token tracking
+        let db_dir = self.config.working_dir.join(".surge");
+        let db_path = db_dir.join("usage.db");
+
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "failed to create usage store, continuing without persistence");
+                Store::in_memory().unwrap()
+            }
+        };
+
+        let aggregator = UsageAggregator::new(store);
+        let aggregator_rx = self.event_tx.subscribe();
+        let _aggregator_handle = aggregator.start_listening(aggregator_rx);
+
+        // 3. Create git worktree
         let git = match GitManager::new(self.config.working_dir.clone()) {
             Ok(g) => g,
             Err(e) => {
@@ -100,7 +118,7 @@ impl Orchestrator {
         let worktree_path = worktree_info.path.clone();
         info!(path = %worktree_path.display(), "worktree created");
 
-        // 3. Create AgentPool
+        // 4. Create AgentPool
         let pool = match AgentPool::new(
             self.config.surge_config.agents.clone(),
             self.config.surge_config.default_agent.clone(),
@@ -128,7 +146,7 @@ impl Orchestrator {
 
         pool.warm_up();
 
-        // 4. Create ACP session
+        // 5. Create ACP session
         let session = match pool.create_session(None, None, &worktree_path).await {
             Ok(s) => s,
             Err(e) => {
@@ -141,7 +159,19 @@ impl Orchestrator {
         };
         info!("ACP session created");
 
-        // 5. Build dependency graph and topological batches
+        // 6. Register session with usage aggregator
+        aggregator
+            .register_session(
+                session.session_id.clone(),
+                SessionContext {
+                    task_id,
+                    subtask_id: None,
+                    spec_id: spec.id,
+                },
+            )
+            .await;
+
+        // 7. Build dependency graph and topological batches
         let graph = match DependencyGraph::from_spec(&spec) {
             Ok(g) => g,
             Err(e) => {
@@ -175,7 +205,7 @@ impl Orchestrator {
 
         let total: usize = batches.iter().map(|b| b.len()).sum();
 
-        // 6. Create parallel executor and gate manager
+        // 8. Create parallel executor and gate manager
         let parallel_exec = ParallelExecutor::new(
             self.config.surge_config.pipeline.max_parallel,
             ExecutorConfig::default(),
@@ -187,7 +217,7 @@ impl Orchestrator {
             specs_dir,
         );
 
-        // 7. Execute subtasks in batches
+        // 9. Execute subtasks in batches
         let spec_id = spec.id;
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
@@ -270,7 +300,7 @@ impl Orchestrator {
             warn!(completed, "some subtasks failed during batch execution");
         }
 
-        // 8. QA review
+        // 10. QA review
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Executing { completed, total },
@@ -288,7 +318,7 @@ impl Orchestrator {
             "QA review complete"
         );
 
-        // 9. If QA approved → merge
+        // 11. If QA approved → merge
         match qa_result.verdict {
             QaVerdict::Approved => {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
@@ -298,6 +328,7 @@ impl Orchestrator {
                 });
 
                 if let Err(e) = git.merge(&spec_id_str, None, true) {
+                    aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
                     return PipelineResult::Failed {
@@ -307,6 +338,7 @@ impl Orchestrator {
                 info!("merged successfully");
             }
             QaVerdict::NeedsFix { issues } => {
+                aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
                 return PipelineResult::Failed {
@@ -315,7 +347,8 @@ impl Orchestrator {
             }
         }
 
-        // 10. Cleanup
+        // 12. Cleanup
+        aggregator.unregister_session(&session.session_id).await;
         let _ = git.discard(&spec_id_str);
         pool.shutdown().await;
 

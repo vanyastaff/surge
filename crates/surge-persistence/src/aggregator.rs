@@ -112,6 +112,7 @@ impl UsageAggregator {
             cached_read_tokens,
             cached_write_tokens,
             estimated_cost_usd,
+            ..
         } = event
         else {
             return Ok(());
@@ -253,6 +254,8 @@ mod tests {
         let event = SurgeEvent::TokensConsumed {
             session_id: session_id.clone(),
             agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: Some(subtask_id),
             input_tokens: 1000,
             output_tokens: 500,
             thought_tokens: Some(200),
@@ -327,6 +330,8 @@ mod tests {
         let event1 = SurgeEvent::TokensConsumed {
             session_id: session1_id.clone(),
             agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: Some(subtask_id),
             input_tokens: 1000,
             output_tokens: 500,
             thought_tokens: None,
@@ -342,6 +347,8 @@ mod tests {
         let event2 = SurgeEvent::TokensConsumed {
             session_id: session2_id.clone(),
             agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: Some(subtask_id),
             input_tokens: 800,
             output_tokens: 400,
             thought_tokens: None,
@@ -382,6 +389,8 @@ mod tests {
         let event = SurgeEvent::TokensConsumed {
             session_id: "unknown-session".to_string(),
             agent_name: "claude".to_string(),
+            spec_id: None,
+            subtask_id: None,
             input_tokens: 1000,
             output_tokens: 500,
             thought_tokens: None,
@@ -449,6 +458,8 @@ mod tests {
         let event = SurgeEvent::TokensConsumed {
             session_id: session_id.clone(),
             agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: Some(subtask_id),
             input_tokens: 1000,
             output_tokens: 500,
             thought_tokens: None,
@@ -495,6 +506,8 @@ mod tests {
         let event = SurgeEvent::TokensConsumed {
             session_id: session_id.clone(),
             agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: None,
             input_tokens: 1000,
             output_tokens: 500,
             thought_tokens: None,
