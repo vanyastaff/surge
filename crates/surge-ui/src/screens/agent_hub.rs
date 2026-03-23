@@ -71,7 +71,28 @@ pub struct CatalogAgent {
     pub model: Option<String>,
     pub capabilities: Vec<String>,
     pub pricing: String,
-    pub install_hint: String,
+    pub install_command: String,
+    pub installed: bool,      // detected via `which`
+    pub badge: Option<String>, // "Popular", "New", etc.
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupStep {
+    Install,
+    Configure,
+    Test,
+}
+
+impl SetupStep {
+    fn label(self) -> &'static str {
+        match self { Self::Install => "Install", Self::Configure => "Configure", Self::Test => "Test" }
+    }
+    fn index(self) -> usize {
+        match self { Self::Install => 0, Self::Configure => 1, Self::Test => 2 }
+    }
+    fn all() -> &'static [Self] { &[Self::Install, Self::Configure, Self::Test] }
+    fn next(self) -> Option<Self> { Self::all().get(self.index() + 1).copied() }
+    fn prev(self) -> Option<Self> { if self.index() == 0 { None } else { Self::all().get(self.index() - 1).copied() } }
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +129,33 @@ pub struct AgentHubScreen {
     routing_rules: Vec<RoutingRule>,
     selected_agent: Option<usize>,
     active_tab: HubTab,
+    // Available tab state
+    catalog_search: String,
+    catalog_filter: CatalogFilter,
+    // Setup wizard state
+    setup_wizard: Option<SetupWizardState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogFilter {
+    All,
+    Free,
+    Paid,
+    Installed,
+}
+
+impl CatalogFilter {
+    fn label(self) -> &'static str {
+        match self { Self::All => "All", Self::Free => "Free", Self::Paid => "Paid", Self::Installed => "Installed" }
+    }
+    fn all() -> &'static [Self] { &[Self::All, Self::Free, Self::Paid, Self::Installed] }
+}
+
+#[derive(Debug, Clone)]
+struct SetupWizardState {
+    agent: CatalogAgent,
+    step: SetupStep,
+    test_result: Option<Result<u32, String>>, // Ok(latency_ms) or Err(message)
 }
 
 impl AgentHubScreen {
@@ -118,6 +166,9 @@ impl AgentHubScreen {
             routing_rules: demo_rules(),
             selected_agent: Some(0),
             active_tab: HubTab::Configured,
+            catalog_search: String::new(),
+            catalog_filter: CatalogFilter::All,
+            setup_wizard: None,
         }
     }
 
@@ -351,8 +402,41 @@ impl AgentHubScreen {
 
     // ── Available Tab ────────────────────────────────────────
 
-    fn render_available_tab(&self) -> Div {
-        let cards: Vec<Div> = self.catalog.iter().map(|agent| {
+    fn filtered_catalog(&self) -> Vec<&CatalogAgent> {
+        self.catalog.iter().filter(|a| {
+            // Search
+            if !self.catalog_search.is_empty() {
+                let q = self.catalog_search.to_lowercase();
+                if !a.display_name.to_lowercase().contains(&q)
+                    && !a.vendor.to_lowercase().contains(&q)
+                    && !a.description.to_lowercase().contains(&q) {
+                    return false;
+                }
+            }
+            // Filter
+            match self.catalog_filter {
+                CatalogFilter::All => true,
+                CatalogFilter::Free => a.pricing.to_lowercase().contains("free"),
+                CatalogFilter::Paid => !a.pricing.to_lowercase().contains("free"),
+                CatalogFilter::Installed => a.installed,
+            }
+        }).collect()
+    }
+
+    fn render_available_tab(&self, cx: &mut Context<Self>) -> Div {
+        // If setup wizard is open, show it instead
+        if self.setup_wizard.is_some() {
+            return self.render_setup_wizard(cx);
+        }
+
+        let filtered = self.filtered_catalog();
+
+        let cards: Vec<Div> = filtered.iter().enumerate().map(|(_i, agent)| {
+            let name = agent.name.clone();
+            let agent_clone = (*agent).clone();
+            let installed = agent.installed;
+            let badge_text = agent.badge.clone();
+
             div()
                 .v_flex()
                 .gap(px(8.0))
@@ -360,15 +444,44 @@ impl AgentHubScreen {
                 .rounded_lg()
                 .bg(theme::SURFACE)
                 .border_1()
-                .border_color(theme::TEXT_MUTED.opacity(0.06))
-                .hover(|s: StyleRefinement| s.border_color(theme::TEXT_MUTED.opacity(0.15)))
-                // Header: name + Setup button
+                .border_color(if installed { theme::SUCCESS.opacity(0.15) } else { theme::TEXT_MUTED.opacity(0.06) })
+                .hover(|s: StyleRefinement| s.border_color(theme::PRIMARY.opacity(0.2)))
+                // Header: name + badge + button
                 .child(
                     div().h_flex().justify_between().items_center()
-                        .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
                         .child(
-                            Button::new(SharedString::from(format!("setup-{}", agent.name)))
-                                .compact().label("Setup"),
+                            div().h_flex().gap_2().items_center()
+                                .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(agent.display_name.clone()))
+                                .when(badge_text.is_some(), |el: Div| {
+                                    let b = badge_text.unwrap_or_default();
+                                    let color = match b.as_str() {
+                                        "Popular" => theme::WARNING,
+                                        "New" => theme::PRIMARY,
+                                        _ => theme::TEXT_MUTED,
+                                    };
+                                    el.child(
+                                        div().text_xs().px(px(5.0)).py(px(1.0)).rounded(px(3.0))
+                                            .bg(color.opacity(0.15)).text_color(color)
+                                            .font_weight(FontWeight::BOLD).child(b))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("setup-{name}")))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _e, _w, cx| {
+                                    this.setup_wizard = Some(SetupWizardState {
+                                        agent: agent_clone.clone(),
+                                        step: if agent_clone.installed { SetupStep::Configure } else { SetupStep::Install },
+                                        test_result: None,
+                                    });
+                                    cx.notify();
+                                }))
+                                .child(
+                                    Button::new(SharedString::from(format!("setup-btn-{}", agent.name)))
+                                        .compact()
+                                        .label(if installed { "Add" } else { "Setup" }),
+                                ),
                         ),
                 )
                 // Vendor + pricing
@@ -379,20 +492,48 @@ impl AgentHubScreen {
                         .child(div().text_xs().text_color(theme::TEXT_MUTED).child(agent.pricing.clone())),
                 )
                 // Description
-                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.7)).line_height(relative(1.4)).child(agent.description.clone()))
+                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.7)).line_height(relative(1.4))
+                    .max_h(px(32.0)).overflow_hidden().child(agent.description.clone()))
                 // Capabilities + model
                 .child(
                     div().h_flex().gap_1().flex_wrap()
                         .children(agent.capabilities.iter().map(|c| badge(c, cap_color(c))))
                         .when(agent.model.is_some(), |el: Div| {
-                            el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(agent.model.clone().unwrap_or_default()))
+                            el.child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.4)).child(format!("· {}", agent.model.as_deref().unwrap_or(""))))
                         }),
                 )
-                // Install hint
+                // Install status + command
                 .child(
-                    div().h_flex().gap_1().items_center().pt_1().border_t_1().border_color(theme::TEXT_MUTED.opacity(0.04))
-                        .child(Icon::new(IconName::SquareTerminal).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
-                        .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(agent.install_hint.clone())),
+                    div().h_flex().justify_between().items_center().pt(px(6.0)).border_t_1().border_color(theme::TEXT_MUTED.opacity(0.04))
+                        // Installed status
+                        .child(
+                            if installed {
+                                div().h_flex().gap_1().items_center()
+                                    .child(Icon::new(IconName::CircleCheck).size_3().text_color(theme::SUCCESS))
+                                    .child(div().text_xs().text_color(theme::SUCCESS).child("Installed".to_string()))
+                            } else {
+                                div().h_flex().gap_1().items_center()
+                                    .child(Icon::new(IconName::ArrowDown).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child("Not installed".to_string()))
+                            },
+                        )
+                        // Install command (clickable to copy)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("copy-{}", agent.name)))
+                                .h_flex().gap_1().items_center().cursor_pointer()
+                                .px(px(6.0)).py(px(2.0)).rounded(px(4.0))
+                                .bg(theme::BACKGROUND.opacity(0.5))
+                                .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.08)))
+                                .on_click(cx.listener({
+                                    let cmd = agent.install_command.clone();
+                                    move |_this, _e, _window, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
+                                    }
+                                }))
+                                .child(Icon::new(IconName::Copy).size_3().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                                .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5)).child(agent.install_command.clone())),
+                        ),
                 )
         }).collect();
 
@@ -401,13 +542,218 @@ impl AgentHubScreen {
             .v_flex()
             .gap_3()
             .p_4()
+            // Search + filter bar
             .child(
-                div().text_xs().text_color(theme::TEXT_MUTED)
-                    .child("Agents available for installation. Click Setup to configure.".to_string()),
+                div().h_flex().gap_3().items_center()
+                    // Search
+                    .child(
+                        div().flex_1().h_flex().gap_2().items_center()
+                            .px_3().py(px(6.0)).rounded_lg()
+                            .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.08))
+                            .child(Icon::new(IconName::Search).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                            .child(
+                                div().text_xs().text_color(if self.catalog_search.is_empty() { theme::TEXT_MUTED.opacity(0.4) } else { theme::TEXT_PRIMARY })
+                                    .child(if self.catalog_search.is_empty() { "Search agents...".to_string() } else { self.catalog_search.clone() }),
+                            ),
+                    )
+                    // Filter chips
+                    .child(
+                        div().h_flex().gap_1().children(
+                            CatalogFilter::all().iter().map(|&f| {
+                                let is_active = f == self.catalog_filter;
+                                div()
+                                    .id(SharedString::from(format!("filter-{}", f.label())))
+                                    .px(px(8.0)).py(px(4.0)).rounded_full().cursor_pointer()
+                                    .text_xs()
+                                    .bg(if is_active { theme::PRIMARY.opacity(0.12) } else { gpui::transparent_black() })
+                                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
+                                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
+                                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                                        this.catalog_filter = f;
+                                        cx.notify();
+                                    }))
+                                    .child(f.label().to_string())
+                            }),
+                        ),
+                    ),
             )
+            // Results count
+            .child(
+                div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
+                    .child(format!("{} agents available", filtered.len())),
+            )
+            // Cards grid
             .child(
                 div().flex().flex_wrap().gap_3().content_start()
-                    .children(cards.into_iter().map(|c| div().w(px(320.0)).child(c))),
+                    .children(cards.into_iter().map(|c| div().w(px(300.0)).child(c))),
+            )
+    }
+
+    // ── Setup Wizard ─────────────────────────────────────────
+
+    fn render_setup_wizard(&self, cx: &mut Context<Self>) -> Div {
+        let wizard = self.setup_wizard.as_ref().unwrap();
+        let agent = &wizard.agent;
+        let step = wizard.step;
+
+        // Stepper
+        let stepper: Vec<Div> = SetupStep::all().iter().map(|&s| {
+            let is_current = s == step;
+            let is_done = s.index() < step.index();
+            let color = if is_current { theme::PRIMARY } else if is_done { theme::SUCCESS } else { theme::TEXT_MUTED.opacity(0.3) };
+            div().h_flex().gap_2().items_center()
+                .child(
+                    div().w(px(22.0)).h(px(22.0)).rounded_full().flex().items_center().justify_center()
+                        .bg(color.opacity(0.2)).text_color(color).text_xs()
+                        .child(if is_done { "✓".to_string() } else { format!("{}", s.index() + 1) }))
+                .child(div().text_xs().text_color(color).child(s.label().to_string()))
+        }).collect();
+
+        let step_content = match step {
+            SetupStep::Install => {
+                div().v_flex().gap_3()
+                    .child(div().text_base().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
+                        .child(format!("Install {}", agent.display_name)))
+                    .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Run this command to install:".to_string()))
+                    // Command box
+                    .child(
+                        div()
+                            .id("wizard-copy-cmd")
+                            .h_flex().justify_between().items_center()
+                            .px_3().py(px(8.0)).rounded_lg()
+                            .bg(theme::BACKGROUND).border_1().border_color(theme::TEXT_MUTED.opacity(0.1))
+                            .cursor_pointer()
+                            .hover(|s: StyleRefinement| s.border_color(theme::PRIMARY.opacity(0.3)))
+                            .on_click(cx.listener({
+                                let cmd = agent.install_command.clone();
+                                move |_this, _e, _window, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
+                                }
+                            }))
+                            .child(
+                                div().text_sm().text_color(theme::TEXT_PRIMARY)
+                                    .child(agent.install_command.clone()))
+                            .child(
+                                div().h_flex().gap_1().items_center()
+                                    .child(Icon::new(IconName::Copy).size_3p5().text_color(theme::TEXT_MUTED))
+                                    .child(div().text_xs().text_color(theme::TEXT_MUTED).child("Copy".to_string()))),
+                    )
+                    .when(agent.installed, |el: Div| {
+                        el.child(
+                            div().h_flex().gap_2().items_center().px_3().py_2().rounded_lg()
+                                .bg(theme::SUCCESS.opacity(0.08)).border_1().border_color(theme::SUCCESS.opacity(0.2))
+                                .child(Icon::new(IconName::CircleCheck).size_4().text_color(theme::SUCCESS))
+                                .child(div().text_xs().text_color(theme::SUCCESS).child("Already installed on this machine".to_string())),
+                        )
+                    })
+            }
+            SetupStep::Configure => {
+                div().v_flex().gap_3()
+                    .child(div().text_base().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
+                        .child(format!("Configure {}", agent.display_name)))
+                    .child(config_field("Name", &agent.display_name))
+                    .child(config_field("Command", &agent.name))
+                    .child(config_field("Transport", "stdio"))
+                    .when(agent.pricing.to_lowercase().contains("api"), |el: Div| {
+                        el.child(config_field("API Key", "••••••••••"))
+                    })
+            }
+            SetupStep::Test => {
+                let test_result = &wizard.test_result;
+                div().v_flex().gap_3()
+                    .child(div().text_base().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY)
+                        .child(format!("Test {}", agent.display_name)))
+                    .child(
+                        match test_result {
+                            None => {
+                                div().v_flex().gap_2().items_center().py_4()
+                                    .child(div().text_sm().text_color(theme::TEXT_MUTED).child("Click Test Connection to verify".to_string()))
+                            }
+                            Some(Ok(ms)) => {
+                                div().h_flex().gap_2().items_center().px_3().py_2().rounded_lg()
+                                    .bg(theme::SUCCESS.opacity(0.08)).border_1().border_color(theme::SUCCESS.opacity(0.2))
+                                    .child(Icon::new(IconName::CircleCheck).size_5().text_color(theme::SUCCESS))
+                                    .child(div().text_sm().text_color(theme::SUCCESS).child(format!("Connected! Latency: {}ms", ms)))
+                            }
+                            Some(Err(msg)) => {
+                                div().h_flex().gap_2().items_center().px_3().py_2().rounded_lg()
+                                    .bg(theme::ERROR.opacity(0.08)).border_1().border_color(theme::ERROR.opacity(0.2))
+                                    .child(Icon::new(IconName::CircleX).size_5().text_color(theme::ERROR))
+                                    .child(div().text_sm().text_color(theme::ERROR).child(msg.clone()))
+                            }
+                        },
+                    )
+            }
+        };
+
+        let has_prev = step.prev().is_some();
+        let is_last = step == SetupStep::Test;
+
+        div()
+            .size_full()
+            .v_flex()
+            .gap_4()
+            .p_4()
+            .child(
+                div().v_flex().gap_4().max_w(px(600.0))
+                    .p_4().rounded_xl().bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.08))
+                    // Stepper
+                    .child(div().h_flex().gap_4().justify_center().children(stepper))
+                    // Content
+                    .child(div().min_h(px(150.0)).child(step_content))
+                    // Actions
+                    .child(
+                        div().h_flex().justify_between()
+                            .child(
+                                div().h_flex().gap_2()
+                                    .child(
+                                        Button::new("wizard-cancel").ghost().compact().label("Cancel")
+                                            .on_click(cx.listener(|this, _e, _w, cx| {
+                                                this.setup_wizard = None;
+                                                cx.notify();
+                                            })))
+                                    .when(has_prev, |el: Div| {
+                                        el.child(Button::new("wizard-back").ghost().compact().label("Back")
+                                            .on_click(cx.listener(|this, _e, _w, cx| {
+                                                if let Some(w) = &mut this.setup_wizard {
+                                                    if let Some(prev) = w.step.prev() { w.step = prev; }
+                                                }
+                                                cx.notify();
+                                            })))
+                                    }),
+                            )
+                            .child(
+                                div().h_flex().gap_2()
+                                    .when(step == SetupStep::Test, |el: Div| {
+                                        el.child(
+                                            Button::new("wizard-test").compact().label("Test Connection")
+                                                .on_click(cx.listener(|this, _e, _w, cx| {
+                                                    // Simulate test result
+                                                    if let Some(w) = &mut this.setup_wizard {
+                                                        w.test_result = Some(Ok(89));
+                                                    }
+                                                    cx.notify();
+                                                })))
+                                    })
+                                    .child(
+                                        if is_last {
+                                            Button::new("wizard-finish").primary().compact().label("Add to Configured")
+                                                .on_click(cx.listener(|this, _e, _w, cx| {
+                                                    this.setup_wizard = None;
+                                                    cx.notify();
+                                                }))
+                                        } else {
+                                            Button::new("wizard-next").primary().compact().label("Next")
+                                                .on_click(cx.listener(|this, _e, _w, cx| {
+                                                    if let Some(w) = &mut this.setup_wizard {
+                                                        if let Some(next) = w.step.next() { w.step = next; }
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        },
+                                    ),
+                            ),
+                    ),
             )
     }
 
@@ -491,6 +837,15 @@ fn stat_card(label: &str, value: &str, icon: IconName, color: Hsla) -> Div {
         .child(div().text_base().font_weight(FontWeight::BOLD).text_color(theme::TEXT_PRIMARY).child(value.to_string()))
 }
 
+fn config_field(label: &str, value: &str) -> Div {
+    div().v_flex().gap(px(4.0))
+        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED.opacity(0.6)).child(label.to_string()))
+        .child(
+            div().px_3().py(px(6.0)).rounded_md()
+                .bg(theme::BACKGROUND).border_1().border_color(theme::TEXT_MUTED.opacity(0.1))
+                .text_xs().text_color(theme::TEXT_PRIMARY).child(value.to_string()))
+}
+
 fn cap_color(cap: &str) -> Hsla {
     match cap {
         "Code" => theme::PRIMARY,
@@ -522,7 +877,7 @@ impl Render for AgentHubScreen {
             HubTab::Available => {
                 div().size_full().v_flex()
                     .child(self.render_header(cx))
-                    .child(self.render_available_tab())
+                    .child(self.render_available_tab(cx))
             }
             HubTab::Benchmarks => {
                 div().size_full().v_flex()
@@ -620,37 +975,45 @@ fn demo_agents() -> Vec<AgentInfo> {
 fn demo_catalog() -> Vec<CatalogAgent> {
     vec![
         CatalogAgent { name: "gemini-cli".into(), display_name: "Gemini CLI".into(), vendor: "Google".into(),
-            description: "Google's AI coding assistant with Gemini models".into(),
+            description: "Google's AI coding assistant with Gemini models and massive context window".into(),
             model: Some("gemini-2.5-pro".into()), capabilities: vec!["Code".into(), "Chat".into()],
-            pricing: "Free tier".into(), install_hint: "npm install -g @anthropic/gemini-cli".into() },
+            pricing: "Free tier".into(), install_command: "npm install -g @anthropic/gemini-cli".into(),
+            installed: false, badge: Some("Popular".into()) },
         CatalogAgent { name: "codex".into(), display_name: "OpenAI Codex".into(), vendor: "OpenAI".into(),
-            description: "OpenAI's code generation and editing agent".into(),
+            description: "OpenAI's autonomous coding agent with sandboxed execution".into(),
             model: Some("codex".into()), capabilities: vec!["Code".into(), "Refactor".into()],
-            pricing: "API key".into(), install_hint: "npm install -g @openai/codex".into() },
+            pricing: "API key".into(), install_command: "npm install -g @openai/codex".into(),
+            installed: false, badge: Some("Popular".into()) },
         CatalogAgent { name: "goose".into(), display_name: "Goose".into(), vendor: "Square (open source)".into(),
-            description: "Open source AI developer agent by Square".into(),
+            description: "Open source AI developer agent by Square with extensible toolkit".into(),
             model: None, capabilities: vec!["Code".into(), "Plan".into()],
-            pricing: "Free (OSS)".into(), install_hint: "brew install goose".into() },
+            pricing: "Free (OSS)".into(), install_command: "brew install goose".into(),
+            installed: true, badge: Some("Popular".into()) },
         CatalogAgent { name: "cline".into(), display_name: "Cline".into(), vendor: "Open source".into(),
-            description: "Autonomous coding agent for VS Code and CLI".into(),
+            description: "Autonomous coding agent for VS Code and CLI with multi-model support".into(),
             model: None, capabilities: vec!["Code".into(), "Chat".into()],
-            pricing: "Free (OSS)".into(), install_hint: "npm install -g cline".into() },
+            pricing: "Free (OSS)".into(), install_command: "npm install -g cline".into(),
+            installed: false, badge: None },
         CatalogAgent { name: "devstral".into(), display_name: "Devstral".into(), vendor: "Mistral".into(),
-            description: "Mistral's coding-focused model for development tasks".into(),
+            description: "Mistral's coding-focused model optimized for development tasks".into(),
             model: Some("devstral".into()), capabilities: vec!["Code".into()],
-            pricing: "API key".into(), install_hint: "pip install mistral-cli".into() },
+            pricing: "API key".into(), install_command: "pip install mistral-cli".into(),
+            installed: false, badge: Some("New".into()) },
         CatalogAgent { name: "kiro".into(), display_name: "Kiro".into(), vendor: "Amazon".into(),
-            description: "Amazon's spec-driven AI IDE for software development".into(),
+            description: "Amazon's spec-driven AI IDE for structured software development".into(),
             model: None, capabilities: vec!["Code".into(), "Plan".into()],
-            pricing: "Free preview".into(), install_hint: "Download from kiro.dev".into() },
+            pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(),
+            installed: false, badge: Some("New".into()) },
         CatalogAgent { name: "qwen-coder".into(), display_name: "Qwen3-Coder".into(), vendor: "Alibaba".into(),
-            description: "Alibaba's code generation model, runs locally".into(),
+            description: "Alibaba's code generation model, runs fully locally via Ollama".into(),
             model: Some("qwen3-coder".into()), capabilities: vec!["Code".into()],
-            pricing: "Free (local)".into(), install_hint: "ollama pull qwen3-coder".into() },
+            pricing: "Free (local)".into(), install_command: "ollama pull qwen3-coder".into(),
+            installed: false, badge: None },
         CatalogAgent { name: "amp".into(), display_name: "Amp".into(), vendor: "Sourcegraph".into(),
-            description: "Sourcegraph's AI coding agent with codebase context".into(),
+            description: "Sourcegraph's AI coding agent with deep codebase context and search".into(),
             model: None, capabilities: vec!["Code".into(), "Review".into()],
-            pricing: "Free tier".into(), install_hint: "npm install -g @sourcegraph/amp".into() },
+            pricing: "Free tier".into(), install_command: "npm install -g @sourcegraph/amp".into(),
+            installed: false, badge: None },
     ]
 }
 
