@@ -129,31 +129,31 @@ impl AgentHubScreen {
                 let badge_oss = theme::TEXT_MUTED;
                 vec![
                     AvailableAgent { name: "gemini-cli".into(), display_name: "Gemini CLI".into(), vendor: "Google".into(), vendor_color: google,
-                        description: "Google's AI coding assistant with Gemini models and 1M token context".into(),
+                        description: "Agentic coding assistant powered by Gemini 2.5 Pro. 1M token context window, native Google Cloud integration, multi-file editing with automatic conflict resolution".into(),
                         pricing: "Free tier".into(), install_command: "npm install -g @google/gemini-cli".into(), install_method: "npm".into(),
                         badges: vec![("Popular".into(), badge_popular)] },
                     AvailableAgent { name: "codex".into(), display_name: "OpenAI Codex".into(), vendor: "OpenAI".into(), vendor_color: openai,
-                        description: "OpenAI's autonomous coding agent with sandboxed execution".into(),
+                        description: "Autonomous coding agent that runs in a sandboxed environment. Executes code, runs tests, and makes commits. Supports multi-step reasoning with tool use".into(),
                         pricing: "API key".into(), install_command: "npm install -g @openai/codex".into(), install_method: "npm".into(),
                         badges: vec![("Popular".into(), badge_popular)] },
                     AvailableAgent { name: "goose".into(), display_name: "Goose".into(), vendor: "Square".into(), vendor_color: square,
-                        description: "Open source AI developer agent with extensible toolkit".into(),
+                        description: "Open source AI developer agent with extensible toolkit. Plugin system for custom tools, supports multiple LLM backends, built-in code review and test generation".into(),
                         pricing: "Free".into(), install_command: "brew install goose".into(), install_method: "brew".into(),
                         badges: vec![("Popular".into(), badge_popular), ("OSS".into(), badge_oss)] },
                     AvailableAgent { name: "cline".into(), display_name: "Cline".into(), vendor: "Open source".into(), vendor_color: oss,
-                        description: "Autonomous coding agent with multi-model support".into(),
+                        description: "Autonomous coding agent originally built for VS Code, now available as CLI. Supports Claude, GPT, Gemini, and local models. Plan-and-execute workflow with human approval gates".into(),
                         pricing: "Free".into(), install_command: "npm install -g cline".into(), install_method: "npm".into(),
                         badges: vec![("OSS".into(), badge_oss)] },
                     AvailableAgent { name: "devstral".into(), display_name: "Devstral".into(), vendor: "Mistral".into(), vendor_color: mistral,
-                        description: "Mistral's coding-focused model optimized for dev tasks".into(),
+                        description: "Mistral's coding-specialized model fine-tuned for software engineering. Optimized for code generation, refactoring, and bug fixing with low-latency inference".into(),
                         pricing: "API key".into(), install_command: "pip install mistral-cli".into(), install_method: "pip".into(),
                         badges: vec![("New".into(), badge_new)] },
                     AvailableAgent { name: "kiro".into(), display_name: "Kiro".into(), vendor: "Amazon".into(), vendor_color: amazon,
-                        description: "Amazon's spec-driven AI IDE for structured development".into(),
+                        description: "Spec-driven AI IDE that generates implementation plans from requirements. Automated task decomposition, built-in testing, and AWS service integration".into(),
                         pricing: "Free preview".into(), install_command: "Download from kiro.dev".into(), install_method: "download".into(),
                         badges: vec![("New".into(), badge_new)] },
                     AvailableAgent { name: "qwen-coder".into(), display_name: "Qwen3-Coder".into(), vendor: "Alibaba".into(), vendor_color: alibaba,
-                        description: "Code generation model, runs fully locally via Ollama".into(),
+                        description: "High-performance code generation model that runs fully locally. No API keys, no internet required. 32K context, supports 90+ programming languages via Ollama".into(),
                         pricing: "Free".into(), install_command: "ollama pull qwen3-coder".into(), install_method: "ollama".into(),
                         badges: vec![("Local".into(), badge_local), ("OSS".into(), badge_oss)] },
                 ]
@@ -385,12 +385,12 @@ impl AgentHubScreen {
                         )
                         .child(div().text_xs().text_color(theme::TEXT_MUTED).child(format!("{} · {}", agent.vendor, agent.pricing))),
                 )
-                // Description (brighter)
+                // Description (brighter, 3 lines)
                 .child(
                     div().flex_1().min_w_0()
                         .text_xs().text_color(theme::TEXT_MUTED.opacity(0.8))
-                        .line_height(relative(1.4))
-                        .max_h(px(30.0)).overflow_hidden()
+                        .line_height(relative(1.5))
+                        .max_h(px(48.0)).overflow_hidden()
                         .child(agent.description.clone()),
                 )
                 // Install method label
