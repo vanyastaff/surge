@@ -48,6 +48,28 @@ pub enum GitError {
 
     #[error("repository has no commits")]
     EmptyRepository,
+
+    #[error("nothing to commit: no changes staged in worktree for spec '{0}'")]
+    NothingToCommit(String),
+
+    #[error("merge source and target are the same branch: {0}")]
+    SameBranch(String),
+}
+
+impl From<GitError> for surge_core::SurgeError {
+    fn from(e: GitError) -> Self {
+        match e {
+            GitError::WorktreeNotFound(s) => {
+                surge_core::SurgeError::NotFound(format!("worktree: {s}"))
+            }
+            GitError::BranchNotFound(s) => {
+                surge_core::SurgeError::NotFound(format!("branch: {s}"))
+            }
+            GitError::Io(e) => surge_core::SurgeError::Io(e),
+            GitError::Git2(e) => surge_core::SurgeError::git_source(e.message().to_string(), e),
+            e => surge_core::SurgeError::git(e.to_string()),
+        }
+    }
 }
 
 /// Manages git worktrees for Surge tasks.
@@ -194,11 +216,29 @@ impl GitManager {
         Ok(result)
     }
 
+    /// Returns `true` if the worktree for the given spec has any changes:
+    /// staged, unstaged, or untracked files.
+    pub fn has_changes(&self, spec_id: &str) -> Result<bool, GitError> {
+        let wt_path = self.worktree_path(spec_id);
+        if !wt_path.exists() {
+            return Err(GitError::WorktreeNotFound(spec_id.to_string()));
+        }
+
+        let wt_repo = Repository::open(&wt_path)?;
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true).include_ignored(false);
+        let statuses = wt_repo.statuses(Some(&mut opts))?;
+        Ok(!statuses.is_empty())
+    }
+
     /// Stage all changes and commit in the worktree for the given spec.
+    ///
+    /// Returns [`GitError::NothingToCommit`] if the worktree has no changes.
     ///
     /// # Errors
     ///
-    /// Returns an error if the worktree does not exist or the commit fails.
+    /// Returns an error if the worktree does not exist, there is nothing to
+    /// commit, or the commit fails.
     pub fn commit(&self, spec_id: &str, message: &str) -> Result<git2::Oid, GitError> {
         let wt_path = self.worktree_path(spec_id);
         if !wt_path.exists() {
@@ -212,14 +252,20 @@ impl GitManager {
         let mut index = wt_repo.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
         index.write()?;
+
+        // Check for staged changes vs HEAD
+        let head = wt_repo.head()?;
+        let head_commit = head.peel_to_commit()?;
+        let head_tree = head_commit.tree()?;
+        let diff = wt_repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
+        if diff.stats()?.files_changed() == 0 {
+            return Err(GitError::NothingToCommit(spec_id.to_string()));
+        }
+
         let tree_oid = index.write_tree()?;
         let tree = wt_repo.find_tree(tree_oid)?;
 
-        // Get parent commit
-        let head = wt_repo.head()?;
-        let parent = head.peel_to_commit()?;
-
-        let oid = wt_repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = wt_repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head_commit])?;
 
         info!(spec_id, %oid, "committed in worktree");
         Ok(oid)
@@ -227,7 +273,9 @@ impl GitManager {
 
     /// Get the diff between the surge branch and its merge base with HEAD.
     ///
-    /// Returns the diff as a string.
+    /// Only shows **committed** changes on the surge branch relative to the
+    /// point where it diverged from HEAD. Uncommitted changes in the worktree
+    /// working directory are not included.
     pub fn diff(&self, spec_id: &str) -> Result<String, GitError> {
         let repo = self.open_repo()?;
         let branch_name = Self::branch_name(spec_id);
@@ -305,18 +353,12 @@ impl GitManager {
     /// Merge the surge branch into the target branch (default: current HEAD branch).
     ///
     /// Performs a fast-forward if possible, otherwise creates a merge commit.
-    /// Returns an error on conflicts.
+    /// Returns an error on conflicts or if source and target are the same branch.
     pub fn merge(&self, spec_id: &str, target_branch: Option<&str>) -> Result<git2::Oid, GitError> {
         let repo = self.open_repo()?;
         let branch_name = Self::branch_name(spec_id);
 
-        // Find the surge branch commit
-        let surge_branch = repo
-            .find_branch(&branch_name, BranchType::Local)
-            .map_err(|_| GitError::BranchNotFound(branch_name.clone()))?;
-        let surge_commit = surge_branch.get().peel_to_commit()?;
-
-        // Resolve target branch
+        // Resolve target branch ref name
         let target_ref_name = if let Some(target) = target_branch {
             format!("refs/heads/{target}")
         } else {
@@ -325,6 +367,18 @@ impl GitManager {
                 .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
                 .to_string()
         };
+
+        // Guard: source and target must differ
+        let source_ref_name = format!("refs/heads/{branch_name}");
+        if source_ref_name == target_ref_name {
+            return Err(GitError::SameBranch(branch_name));
+        }
+
+        // Find the surge branch commit
+        let surge_branch = repo
+            .find_branch(&branch_name, BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound(branch_name.clone()))?;
+        let surge_commit = surge_branch.get().peel_to_commit()?;
 
         let target_ref = repo.find_reference(&target_ref_name)?;
         let target_commit = target_ref.peel_to_commit()?;
@@ -385,49 +439,7 @@ impl GitManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    /// Create a temporary git repo with an initial commit.
-    fn init_test_repo() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_path_buf();
-
-        Command::new("git")
-            .args(["init"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        // Create initial commit
-        let file = path.join("README.md");
-        fs::write(&file, "# Test repo\n").unwrap();
-
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["commit", "-m", "initial commit"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        (dir, path)
-    }
+    use crate::test_helpers::init_test_repo;
 
     #[test]
     fn test_create_worktree() {
@@ -479,6 +491,27 @@ mod tests {
     }
 
     #[test]
+    fn test_has_changes_no_changes() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let info = gm.create_worktree("clean-spec").unwrap();
+
+        // Fresh worktree — no changes
+        assert!(!gm.has_changes("clean-spec").unwrap());
+        drop(info);
+    }
+
+    #[test]
+    fn test_has_changes_with_changes() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let info = gm.create_worktree("dirty-spec").unwrap();
+
+        fs::write(info.path.join("new.txt"), "hello\n").unwrap();
+        assert!(gm.has_changes("dirty-spec").unwrap());
+    }
+
+    #[test]
     fn test_commit_in_worktree() {
         let (_dir, path) = init_test_repo();
         let gm = GitManager::new(path.clone()).unwrap();
@@ -496,6 +529,16 @@ mod tests {
         let wt_repo = Repository::open(&info.path).unwrap();
         let commit = wt_repo.find_commit(oid).unwrap();
         assert_eq!(commit.message(), Some("add new file"));
+    }
+
+    #[test]
+    fn test_commit_nothing_to_commit() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        gm.create_worktree("empty-commit-spec").unwrap();
+
+        let result = gm.commit("empty-commit-spec", "should fail");
+        assert!(matches!(result, Err(GitError::NothingToCommit(_))));
     }
 
     #[test]
@@ -556,5 +599,30 @@ mod tests {
         let head = repo.head().unwrap();
         let commit = head.peel_to_commit().unwrap();
         assert_eq!(commit.message(), Some("add merge file"));
+    }
+
+    #[test]
+    fn test_merge_same_branch_error() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        gm.create_worktree("same-spec").unwrap();
+
+        // Try merging surge/same-spec into surge/same-spec
+        let result = gm.merge("same-spec", Some("surge/same-spec"));
+        assert!(matches!(result, Err(GitError::SameBranch(_))));
+    }
+
+    #[test]
+    fn test_from_git_error_for_surge_error() {
+        use surge_core::SurgeError;
+
+        let e: SurgeError = GitError::WorktreeNotFound("abc".into()).into();
+        assert!(matches!(e, SurgeError::NotFound(_)));
+
+        let e: SurgeError = GitError::BranchNotFound("main".into()).into();
+        assert!(matches!(e, SurgeError::NotFound(_)));
+
+        let e: SurgeError = GitError::MergeConflict.into();
+        assert!(matches!(e, SurgeError::Git { .. }));
     }
 }

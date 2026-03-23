@@ -103,49 +103,8 @@ impl LifecycleManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::init_test_repo;
     use std::fs;
-    use std::process::Command;
-
-    /// Create a temporary git repo with an initial commit.
-    fn init_test_repo() -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_path_buf();
-
-        Command::new("git")
-            .args(["init"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        let file = path.join("README.md");
-        fs::write(&file, "# Test repo\n").unwrap();
-
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["commit", "-m", "initial commit"])
-            .current_dir(&path)
-            .output()
-            .unwrap();
-
-        (dir, path)
-    }
 
     #[test]
     fn test_cleanup_orphaned() {
