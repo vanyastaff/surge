@@ -17,6 +17,23 @@ use app::SurgeApp;
 use app_state::AppState;
 
 fn main() {
+    // Initialize tracing for debug logs
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    // Start a background tokio runtime for ACP pool operations.
+    // gpui uses its own async executor, but AgentPool needs tokio channels.
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    let _guard = tokio_rt.enter();
+
     let app = Application::new().with_assets(gpui_component_assets::Assets);
 
     app.run(move |cx| {
