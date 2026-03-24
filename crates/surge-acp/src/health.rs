@@ -4,6 +4,17 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+/// Health status of an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Agent is operating normally.
+    Healthy,
+    /// Agent is experiencing issues (high error rate or rate-limited).
+    Degraded,
+    /// Agent is offline or unresponsive.
+    Offline,
+}
+
 /// Parses a `Retry-After` header value from an error message.
 /// Supports delay-seconds format (e.g., "Retry-After: 120").
 /// Returns `None` if not found or parsing fails.
@@ -81,6 +92,27 @@ impl AgentHealth {
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         !self.rate_limited && self.error_rate() < 50.0
+    }
+
+    /// Returns the current health status of the agent.
+    ///
+    /// Status is determined by the following rules:
+    /// - `Offline`: 3 or more consecutive heartbeat failures
+    /// - `Degraded`: error rate >= 50% OR rate-limited (but not offline)
+    /// - `Healthy`: otherwise
+    #[must_use]
+    pub fn status(&self) -> HealthStatus {
+        // Offline: 3+ consecutive heartbeat failures
+        if self.consecutive_heartbeat_failures >= 3 {
+            return HealthStatus::Offline;
+        }
+
+        // Degraded: rate-limited or high error rate
+        if self.rate_limited || self.error_rate() >= 50.0 {
+            return HealthStatus::Degraded;
+        }
+
+        HealthStatus::Healthy
     }
 
     /// Returns the p50 (median) latency in milliseconds.
@@ -490,5 +522,97 @@ mod tests {
         let health = monitor.get_health("claude").unwrap();
         assert_eq!(health.total_heartbeat_failures, 3);
         assert_eq!(health.consecutive_heartbeat_failures, 1);
+    }
+
+    #[test]
+    fn test_health_status_healthy() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_success("claude", Duration::from_millis(100));
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_health_status_degraded_high_error_rate() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // 60% error rate
+        for _ in 0..4 {
+            monitor.record_success("claude", Duration::from_millis(50));
+        }
+        for _ in 0..6 {
+            monitor.record_failure("claude", "server error");
+        }
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_health_status_degraded_rate_limited() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_failure("claude", "429 Too Many Requests");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_health_status_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // 3 consecutive heartbeat failures
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
+    }
+
+    #[test]
+    fn test_health_status_recovery_from_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Go offline
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
+
+        // Recover
+        monitor.record_heartbeat_success("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_health_status_degraded_before_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Rate-limited AND 2 heartbeat failures
+        monitor.record_failure("claude", "429 Too Many Requests");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        // Should be degraded (not offline yet, only 2 consecutive heartbeat failures)
+        assert_eq!(health.status(), HealthStatus::Degraded);
+
+        // Third heartbeat failure pushes to offline
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
     }
 }
