@@ -467,8 +467,8 @@ impl Orchestrator {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
                     task_id,
                     old_state: TaskState::QaReview {
-                        verdict: None,
-                        reasoning: None,
+                        verdict: Some("approved".to_string()),
+                        reasoning: qa_result.reasoning.clone(),
                     },
                     new_state: TaskState::Merging,
                 });
@@ -484,6 +484,33 @@ impl Orchestrator {
                 info!("merged successfully");
             }
             QaVerdict::Partial { met, unmet } => {
+                let verdict_str = format!(
+                    "partial ({} met, {} unmet)",
+                    met.len(),
+                    unmet.len()
+                );
+                let reasoning_str = format!(
+                    "Met: {}; Unmet: {}",
+                    if met.is_empty() { "none".to_string() } else { met.join(", ") },
+                    if unmet.is_empty() { "none".to_string() } else { unmet.join(", ") }
+                );
+
+                let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
+                    task_id,
+                    old_state: TaskState::QaReview {
+                        verdict: Some(verdict_str),
+                        reasoning: Some(reasoning_str),
+                    },
+                    new_state: TaskState::Failed {
+                        reason: format!(
+                            "QA review incomplete after max iterations: {} criteria met, {} unmet ({})",
+                            met.len(),
+                            unmet.len(),
+                            unmet.join(", ")
+                        ),
+                    },
+                });
+
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
@@ -497,6 +524,17 @@ impl Orchestrator {
                 };
             }
             QaVerdict::NeedsFix { issues } => {
+                let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
+                    task_id,
+                    old_state: TaskState::QaReview {
+                        verdict: Some("needs_fix".to_string()),
+                        reasoning: Some(issues.clone()),
+                    },
+                    new_state: TaskState::Failed {
+                        reason: format!("QA review failed after max iterations: {issues}"),
+                    },
+                });
+
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
