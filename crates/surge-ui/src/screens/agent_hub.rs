@@ -2,7 +2,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_acp::{
-    AgentDetail, AgentKind, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus,
+    AgentDetail, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus,
     Usage,
 };
 
@@ -852,18 +852,21 @@ impl AgentHubScreen {
                     .unwrap_or('?')
                     .to_uppercase()
                     .to_string();
-                let vc = AgentKind::from_id(&agent.name)
-                    .map(|kind| {
-                        let (r, g, b) = kind.color();
-                        gpui::rgba(
-                            ((r * 255.0) as u32) << 24
-                                | ((g * 255.0) as u32) << 16
-                                | ((b * 255.0) as u32) << 8
-                                | 0xFF,
-                        )
-                        .into()
-                    })
-                    .unwrap_or(theme::TEXT_MUTED);
+                // Map agent ID to vendor color
+                let (r, g, b) = match agent.name.as_str() {
+                    "claude-acp" => (0.851, 0.467, 0.341),  // #D97757 - Anthropic
+                    "github-copilot-cli" => (0.431, 0.251, 0.788), // #6E40C9 - GitHub
+                    "codex-acp" => (0.063, 0.639, 0.498),   // #10A37F - OpenAI
+                    "gemini" => (0.259, 0.522, 0.957),  // #4285F4 - Google
+                    _ => (0.5, 0.5, 0.5), // Default gray
+                };
+                let vc: Hsla = gpui::rgba(
+                    ((r * 255.0) as u32) << 24
+                        | ((g * 255.0) as u32) << 16
+                        | ((b * 255.0) as u32) << 8
+                        | 0xFF,
+                )
+                .into();
 
                 div()
                     .w_full()

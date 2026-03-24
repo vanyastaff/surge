@@ -1,11 +1,10 @@
 //! Agent display data — UI presentation types and view models.
 //!
-//! View models that project [`AgentKind`] metadata and [`RegistryEntry`]
-//! data into structures suitable for UI rendering. Agent metadata itself
-//! lives on [`AgentKind`] methods in the registry module.
+//! View models that project [`RegistryEntry`]
+//! data into structures suitable for UI rendering.
 
 use crate::health::AgentHealth;
-use crate::registry::{AgentKind, DetectedAgent, RegistryEntry};
+use crate::registry::{DetectedAgent, RegistryEntry};
 
 // ── Display types ───────────────────────────────────────────────────
 
@@ -173,7 +172,7 @@ impl AgentDetail {
             None => (0, 0, 0),
         };
 
-        let kind = detected.entry.kind;
+        let agent_id = &detected.entry.id;
         let install_method = if detected.entry.is_npx() {
             InstallMethod::Npx
         } else if detected.entry.is_uvx() {
@@ -183,10 +182,10 @@ impl AgentDetail {
         };
 
         Self {
-            name: kind.id().to_string(),
-            display_name: kind.display_name().to_string(),
-            description: kind.tagline().to_string(),
-            model: Some(kind.default_model().to_string()),
+            name: detected.entry.id.clone(),
+            display_name: detected.entry.display_name.clone(),
+            description: detected.entry.description.clone(),
+            model: detected.entry.models.first().cloned(),
             binary: detected.entry.command.clone(),
             registry_version: detected.entry.version.clone(),
             installed_version: None,
@@ -197,8 +196,8 @@ impl AgentDetail {
             cost_today: 0.0,
             avg_latency_ms: latency as u32,
             sessions_today: 0,
-            capabilities: capabilities(kind),
-            usage: usage(kind),
+            capabilities: capabilities(agent_id),
+            usage: usage(agent_id),
             subtasks_completed: 0,
             subtasks_failed: failures as u32,
             avg_subtask_secs: 0,
@@ -229,7 +228,6 @@ impl AgentSummary {
     /// Build from a registry entry.
     #[must_use]
     pub fn from_entry(entry: &RegistryEntry) -> Self {
-        let kind = entry.kind;
         let runnable = entry.is_runnable();
         let run_via = if entry.is_npx() {
             Some(InstallMethod::Npx)
@@ -242,10 +240,10 @@ impl AgentSummary {
         };
 
         Self {
-            name: kind.id().to_string(),
-            display_name: kind.display_name().to_string(),
-            vendor: kind.vendor().to_string(),
-            description: kind.tagline().to_string(),
+            name: entry.id.clone(),
+            display_name: entry.display_name.clone(),
+            vendor: entry.vendor().to_string(),
+            description: entry.description.clone(),
             license: entry.license.clone(),
             install_command: entry.install_instructions.clone(),
             install_method: if entry.is_npx() {
@@ -263,11 +261,11 @@ impl AgentSummary {
     }
 }
 
-// ── Per-agent UI data (keyed by AgentKind) ──────────────────────────
+// ── Per-agent UI data (keyed by agent ID) ──────────────────────────
 
-fn capabilities(kind: AgentKind) -> DisplayCapabilities {
-    match kind {
-        AgentKind::Claude => DisplayCapabilities {
+fn capabilities(agent_id: &str) -> DisplayCapabilities {
+    match agent_id {
+        "claude-acp" => DisplayCapabilities {
             models: Some(vec![
                 Model {
                     name: "Claude Opus 4.6".into(),
@@ -321,7 +319,7 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
             ]),
             dangerous_ops: Some("Ask permission".into()),
         },
-        AgentKind::Copilot => DisplayCapabilities {
+        "github-copilot-cli" => DisplayCapabilities {
             models: Some(vec![
                 Model {
                     name: "Claude Opus 4.6".into(),
@@ -370,7 +368,7 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
             permissions: None,
             dangerous_ops: Some("Ask permission".into()),
         },
-        AgentKind::Codex => DisplayCapabilities {
+        "codex-acp" => DisplayCapabilities {
             models: Some(vec![
                 Model {
                     name: "GPT-5.3-Codex".into(),
@@ -405,7 +403,7 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
             permissions: None,
             dangerous_ops: Some("Sandboxed".into()),
         },
-        AgentKind::Gemini => DisplayCapabilities {
+        "gemini" => DisplayCapabilities {
             models: Some(vec![
                 Model {
                     name: "Gemini 2.5 Pro".into(),
@@ -433,12 +431,18 @@ fn capabilities(kind: AgentKind) -> DisplayCapabilities {
             permissions: None,
             dangerous_ops: Some("Ask permission".into()),
         },
+        _ => DisplayCapabilities {
+            models: None,
+            effort: None,
+            permissions: None,
+            dangerous_ops: Some("Unknown".into()),
+        },
     }
 }
 
-fn usage(kind: AgentKind) -> Usage {
-    match kind {
-        AgentKind::Claude => Usage::ClaudeCode {
+fn usage(agent_id: &str) -> Usage {
+    match agent_id {
+        "claude-acp" => Usage::ClaudeCode {
             five_hour_pct: 0.0,
             five_hour_reset: "—".into(),
             weekly_pct: 0.0,
@@ -477,7 +481,14 @@ pub async fn detect_installed_version(entry: &RegistryEntry) -> Option<VersionIn
         return None;
     }
 
-    let (cmd_args, is_wrapper, cli_name) = entry.kind.version_command();
+    // Map agent ID to version command
+    let (cmd_args, is_wrapper, cli_name): (&[&str], bool, &str) = match entry.id.as_str() {
+        "claude-acp" => (&["claude", "--version"], true, "Claude Code"),
+        "github-copilot-cli" => (&["gh", "copilot", "--version"], false, ""),
+        "codex-acp" => (&["codex", "--version"], true, "Codex CLI"),
+        "gemini" => (&["gemini", "--version"], false, ""),
+        _ => return None,
+    };
     let (cmd, args) = cmd_args.split_first()?;
 
     let output = Command::new(cmd)
@@ -542,12 +553,15 @@ mod tests {
 
     #[test]
     fn test_all_agents_have_metadata() {
-        for kind in AgentKind::ALL {
-            // All metadata is on AgentKind methods — compiler guarantees exhaustive match
-            assert!(!kind.display_name().is_empty());
-            assert!(!kind.tagline().is_empty());
-            assert!(!kind.vendor().is_empty());
-            assert!(!kind.default_model().is_empty());
+        use crate::registry::Registry;
+
+        // Test that all builtin agents have required metadata
+        let registry = Registry::builtin();
+        for entry in registry.list() {
+            assert!(!entry.id.is_empty());
+            assert!(!entry.display_name.is_empty());
+            assert!(!entry.description.is_empty());
+            assert!(!entry.authors.is_empty());
         }
     }
 }

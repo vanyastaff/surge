@@ -26,6 +26,6 @@ pub use display::{
 };
 pub use health::{AgentHealth, HealthTracker};
 pub use pool::{AgentPool, SessionHandle};
-pub use registry::{AgentCapability, AgentKind, DetectedAgent, Registry, RegistryEntry};
+pub use registry::{AgentCapability, DetectedAgent, Registry, RegistryEntry};
 pub use router::{AgentRouter, RouteDecision};
 pub use surge_core::SurgeEvent;

@@ -22,134 +22,6 @@ use tracing::{debug, warn};
 
 // ── Public types ────────────────────────────────────────────────────
 
-/// Known agent variants in the Surge ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentKind {
-    Claude,
-    Copilot,
-    Codex,
-    Gemini,
-}
-
-impl AgentKind {
-    /// All known agent kinds.
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Copilot, Self::Codex, Self::Gemini];
-
-    /// String identifier used in configs and registry.
-    #[must_use]
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Claude => "claude-acp",
-            Self::Copilot => "github-copilot-cli",
-            Self::Codex => "codex-acp",
-            Self::Gemini => "gemini",
-        }
-    }
-
-    /// Try to parse from a string identifier.
-    #[must_use]
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "claude-acp" => Some(Self::Claude),
-            "github-copilot-cli" => Some(Self::Copilot),
-            "codex-acp" => Some(Self::Codex),
-            "gemini" => Some(Self::Gemini),
-            _ => None,
-        }
-    }
-
-    /// Human-readable display name.
-    #[must_use]
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Agent",
-            Self::Copilot => "GitHub Copilot",
-            Self::Codex => "Codex CLI",
-            Self::Gemini => "Gemini CLI",
-        }
-    }
-
-    /// One-line description / tagline.
-    #[must_use]
-    pub fn tagline(self) -> &'static str {
-        match self {
-            Self::Claude => {
-                "Anthropic's autonomous coding agent — deepest reasoning, largest context"
-            }
-            Self::Copilot => "GitHub's multi-model terminal agent with native repo integration",
-            Self::Codex => "OpenAI's cloud-native coding agent with sandboxed parallel execution",
-            Self::Gemini => {
-                "Google's CLI with the most generous free tier — 1M context on all models"
-            }
-        }
-    }
-
-    /// Vendor / company name.
-    #[must_use]
-    pub fn vendor(self) -> &'static str {
-        match self {
-            Self::Claude => "Anthropic",
-            Self::Copilot => "GitHub",
-            Self::Codex => "OpenAI",
-            Self::Gemini => "Google",
-        }
-    }
-
-    /// Default model name.
-    #[must_use]
-    pub fn default_model(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Sonnet 4.6",
-            Self::Copilot => "GPT-5 mini",
-            Self::Codex => "GPT-5.3-Codex",
-            Self::Gemini => "Gemini 2.5 Pro",
-        }
-    }
-
-    /// Vendor brand color as (r, g, b) in 0.0–1.0.
-    #[must_use]
-    pub fn color(self) -> (f32, f32, f32) {
-        match self {
-            Self::Claude => (0.851, 0.467, 0.341),  // #D97757
-            Self::Copilot => (0.431, 0.251, 0.788), // #6E40C9
-            Self::Codex => (0.063, 0.639, 0.498),   // #10A37F
-            Self::Gemini => (0.259, 0.522, 0.957),  // #4285F4
-        }
-    }
-
-    /// Version detection command: (args, is_wrapper, cli_name).
-    #[must_use]
-    pub fn version_command(self) -> (&'static [&'static str], bool, &'static str) {
-        match self {
-            Self::Claude => (&["claude", "--version"], true, "Claude Code"),
-            Self::Copilot => (&["gh", "copilot", "--version"], false, ""),
-            Self::Codex => (&["codex", "--version"], true, "Codex CLI"),
-            Self::Gemini => (&["gemini", "--version"], false, ""),
-        }
-    }
-
-    /// Environment variable used to pass an MCP config file path to this agent.
-    ///
-    /// Returns `None` for agents whose MCP pass-through mechanism is not yet known.
-    /// Extend this as each agent's CLI is verified against its documentation.
-    #[must_use]
-    pub fn mcp_config_env_var(self) -> Option<&'static str> {
-        match self {
-            // Claude Code reads MCP server config from the path in CLAUDE_MCP_CONFIG.
-            Self::Claude => Some("CLAUDE_MCP_CONFIG"),
-            // TODO: discover the correct env var / flag for each agent below.
-            Self::Copilot | Self::Codex | Self::Gemini => None,
-        }
-    }
-}
-
-impl fmt::Display for AgentKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id())
-    }
-}
-
 /// Capabilities an agent may support.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -179,7 +51,6 @@ impl fmt::Display for AgentCapability {
 /// A single entry in the agent registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
-    pub kind: AgentKind,
     pub id: String,
     pub display_name: String,
     pub description: String,
@@ -484,11 +355,7 @@ impl Registry {
         let entries = agents
             .into_iter()
             .map(|(name, config)| {
-                // Try to infer AgentKind from command or name
-                let kind = infer_agent_kind(&name, &config.command);
-
                 RegistryEntry {
-                    kind,
                     id: name.clone(),
                     display_name: prettify_name(&name),
                     description: format!("Custom agent: {}", name),
@@ -618,7 +485,6 @@ pub struct DetectedAgent {
 fn builtin_agents() -> Vec<RegistryEntry> {
     vec![
         RegistryEntry {
-            kind: AgentKind::Claude,
             id: "claude-acp".into(),
             display_name: "Claude Agent".into(),
             description: "ACP wrapper for Anthropic's Claude".into(),
@@ -644,7 +510,6 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
-            kind: AgentKind::Copilot,
             id: "github-copilot-cli".into(),
             display_name: "GitHub Copilot".into(),
             description: "GitHub's AI pair programmer".into(),
@@ -668,7 +533,6 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
-            kind: AgentKind::Codex,
             id: "codex-acp".into(),
             display_name: "Codex CLI".into(),
             description: "ACP adapter for OpenAI's coding assistant".into(),
@@ -687,7 +551,6 @@ fn builtin_agents() -> Vec<RegistryEntry> {
             long_description: String::new(),
         },
         RegistryEntry {
-            kind: AgentKind::Gemini,
             id: "gemini".into(),
             display_name: "Gemini CLI".into(),
             description: "Google's official CLI for Gemini".into(),
@@ -848,29 +711,6 @@ fn resolve_command_uncached(command: &str) -> Option<String> {
     }
 }
 
-/// Try to infer `AgentKind` from agent name or command.
-/// Falls back to Claude if no match is found.
-fn infer_agent_kind(name: &str, command: &str) -> AgentKind {
-    let name_lower = name.to_lowercase();
-    let command_lower = command.to_lowercase();
-
-    if name_lower.contains("claude") || command_lower.contains("claude") {
-        AgentKind::Claude
-    } else if name_lower.contains("copilot")
-        || name_lower.contains("gh")
-        || command_lower.contains("copilot")
-    {
-        AgentKind::Copilot
-    } else if name_lower.contains("codex") || command_lower.contains("codex") {
-        AgentKind::Codex
-    } else if name_lower.contains("gemini") || command_lower.contains("gemini") {
-        AgentKind::Gemini
-    } else {
-        // Default to Claude for unknown agents
-        AgentKind::Claude
-    }
-}
-
 /// Convert a kebab-case or snake_case name to a human-readable display name.
 fn prettify_name(name: &str) -> String {
     name.replace('-', " ")
@@ -995,7 +835,7 @@ mod tests {
 
     fn make_entry(id: &str) -> RegistryEntry {
         RegistryEntry {
-            kind: AgentKind::Claude,
+Claude,
             id: id.to_string(),
             display_name: id.to_string(),
             description: String::new(),
@@ -1100,16 +940,8 @@ mod tests {
         assert!(merged.find("agent-c").is_some());
     }
 
-    #[test]
-    fn test_mcp_config_env_var() {
-        assert_eq!(
-            AgentKind::Claude.mcp_config_env_var(),
-            Some("CLAUDE_MCP_CONFIG")
-        );
-        assert!(AgentKind::Copilot.mcp_config_env_var().is_none());
-        assert!(AgentKind::Codex.mcp_config_env_var().is_none());
-        assert!(AgentKind::Gemini.mcp_config_env_var().is_none());
-    }
+    // Note: MCP config env var functionality moved to per-agent metadata
+    // in the registry entries. See RegistryEntry for MCP config support.
 
     #[test]
     fn test_refresh_discovery() {
@@ -1164,7 +996,7 @@ mod tests {
 
             // Look for Claude in the results
             let claude_found = detected.iter().any(|d| {
-                d.entry.kind == AgentKind::Claude
+                d.entry.id == "claude-acp"
                     && d.command_path
                         .as_ref()
                         .map(|p| p.contains("test_mock_claude"))
@@ -1255,24 +1087,7 @@ mod tests {
             .capabilities
             .contains(&AgentCapability::Test));
 
-        // Test 4: Inferred AgentKind from name
-        let mut claude_agent = HashMap::new();
-        claude_agent.insert(
-            "claude-custom".to_string(),
-            AgentConfig {
-                command: "npx".to_string(),
-                args: vec!["@custom/claude".to_string()],
-                transport: Transport::Stdio,
-                mcp_servers: vec![],
-                capabilities: vec![],
-            },
-        );
-
-        let claude_reg = Registry::from_config(claude_agent);
-        let claude_entry = claude_reg.find("claude-custom").unwrap();
-        assert_eq!(claude_entry.kind, AgentKind::Claude);
-
-        // Test 5: Multiple agents
+        // Test 4: Multiple agents
         let mut multi_agents = HashMap::new();
         multi_agents.insert(
             "agent-1".to_string(),
