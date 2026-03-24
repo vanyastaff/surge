@@ -448,32 +448,28 @@ fn show_summary(
             );
 
             // Display top 3 tasks
-            if let Some(ref top_tasks) = summary.top_tasks {
-                if !top_tasks.is_empty() {
+            if let Some(ref top_tasks) = summary.top_tasks && !top_tasks.is_empty() {
+                println!();
+                println!("🏆 Top 3 Costliest Tasks:");
+                for (i, task) in top_tasks.iter().enumerate() {
                     println!();
-                    println!("🏆 Top 3 Costliest Tasks:");
-                    for (i, task) in top_tasks.iter().enumerate() {
-                        println!();
-                        println!("   {}. {}", i + 1, task.spec_id);
-                        println!("      Sessions: {}", task.session_count);
-                        println!("      Tokens:   {}", format_number(task.total_tokens));
-                        println!("      Cost:     ${:.4}", task.total_cost_usd);
-                    }
+                    println!("   {}. {}", i + 1, task.spec_id);
+                    println!("      Sessions: {}", task.session_count);
+                    println!("      Tokens:   {}", format_number(task.total_tokens));
+                    println!("      Cost:     ${:.4}", task.total_cost_usd);
                 }
             }
 
             // Display per-agent breakdown
-            if let Some(ref agents) = summary.agent_breakdown {
-                if !agents.is_empty() {
+            if let Some(ref agents) = summary.agent_breakdown && !agents.is_empty() {
+                println!();
+                println!("🤖 Per-Agent Breakdown:");
+                for agent in agents {
                     println!();
-                    println!("🤖 Per-Agent Breakdown:");
-                    for agent in agents {
-                        println!();
-                        println!("   Agent: {}", agent.agent_name);
-                        println!("      Sessions: {}", agent.session_count);
-                        println!("      Tokens:   {}", format_number(agent.total_tokens));
-                        println!("      Cost:     ${:.4}", agent.total_cost_usd);
-                    }
+                    println!("   Agent: {}", agent.agent_name);
+                    println!("      Sessions: {}", agent.session_count);
+                    println!("      Tokens:   {}", format_number(agent.total_tokens));
+                    println!("      Cost:     ${:.4}", agent.total_cost_usd);
                 }
             }
         }
@@ -867,14 +863,12 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
 fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
-    let mut count = 0;
 
-    for c in s.chars().rev() {
+    for (count, c) in s.chars().rev().enumerate() {
         if count > 0 && count % 3 == 0 {
             result.push(',');
         }
         result.push(c);
-        count += 1;
     }
 
     result.chars().rev().collect()

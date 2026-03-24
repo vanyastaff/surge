@@ -273,11 +273,11 @@ impl BudgetTracker {
 
         // Thursday = 3 (0=Sunday, 1=Monday, ..., 6=Saturday)
         // We want Monday as week start
-        let day_of_week = ((days_since_epoch + 3) % 7) as u64; // 0=Monday, 1=Tuesday, ...
+        let day_of_week = (days_since_epoch + 3) % 7; // 0=Monday, 1=Tuesday, ...
 
         // Calculate start of week (Monday 00:00:00 UTC)
         let start_of_week_ms = now_ms - (day_of_week * 86400 * 1000)
-            - ((now_ms % (86400 * 1000)) as u64);
+            - (now_ms % (86400 * 1000));
         let end_of_week_ms = start_of_week_ms + (7 * 86400 * 1000); // +7 days
 
         (start_of_week_ms, end_of_week_ms)
