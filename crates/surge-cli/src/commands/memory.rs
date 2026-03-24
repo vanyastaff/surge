@@ -220,16 +220,180 @@ fn search_memory(
     tags: Option<String>,
     limit: usize,
 ) -> Result<()> {
-    // TODO: Implementation will be added in subsequent subtasks
-    println!("⚡ Memory Search");
-    println!("Query: {}", query);
-    if let Some(spec) = spec {
-        println!("Spec filter: {}", spec);
+    // Open the memory store
+    let store_path = MemoryStore::default_path()?;
+
+    if !store_path.exists() {
+        println!("⚠️  No memory data available yet.");
+        println!("   Add entries using 'surge memory add' to build your knowledge base.");
+        return Ok(());
     }
-    if let Some(tags) = tags {
-        println!("Tags filter: {}", tags);
+
+    let store = MemoryStore::open(&store_path)?;
+
+    // Parse spec ID if provided
+    let spec_id = if let Some(spec_str) = spec {
+        let spec_file = load_spec_by_id(&spec_str)?;
+        Some(spec_file.spec.id)
+    } else {
+        None
+    };
+
+    // Parse tags if provided
+    let tags_filter: Vec<String> = tags
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    // Execute FTS5 search
+    // Note: If the query contains FTS5 special characters and causes an error,
+    // try wrapping it in quotes for exact phrase search
+    let mut results = match store.search_all(&query, Some(limit)) {
+        Ok(results) => results,
+        Err(e) => {
+            // If FTS5 query fails, try again with quoted query for exact phrase match
+            let quoted_query = format!("\"{}\"", query);
+            match store.search_all(&quoted_query, Some(limit)) {
+                Ok(results) => results,
+                Err(_) => {
+                    eprintln!("⚠️  Search error: {}", e);
+                    eprintln!("   Try quoting your search query or using simpler terms.");
+                    return Err(e.into());
+                }
+            }
+        }
+    };
+
+    // Apply spec_id filter if provided
+    if let Some(sid) = spec_id {
+        results.discoveries.retain(|d| d.spec_id.as_ref() == Some(&sid));
+        results.patterns.retain(|p| p.spec_id.as_ref() == Some(&sid));
+        results.gotchas.retain(|g| g.spec_id.as_ref() == Some(&sid));
+        results.file_contexts.retain(|f| f.spec_id.as_ref() == Some(&sid));
     }
-    println!("Limit: {}", limit);
-    println!("\n⚠️  Memory system not yet implemented");
+
+    // Apply tags filter if provided
+    if !tags_filter.is_empty() {
+        results.discoveries.retain(|d| {
+            tags_filter.iter().any(|tag| d.tags.contains(tag))
+        });
+        results.patterns.retain(|p| {
+            tags_filter.iter().any(|tag| p.tags.contains(tag))
+        });
+        results.gotchas.retain(|g| {
+            tags_filter.iter().any(|tag| g.tags.contains(tag))
+        });
+        results.file_contexts.retain(|f| {
+            tags_filter.iter().any(|tag| f.tags.contains(tag))
+        });
+    }
+
+    // Display results
+    println!("⚡ Memory Search Results");
+    println!("Query: \"{}\"", query);
+    println!();
+
+    if results.is_empty() {
+        println!("⚠️  No results found");
+        return Ok(());
+    }
+
+    println!("Found {} total results\n", results.total_count());
+
+    // Display discoveries
+    if !results.discoveries.is_empty() {
+        println!("═══ Discoveries ({}) ═══", results.discoveries.len());
+        for discovery in &results.discoveries {
+            println!("  📋 {}", discovery.title);
+            println!("     ID: {}", discovery.id);
+            if let Some(category) = &discovery.category {
+                println!("     Category: {}", category);
+            }
+            if !discovery.tags.is_empty() {
+                println!("     Tags: {}", discovery.tags.join(", "));
+            }
+            // Show preview of content (first 100 chars)
+            let content_preview = if discovery.content.len() > 100 {
+                format!("{}...", &discovery.content[..100])
+            } else {
+                discovery.content.clone()
+            };
+            println!("     {}", content_preview);
+            println!();
+        }
+    }
+
+    // Display patterns
+    if !results.patterns.is_empty() {
+        println!("═══ Patterns ({}) ═══", results.patterns.len());
+        for pattern in &results.patterns {
+            println!("  🔧 {}", pattern.name);
+            println!("     ID: {}", pattern.id);
+            if let Some(language) = &pattern.language {
+                println!("     Language: {}", language);
+            }
+            if let Some(category) = &pattern.category {
+                println!("     Category: {}", category);
+            }
+            if !pattern.tags.is_empty() {
+                println!("     Tags: {}", pattern.tags.join(", "));
+            }
+            // Show preview of description (first 100 chars)
+            let desc_preview = if pattern.description.len() > 100 {
+                format!("{}...", &pattern.description[..100])
+            } else {
+                pattern.description.clone()
+            };
+            println!("     {}", desc_preview);
+            println!();
+        }
+    }
+
+    // Display gotchas
+    if !results.gotchas.is_empty() {
+        println!("═══ Gotchas ({}) ═══", results.gotchas.len());
+        for gotcha in &results.gotchas {
+            println!("  ⚠️  {}", gotcha.title);
+            println!("     ID: {}", gotcha.id);
+            if let Some(severity) = &gotcha.severity {
+                println!("     Severity: {}", severity);
+            }
+            if let Some(category) = &gotcha.category {
+                println!("     Category: {}", category);
+            }
+            if !gotcha.tags.is_empty() {
+                println!("     Tags: {}", gotcha.tags.join(", "));
+            }
+            // Show preview of description (first 100 chars)
+            let desc_preview = if gotcha.description.len() > 100 {
+                format!("{}...", &gotcha.description[..100])
+            } else {
+                gotcha.description.clone()
+            };
+            println!("     {}", desc_preview);
+            println!();
+        }
+    }
+
+    // Display file contexts
+    if !results.file_contexts.is_empty() {
+        println!("═══ File Contexts ({}) ═══", results.file_contexts.len());
+        for context in &results.file_contexts {
+            println!("  📄 {}", context.file_path);
+            println!("     ID: {}", context.id);
+            if let Some(language) = &context.language {
+                println!("     Language: {}", language);
+            }
+            if !context.key_apis.is_empty() {
+                println!("     Key APIs: {}", context.key_apis.join(", "));
+            }
+            if !context.tags.is_empty() {
+                println!("     Tags: {}", context.tags.join(", "));
+            }
+            // Show summary
+            println!("     {}", context.summary);
+            println!();
+        }
+    }
+
     Ok(())
 }
