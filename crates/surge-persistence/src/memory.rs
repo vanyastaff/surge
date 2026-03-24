@@ -7,4 +7,11 @@
 /// Data models for memory entries
 pub mod models;
 
+/// Database schema for memory storage
+pub mod schema;
+
+/// SQLite-based memory store
+pub mod store;
+
 pub use models::{Discovery, FileContext, Gotcha, Pattern};
+pub use store::MemoryStore;
