@@ -6,10 +6,10 @@
 
 use std::path::PathBuf;
 
+use surge_core::SurgeConfig;
 use surge_core::event::SurgeEvent;
 use surge_core::id::SpecId;
 use surge_core::roadmap::{RoadmapStatus, Timeline};
-use surge_core::SurgeConfig;
 use surge_spec::SpecFile;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -77,11 +77,7 @@ impl ProjectExecutor {
     ///
     /// Requires a closure that loads a `SpecFile` by `SpecId`.
     /// This keeps the executor decoupled from filesystem layout.
-    pub async fn execute<F>(
-        &self,
-        timeline: &mut Timeline,
-        mut load_spec: F,
-    ) -> ProjectResult
+    pub async fn execute<F>(&self, timeline: &mut Timeline, mut load_spec: F) -> ProjectResult
     where
         F: FnMut(SpecId) -> Option<SpecFile>,
     {
@@ -124,8 +120,7 @@ impl ProjectExecutor {
                     Some(sf) => sf,
                     None => {
                         warn!(spec_id = %spec_id, "spec file not found, skipping");
-                        timeline.batches[batch_idx].items[item_idx].status =
-                            RoadmapStatus::Skipped;
+                        timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Skipped;
                         result.skipped += 1;
                         continue;
                     }
@@ -157,14 +152,12 @@ impl ProjectExecutor {
                     }
                     PipelineResult::Paused { phase, reason } => {
                         info!(spec_id = %spec_id, %phase, %reason, "spec paused");
-                        timeline.batches[batch_idx].items[item_idx].status =
-                            RoadmapStatus::Paused;
+                        timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Paused;
                         result.paused += 1;
                     }
                     PipelineResult::Failed { reason } => {
                         warn!(spec_id = %spec_id, %reason, "spec failed");
-                        timeline.batches[batch_idx].items[item_idx].status =
-                            RoadmapStatus::Failed;
+                        timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Failed;
                         result.failed += 1;
                         batch_had_failure = true;
                     }
@@ -285,9 +278,6 @@ mod tests {
 
         let result = executor.execute(&mut timeline, |_| None).await;
         assert_eq!(result.skipped, 1);
-        assert_eq!(
-            timeline.batches[0].items[0].status,
-            RoadmapStatus::Skipped
-        );
+        assert_eq!(timeline.batches[0].items[0].status, RoadmapStatus::Skipped);
     }
 }

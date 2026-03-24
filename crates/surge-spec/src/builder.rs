@@ -1,8 +1,8 @@
 //! Builder pattern for constructing specs programmatically.
 
+use surge_core::SurgeError;
 use surge_core::id::{SpecId, SubtaskId};
 use surge_core::spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
-use surge_core::SurgeError;
 
 /// Builder for constructing Spec instances.
 pub struct SpecBuilder {
@@ -48,9 +48,11 @@ impl SpecBuilder {
     }
 
     pub fn build(self) -> Result<Spec, SurgeError> {
-        let title = self.title
+        let title = self
+            .title
             .ok_or_else(|| SurgeError::Spec("Spec title is required".to_string()))?;
-        let description = self.description
+        let description = self
+            .description
             .ok_or_else(|| SurgeError::Spec("Spec description is required".to_string()))?;
 
         Ok(Spec {
@@ -132,9 +134,11 @@ impl SubtaskBuilder {
     }
 
     pub fn build(self) -> Result<Subtask, SurgeError> {
-        let title = self.title
+        let title = self
+            .title
             .ok_or_else(|| SurgeError::Spec("Subtask title is required".to_string()))?;
-        let description = self.description
+        let description = self
+            .description
             .ok_or_else(|| SurgeError::Spec("Subtask description is required".to_string()))?;
 
         Ok(Subtask {
@@ -212,17 +216,13 @@ mod tests {
 
     #[test]
     fn test_spec_builder_missing_title() {
-        let result = SpecBuilder::new()
-            .description("No title")
-            .build();
+        let result = SpecBuilder::new().description("No title").build();
         assert!(result.is_err());
     }
 
     #[test]
     fn test_subtask_builder_missing_title() {
-        let result = SubtaskBuilder::new()
-            .description("No title")
-            .build();
+        let result = SubtaskBuilder::new().description("No title").build();
         assert!(result.is_err());
     }
 }

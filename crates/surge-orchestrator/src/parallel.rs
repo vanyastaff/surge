@@ -9,7 +9,7 @@ use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
-use tokio::sync::{broadcast, Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, broadcast};
 use tracing::warn;
 
 use crate::executor::{ExecutorConfig, SubtaskExecutor, SubtaskResult};
@@ -138,7 +138,10 @@ impl ParallelExecutor {
             }
         }
 
-        BatchResult { successes, failures }
+        BatchResult {
+            successes,
+            failures,
+        }
     }
 }
 

@@ -1,9 +1,9 @@
 //! Built-in spec templates for common task types.
 
-use surge_core::spec::Complexity;
 use crate::builder::{SpecBuilder, SubtaskBuilder};
 use crate::parser::SpecFile;
 use surge_core::SurgeError;
+use surge_core::spec::Complexity;
 
 /// Available built-in template types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,15 @@ impl TemplateKind {
 
     /// List all available template names.
     pub fn all() -> &'static [&'static str] {
-        &["feature", "bugfix", "refactor", "performance", "security", "docs", "migration"]
+        &[
+            "feature",
+            "bugfix",
+            "refactor",
+            "performance",
+            "security",
+            "docs",
+            "migration",
+        ]
     }
 }
 
@@ -48,7 +56,9 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
         TemplateKind::Feature => {
             let sub1 = SubtaskBuilder::new()
                 .title("Design and plan")
-                .description("Define the approach, identify files to modify, write acceptance criteria")
+                .description(
+                    "Define the approach, identify files to modify, write acceptance criteria",
+                )
                 .complexity(Complexity::Simple)
                 .criterion("Approach documented")
                 .build()?;
@@ -294,18 +304,39 @@ mod tests {
 
     #[test]
     fn test_template_kind_from_str() {
-        assert_eq!(TemplateKind::parse("feature").unwrap(), TemplateKind::Feature);
+        assert_eq!(
+            TemplateKind::parse("feature").unwrap(),
+            TemplateKind::Feature
+        );
         assert_eq!(TemplateKind::parse("bugfix").unwrap(), TemplateKind::Bugfix);
         assert_eq!(TemplateKind::parse("fix").unwrap(), TemplateKind::Bugfix);
-        assert_eq!(TemplateKind::parse("refactor").unwrap(), TemplateKind::Refactor);
-        assert_eq!(TemplateKind::parse("performance").unwrap(), TemplateKind::Performance);
-        assert_eq!(TemplateKind::parse("perf").unwrap(), TemplateKind::Performance);
-        assert_eq!(TemplateKind::parse("security").unwrap(), TemplateKind::Security);
+        assert_eq!(
+            TemplateKind::parse("refactor").unwrap(),
+            TemplateKind::Refactor
+        );
+        assert_eq!(
+            TemplateKind::parse("performance").unwrap(),
+            TemplateKind::Performance
+        );
+        assert_eq!(
+            TemplateKind::parse("perf").unwrap(),
+            TemplateKind::Performance
+        );
+        assert_eq!(
+            TemplateKind::parse("security").unwrap(),
+            TemplateKind::Security
+        );
         assert_eq!(TemplateKind::parse("sec").unwrap(), TemplateKind::Security);
         assert_eq!(TemplateKind::parse("docs").unwrap(), TemplateKind::Docs);
         assert_eq!(TemplateKind::parse("doc").unwrap(), TemplateKind::Docs);
-        assert_eq!(TemplateKind::parse("migration").unwrap(), TemplateKind::Migration);
-        assert_eq!(TemplateKind::parse("migrate").unwrap(), TemplateKind::Migration);
+        assert_eq!(
+            TemplateKind::parse("migration").unwrap(),
+            TemplateKind::Migration
+        );
+        assert_eq!(
+            TemplateKind::parse("migrate").unwrap(),
+            TemplateKind::Migration
+        );
         assert!(TemplateKind::parse("unknown").is_err());
     }
 
@@ -315,7 +346,10 @@ mod tests {
         assert_eq!(spec_file.spec.title, "Add user auth");
         assert_eq!(spec_file.spec.subtasks.len(), 3);
         assert_eq!(spec_file.spec.subtasks[1].depends_on.len(), 1);
-        assert_eq!(spec_file.spec.subtasks[1].depends_on[0], spec_file.spec.subtasks[0].id);
+        assert_eq!(
+            spec_file.spec.subtasks[1].depends_on[0],
+            spec_file.spec.subtasks[0].id
+        );
     }
 
     #[test]
@@ -336,8 +370,14 @@ mod tests {
         let spec_file = generate(TemplateKind::Performance, "Speed up query engine").unwrap();
         assert_eq!(spec_file.spec.subtasks.len(), 3);
         // profile → optimize → benchmark (linear chain)
-        assert_eq!(spec_file.spec.subtasks[1].depends_on[0], spec_file.spec.subtasks[0].id);
-        assert_eq!(spec_file.spec.subtasks[2].depends_on[0], spec_file.spec.subtasks[1].id);
+        assert_eq!(
+            spec_file.spec.subtasks[1].depends_on[0],
+            spec_file.spec.subtasks[0].id
+        );
+        assert_eq!(
+            spec_file.spec.subtasks[2].depends_on[0],
+            spec_file.spec.subtasks[1].id
+        );
     }
 
     #[test]

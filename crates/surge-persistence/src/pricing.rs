@@ -516,13 +516,8 @@ pub mod cost_calculation_tests {
         // 200k cache reads = 0.2M * $1 = $0.20
         // 40k cache writes = 0.04M * $12.5 = $0.50
         // Total = $3.70
-        let cost = pricing.calculate_cost(
-            100_000,
-            50_000,
-            Some(25_000),
-            Some(200_000),
-            Some(40_000),
-        );
+        let cost =
+            pricing.calculate_cost(100_000, 50_000, Some(25_000), Some(200_000), Some(40_000));
         assert!((cost - 3.7).abs() < 0.001);
     }
 
@@ -536,8 +531,7 @@ pub mod cost_calculation_tests {
         // - 5k thought tokens (reasoning)
         // - 100k cache reads (reused context from previous turns)
         // - 10k cache writes (new context being cached)
-        let cost =
-            pricing.calculate_cost(50_000, 10_000, Some(5_000), Some(100_000), Some(10_000));
+        let cost = pricing.calculate_cost(50_000, 10_000, Some(5_000), Some(100_000), Some(10_000));
 
         // Expected calculation:
         // Input: 0.05M * $3.00 = $0.150

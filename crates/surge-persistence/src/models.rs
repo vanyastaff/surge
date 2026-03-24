@@ -77,9 +77,7 @@ impl SessionUsage {
     /// separately and not included in the total.
     #[must_use]
     pub fn total_tokens(&self) -> u64 {
-        self.input_tokens
-            + self.output_tokens
-            + self.thought_tokens.unwrap_or(0)
+        self.input_tokens + self.output_tokens + self.thought_tokens.unwrap_or(0)
     }
 }
 

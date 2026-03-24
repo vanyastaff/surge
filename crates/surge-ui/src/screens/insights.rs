@@ -72,7 +72,10 @@ impl InsightsScreen {
     }
 
     fn total_tokens(&self) -> u64 {
-        self.agent_usage.iter().map(|a| a.input_tokens + a.output_tokens).sum()
+        self.agent_usage
+            .iter()
+            .map(|a| a.input_tokens + a.output_tokens)
+            .sum()
     }
 
     fn render_period_selector(&self, cx: &mut Context<Self>) -> Div {
@@ -87,8 +90,16 @@ impl InsightsScreen {
                     .cursor_pointer()
                     .rounded_md()
                     .text_sm()
-                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
-                    .bg(if is_active { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                    .text_color(if is_active {
+                        theme::PRIMARY
+                    } else {
+                        theme::TEXT_MUTED
+                    })
+                    .bg(if is_active {
+                        theme::PRIMARY.opacity(0.1)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.period = p;
                         cx.notify();
@@ -109,7 +120,10 @@ impl InsightsScreen {
             .child(self.stat_card("Total Tokens", &format_tokens(self.total_tokens())))
             .child(self.stat_card("Total Cost", &format!("${:.2}", self.total_cost())))
             .child(self.stat_card("Requests", &format!("{total_requests}")))
-            .child(self.stat_card("Tasks Completed", &format!("{}", self.qa_metrics.total_tasks)))
+            .child(self.stat_card(
+                "Tasks Completed",
+                &format!("{}", self.qa_metrics.total_tasks),
+            ))
     }
 
     fn stat_card(&self, label: &str, value: &str) -> Div {
@@ -146,11 +160,46 @@ impl InsightsScreen {
             .py(px(8.0))
             .border_b_1()
             .border_color(theme::TEXT_MUTED.opacity(0.1))
-            .child(div().w(px(140.0)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED).child("Agent".to_string()))
-            .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED).child("Requests".to_string()))
-            .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED).child("Input Tokens".to_string()))
-            .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED).child("Output Tokens".to_string()))
-            .child(div().w(px(80.0)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::TEXT_MUTED).child("Cost".to_string()));
+            .child(
+                div()
+                    .w(px(140.0))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_MUTED)
+                    .child("Agent".to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_MUTED)
+                    .child("Requests".to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_MUTED)
+                    .child("Input Tokens".to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_MUTED)
+                    .child("Output Tokens".to_string()),
+            )
+            .child(
+                div()
+                    .w(px(80.0))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_MUTED)
+                    .child("Cost".to_string()),
+            );
 
         let rows: Vec<Div> = self
             .agent_usage
@@ -342,16 +391,8 @@ impl Render for InsightsScreen {
                     .h_flex()
                     .gap_4()
                     .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(self.render_usage_table()),
-                    )
-                    .child(
-                        div()
-                            .w(px(300.0))
-                            .child(self.render_qa_metrics()),
-                    ),
+                    .child(div().flex_1().child(self.render_usage_table()))
+                    .child(div().w(px(300.0)).child(self.render_qa_metrics())),
             )
     }
 }

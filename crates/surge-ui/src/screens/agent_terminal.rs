@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Icon, IconName, StyledExt};
 
@@ -126,8 +126,9 @@ impl AgentTerminalScreen {
     fn ensure_thinking(&mut self) -> &mut ThinkingBlock {
         let needs_new = !matches!(self.items.last(), Some(ChatItem::Thinking(_)));
         if needs_new {
-            self.items
-                .push(ChatItem::Thinking(ThinkingBlock { text: String::new() }));
+            self.items.push(ChatItem::Thinking(ThinkingBlock {
+                text: String::new(),
+            }));
         }
         let Some(ChatItem::Thinking(block)) = self.items.last_mut() else {
             unreachable!("just pushed Thinking");
@@ -161,8 +162,9 @@ impl AgentTerminalScreen {
             return;
         }
 
-        self.items
-            .push(ChatItem::UserMessage { content: input.clone() });
+        self.items.push(ChatItem::UserMessage {
+            content: input.clone(),
+        });
         input_entity.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
@@ -571,12 +573,7 @@ impl AgentTerminalScreen {
         container
     }
 
-    fn render_thinking(
-        &self,
-        idx: usize,
-        block: &ThinkingBlock,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn render_thinking(&self, idx: usize, block: &ThinkingBlock, cx: &mut Context<Self>) -> Div {
         let key = format!("thinking-{idx}");
         let is_collapsed = self.is_collapsed(&key, false);
         let chevron = if is_collapsed {
@@ -836,7 +833,11 @@ fn render_user_message(content: &str) -> Div {
                 .items_center()
                 .gap(px(5.0))
                 .mb(px(2.0))
-                .child(Icon::new(IconName::User).size_3().text_color(theme::PRIMARY))
+                .child(
+                    Icon::new(IconName::User)
+                        .size_3()
+                        .text_color(theme::PRIMARY),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -892,39 +893,35 @@ fn render_permission(perm: &PermissionBlock) -> Div {
         Some(false) => (IconName::CircleX, "Denied", theme::ERROR),
     };
 
-    div()
-        .w_full()
-        .px(px(12.0))
-        .py(px(1.0))
-        .child(
-            div()
-                .w_full()
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(4.0))
-                .bg(status_color.opacity(0.06))
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .child(Icon::new(icon).size_3().text_color(status_color))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_xs()
-                        .text_color(theme::TEXT_MUTED)
-                        .child(perm.description.clone()),
-                )
-                .child(
-                    div()
-                        .px(px(6.0))
-                        .py(px(1.0))
-                        .rounded(px(3.0))
-                        .bg(status_color.opacity(0.15))
-                        .text_xs()
-                        .text_color(status_color)
-                        .child(status_text),
-                ),
-        )
+    div().w_full().px(px(12.0)).py(px(1.0)).child(
+        div()
+            .w_full()
+            .px(px(8.0))
+            .py(px(3.0))
+            .rounded(px(4.0))
+            .bg(status_color.opacity(0.06))
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .child(Icon::new(icon).size_3().text_color(status_color))
+            .child(
+                div()
+                    .flex_1()
+                    .text_xs()
+                    .text_color(theme::TEXT_MUTED)
+                    .child(perm.description.clone()),
+            )
+            .child(
+                div()
+                    .px(px(6.0))
+                    .py(px(1.0))
+                    .rounded(px(3.0))
+                    .bg(status_color.opacity(0.15))
+                    .text_xs()
+                    .text_color(status_color)
+                    .child(status_text),
+            ),
+    )
 }
 
 fn render_system(content: &str) -> Div {
@@ -935,7 +932,11 @@ fn render_system(content: &str) -> Div {
         .flex()
         .items_center()
         .gap(px(5.0))
-        .child(Icon::new(IconName::Info).size_3().text_color(theme::TEXT_MUTED))
+        .child(
+            Icon::new(IconName::Info)
+                .size_3()
+                .text_color(theme::TEXT_MUTED),
+        )
         .child(
             div()
                 .text_xs()
@@ -1021,7 +1022,11 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
             .flex()
             .items_center()
             .gap(px(6.0))
-            .child(Icon::new(IconName::File).size_3().text_color(theme::TEXT_MUTED))
+            .child(
+                Icon::new(IconName::File)
+                    .size_3()
+                    .text_color(theme::TEXT_MUTED),
+            )
             .child(
                 div()
                     .text_xs()

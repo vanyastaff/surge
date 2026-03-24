@@ -2,21 +2,21 @@
 
 use std::path::PathBuf;
 
-use surge_acp::pool::AgentPool;
 use surge_acp::PermissionPolicy;
+use surge_acp::pool::AgentPool;
+use surge_core::SurgeConfig;
 use surge_core::event::SurgeEvent;
 use surge_core::id::TaskId;
 use surge_core::spec::SubtaskState;
 use surge_core::state::TaskState;
-use surge_core::SurgeConfig;
 use surge_git::worktree::GitManager;
 use surge_persistence::aggregator::{SessionContext, UsageAggregator};
 use surge_persistence::store::Store;
-use surge_spec::{validate_spec, DependencyGraph, SpecFile};
+use surge_spec::{DependencyGraph, SpecFile, validate_spec};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::budget::{start_budget_listener, BudgetStatus, BudgetTracker};
+use crate::budget::{BudgetStatus, BudgetTracker, start_budget_listener};
 use crate::executor::ExecutorConfig;
 use crate::gates::{GateAction, GateManager};
 use crate::parallel::ParallelExecutor;
@@ -180,10 +180,8 @@ impl Orchestrator {
             .await;
 
         // Gate manager (shared across all phases).
-        let gate_manager = GateManager::new(
-            self.config.surge_config.pipeline.gates.clone(),
-            specs_dir,
-        );
+        let gate_manager =
+            GateManager::new(self.config.surge_config.pipeline.gates.clone(), specs_dir);
 
         // ── Phase 1: Spec Creation ──────────────────────────────────────
         let req_path = spec_dir.join("requirements.md");
@@ -228,14 +226,9 @@ impl Orchestrator {
 
         // ── Phase 2: Planning ───────────────────────────────────────────
         if spec_file.spec.subtasks.is_empty() {
-            if let Err(e) = PlannerPhase::create_plan(
-                spec_file,
-                &spec_dir,
-                &pool,
-                &session,
-                &worktree_path,
-            )
-            .await
+            if let Err(e) =
+                PlannerPhase::create_plan(spec_file, &spec_dir, &pool, &session, &worktree_path)
+                    .await
             {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
@@ -244,10 +237,7 @@ impl Orchestrator {
                     reason: format!("Planning failed: {e}"),
                 };
             }
-            info!(
-                stories = spec_file.spec.subtasks.len(),
-                "plan created"
-            );
+            info!(stories = spec_file.spec.subtasks.len(), "plan created");
 
             // Gate: user reviews plan (architecture.md + stories) before execution.
             match gate_manager.check_gate(Phase::Planning, spec_id) {
@@ -304,7 +294,9 @@ impl Orchestrator {
         };
 
         // Count already completed subtasks (for resume support)
-        let already_completed = spec.subtasks.iter()
+        let already_completed = spec
+            .subtasks
+            .iter()
             .filter(|s| s.execution.state.is_terminal())
             .count();
 
@@ -314,7 +306,8 @@ impl Orchestrator {
             .map(|ids| {
                 ids.iter()
                     .filter_map(|id| {
-                        spec.subtasks.iter()
+                        spec.subtasks
+                            .iter()
                             .find(|s| s.id == *id)
                             .filter(|s| !s.execution.state.is_terminal())
                             .cloned()
@@ -333,7 +326,10 @@ impl Orchestrator {
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Planning,
-            new_state: TaskState::Executing { completed: already_completed, total },
+            new_state: TaskState::Executing {
+                completed: already_completed,
+                total,
+            },
         });
 
         let mut completed: usize = already_completed;
@@ -358,7 +354,10 @@ impl Orchestrator {
                 } => {
                     let used_usd = used_micro_usd as f64 / 1_000_000.0;
                     let limit_usd = limit_micro_usd as f64 / 1_000_000.0;
-                    warn!(used_usd, limit_usd, "cost budget exceeded, stopping pipeline");
+                    warn!(
+                        used_usd,
+                        limit_usd, "cost budget exceeded, stopping pipeline"
+                    );
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
@@ -450,7 +449,15 @@ impl Orchestrator {
 
         let qa_reviewer = QaReviewer::new(self.config.surge_config.pipeline.max_qa_iterations);
         let qa_result = qa_reviewer
-            .run(&spec, task_id, &pool, &session, &git, &self.event_tx, Some(&spec_dir))
+            .run(
+                &spec,
+                task_id,
+                &pool,
+                &session,
+                &git,
+                &self.event_tx,
+                Some(&spec_dir),
+            )
             .await;
 
         info!(

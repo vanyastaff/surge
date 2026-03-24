@@ -29,7 +29,10 @@ pub enum SpecCommands {
 
 pub fn run(command: SpecCommands) -> Result<()> {
     match command {
-        SpecCommands::Create { description, template } => {
+        SpecCommands::Create {
+            description,
+            template,
+        } => {
             let kind = template.as_deref().unwrap_or("feature");
             let template_kind = surge_spec::TemplateKind::parse(kind)?;
             let spec_file = surge_spec::generate_template(template_kind, &description)?;

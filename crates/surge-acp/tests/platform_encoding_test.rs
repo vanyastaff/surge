@@ -32,7 +32,10 @@ async fn test_utf8_basic_output() {
 
     let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
 
-    assert!(output.contains("Hello UTF-8"), "Output should contain UTF-8 text");
+    assert!(
+        output.contains("Hello UTF-8"),
+        "Output should contain UTF-8 text"
+    );
 }
 
 #[tokio::test]
@@ -144,10 +147,7 @@ async fn test_truncation_respects_char_boundaries() {
 
     // Create a string with multi-byte characters
     #[cfg(windows)]
-    let (cmd, args) = (
-        "cmd",
-        vec!["/C".into(), "echo 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀".into()],
-    );
+    let (cmd, args) = ("cmd", vec!["/C".into(), "echo 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀".into()]);
     #[cfg(not(windows))]
     let (cmd, args) = ("echo", vec!["🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀".into()]);
 
@@ -168,7 +168,10 @@ async fn test_truncation_respects_char_boundaries() {
 
     // Output should be valid UTF-8 (not split mid-character)
     // If it were split incorrectly, this would panic or contain replacement chars
-    assert!(output.is_char_boundary(output.len()), "Output should end at char boundary");
+    assert!(
+        output.is_char_boundary(output.len()),
+        "Output should end at char boundary"
+    );
 
     // Verify output is not empty
     assert!(!output.is_empty(), "Should have captured some output");
@@ -195,8 +198,14 @@ async fn test_truncation_exact_char_boundary() {
 
     let (output, _truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
 
-    assert!(output.len() <= 10, "Output should be truncated to 10 bytes or less");
-    assert!(output.is_char_boundary(output.len()), "Output should end at char boundary");
+    assert!(
+        output.len() <= 10,
+        "Output should be truncated to 10 bytes or less"
+    );
+    assert!(
+        output.is_char_boundary(output.len()),
+        "Output should end at char boundary"
+    );
 }
 
 #[tokio::test]
@@ -205,10 +214,7 @@ async fn test_stderr_utf8_capture() {
     let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
     #[cfg(windows)]
-    let (cmd, args) = (
-        "cmd",
-        vec!["/C".into(), "echo Error message 1>&2".into()],
-    );
+    let (cmd, args) = ("cmd", vec!["/C".into(), "echo Error message 1>&2".into()]);
     #[cfg(not(windows))]
     let (cmd, args) = ("sh", vec!["-c".into(), "echo 'Error message' 1>&2".into()]);
 
@@ -251,7 +257,10 @@ async fn test_large_utf8_output() {
     let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
 
     // Should have captured multiple lines
-    assert!(output.lines().count() > 10, "Should have captured multiple lines");
+    assert!(
+        output.lines().count() > 10,
+        "Should have captured multiple lines"
+    );
 }
 
 #[tokio::test]
@@ -274,7 +283,11 @@ async fn test_zero_byte_limit() {
 
     let (output, _truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
 
-    assert_eq!(output.len(), 0, "Output should be empty with zero byte limit");
+    assert_eq!(
+        output.len(),
+        0,
+        "Output should be empty with zero byte limit"
+    );
 }
 
 #[tokio::test]
@@ -284,15 +297,9 @@ async fn test_binary_output_handling() {
     let mgr = Arc::new(Mutex::new(Terminals::new(temp_dir())));
 
     #[cfg(windows)]
-    let (cmd, args) = (
-        "cmd",
-        vec!["/C".into(), "type nul".into()],
-    );
+    let (cmd, args) = ("cmd", vec!["/C".into(), "type nul".into()]);
     #[cfg(not(windows))]
-    let (cmd, args) = (
-        "sh",
-        vec!["-c".into(), "printf '\\xff\\xfe\\xfd'".into()],
-    );
+    let (cmd, args) = ("sh", vec!["-c".into(), "printf '\\xff\\xfe\\xfd'".into()]);
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 

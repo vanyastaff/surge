@@ -5,15 +5,14 @@
 //! tables, lists, blockquotes, and horizontal rules.
 
 use gpui::*;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, CodeBlockKind};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 use crate::theme;
 
 /// Render markdown text into a list of gpui elements.
 pub fn render_markdown(text: &str) -> Div {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(text, options);
 
     let mut renderer = MarkdownRenderer::new();
@@ -89,15 +88,21 @@ impl MarkdownRenderer {
     }
 
     fn is_bold(&self) -> bool {
-        self.format_stack.iter().any(|f| matches!(f, FormatTag::Bold))
+        self.format_stack
+            .iter()
+            .any(|f| matches!(f, FormatTag::Bold))
     }
 
     fn is_italic(&self) -> bool {
-        self.format_stack.iter().any(|f| matches!(f, FormatTag::Italic))
+        self.format_stack
+            .iter()
+            .any(|f| matches!(f, FormatTag::Italic))
     }
 
     fn is_strikethrough(&self) -> bool {
-        self.format_stack.iter().any(|f| matches!(f, FormatTag::Strikethrough))
+        self.format_stack
+            .iter()
+            .any(|f| matches!(f, FormatTag::Strikethrough))
     }
 
     fn push_text(&mut self, text: &str) {
@@ -232,7 +237,8 @@ impl MarkdownRenderer {
             Tag::Emphasis => self.format_stack.push(FormatTag::Italic),
             Tag::Strikethrough => self.format_stack.push(FormatTag::Strikethrough),
             Tag::Link { dest_url, .. } => {
-                self.format_stack.push(FormatTag::Link(dest_url.to_string()));
+                self.format_stack
+                    .push(FormatTag::Link(dest_url.to_string()));
             }
             Tag::CodeBlock(kind) => {
                 self.flush_paragraph();
@@ -243,7 +249,10 @@ impl MarkdownRenderer {
                     }
                     CodeBlockKind::Indented => None,
                 };
-                self.code_buf = Some(CodeBlock { lang, content: String::new() });
+                self.code_buf = Some(CodeBlock {
+                    lang,
+                    content: String::new(),
+                });
             }
             Tag::List(start) => {
                 self.flush_paragraph();
@@ -332,13 +341,16 @@ impl MarkdownRenderer {
                 self.format_stack.retain(|f| !matches!(f, FormatTag::Bold));
             }
             TagEnd::Emphasis => {
-                self.format_stack.retain(|f| !matches!(f, FormatTag::Italic));
+                self.format_stack
+                    .retain(|f| !matches!(f, FormatTag::Italic));
             }
             TagEnd::Strikethrough => {
-                self.format_stack.retain(|f| !matches!(f, FormatTag::Strikethrough));
+                self.format_stack
+                    .retain(|f| !matches!(f, FormatTag::Strikethrough));
             }
             TagEnd::Link => {
-                self.format_stack.retain(|f| !matches!(f, FormatTag::Link(_)));
+                self.format_stack
+                    .retain(|f| !matches!(f, FormatTag::Link(_)));
             }
             TagEnd::CodeBlock => {
                 if let Some(code) = self.code_buf.take() {
@@ -376,7 +388,7 @@ impl MarkdownRenderer {
                             .font_family("Consolas")
                             .text_sm()
                             .text_color(hsla(0.0, 0.0, 0.85, 1.0))
-                                                        .child(content),
+                            .child(content),
                     );
 
                     self.root.push(block.into_any_element());
@@ -474,10 +486,7 @@ fn render_table(table: TableState) -> Div {
             hsla(0.0, 0.0, 0.08, 1.0)
         };
 
-        let mut row = div()
-            .w_full()
-            .flex()
-            .bg(bg);
+        let mut row = div().w_full().flex().bg(bg);
 
         // Add border between rows (except last)
         if i < table.rows.len() - 1 {

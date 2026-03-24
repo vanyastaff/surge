@@ -11,7 +11,7 @@ use surge_core::spec::{Spec, Subtask};
 use surge_core::state::TaskState;
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{info, warn};
 
 use crate::context::SubtaskContext;
@@ -149,8 +149,7 @@ impl SubtaskExecutor {
 
             match pool.prompt(session, content.clone()).await {
                 Ok(_response) => {
-                    let commit_msg =
-                        format!("surge: subtask {} — {}", subtask.title, subtask_id);
+                    let commit_msg = format!("surge: subtask {} — {}", subtask.title, subtask_id);
                     let spec_id_str = spec.id.to_string();
 
                     match git.commit(&spec_id_str, &commit_msg) {
@@ -170,7 +169,9 @@ impl SubtaskExecutor {
                                     total: total_count,
                                 };
                                 let mut store_guard = store_ref.lock().await;
-                                if let Err(e) = store_guard.checkpoint_task_state(task_id, spec.id, &state) {
+                                if let Err(e) =
+                                    store_guard.checkpoint_task_state(task_id, spec.id, &state)
+                                {
                                     warn!(
                                         subtask_id = %subtask_id,
                                         error = %e,

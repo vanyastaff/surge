@@ -56,8 +56,10 @@ fn test_worktree_path_uses_platform_separators() {
     let wt_path = gm.worktree_path(spec_id);
 
     // Path should end with .surge/worktrees/test-spec-123
-    assert!(wt_path.ends_with(".surge/worktrees/test-spec-123")
-        || wt_path.ends_with(r".surge\worktrees\test-spec-123"));
+    assert!(
+        wt_path.ends_with(".surge/worktrees/test-spec-123")
+            || wt_path.ends_with(r".surge\worktrees\test-spec-123")
+    );
 
     // Path should be a valid PathBuf that can be used in operations
     assert!(wt_path.parent().is_some());

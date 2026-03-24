@@ -121,24 +121,27 @@ impl CommandPalette {
             base
         };
 
-        let mut row = base
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::TEXT_MUTED)
-                            .child(cmd.category.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(if is_selected { theme::TEXT_PRIMARY } else { theme::TEXT_MUTED })
-                            .child(cmd.label.clone()),
-                    ),
-            );
+        let mut row = base.child(
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::TEXT_MUTED)
+                        .child(cmd.category.clone()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if is_selected {
+                            theme::TEXT_PRIMARY
+                        } else {
+                            theme::TEXT_MUTED
+                        })
+                        .child(cmd.label.clone()),
+                ),
+        );
 
         if let Some(sc) = &cmd.shortcut {
             row = row.child(
@@ -156,9 +159,7 @@ impl CommandPalette {
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let item_count = self.filtered.len();
-        let items: Vec<Div> = (0..item_count)
-            .map(|i| self.render_item(i, cx))
-            .collect();
+        let items: Vec<Div> = (0..item_count).map(|i| self.render_item(i, cx)).collect();
 
         div()
             .v_flex()
@@ -197,14 +198,7 @@ impl Render for CommandPalette {
                     ),
             )
             // Results
-            .child(
-                div()
-                    .v_flex()
-                    .px_1()
-                    .py_1()
-                    .gap_0p5()
-                    .children(items),
-            )
+            .child(div().v_flex().px_1().py_1().gap_0p5().children(items))
             // Footer
             .child(
                 div()

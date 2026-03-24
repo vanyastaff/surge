@@ -76,8 +76,8 @@ impl LifecycleManager {
 
             // If HEAD is a descendant of (or equal to) the branch commit,
             // then the branch is fully merged.
-            let is_merged = head_oid == branch_oid
-                || repo.graph_descendant_of(head_oid, branch_oid)?;
+            let is_merged =
+                head_oid == branch_oid || repo.graph_descendant_of(head_oid, branch_oid)?;
 
             if is_merged {
                 info!(branch = %name, "removing merged branch");
@@ -149,7 +149,11 @@ mod tests {
         // Now the surge/merged-spec branch should be an ancestor of HEAD
         let lm = LifecycleManager::new(GitManager::new(path).unwrap());
         let report = lm.cleanup_merged_branches().unwrap();
-        assert!(report.removed_branches.contains(&"surge/merged-spec".to_string()));
+        assert!(
+            report
+                .removed_branches
+                .contains(&"surge/merged-spec".to_string())
+        );
     }
 
     #[test]

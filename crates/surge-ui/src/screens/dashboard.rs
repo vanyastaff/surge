@@ -1,7 +1,7 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 use surge_core::TaskState;
 
 use crate::app_state::AppState;
@@ -21,8 +21,13 @@ pub struct TaskCounts {
 
 impl TaskCounts {
     pub fn total(&self) -> u32 {
-        self.draft + self.planning + self.executing + self.qa_review
-            + self.human_review + self.completed + self.failed
+        self.draft
+            + self.planning
+            + self.executing
+            + self.qa_review
+            + self.human_review
+            + self.completed
+            + self.failed
     }
 
     pub fn active(&self) -> u32 {
@@ -105,12 +110,16 @@ impl DashboardScreen {
             .take(10)
             .map(|event| {
                 let (message, kind) = match event {
-                    surge_core::SurgeEvent::TaskStateChanged { task_id, new_state, .. } => {
-                        (format!("Task {} moved to {:?}", task_id, new_state), ActivityKind::TaskUpdate)
-                    }
-                    surge_core::SurgeEvent::AgentConnected { agent_name } => {
-                        (format!("{} connected", agent_name), ActivityKind::AgentEvent)
-                    }
+                    surge_core::SurgeEvent::TaskStateChanged {
+                        task_id, new_state, ..
+                    } => (
+                        format!("Task {} moved to {:?}", task_id, new_state),
+                        ActivityKind::TaskUpdate,
+                    ),
+                    surge_core::SurgeEvent::AgentConnected { agent_name } => (
+                        format!("{} connected", agent_name),
+                        ActivityKind::AgentEvent,
+                    ),
                     _ => (format!("{:?}", event), ActivityKind::TaskUpdate),
                 };
                 ActivityEntry {
@@ -145,13 +154,7 @@ impl DashboardScreen {
                             .h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded_full()
-                                    .bg(*color),
-                            )
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(*color))
                             .child(
                                 div()
                                     .text_sm()
@@ -180,7 +183,11 @@ impl DashboardScreen {
         let items: Vec<Div> = agents
             .iter()
             .map(|a| {
-                let status_color = if a.connected { theme::SUCCESS } else { theme::ERROR };
+                let status_color = if a.connected {
+                    theme::SUCCESS
+                } else {
+                    theme::ERROR
+                };
                 let status_text = if a.connected { "Online" } else { "Offline" };
 
                 div()
@@ -192,13 +199,7 @@ impl DashboardScreen {
                             .h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded_full()
-                                    .bg(status_color),
-                            )
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(status_color))
                             .child(
                                 div()
                                     .text_sm()
@@ -252,16 +253,8 @@ impl DashboardScreen {
                         .w_full()
                         .label("New Task"),
                 )
-                .child(
-                    Button::new("qa-continue")
-                        .w_full()
-                        .label("Continue Last"),
-                )
-                .child(
-                    Button::new("qa-review")
-                        .w_full()
-                        .label("Review Queue (1)"),
-                ),
+                .child(Button::new("qa-continue").w_full().label("Continue Last"))
+                .child(Button::new("qa-review").w_full().label("Review Queue (1)")),
         )
     }
 

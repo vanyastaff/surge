@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_core::TaskState;
 
@@ -164,7 +164,11 @@ impl KanbanScreen {
             .collect()
     }
 
-    fn tasks_in_column<'a>(&self, col: KanbanColumn, tasks: &'a [KanbanTask]) -> Vec<&'a KanbanTask> {
+    fn tasks_in_column<'a>(
+        &self,
+        col: KanbanColumn,
+        tasks: &'a [KanbanTask],
+    ) -> Vec<&'a KanbanTask> {
         tasks.iter().filter(|t| t.column == col).collect()
     }
 
@@ -175,17 +179,21 @@ impl KanbanScreen {
         } else {
             0.0
         };
-        let progress_color = if pct >= 1.0 { theme::SUCCESS } else { theme::PRIMARY };
+        let progress_color = if pct >= 1.0 {
+            theme::SUCCESS
+        } else {
+            theme::PRIMARY
+        };
 
         // Subtask dots
         let dots: Vec<Div> = (0..task.subtasks_total.min(12))
             .map(|i| {
                 let done = i < task.subtasks_done;
-                div()
-                    .w(px(7.0))
-                    .h(px(7.0))
-                    .rounded_full()
-                    .bg(if done { progress_color } else { theme::TEXT_MUTED.opacity(0.2) })
+                div().w(px(7.0)).h(px(7.0)).rounded_full().bg(if done {
+                    progress_color
+                } else {
+                    theme::TEXT_MUTED.opacity(0.2)
+                })
             })
             .collect();
 
@@ -224,16 +232,20 @@ impl KanbanScreen {
             )
             // Tags row
             .when(!task.tags.is_empty(), |el: Stateful<Div>| {
-                let tags_el: Vec<Div> = task.tags.iter().map(|(label, color)| {
-                    div()
-                        .text_xs()
-                        .px(px(6.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(color.opacity(0.15))
-                        .text_color(*color)
-                        .child(label.clone())
-                }).collect();
+                let tags_el: Vec<Div> = task
+                    .tags
+                    .iter()
+                    .map(|(label, color)| {
+                        div()
+                            .text_xs()
+                            .px(px(6.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(color.opacity(0.15))
+                            .text_color(*color)
+                            .child(label.clone())
+                    })
+                    .collect();
                 el.child(div().h_flex().gap_1().flex_wrap().children(tags_el))
             })
             // Description (2 lines max)
@@ -311,7 +323,9 @@ impl KanbanScreen {
                     .gap(px(4.0))
                     .items_center()
                     .child(
-                        Icon::new(IconName::Calendar).size_3().text_color(theme::TEXT_MUTED.opacity(0.5)),
+                        Icon::new(IconName::Calendar)
+                            .size_3()
+                            .text_color(theme::TEXT_MUTED.opacity(0.5)),
                     )
                     .child(
                         div()
@@ -344,15 +358,18 @@ impl KanbanScreen {
             )
     }
 
-    fn render_column_with_tasks(&self, col: KanbanColumn, all_tasks: &[KanbanTask], cx: &mut Context<Self>) -> Div {
+    fn render_column_with_tasks(
+        &self,
+        col: KanbanColumn,
+        all_tasks: &[KanbanTask],
+        cx: &mut Context<Self>,
+    ) -> Div {
         let tasks = self.tasks_in_column(col, all_tasks);
         let count = tasks.len();
         let is_empty = tasks.is_empty();
 
-        let cards: Vec<Stateful<Div>> = tasks
-            .iter()
-            .map(|t| self.render_task_card(t, cx))
-            .collect();
+        let cards: Vec<Stateful<Div>> =
+            tasks.iter().map(|t| self.render_task_card(t, cx)).collect();
 
         div()
             .v_flex()
@@ -365,13 +382,7 @@ impl KanbanScreen {
             .border_1()
             .border_color(theme::TEXT_MUTED.opacity(0.06))
             // Colored top border
-            .child(
-                div()
-                    .w_full()
-                    .h(px(3.0))
-                    .rounded_t_lg()
-                    .bg(col.color()),
-            )
+            .child(div().w_full().h(px(3.0)).rounded_t_lg().bg(col.color()))
             // Column header
             .child(
                 div()
@@ -416,9 +427,7 @@ impl KanbanScreen {
                     .flex_1()
                     .px_2()
                     .pb_2()
-                    .when(is_empty, |el: Div| {
-                        el.child(self.render_empty_column(col))
-                    })
+                    .when(is_empty, |el: Div| el.child(self.render_empty_column(col)))
                     .children(cards),
             )
     }

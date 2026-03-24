@@ -1,7 +1,7 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::theme;
 
@@ -76,7 +76,11 @@ impl FileExplorerScreen {
 
         let groups = dir_map
             .into_iter()
-            .map(|(dir, files)| DirGroup { dir, files, expanded: true })
+            .map(|(dir, files)| DirGroup {
+                dir,
+                files,
+                expanded: true,
+            })
             .collect();
 
         Self {
@@ -158,7 +162,11 @@ impl FileExplorerScreen {
                         .py(px(4.0))
                         .cursor_pointer()
                         .rounded_md()
-                        .bg(if is_selected { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                        .bg(if is_selected {
+                            theme::PRIMARY.opacity(0.1)
+                        } else {
+                            gpui::transparent_black()
+                        })
                         .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.selected_file = Some(path.clone());
@@ -278,11 +286,7 @@ impl Render for FileExplorerScreen {
                             .text_color(theme::TEXT_PRIMARY)
                             .child("File Explorer".to_string()),
                     )
-                    .child(
-                        Button::new("fe-view-diff")
-                            .primary()
-                            .label("View Diff"),
-                    ),
+                    .child(Button::new("fe-view-diff").primary().label("View Diff")),
             )
             // Tree view
             .child(

@@ -110,7 +110,10 @@ impl QaReviewer {
             match &verdict {
                 QaVerdict::Approved => {
                     info!(iteration, "QA approved");
-                    return QaCycleResult { verdict, iterations: iteration };
+                    return QaCycleResult {
+                        verdict,
+                        iterations: iteration,
+                    };
                 }
                 QaVerdict::NeedsFix { issues } => {
                     info!(iteration, issues = %issues, "QA needs fix");

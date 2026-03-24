@@ -57,14 +57,18 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                 println!("   (no agents configured)");
             } else {
                 for (name, agent_config) in &config.agents {
-                    let marker = if name == &config.default_agent { "*" } else { " " };
+                    let marker = if name == &config.default_agent {
+                        "*"
+                    } else {
+                        " "
+                    };
 
                     // Check if this configured agent is available
                     let available = discovered.iter().any(|d| {
                         // Match by command + args, or by agent kind ID
                         (d.entry.command == agent_config.command
                             && d.entry.default_args == agent_config.args)
-                        || d.entry.id == *name
+                            || d.entry.id == *name
                     });
 
                     let status = if available { "✓" } else { "✗" };
@@ -98,13 +102,16 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                     !discovered.iter().any(|d| {
                         (d.entry.command == agent_config.command
                             && d.entry.default_args == agent_config.args)
-                        || d.entry.id == **name
+                            || d.entry.id == **name
                     })
                 })
                 .collect();
 
             if !missing.is_empty() {
-                println!("⚠️  Missing agents ({} configured but not available):", missing.len());
+                println!(
+                    "⚠️  Missing agents ({} configured but not available):",
+                    missing.len()
+                );
                 for (name, _) in missing {
                     println!("   ✗ {}", name);
                 }
@@ -179,7 +186,11 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             // Collect names first to avoid borrow issues
             let agent_names: Vec<String> = config.agents.keys().cloned().collect();
             for name in &agent_names {
-                let marker = if name == &config.default_agent { " (default)" } else { "" };
+                let marker = if name == &config.default_agent {
+                    " (default)"
+                } else {
+                    ""
+                };
                 match pool.ping(name).await {
                     Ok(()) => println!("  ✅ {name}{marker} — online"),
                     Err(e) => {

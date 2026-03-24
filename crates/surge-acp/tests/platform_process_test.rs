@@ -30,7 +30,11 @@ async fn test_basic_process_spawn_unix() {
         let temp_dir = std::env::temp_dir();
 
         let result = StdioTransport::connect("test-echo", &config, &temp_dir).await;
-        assert!(result.is_ok(), "Failed to spawn echo process: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to spawn echo process: {:?}",
+            result.err()
+        );
 
         let mut io = result.unwrap();
 
@@ -54,7 +58,11 @@ async fn test_basic_process_spawn_windows() {
         let temp_dir = std::env::temp_dir();
 
         let result = StdioTransport::connect("test-echo", &config, &temp_dir).await;
-        assert!(result.is_ok(), "Failed to spawn echo process: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to spawn echo process: {:?}",
+            result.err()
+        );
 
         let mut io = result.unwrap();
 
@@ -95,13 +103,19 @@ async fn test_process_cleanup_no_zombies() {
     child.kill().await.expect("Failed to kill child process");
 
     // Wait for the process to terminate
-    let _status = child.wait().await.expect("Failed to wait for child process");
+    let _status = child
+        .wait()
+        .await
+        .expect("Failed to wait for child process");
 
     // On Unix, killed processes should have a signal exit status
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
-        assert!(_status.signal().is_some(), "Process should have been killed by signal");
+        assert!(
+            _status.signal().is_some(),
+            "Process should have been killed by signal"
+        );
     }
 
     // Verify the process is truly gone by checking if the PID is reusable
@@ -118,7 +132,11 @@ async fn test_process_cleanup_no_zombies() {
             .expect("Failed to check process existence");
 
         // Exit code 1 means process doesn't exist (which is what we want)
-        assert!(!check.status.success(), "Process with PID {} still exists after cleanup", pid);
+        assert!(
+            !check.status.success(),
+            "Process with PID {} still exists after cleanup",
+            pid
+        );
     }
 
     #[cfg(windows)]
@@ -186,7 +204,10 @@ async fn test_invalid_command_returns_error() {
 
         let result = StdioTransport::connect("test-invalid", &config, &temp_dir).await;
 
-        assert!(result.is_err(), "Expected error when spawning non-existent command");
+        assert!(
+            result.is_err(),
+            "Expected error when spawning non-existent command"
+        );
 
         // Extract error message without requiring Debug on AgentIo
         if let Err(err) = result {
@@ -406,10 +427,16 @@ async fn test_process_termination_timeout() {
 
     // Wait for the process with a timeout
     let wait_result = timeout(Duration::from_secs(2), child.wait()).await;
-    assert!(wait_result.is_ok(), "Process did not terminate within timeout");
+    assert!(
+        wait_result.is_ok(),
+        "Process did not terminate within timeout"
+    );
 
     let status = wait_result.unwrap().expect("Failed to get exit status");
 
     // Process should not have exited successfully (it was killed)
-    assert!(!status.success(), "Killed process should not have success status");
+    assert!(
+        !status.success(),
+        "Killed process should not have success status"
+    );
 }

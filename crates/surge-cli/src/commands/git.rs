@@ -71,7 +71,11 @@ pub fn worktrees() -> Result<()> {
     } else {
         println!("⚡ Active worktrees:\n");
         for wt in &worktrees {
-            let status = if wt.exists_on_disk { "✅" } else { "❌ (missing)" };
+            let status = if wt.exists_on_disk {
+                "✅"
+            } else {
+                "❌ (missing)"
+            };
             println!("  {status} {} — {}", wt.spec_id, wt.branch);
             println!("       {}", wt.path.display());
         }

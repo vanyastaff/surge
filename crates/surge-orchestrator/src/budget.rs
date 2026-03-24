@@ -1,7 +1,7 @@
 //! Budget — token and cost limit enforcement for pipeline execution.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use surge_core::config::PipelineConfig;
 use surge_core::event::SurgeEvent;
@@ -27,10 +27,7 @@ pub enum BudgetStatus {
     /// Within budget.
     Ok,
     /// Token limit exceeded.
-    TokensExceeded {
-        used: u64,
-        limit: u64,
-    },
+    TokensExceeded { used: u64, limit: u64 },
     /// Cost limit exceeded.
     CostExceeded {
         used_micro_usd: u64,
@@ -68,7 +65,8 @@ impl BudgetTracker {
 
         if let Some(cost) = estimated_cost_usd {
             let micro = (cost * 1_000_000.0) as u64;
-            self.total_cost_micro_usd.fetch_add(micro, Ordering::Relaxed);
+            self.total_cost_micro_usd
+                .fetch_add(micro, Ordering::Relaxed);
         }
     }
 
@@ -181,7 +179,10 @@ mod tests {
         tracker.record(1_000, 1_000, None);
         assert!(matches!(
             tracker.check(),
-            BudgetStatus::TokensExceeded { used: 11_000, limit: 10_000 }
+            BudgetStatus::TokensExceeded {
+                used: 11_000,
+                limit: 10_000
+            }
         ));
     }
 
@@ -198,10 +199,7 @@ mod tests {
         assert_eq!(tracker.check(), BudgetStatus::Ok);
 
         tracker.record(1_000, 500, Some(0.6));
-        assert!(matches!(
-            tracker.check(),
-            BudgetStatus::CostExceeded { .. }
-        ));
+        assert!(matches!(tracker.check(), BudgetStatus::CostExceeded { .. }));
     }
 
     #[test]

@@ -50,18 +50,18 @@ impl Screen {
     pub fn icon(self) -> IconName {
         match self {
             Self::Dashboard => IconName::LayoutDashboard,
-            Self::Kanban => IconName::Frame,           // columns layout
+            Self::Kanban => IconName::Frame, // columns layout
             Self::TaskDetail => IconName::File,
             Self::SpecExplorer => IconName::Search,
             Self::SpecWizard => IconName::Plus,
             Self::AgentHub => IconName::Bot,
             Self::AgentTerminals => IconName::SquareTerminal,
-            Self::LiveExecution => IconName::Loader,   // activity/spinner
-            Self::DiffViewer => IconName::Replace,     // git compare
+            Self::LiveExecution => IconName::Loader, // activity/spinner
+            Self::DiffViewer => IconName::Replace,   // git compare
             Self::FileExplorer => IconName::Folder,
             Self::Insights => IconName::ChartPie,
-            Self::Worktrees => IconName::FolderOpen,   // git branch
-            Self::GitHubIssues => IconName::Info,      // circle-dot
+            Self::Worktrees => IconName::FolderOpen, // git branch
+            Self::GitHubIssues => IconName::Info,    // circle-dot
             Self::GitHubPRs => IconName::GitHub,
             Self::Roadmap => IconName::Map,
             Self::ContextMemory => IconName::BookOpen,

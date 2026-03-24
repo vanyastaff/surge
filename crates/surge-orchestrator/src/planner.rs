@@ -5,10 +5,10 @@ use std::path::Path;
 
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
+use surge_core::SurgeError;
 use surge_core::event::SurgeEvent;
 use surge_core::id::SubtaskId;
 use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask, SubtaskExecution};
-use surge_core::SurgeError;
 use surge_spec::SpecFile;
 use tracing::info;
 
@@ -229,10 +229,7 @@ description = "criterion text"
             if let Some(path) = &spec_file.path {
                 spec_file.save(path)?;
             }
-            info!(
-                "plan created: {} stories",
-                spec_file.spec.subtasks.len()
-            );
+            info!("plan created: {} stories", spec_file.spec.subtasks.len());
         }
 
         Ok(())
@@ -244,12 +241,7 @@ description = "criterion text"
     fn load_subtasks_from_stories(stories_dir: &Path) -> Result<Vec<Subtask>, SurgeError> {
         let mut stories: Vec<_> = fs::read_dir(stories_dir)?
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|x| x == "md")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
             .collect();
 
         // Sort by filename (story-001, story-002, ...).
@@ -399,10 +391,7 @@ description = "criterion text"
     /// Used for complex features where the user description may be ambiguous.
     /// The agent returns 2-3 focused questions; answers are fed into phase 1.
     #[must_use]
-    pub fn build_clarification_prompt(
-        user_description: &str,
-        worktree_root: &Path,
-    ) -> String {
+    pub fn build_clarification_prompt(user_description: &str, worktree_root: &Path) -> String {
         let project_structure = Self::read_project_structure(worktree_root);
 
         format!(
@@ -488,9 +477,18 @@ mod tests {
         let prompt =
             PlannerPhase::build_requirements_prompt("Add JWT auth", &PathBuf::from("/tmp/fake"));
 
-        assert!(prompt.contains("Add JWT auth"), "should contain user description");
-        assert!(prompt.contains("### Overview"), "should have Overview section");
-        assert!(prompt.contains("### User Stories"), "should have User Stories section");
+        assert!(
+            prompt.contains("Add JWT auth"),
+            "should contain user description"
+        );
+        assert!(
+            prompt.contains("### Overview"),
+            "should have Overview section"
+        );
+        assert!(
+            prompt.contains("### User Stories"),
+            "should have User Stories section"
+        );
         assert!(
             prompt.contains("### Functional Requirements"),
             "should have FR section"
@@ -544,10 +542,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(subtask.title, "Add JWT authentication middleware");
-        assert_eq!(
-            subtask.story_file.as_deref(),
-            Some("stories/story-002.md")
-        );
+        assert_eq!(subtask.story_file.as_deref(), Some("stories/story-002.md"));
     }
 
     #[test]
@@ -566,10 +561,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(subtask.files.len(), 2);
-        assert_eq!(
-            subtask.files[0],
-            "crates/surge-api/src/middleware/auth.rs"
-        );
+        assert_eq!(subtask.files[0], "crates/surge-api/src/middleware/auth.rs");
         assert_eq!(subtask.files[1], "crates/surge-api/src/router.rs");
     }
 
@@ -637,10 +629,8 @@ mod tests {
 
     #[test]
     fn test_build_clarification_prompt_contains_key_parts() {
-        let prompt = PlannerPhase::build_clarification_prompt(
-            "Add user auth",
-            &PathBuf::from("/tmp/fake"),
-        );
+        let prompt =
+            PlannerPhase::build_clarification_prompt("Add user auth", &PathBuf::from("/tmp/fake"));
 
         assert!(prompt.contains("Add user auth"));
         assert!(prompt.contains("Scope ambiguity"));

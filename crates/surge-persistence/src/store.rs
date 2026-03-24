@@ -2,7 +2,7 @@
 
 use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
 use crate::{PersistenceError, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_core::state::TaskState;
@@ -174,8 +174,10 @@ impl Store {
             self.conn.execute(CREATE_SUBTASK_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_TASK_STATE_SPEC_INDEX, [])?;
 
-            self.conn
-                .execute("INSERT INTO schema_version (version) VALUES (?1)", [SCHEMA_VERSION])?;
+            self.conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                [SCHEMA_VERSION],
+            )?;
         }
 
         Ok(())
@@ -224,9 +226,7 @@ impl Store {
                         session_id: row.get(0)?,
                         agent_name: row.get(1)?,
                         task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                        subtask_id: row
-                            .get::<_, Option<String>>(3)?
-                            .map(|s| s.parse().unwrap()),
+                        subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
                         spec_id: row.get::<_, String>(4)?.parse().unwrap(),
                         timestamp_ms: row.get::<_, i64>(5)? as u64,
                         input_tokens: row.get::<_, i64>(6)? as u64,
@@ -244,18 +244,16 @@ impl Store {
 
     /// List all session usage records for a given spec.
     pub fn list_sessions_by_spec(&self, spec_id: SpecId) -> Result<Vec<SessionUsage>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM session_usage WHERE spec_id = ?1 ORDER BY timestamp_ms DESC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM session_usage WHERE spec_id = ?1 ORDER BY timestamp_ms DESC")?;
 
         let rows = stmt.query_map([spec_id.to_string()], |row| {
             Ok(SessionUsage {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
                 task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                subtask_id: row
-                    .get::<_, Option<String>>(3)?
-                    .map(|s| s.parse().unwrap()),
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
                 spec_id: row.get::<_, String>(4)?.parse().unwrap(),
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
@@ -282,9 +280,7 @@ impl Store {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
                 task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                subtask_id: row
-                    .get::<_, Option<String>>(3)?
-                    .map(|s| s.parse().unwrap()),
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
                 spec_id: row.get::<_, String>(4)?.parse().unwrap(),
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
@@ -364,9 +360,9 @@ impl Store {
 
     /// List all subtask usage records for a given spec.
     pub fn list_subtasks_by_spec(&self, spec_id: SpecId) -> Result<Vec<SubtaskUsage>> {
-        let mut stmt =
-            self.conn
-                .prepare("SELECT * FROM subtask_usage WHERE spec_id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM subtask_usage WHERE spec_id = ?1")?;
 
         let rows = stmt.query_map([spec_id.to_string()], |row| {
             Ok(SubtaskUsage {
@@ -474,8 +470,9 @@ impl Store {
         spec_id: SpecId,
         state: &TaskState,
     ) -> Result<()> {
-        let state_json = serde_json::to_string(state)
-            .map_err(|e| PersistenceError::Storage(format!("Failed to serialize task state: {e}")))?;
+        let state_json = serde_json::to_string(state).map_err(|e| {
+            PersistenceError::Storage(format!("Failed to serialize task state: {e}"))
+        })?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -488,12 +485,7 @@ impl Store {
                 task_id, spec_id, state_json, updated_at
             ) VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![
-                task_id.to_string(),
-                spec_id.to_string(),
-                state_json,
-                now,
-            ],
+            params![task_id.to_string(), spec_id.to_string(), state_json, now,],
         )?;
         Ok(())
     }
@@ -515,17 +507,22 @@ impl Store {
             )
             .optional()?
             .map(|(spec_id_str, state_json)| {
-                let spec_id = spec_id_str.parse()
+                let spec_id = spec_id_str
+                    .parse()
                     .map_err(|e| PersistenceError::Storage(format!("Invalid spec_id: {e}")))?;
-                let state: TaskState = serde_json::from_str(&state_json)
-                    .map_err(|e| PersistenceError::Storage(format!("Failed to deserialize task state: {e}")))?;
+                let state: TaskState = serde_json::from_str(&state_json).map_err(|e| {
+                    PersistenceError::Storage(format!("Failed to deserialize task state: {e}"))
+                })?;
                 Ok((spec_id, state))
             })
             .transpose()
     }
 
     /// Get all task checkpoints for a given spec.
-    pub fn list_task_states_by_spec(&self, spec_id: SpecId) -> Result<Vec<(TaskId, TaskState, u64)>> {
+    pub fn list_task_states_by_spec(
+        &self,
+        spec_id: SpecId,
+    ) -> Result<Vec<(TaskId, TaskState, u64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT task_id, state_json, updated_at FROM task_state WHERE spec_id = ?1 ORDER BY updated_at DESC",
         )?;
@@ -539,10 +536,12 @@ impl Store {
 
         rows.map(|row| {
             let (task_id_str, state_json, updated_at) = row?;
-            let task_id = task_id_str.parse()
+            let task_id = task_id_str
+                .parse()
                 .map_err(|e| PersistenceError::Storage(format!("Invalid task_id: {e}")))?;
-            let state: TaskState = serde_json::from_str(&state_json)
-                .map_err(|e| PersistenceError::Storage(format!("Failed to deserialize task state: {e}")))?;
+            let state: TaskState = serde_json::from_str(&state_json).map_err(|e| {
+                PersistenceError::Storage(format!("Failed to deserialize task state: {e}"))
+            })?;
             Ok((task_id, state, updated_at))
         })
         .collect()
@@ -558,23 +557,19 @@ impl Store {
 
     /// Get total session count across all specs.
     pub fn total_session_count(&self) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM session_usage",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_usage", [], |row| row.get(0))?;
         Ok(count as u64)
     }
 
     /// Get total estimated cost across all specs.
     pub fn total_estimated_cost(&self) -> Result<f64> {
-        let cost: f64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM spec_usage",
-                [],
-                |row| row.get(0),
-            )?;
+        let cost: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM spec_usage",
+            [],
+            |row| row.get(0),
+        )?;
         Ok(cost)
     }
 }
@@ -881,10 +876,15 @@ mod tests {
         let mut store = Store::in_memory().unwrap();
         let task_id = TaskId::new();
         let spec_id = SpecId::new();
-        let state = TaskState::Executing { completed: 3, total: 10 };
+        let state = TaskState::Executing {
+            completed: 3,
+            total: 10,
+        };
 
         // Checkpoint the task state
-        store.checkpoint_task_state(task_id, spec_id, &state).unwrap();
+        store
+            .checkpoint_task_state(task_id, spec_id, &state)
+            .unwrap();
 
         // Resume the task state
         let resumed = store.resume_task_state(task_id).unwrap();
@@ -902,12 +902,22 @@ mod tests {
         let spec_id = SpecId::new();
 
         // First checkpoint
-        let state1 = TaskState::Executing { completed: 3, total: 10 };
-        store.checkpoint_task_state(task_id, spec_id, &state1).unwrap();
+        let state1 = TaskState::Executing {
+            completed: 3,
+            total: 10,
+        };
+        store
+            .checkpoint_task_state(task_id, spec_id, &state1)
+            .unwrap();
 
         // Second checkpoint (should replace)
-        let state2 = TaskState::Executing { completed: 7, total: 10 };
-        store.checkpoint_task_state(task_id, spec_id, &state2).unwrap();
+        let state2 = TaskState::Executing {
+            completed: 7,
+            total: 10,
+        };
+        store
+            .checkpoint_task_state(task_id, spec_id, &state2)
+            .unwrap();
 
         // Resume should get the latest state
         let (_, resumed_state) = store.resume_task_state(task_id).unwrap().unwrap();
@@ -931,19 +941,26 @@ mod tests {
             TaskState::Draft,
             TaskState::Planning,
             TaskState::Planned { subtask_count: 5 },
-            TaskState::Executing { completed: 2, total: 5 },
+            TaskState::Executing {
+                completed: 2,
+                total: 5,
+            },
             TaskState::QaReview,
             TaskState::QaFix { iteration: 2 },
             TaskState::HumanReview,
             TaskState::Merging,
             TaskState::Completed,
-            TaskState::Failed { reason: "test error".to_string() },
+            TaskState::Failed {
+                reason: "test error".to_string(),
+            },
             TaskState::Cancelled,
         ];
 
         for state in test_states {
             let task_id = TaskId::new();
-            store.checkpoint_task_state(task_id, spec_id, &state).unwrap();
+            store
+                .checkpoint_task_state(task_id, spec_id, &state)
+                .unwrap();
             let (_, resumed_state) = store.resume_task_state(task_id).unwrap().unwrap();
             assert_eq!(resumed_state, state);
         }
@@ -959,13 +976,28 @@ mod tests {
         let task3 = TaskId::new();
 
         // Checkpoint three tasks for the same spec
-        store.checkpoint_task_state(task1, spec_id, &TaskState::Executing { completed: 1, total: 5 }).unwrap();
-        store.checkpoint_task_state(task2, spec_id, &TaskState::Completed).unwrap();
-        store.checkpoint_task_state(task3, spec_id, &TaskState::Planning).unwrap();
+        store
+            .checkpoint_task_state(
+                task1,
+                spec_id,
+                &TaskState::Executing {
+                    completed: 1,
+                    total: 5,
+                },
+            )
+            .unwrap();
+        store
+            .checkpoint_task_state(task2, spec_id, &TaskState::Completed)
+            .unwrap();
+        store
+            .checkpoint_task_state(task3, spec_id, &TaskState::Planning)
+            .unwrap();
 
         // Also checkpoint a task for a different spec (should not be included)
         let other_spec = SpecId::new();
-        store.checkpoint_task_state(TaskId::new(), other_spec, &TaskState::Draft).unwrap();
+        store
+            .checkpoint_task_state(TaskId::new(), other_spec, &TaskState::Draft)
+            .unwrap();
 
         // List tasks for the first spec
         let tasks = store.list_task_states_by_spec(spec_id).unwrap();

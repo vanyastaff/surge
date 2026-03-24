@@ -39,9 +39,7 @@ macro_rules! define_id {
             /// Parse from either the prefixed form (`"spec-01ARZ3NDEKTSV4RRFFQ69G5FAV"`)
             /// or the bare ULID string (`"01ARZ3NDEKTSV4RRFFQ69G5FAV"`).
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let ulid_str = s
-                    .strip_prefix(concat!($prefix, "-"))
-                    .unwrap_or(s);
+                let ulid_str = s.strip_prefix(concat!($prefix, "-")).unwrap_or(s);
                 ulid_str.parse::<Ulid>().map(Self)
             }
         }
@@ -73,7 +71,7 @@ mod tests {
     #[test]
     fn from_str_prefixed_roundtrip() {
         let id = TaskId::new();
-        let s = id.to_string();          // "task-01ARZ..."
+        let s = id.to_string(); // "task-01ARZ..."
         let parsed: TaskId = s.parse().unwrap();
         assert_eq!(parsed, id);
     }
@@ -81,7 +79,7 @@ mod tests {
     #[test]
     fn from_str_bare_ulid() {
         let id = SubtaskId::new();
-        let bare = id.as_ulid().to_string();  // no prefix
+        let bare = id.as_ulid().to_string(); // no prefix
         let parsed: SubtaskId = bare.parse().unwrap();
         assert_eq!(parsed, id);
     }
@@ -91,7 +89,7 @@ mod tests {
         // "task-<ulid>" parsed as SpecId strips nothing (wrong prefix),
         // so it tries to parse "task-<ulid>" as a raw ULID and fails.
         let task_id = TaskId::new();
-        let task_str = task_id.to_string();  // "task-01ARZ..."
+        let task_str = task_id.to_string(); // "task-01ARZ..."
         let result: Result<SpecId, _> = task_str.parse();
         assert!(result.is_err());
     }

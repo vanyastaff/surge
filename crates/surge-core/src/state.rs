@@ -20,14 +20,21 @@ pub enum TaskState {
 impl TaskState {
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed { .. } | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::Failed { .. } | Self::Cancelled
+        )
     }
 
     #[must_use]
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Self::Planning | Self::Executing { .. } | Self::QaReview | Self::QaFix { .. } | Self::Merging
+            Self::Planning
+                | Self::Executing { .. }
+                | Self::QaReview
+                | Self::QaFix { .. }
+                | Self::Merging
         )
     }
 
@@ -50,13 +57,25 @@ mod tests {
         assert!(TaskState::Cancelled.is_terminal());
 
         assert!(!TaskState::Draft.is_terminal());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_terminal());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_terminal()
+        );
     }
 
     #[test]
     fn test_active_states() {
         assert!(TaskState::Planning.is_active());
-        assert!(TaskState::Executing { completed: 1, total: 3 }.is_active());
+        assert!(
+            TaskState::Executing {
+                completed: 1,
+                total: 3
+            }
+            .is_active()
+        );
         assert!(TaskState::QaReview.is_active());
         assert!(TaskState::QaFix { iteration: 2 }.is_active());
         assert!(TaskState::Merging.is_active());
@@ -74,7 +93,13 @@ mod tests {
         assert!(TaskState::HumanReview.is_waiting());
 
         assert!(!TaskState::Planning.is_waiting());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_waiting());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_waiting()
+        );
         assert!(!TaskState::Completed.is_waiting());
         assert!(!TaskState::Failed { reason: "x".into() }.is_waiting());
     }
@@ -86,7 +111,10 @@ mod tests {
             TaskState::Draft,
             TaskState::Planning,
             TaskState::Planned { subtask_count: 1 },
-            TaskState::Executing { completed: 0, total: 1 },
+            TaskState::Executing {
+                completed: 0,
+                total: 1,
+            },
             TaskState::QaReview,
             TaskState::QaFix { iteration: 1 },
             TaskState::HumanReview,

@@ -1,12 +1,12 @@
 //! Dependency graph for spec subtasks — topological sorting and batch grouping.
 
-use std::collections::HashMap;
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::algo::toposort;
 use petgraph::Direction;
+use petgraph::algo::toposort;
+use petgraph::graph::{DiGraph, NodeIndex};
+use std::collections::HashMap;
+use surge_core::SurgeError;
 use surge_core::id::SubtaskId;
 use surge_core::spec::Spec;
-use surge_core::SurgeError;
 
 /// A dependency graph of subtasks.
 pub struct DependencyGraph {
@@ -43,7 +43,11 @@ impl DependencyGraph {
             }
         }
 
-        Ok(Self { graph, id_to_node, node_to_id })
+        Ok(Self {
+            graph,
+            id_to_node,
+            node_to_id,
+        })
     }
 
     /// Get topologically sorted subtask IDs.
@@ -63,7 +67,8 @@ impl DependencyGraph {
         let mut max_depth = 0;
 
         for node in &sorted {
-            let depth = self.graph
+            let depth = self
+                .graph
                 .neighbors_directed(*node, Direction::Incoming)
                 .map(|dep| depths.get(&dep).copied().unwrap_or(0) + 1)
                 .max()
@@ -99,10 +104,13 @@ impl DependencyGraph {
             lines.push(format!("Batch {}:", i + 1));
             for id in batch {
                 let title = title_map.get(id).unwrap_or(&"???");
-                let deps: Vec<&str> = spec.subtasks.iter()
+                let deps: Vec<&str> = spec
+                    .subtasks
+                    .iter()
                     .find(|s| s.id == *id)
                     .map(|s| {
-                        s.depends_on.iter()
+                        s.depends_on
+                            .iter()
                             .filter_map(|d| title_map.get(d).copied())
                             .collect()
                     })

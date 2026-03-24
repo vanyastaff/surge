@@ -9,8 +9,10 @@ pub struct SurgeNotification;
 
 impl SurgeNotification {
     pub fn task_completed(task_name: &str) -> Notification {
-        Notification::success(SharedString::from(format!("{task_name} finished successfully")))
-            .title("Task Completed")
+        Notification::success(SharedString::from(format!(
+            "{task_name} finished successfully"
+        )))
+        .title("Task Completed")
     }
 
     pub fn task_failed(task_name: &str, reason: &str) -> Notification {
@@ -20,8 +22,7 @@ impl SurgeNotification {
     }
 
     pub fn agent_connected(agent: &str) -> Notification {
-        Notification::info(SharedString::from(format!("{agent} is ready")))
-            .title("Agent Connected")
+        Notification::info(SharedString::from(format!("{agent} is ready"))).title("Agent Connected")
     }
 
     pub fn agent_disconnected(agent: &str) -> Notification {
@@ -37,9 +38,9 @@ impl SurgeNotification {
     }
 
     pub fn rate_limit_warning(agent: &str, reset_secs: u64) -> Notification {
-        Notification::warning(SharedString::from(
-            format!("{agent} rate limited — resets in {reset_secs}s"),
-        ))
+        Notification::warning(SharedString::from(format!(
+            "{agent} rate limited — resets in {reset_secs}s"
+        )))
         .title("Rate Limit")
         .autohide(false)
     }

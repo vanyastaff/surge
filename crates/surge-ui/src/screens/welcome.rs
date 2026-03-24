@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::project::{RecentProject, RecentProjects};
 use crate::theme;
@@ -48,11 +48,7 @@ impl WelcomeScreen {
             .items_center()
             .gap_2()
             .pb_8()
-            .child(
-                div()
-                    .text_color(theme::PRIMARY)
-                    .child("⚡".to_string()),
-            )
+            .child(div().text_color(theme::PRIMARY).child("⚡".to_string()))
             .child(
                 div()
                     .font_weight(FontWeight::BOLD)
@@ -152,11 +148,17 @@ impl WelcomeScreen {
                             .py_1()
                             .rounded_md()
                             .text_xs()
-                            .text_color(if pinned { theme::WARNING } else { theme::TEXT_MUTED })
+                            .text_color(if pinned {
+                                theme::WARNING
+                            } else {
+                                theme::TEXT_MUTED
+                            })
                             .hover(|s: StyleRefinement| s.bg(theme::SURFACE))
-                            .on_click(cx.listener(move |_this, _event: &ClickEvent, _window, cx| {
-                                cx.emit(WelcomeEvent::TogglePin(path_pin.clone()));
-                            }))
+                            .on_click(cx.listener(
+                                move |_this, _event: &ClickEvent, _window, cx| {
+                                    cx.emit(WelcomeEvent::TogglePin(path_pin.clone()));
+                                },
+                            ))
                             .child(if pinned { "★" } else { "☆" }),
                     )
                     // Remove button
@@ -169,10 +171,14 @@ impl WelcomeScreen {
                             .rounded_md()
                             .text_xs()
                             .text_color(theme::TEXT_MUTED)
-                            .hover(|s: StyleRefinement| s.text_color(theme::ERROR).bg(theme::SURFACE))
-                            .on_click(cx.listener(move |_this, _event: &ClickEvent, _window, cx| {
-                                cx.emit(WelcomeEvent::RemoveProject(path_remove.clone()));
-                            }))
+                            .hover(|s: StyleRefinement| {
+                                s.text_color(theme::ERROR).bg(theme::SURFACE)
+                            })
+                            .on_click(cx.listener(
+                                move |_this, _event: &ClickEvent, _window, cx| {
+                                    cx.emit(WelcomeEvent::RemoveProject(path_remove.clone()));
+                                },
+                            ))
                             .child("✕"),
                     ),
             )
@@ -191,11 +197,7 @@ impl WelcomeScreen {
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         cx.emit(WelcomeEvent::BrowseProject);
                     }))
-                    .child(
-                        Button::new("open-project")
-                            .primary()
-                            .label("Open Project"),
-                    ),
+                    .child(Button::new("open-project").primary().label("Open Project")),
             )
             // Init New Project
             .child(
@@ -204,10 +206,7 @@ impl WelcomeScreen {
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         cx.emit(WelcomeEvent::InitProject);
                     }))
-                    .child(
-                        Button::new("init-project")
-                            .label("Init New Project"),
-                    ),
+                    .child(Button::new("init-project").label("Init New Project")),
             )
     }
 }
@@ -236,17 +235,13 @@ impl Render for WelcomeScreen {
                     .child(self.render_logo())
                     // Recent Projects header
                     .child(
-                        div()
-                            .h_flex()
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_MUTED)
-                                    .child("Recent Projects".to_string()),
-                            ),
+                        div().h_flex().justify_between().items_center().child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::TEXT_MUTED)
+                                .child("Recent Projects".to_string()),
+                        ),
                     )
                     // Project list
                     .child(
@@ -262,7 +257,10 @@ impl Render for WelcomeScreen {
                                         .p_8()
                                         .text_center()
                                         .text_color(theme::TEXT_MUTED)
-                                        .child("No recent projects. Open or create one to get started.".to_string()),
+                                        .child(
+                                        "No recent projects. Open or create one to get started."
+                                            .to_string(),
+                                    ),
                                 )
                             })
                             .children(project_items),
