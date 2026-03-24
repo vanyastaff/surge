@@ -80,6 +80,9 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                     if let Some(path) = &agent.command_path {
                         println!("     Path: {path}");
                     }
+                    if let Some(version) = &agent.detected_version {
+                        println!("     Version: {version}");
+                    }
                     println!("     Capabilities: {}", caps.join(", "));
                     println!();
                 }
