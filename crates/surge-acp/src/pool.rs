@@ -66,6 +66,7 @@ enum PoolOp {
 struct WorkerState {
     connections: HashMap<String, AgentConnection>,
     spawning: HashSet<String>,
+    reconnecting: HashSet<String>,
     configs: HashMap<String, AgentConfig>,
     worktree_root: PathBuf,
     permission_policy: PermissionPolicy,
@@ -439,6 +440,7 @@ fn run_worker(
         let state = Rc::new(RefCell::new(WorkerState {
             connections: HashMap::new(),
             spawning: HashSet::new(),
+            reconnecting: HashSet::new(),
             configs,
             worktree_root,
             permission_policy,
