@@ -2,7 +2,34 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+
+/// Capabilities an agent may support.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentCapability {
+    Code,
+    Plan,
+    Review,
+    Test,
+    Refactor,
+    Chat,
+}
+
+impl fmt::Display for AgentCapability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Code => "code",
+            Self::Plan => "plan",
+            Self::Review => "review",
+            Self::Test => "test",
+            Self::Refactor => "refactor",
+            Self::Chat => "chat",
+        };
+        write!(f, "{s}")
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
@@ -56,6 +83,9 @@ pub struct AgentConfig {
     /// Claude Code) before spawning the process.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Capabilities this agent supports.
+    #[serde(default)]
+    pub capabilities: Vec<AgentCapability>,
 }
 
 impl AgentConfig {
