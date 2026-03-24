@@ -239,15 +239,15 @@ impl HealthTracker {
     /// Records a successful heartbeat from an agent.
     /// Clears consecutive heartbeat failure count.
     pub fn record_heartbeat_success(&mut self, agent: &str) {
-        if let Some(health) = self.agents.get_mut(agent) {
-            if health.consecutive_heartbeat_failures > 0 {
-                info!(
-                    agent,
-                    "heartbeat recovered after {} consecutive failures",
-                    health.consecutive_heartbeat_failures
-                );
-                health.consecutive_heartbeat_failures = 0;
-            }
+        if let Some(health) = self.agents.get_mut(agent)
+            && health.consecutive_heartbeat_failures > 0
+        {
+            info!(
+                agent,
+                "heartbeat recovered after {} consecutive failures",
+                health.consecutive_heartbeat_failures
+            );
+            health.consecutive_heartbeat_failures = 0;
         }
     }
 

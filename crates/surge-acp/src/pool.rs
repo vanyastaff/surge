@@ -66,6 +66,7 @@ enum PoolOp {
 struct WorkerState {
     connections: HashMap<String, AgentConnection>,
     spawning: HashSet<String>,
+    #[allow(dead_code)] // Used in try_reconnect_with_backoff, which is not yet integrated
     reconnecting: HashSet<String>,
     configs: HashMap<String, AgentConfig>,
     worktree_root: PathBuf,
@@ -99,6 +100,7 @@ pub struct AgentPool {
     event_tx: broadcast::Sender<SurgeEvent>,
 
     /// Active session counter for heartbeat interval switching.
+    #[allow(dead_code)] // Will be used for heartbeat interval switching in future subtasks
     active_sessions: Arc<AtomicUsize>,
 }
 
@@ -501,6 +503,118 @@ fn run_worker(
 }
 
 // ── Worker operations (run inside LocalSet via spawn_local) ─────────
+
+/// Attempt to reconnect to an agent with exponential backoff.
+///
+/// Tries to establish connection multiple times with increasing delays between
+/// attempts according to the configured backoff strategy.
+///
+/// # Errors
+///
+/// Returns error if all reconnection attempts fail.
+#[allow(dead_code)] // Will be integrated with heartbeat monitoring in future subtasks
+async fn try_reconnect_with_backoff(
+    state: &Rc<RefCell<WorkerState>>,
+    name: &str,
+) -> Result<(), SurgeError> {
+    // Check if already reconnecting
+    {
+        let s = state.borrow();
+        if s.reconnecting.contains(name) {
+            return Err(SurgeError::AgentConnection(format!(
+                "Agent '{name}' is already attempting to reconnect"
+            )));
+        }
+    }
+
+    // Mark as reconnecting
+    state.borrow_mut().reconnecting.insert(name.to_string());
+
+    let (max_attempts, initial_delay_ms, max_delay_ms, backoff_strategy, event_tx) = {
+        let s = state.borrow();
+        (
+            s.resilience.reconnect_max_attempts,
+            s.resilience.reconnect_initial_delay_ms,
+            s.resilience.retry_policy.max_delay_ms,
+            s.resilience.retry_policy.backoff_strategy.clone(),
+            s.event_tx.clone(),
+        )
+    };
+
+    let mut last_error = None;
+
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            let delay = calculate_backoff(
+                attempt - 1,
+                initial_delay_ms,
+                max_delay_ms,
+                &backoff_strategy,
+            );
+
+            debug!(
+                "Reconnect attempt {}/{} for agent '{}' after {}ms delay",
+                attempt + 1,
+                max_attempts,
+                name,
+                delay.as_millis()
+            );
+
+            // Emit reconnection attempt event
+            let _ = event_tx.send(SurgeEvent::AgentReconnecting {
+                agent_name: name.to_string(),
+                attempt: attempt + 1,
+                max_attempts,
+            });
+
+            tokio::time::sleep(delay).await;
+        } else {
+            debug!(
+                "Initial reconnect attempt for agent '{}' (1/{})",
+                name, max_attempts
+            );
+            let _ = event_tx.send(SurgeEvent::AgentReconnecting {
+                agent_name: name.to_string(),
+                attempt: 1,
+                max_attempts,
+            });
+        }
+
+        // Attempt connection
+        match connect(state, name).await {
+            Ok(()) => {
+                info!(
+                    "Successfully reconnected to agent '{}' on attempt {}/{}",
+                    name,
+                    attempt + 1,
+                    max_attempts
+                );
+                state.borrow_mut().reconnecting.remove(name);
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "Reconnect attempt {}/{} failed for agent '{}': {}",
+                    attempt + 1,
+                    max_attempts,
+                    name,
+                    e
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    // All attempts failed
+    state.borrow_mut().reconnecting.remove(name);
+
+    Err(last_error.unwrap_or_else(|| {
+        SurgeError::AgentConnection(format!(
+            "Failed to reconnect to agent '{}' after {} attempts",
+            name, max_attempts
+        ))
+    }))
+}
 
 async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), SurgeError> {
     // Fast path
@@ -1305,6 +1419,94 @@ mod tests {
                 !is_auth_failure(error_msg),
                 "Non-auth error incorrectly detected as auth failure: {}",
                 error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_auto_reconnect() {
+        // Test that backoff calculation works correctly for different strategies
+        let initial_delay = 1000;
+        let max_delay = 60000;
+
+        // Linear backoff - always returns initial delay
+        let linear_delay = calculate_backoff(
+            0,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Linear,
+        );
+        assert_eq!(linear_delay.as_millis(), 1000);
+
+        let linear_delay = calculate_backoff(
+            5,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Linear,
+        );
+        assert_eq!(linear_delay.as_millis(), 1000);
+
+        // Exponential backoff - doubles each time
+        let exp_delay_0 = calculate_backoff(
+            0,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_0.as_millis(), 1000); // 1000 * 2^0 = 1000
+
+        let exp_delay_1 = calculate_backoff(
+            1,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_1.as_millis(), 2000); // 1000 * 2^1 = 2000
+
+        let exp_delay_2 = calculate_backoff(
+            2,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_2.as_millis(), 4000); // 1000 * 2^2 = 4000
+
+        let exp_delay_3 = calculate_backoff(
+            3,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_3.as_millis(), 8000); // 1000 * 2^3 = 8000
+
+        // Test max delay cap
+        let exp_delay_10 = calculate_backoff(
+            10,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_10.as_millis(), 60000); // Capped at max_delay
+
+        // Exponential with jitter - should be within range
+        for attempt in 0..5 {
+            let jitter_delay = calculate_backoff(
+                attempt,
+                initial_delay,
+                max_delay,
+                &BackoffStrategy::ExponentialWithJitter,
+            );
+
+            // Expected exponential value
+            let expected_exp = initial_delay.saturating_mul(2u64.saturating_pow(attempt));
+            let expected_capped = expected_exp.min(max_delay);
+
+            // Should be within [0, expected_capped]
+            assert!(
+                jitter_delay.as_millis() <= expected_capped as u128,
+                "Jitter delay {} exceeds expected max {}",
+                jitter_delay.as_millis(),
+                expected_capped
             );
         }
     }
