@@ -578,9 +578,9 @@ mod tests {
         // Each detected agent should have matching registry metadata
         for agent in &detected {
             assert!(
-                entries.iter().any(|e| e.kind == agent.entry.kind),
+                entries.iter().any(|e| e.id == agent.entry.id),
                 "Detected agent {:?} should match a registry entry",
-                agent.entry.kind
+                agent.entry.id
             );
 
             // Verify DetectedAgent has full registry metadata

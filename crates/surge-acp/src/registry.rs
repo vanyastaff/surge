@@ -482,97 +482,12 @@ pub struct DetectedAgent {
 
 // ── Hardcoded agents ────────────────────────────────────────────────
 
+/// Builtin registry JSON bundled at compile time.
+const BUILTIN_REGISTRY_JSON: &str = include_str!("../builtin_registry.json");
+
 fn builtin_agents() -> Vec<RegistryEntry> {
-    vec![
-        RegistryEntry {
-            id: "claude-acp".into(),
-            display_name: "Claude Agent".into(),
-            description: "ACP wrapper for Anthropic's Claude".into(),
-            version: "0.22.2".into(),
-            authors: vec!["Anthropic".into()],
-            license: "proprietary".into(),
-            command: "npx".into(),
-            default_args: vec!["@zed-industries/claude-agent-acp".into()],
-            transport: Transport::Stdio,
-            install_instructions: "npx @zed-industries/claude-agent-acp".into(),
-            cli_binary: Some("claude".into()),
-            website: Some("https://claude.ai/claude-code".into()),
-            tags: vec!["anthropic".into(), "popular".into()],
-            capabilities: vec![
-                AgentCapability::Code,
-                AgentCapability::Plan,
-                AgentCapability::Review,
-                AgentCapability::Test,
-                AgentCapability::Refactor,
-                AgentCapability::Chat,
-            ],
-            models: vec![],
-            long_description: String::new(),
-        },
-        RegistryEntry {
-            id: "github-copilot-cli".into(),
-            display_name: "GitHub Copilot".into(),
-            description: "GitHub's AI pair programmer".into(),
-            version: "1.0.10".into(),
-            authors: vec!["GitHub".into()],
-            license: "proprietary".into(),
-            command: "npx".into(),
-            default_args: vec!["@github/copilot".into(), "--acp".into()],
-            transport: Transport::Stdio,
-            install_instructions: "npx @github/copilot --acp".into(),
-            cli_binary: Some("gh".into()),
-            website: Some("https://github.com/features/copilot/cli/".into()),
-            tags: vec!["github".into(), "popular".into()],
-            capabilities: vec![
-                AgentCapability::Code,
-                AgentCapability::Plan,
-                AgentCapability::Review,
-                AgentCapability::Chat,
-            ],
-            models: vec![],
-            long_description: String::new(),
-        },
-        RegistryEntry {
-            id: "codex-acp".into(),
-            display_name: "Codex CLI".into(),
-            description: "ACP adapter for OpenAI's coding assistant".into(),
-            version: "0.10.0".into(),
-            authors: vec!["OpenAI".into(), "Zed Industries".into()],
-            license: "Apache-2.0".into(),
-            command: "npx".into(),
-            default_args: vec!["@zed-industries/codex-acp".into()],
-            transport: Transport::Stdio,
-            install_instructions: "npx @zed-industries/codex-acp".into(),
-            cli_binary: Some("codex".into()),
-            website: Some("https://openai.com".into()),
-            tags: vec!["openai".into(), "popular".into(), "open-source".into()],
-            capabilities: vec![AgentCapability::Code, AgentCapability::Chat],
-            models: vec![],
-            long_description: String::new(),
-        },
-        RegistryEntry {
-            id: "gemini".into(),
-            display_name: "Gemini CLI".into(),
-            description: "Google's official CLI for Gemini".into(),
-            version: "0.34.0".into(),
-            authors: vec!["Google".into()],
-            license: "Apache-2.0".into(),
-            command: "npx".into(),
-            default_args: vec!["@google/gemini-cli".into(), "--acp".into()],
-            transport: Transport::Stdio,
-            install_instructions: "npx @google/gemini-cli --acp".into(),
-            cli_binary: Some("gemini".into()),
-            website: Some("https://geminicli.com".into()),
-            tags: vec!["google".into(), "popular".into(), "open-source".into()],
-            capabilities: vec![
-                AgentCapability::Code,
-                AgentCapability::Refactor,
-                AgentCapability::Chat,
-            ],
-            models: vec![],
-            long_description: String::new(),
-        },
-    ]
+    serde_json::from_str(BUILTIN_REGISTRY_JSON)
+        .expect("builtin_registry.json should be valid JSON")
 }
 
 // ── Registry cache ───────────────────────────────────────────────────
@@ -835,7 +750,6 @@ mod tests {
 
     fn make_entry(id: &str) -> RegistryEntry {
         RegistryEntry {
-Claude,
             id: id.to_string(),
             display_name: id.to_string(),
             description: String::new(),
