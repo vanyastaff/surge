@@ -75,6 +75,15 @@ pub struct PlanEntry {
     pub status: PlanStatus,
 }
 
+/// QA verdict type (mirrors surge-orchestrator QaVerdictKind).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QaVerdictKind {
+    Approved,
+    Partial,
+    NeedsFix,
+}
+
 // ── Events ──────────────────────────────────────────────────────────
 
 /// Events emitted by Surge for monitoring, UI updates, and logging.
@@ -120,6 +129,18 @@ pub enum SurgeEvent {
         task_id: TaskId,
         subtask_id: SubtaskId,
         success: bool,
+    },
+
+    // --- QA review events ---
+    /// QA review completed with a verdict.
+    QaVerdictReceived {
+        task_id: TaskId,
+        verdict: QaVerdictKind,
+        iteration: u32,
+        reasoning: Option<String>,
+        met_criteria: Vec<String>,
+        unmet_criteria: Vec<String>,
+        issues: Option<String>,
     },
 
     // --- File events ---

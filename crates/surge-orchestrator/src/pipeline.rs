@@ -445,7 +445,10 @@ impl Orchestrator {
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Executing { completed, total },
-            new_state: TaskState::QaReview,
+            new_state: TaskState::QaReview {
+                verdict: None,
+                reasoning: None,
+            },
         });
 
         let qa_reviewer = QaReviewer::new(self.config.surge_config.pipeline.max_qa_iterations);
@@ -463,7 +466,10 @@ impl Orchestrator {
             QaVerdict::Approved => {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
                     task_id,
-                    old_state: TaskState::QaReview,
+                    old_state: TaskState::QaReview {
+                        verdict: Some("approved".to_string()),
+                        reasoning: qa_result.reasoning.clone(),
+                    },
                     new_state: TaskState::Merging,
                 });
 
@@ -477,7 +483,58 @@ impl Orchestrator {
                 }
                 info!("merged successfully");
             }
+            QaVerdict::Partial { met, unmet } => {
+                let verdict_str = format!(
+                    "partial ({} met, {} unmet)",
+                    met.len(),
+                    unmet.len()
+                );
+                let reasoning_str = format!(
+                    "Met: {}; Unmet: {}",
+                    if met.is_empty() { "none".to_string() } else { met.join(", ") },
+                    if unmet.is_empty() { "none".to_string() } else { unmet.join(", ") }
+                );
+
+                let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
+                    task_id,
+                    old_state: TaskState::QaReview {
+                        verdict: Some(verdict_str),
+                        reasoning: Some(reasoning_str),
+                    },
+                    new_state: TaskState::Failed {
+                        reason: format!(
+                            "QA review incomplete after max iterations: {} criteria met, {} unmet ({})",
+                            met.len(),
+                            unmet.len(),
+                            unmet.join(", ")
+                        ),
+                    },
+                });
+
+                aggregator.unregister_session(&session.session_id).await;
+                pool.shutdown().await;
+                let _ = git.discard(&spec_id_str);
+                return PipelineResult::Failed {
+                    reason: format!(
+                        "QA review incomplete after max iterations: {} criteria met, {} unmet ({})",
+                        met.len(),
+                        unmet.len(),
+                        unmet.join(", ")
+                    ),
+                };
+            }
             QaVerdict::NeedsFix { issues } => {
+                let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
+                    task_id,
+                    old_state: TaskState::QaReview {
+                        verdict: Some("needs_fix".to_string()),
+                        reasoning: Some(issues.clone()),
+                    },
+                    new_state: TaskState::Failed {
+                        reason: format!("QA review failed after max iterations: {issues}"),
+                    },
+                });
+
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);

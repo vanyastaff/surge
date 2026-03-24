@@ -72,7 +72,7 @@ impl DashboardScreen {
                 TaskState::Draft => counts.draft += 1,
                 TaskState::Planning | TaskState::Planned { .. } => counts.planning += 1,
                 TaskState::Executing { .. } => counts.executing += 1,
-                TaskState::QaReview | TaskState::QaFix { .. } => counts.qa_review += 1,
+                TaskState::QaReview { .. } | TaskState::QaFix { .. } => counts.qa_review += 1,
                 TaskState::HumanReview => counts.human_review += 1,
                 TaskState::Completed | TaskState::Merging => counts.completed += 1,
                 TaskState::Failed { .. } | TaskState::Cancelled => counts.failed += 1,
