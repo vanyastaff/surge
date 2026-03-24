@@ -167,7 +167,7 @@ impl QaReviewer {
                     return QaCycleResult {
                         verdict,
                         iterations: iteration,
-                        reasoning: None,
+                        reasoning: Some(response_text),
                     };
                 }
                 QaVerdict::Partial { met, unmet } => {
@@ -235,7 +235,10 @@ impl QaReviewer {
                 ),
             },
             iterations: self.max_iterations,
-            reasoning: None,
+            reasoning: Some(format!(
+                "QA review exhausted maximum iterations ({})",
+                self.max_iterations
+            )),
         }
     }
 }
