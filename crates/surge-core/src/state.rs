@@ -177,7 +177,12 @@ mod tests {
     fn test_cleanup_required_on_terminal_states() {
         // All terminal states require cleanup (zero-garbage guarantee)
         assert!(TaskState::Completed.requires_cleanup());
-        assert!(TaskState::Failed { reason: "test".into() }.requires_cleanup());
+        assert!(
+            TaskState::Failed {
+                reason: "test".into()
+            }
+            .requires_cleanup()
+        );
         assert!(TaskState::Cancelled.requires_cleanup());
     }
 
@@ -253,10 +258,17 @@ mod tests {
             if state.requires_cleanup() {
                 cleanup_triggered = true;
                 // Cleanup should only trigger on the last state (Completed)
-                assert_eq!(i, states.len() - 1, "Cleanup triggered too early at {state}");
+                assert_eq!(
+                    i,
+                    states.len() - 1,
+                    "Cleanup triggered too early at {state}"
+                );
             }
         }
-        assert!(cleanup_triggered, "Cleanup never triggered for completion flow");
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for completion flow"
+        );
 
         // Test failure flow
         let failure_states = vec![
@@ -274,7 +286,10 @@ mod tests {
                 assert_eq!(i, failure_states.len() - 1, "Cleanup triggered too early");
             }
         }
-        assert!(cleanup_triggered, "Cleanup never triggered for failure flow");
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for failure flow"
+        );
 
         // Test cancellation flow
         let cancel_states = vec![
@@ -292,7 +307,10 @@ mod tests {
                 assert_eq!(i, cancel_states.len() - 1, "Cleanup triggered too early");
             }
         }
-        assert!(cleanup_triggered, "Cleanup never triggered for cancellation flow");
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for cancellation flow"
+        );
     }
 
     #[test]

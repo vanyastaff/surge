@@ -78,9 +78,9 @@ pub fn remove_dir_with_retry(path: &Path) -> Result<(), GitError> {
         }
 
         // This should never be reached due to the loop logic, but satisfy the compiler
-        Err(GitError::Io(
-            last_error.unwrap_or_else(|| std::io::Error::other("max retries exceeded"))
-        ))
+        Err(GitError::Io(last_error.unwrap_or_else(|| {
+            std::io::Error::other("max retries exceeded")
+        })))
     }
 
     #[cfg(not(windows))]
@@ -456,17 +456,11 @@ mod tests {
         // Verify event types
         assert_eq!(events[0].event_type, CleanupEventType::WorktreeRemoved);
         assert_eq!(events[0].resource_id, "test-discard");
-        assert_eq!(
-            events[0].context,
-            Some("explicit discard".to_string())
-        );
+        assert_eq!(events[0].context, Some("explicit discard".to_string()));
 
         assert_eq!(events[1].event_type, CleanupEventType::BranchDeleted);
         assert_eq!(events[1].resource_id, "surge/test-discard");
-        assert_eq!(
-            events[1].context,
-            Some("explicit discard".to_string())
-        );
+        assert_eq!(events[1].context, Some("explicit discard".to_string()));
     }
 
     /// Windows-specific tests for locked file retry logic.
@@ -521,7 +515,11 @@ mod tests {
 
             // Create multiple files
             for i in 0..10 {
-                fs::write(test_dir.join(format!("file{}.txt", i)), format!("content {}", i)).unwrap();
+                fs::write(
+                    test_dir.join(format!("file{}.txt", i)),
+                    format!("content {}", i),
+                )
+                .unwrap();
             }
 
             // Should successfully remove directory with multiple files
