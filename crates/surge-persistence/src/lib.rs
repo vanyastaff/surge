@@ -12,6 +12,9 @@ pub use error::{PersistenceError, Result};
 /// Event aggregator for token usage
 pub mod aggregator;
 
+/// Budget tracking and alerting
+pub mod budget;
+
 /// Data models for token usage tracking
 pub mod models;
 

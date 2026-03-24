@@ -93,7 +93,27 @@ impl Orchestrator {
             }
         };
 
-        let aggregator = UsageAggregator::new(store);
+        // Build custom pricing from config if available
+        let custom_pricing = {
+            let pricing_info = &self.config.surge_config.analytics.default_pricing;
+            if let (Some(input), Some(output)) = (
+                pricing_info.input_cost_per_million_tokens,
+                pricing_info.output_cost_per_million_tokens,
+            ) {
+                Some(surge_persistence::pricing::PricingModel {
+                    model_id: "custom-from-config".to_string(),
+                    input_price_per_million: input,
+                    output_price_per_million: output,
+                    thought_price_per_million: Some(output), // Default to output price
+                    cache_read_price_per_million: None,
+                    cache_write_price_per_million: None,
+                })
+            } else {
+                None
+            }
+        };
+
+        let aggregator = UsageAggregator::new_with_pricing(store, custom_pricing);
         let aggregator_rx = self.event_tx.subscribe();
         let _aggregator_handle = aggregator.start_listening(aggregator_rx);
 

@@ -56,6 +56,47 @@ pub fn run(command: ConfigCommands) -> Result<()> {
                 config.pipeline.gates.after_each_subtask
             );
             println!("    after_qa: {}", config.pipeline.gates.after_qa);
+
+            println!("\nAnalytics:");
+            if let Some(budget) = config.analytics.budget_usd {
+                println!("  budget_usd: ${:.2}", budget);
+            } else {
+                println!("  budget_usd: unlimited");
+            }
+            if let Some(tokens) = config.analytics.budget_tokens {
+                println!("  budget_tokens: {}", tokens);
+            } else {
+                println!("  budget_tokens: unlimited");
+            }
+            println!(
+                "  budget_warn_threshold: {}%",
+                config.analytics.budget_warn_threshold
+            );
+
+            println!("\n  Default Pricing:");
+            if let Some(input_cost) = config.analytics.default_pricing.input_cost_per_million_tokens
+            {
+                println!(
+                    "    input_cost_per_million_tokens: ${:.2}",
+                    input_cost
+                );
+            } else {
+                println!("    input_cost_per_million_tokens: not set");
+            }
+            if let Some(output_cost) =
+                config.analytics.default_pricing.output_cost_per_million_tokens
+            {
+                println!(
+                    "    output_cost_per_million_tokens: ${:.2}",
+                    output_cost
+                );
+            } else {
+                println!("    output_cost_per_million_tokens: not set");
+            }
+            println!(
+                "    currency: {}",
+                config.analytics.default_pricing.currency
+            );
         }
     }
     Ok(())

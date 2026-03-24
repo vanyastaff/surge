@@ -104,3 +104,26 @@ jitter_factor = 0.1              # Randomness factor: 0.0 = no jitter, 1.0 = ful
 # max_delay_ms = 10000
 # backoff_strategy = "linear"  # Fixed delay between retries
 # jitter_factor = 0.05         # Small jitter to avoid synchronized retries
+
+# Cost & Token Analytics Configuration
+# Track token usage and estimated costs across all agents and tasks
+[analytics]
+budget_usd = 100.0              # Optional: Daily budget limit in USD (omit for unlimited)
+budget_tokens = 10000000        # Optional: Daily token limit across all agents (omit for unlimited)
+budget_warn_threshold = 80      # Warn when reaching this % of budget (default: 80)
+
+# Default pricing for cost estimation
+# These rates are used when an agent doesn't specify its own pricing
+# Update these values to match your AI provider's current pricing
+[analytics.default_pricing]
+input_cost_per_million_tokens = 3.0    # Cost per 1M input tokens (e.g., Claude 3.5 Sonnet)
+output_cost_per_million_tokens = 15.0  # Cost per 1M output tokens (e.g., Claude 3.5 Sonnet)
+currency = "USD"                       # Currency code for cost display
+
+# Analytics features:
+# - Track token usage per agent, per task, per pipeline phase
+# - Calculate estimated costs based on configured pricing
+# - Budget alerts when thresholds are reached
+# - Historical data stored in .surge/analytics.db
+# - View summaries with: surge analytics summary
+# - Export data with: surge analytics export --format csv --range 30d

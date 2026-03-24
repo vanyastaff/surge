@@ -5,6 +5,7 @@
 
 use crate::Result;
 use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
+use crate::pricing::{PricingModel, claude_opus_pricing, claude_sonnet_35_pricing, gpt4_turbo_pricing, gemini_pro_pricing};
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,14 +37,73 @@ pub struct UsageAggregator {
     store: Arc<Mutex<Store>>,
     /// Session ID to context mapping.
     sessions: Arc<Mutex<HashMap<String, SessionContext>>>,
+    /// Pricing models mapped by agent name.
+    pricing: Arc<HashMap<String, PricingModel>>,
 }
 
 impl UsageAggregator {
     /// Create a new usage aggregator with the given store.
     pub fn new(store: Store) -> Self {
+        // Initialize pricing map with default models for common agents
+        let mut pricing = HashMap::new();
+
+        // Claude variants
+        pricing.insert("claude".to_string(), claude_sonnet_35_pricing());
+        pricing.insert("claude-sonnet".to_string(), claude_sonnet_35_pricing());
+        pricing.insert("claude-opus".to_string(), claude_opus_pricing());
+        pricing.insert("claude-haiku".to_string(), claude_sonnet_35_pricing()); // Use sonnet pricing for haiku
+
+        // GPT variants
+        pricing.insert("gpt".to_string(), gpt4_turbo_pricing());
+        pricing.insert("gpt-4".to_string(), gpt4_turbo_pricing());
+        pricing.insert("gpt4".to_string(), gpt4_turbo_pricing());
+
+        // Gemini variants
+        pricing.insert("gemini".to_string(), gemini_pro_pricing());
+        pricing.insert("gemini-pro".to_string(), gemini_pro_pricing());
+
         Self {
             store: Arc::new(Mutex::new(store)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            pricing: Arc::new(pricing),
+        }
+    }
+
+    /// Create a new usage aggregator with the given store and custom pricing.
+    ///
+    /// If `custom_pricing` is provided, it will be used for all agents.
+    /// Otherwise, falls back to default pricing models for common agents.
+    pub fn new_with_pricing(store: Store, custom_pricing: Option<PricingModel>) -> Self {
+        let mut pricing = HashMap::new();
+
+        if let Some(model) = custom_pricing {
+            // Use custom pricing for all common agent name variants
+            pricing.insert("claude".to_string(), model.clone());
+            pricing.insert("claude-sonnet".to_string(), model.clone());
+            pricing.insert("claude-opus".to_string(), model.clone());
+            pricing.insert("claude-haiku".to_string(), model.clone());
+            pricing.insert("gpt".to_string(), model.clone());
+            pricing.insert("gpt-4".to_string(), model.clone());
+            pricing.insert("gpt4".to_string(), model.clone());
+            pricing.insert("gemini".to_string(), model.clone());
+            pricing.insert("gemini-pro".to_string(), model);
+        } else {
+            // Fall back to defaults
+            pricing.insert("claude".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("claude-sonnet".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("claude-opus".to_string(), claude_opus_pricing());
+            pricing.insert("claude-haiku".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("gpt".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gpt-4".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gpt4".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gemini".to_string(), gemini_pro_pricing());
+            pricing.insert("gemini-pro".to_string(), gemini_pro_pricing());
+        }
+
+        Self {
+            store: Arc::new(Mutex::new(store)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            pricing: Arc::new(pricing),
         }
     }
 
@@ -84,12 +144,13 @@ impl UsageAggregator {
     ) -> tokio::task::JoinHandle<()> {
         let store = Arc::clone(&self.store);
         let sessions = Arc::clone(&self.sessions);
+        let pricing = Arc::clone(&self.pricing);
 
         tokio::spawn(async move {
             loop {
                 match event_rx.recv().await {
                     Ok(event) => {
-                        if let Err(e) = Self::handle_event(&store, &sessions, event).await {
+                        if let Err(e) = Self::handle_event(&store, &sessions, &pricing, event).await {
                             warn!("Failed to handle event: {}", e);
                         }
                     }
@@ -109,6 +170,7 @@ impl UsageAggregator {
     async fn handle_event(
         store: &Arc<Mutex<Store>>,
         sessions: &Arc<Mutex<HashMap<String, SessionContext>>>,
+        pricing: &Arc<HashMap<String, PricingModel>>,
         event: SurgeEvent,
     ) -> Result<()> {
         // Only process TokensConsumed events
@@ -120,7 +182,6 @@ impl UsageAggregator {
             thought_tokens,
             cached_read_tokens,
             cached_write_tokens,
-            estimated_cost_usd,
             ..
         } = event
         else {
@@ -146,6 +207,19 @@ impl UsageAggregator {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+
+        // Calculate cost using pricing model
+        let estimated_cost_usd = pricing
+            .get(&agent_name)
+            .map(|model| {
+                model.calculate_cost(
+                    input_tokens,
+                    output_tokens,
+                    thought_tokens,
+                    cached_read_tokens,
+                    cached_write_tokens,
+                )
+            });
 
         // Create session usage record
         let session = SessionUsage {
@@ -274,7 +348,7 @@ mod tests {
         };
 
         // Handle event
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
             .await
             .unwrap();
 
@@ -351,7 +425,7 @@ mod tests {
             cached_write_tokens: None,
             estimated_cost_usd: Some(0.005),
         };
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event1)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event1)
             .await
             .unwrap();
 
@@ -368,7 +442,7 @@ mod tests {
             cached_write_tokens: None,
             estimated_cost_usd: Some(0.004),
         };
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event2)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event2)
             .await
             .unwrap();
 
@@ -383,14 +457,17 @@ mod tests {
         assert_eq!(subtask.input_tokens, 1800); // 1000 + 800
         assert_eq!(subtask.output_tokens, 900); // 500 + 400
         assert_eq!(subtask.session_count, 2);
-        assert!((subtask.estimated_cost_usd - 0.009).abs() < 1e-10); // 0.005 + 0.004
+        // Session1: 1000 input ($0.003) + 500 output ($0.0075) = $0.0105
+        // Session2: 800 input ($0.0024) + 400 output ($0.006) = $0.0084
+        // Total = $0.0189
+        assert!((subtask.estimated_cost_usd - 0.0189).abs() < 1e-6);
 
         // Spec should have both sessions aggregated
         let spec = store.get_spec(spec_id).unwrap().unwrap();
         assert_eq!(spec.input_tokens, 1800);
         assert_eq!(spec.output_tokens, 900);
         assert_eq!(spec.session_count, 2);
-        assert!((spec.estimated_cost_usd - 0.009).abs() < 1e-10);
+        assert!((spec.estimated_cost_usd - 0.0189).abs() < 1e-6);
     }
 
     #[tokio::test]
@@ -411,11 +488,11 @@ mod tests {
             thought_tokens: None,
             cached_read_tokens: None,
             cached_write_tokens: None,
-            estimated_cost_usd: None,
+            estimated_cost_usd: Some(0.005),
         };
 
         // Handle event - should not error but should log warning
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
             .await
             .unwrap();
 
@@ -436,7 +513,7 @@ mod tests {
         };
 
         // Handle event - should be ignored without error
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
             .await
             .unwrap();
     }
@@ -532,7 +609,7 @@ mod tests {
         };
 
         // Handle event
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, event)
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
             .await
             .unwrap();
 
@@ -548,5 +625,63 @@ mod tests {
         assert_eq!(spec.output_tokens, 500);
         assert_eq!(spec.session_count, 1);
         assert_eq!(spec.subtask_count, 0); // No subtask
+    }
+
+    #[tokio::test]
+    async fn test_cost_calculation() {
+        let store = Store::in_memory().unwrap();
+        let aggregator = UsageAggregator::new(store);
+
+        let session_id = "test-session".to_string();
+        let spec_id = SpecId::new();
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        // Register session
+        let context = SessionContext {
+            task_id,
+            subtask_id: Some(subtask_id),
+            spec_id,
+        };
+        aggregator
+            .register_session(session_id.clone(), context)
+            .await;
+
+        // Create event with known token counts
+        let event = SurgeEvent::TokensConsumed {
+            session_id: session_id.clone(),
+            agent_name: "claude".to_string(),
+            spec_id: Some(spec_id),
+            subtask_id: Some(subtask_id),
+            input_tokens: 1000,
+            output_tokens: 500,
+            thought_tokens: Some(200),
+            cached_read_tokens: Some(100),
+            cached_write_tokens: Some(50),
+            estimated_cost_usd: Some(0.005),
+        };
+
+        // Handle event
+        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
+            .await
+            .unwrap();
+
+        // Verify cost was calculated correctly
+        // Based on claude_sonnet_35_pricing():
+        // - Input: $3.00/M tokens → 1000 tokens = $0.003
+        // - Output: $15.00/M tokens → 500 tokens = $0.0075
+        // - Thought: $15.00/M tokens → 200 tokens = $0.003
+        // - Cache read: $0.30/M tokens → 100 tokens = $0.00003
+        // - Cache write: $3.75/M tokens → 50 tokens = $0.0001875
+        // Total = $0.0137175
+        let expected_cost = 0.0137175;
+
+        let store = aggregator.store.lock().await;
+        let session = store.get_session(&session_id).unwrap().unwrap();
+
+        assert!(session.estimated_cost_usd.is_some());
+        let actual_cost = session.estimated_cost_usd.unwrap();
+        assert!((actual_cost - expected_cost).abs() < 1e-6,
+            "Expected cost {}, got {}", expected_cost, actual_cost);
     }
 }

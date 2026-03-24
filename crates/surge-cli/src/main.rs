@@ -8,8 +8,9 @@ use tokio::signal;
 mod commands;
 
 use commands::{
-    agent::AgentCommands, config::ConfigCommands, insights::InsightsCommands,
-    memory::MemoryCommands, registry::RegistryCommands, spec::SpecCommands,
+    agent::AgentCommands, analytics::AnalyticsCommands, config::ConfigCommands,
+    insights::InsightsCommands, memory::MemoryCommands, registry::RegistryCommands,
+    spec::SpecCommands,
 };
 
 #[derive(Parser)]
@@ -175,6 +176,12 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+
+    /// View token and cost analytics
+    Analytics {
+        #[command(subcommand)]
+        command: AnalyticsCommands,
     },
 }
 
@@ -474,6 +481,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Memory { command } => {
             commands::memory::run(command)?;
+        }
+
+        Commands::Analytics { command } => {
+            commands::analytics::run(command)?;
         }
 
         Commands::Init => {

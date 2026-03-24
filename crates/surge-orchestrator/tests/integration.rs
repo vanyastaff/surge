@@ -90,7 +90,24 @@ async fn test_token_tracking_end_to_end() {
     assert_eq!(session.thought_tokens, Some(200));
     assert_eq!(session.cached_read_tokens, Some(100));
     assert_eq!(session.cached_write_tokens, Some(50));
-    assert_eq!(session.estimated_cost_usd, Some(0.015));
+    // Cost is now calculated by aggregator using claude_sonnet_35_pricing():
+    // Input: 1000 tokens * $3.00/M = $0.003
+    // Output: 500 tokens * $15.00/M = $0.0075
+    // Thought: 200 tokens * $15.00/M = $0.003
+    // Cache read: 100 tokens * $0.30/M = $0.00003
+    // Cache write: 50 tokens * $3.75/M = $0.0001875
+    // Total = $0.0137175
+    let expected_cost = 0.0137175;
+    assert!(
+        session.estimated_cost_usd.is_some(),
+        "Cost should be calculated"
+    );
+    assert!(
+        (session.estimated_cost_usd.unwrap() - expected_cost).abs() < 1e-6,
+        "Cost should be {}, got {}",
+        expected_cost,
+        session.estimated_cost_usd.unwrap()
+    );
 
     // Check subtask record
     let subtask = verify_store
@@ -104,7 +121,12 @@ async fn test_token_tracking_end_to_end() {
     assert_eq!(subtask.thought_tokens, 200);
     assert_eq!(subtask.cached_read_tokens, 100);
     assert_eq!(subtask.cached_write_tokens, 50);
-    assert_eq!(subtask.estimated_cost_usd, 0.015);
+    assert!(
+        (subtask.estimated_cost_usd - expected_cost).abs() < 1e-6,
+        "Subtask cost should be {}, got {}",
+        expected_cost,
+        subtask.estimated_cost_usd
+    );
 
     // Check spec record
     let spec = verify_store
@@ -118,7 +140,12 @@ async fn test_token_tracking_end_to_end() {
     assert_eq!(spec.thought_tokens, 200);
     assert_eq!(spec.cached_read_tokens, 100);
     assert_eq!(spec.cached_write_tokens, 50);
-    assert_eq!(spec.estimated_cost_usd, 0.015);
+    assert!(
+        (spec.estimated_cost_usd - expected_cost).abs() < 1e-6,
+        "Spec cost should be {}, got {}",
+        expected_cost,
+        spec.estimated_cost_usd
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&db_path);
@@ -210,7 +237,18 @@ async fn test_session_without_subtask() {
     assert_eq!(spec.input_tokens, 200);
     assert_eq!(spec.output_tokens, 100);
     assert_eq!(spec.thought_tokens, 0); // No thought tokens
-    assert_eq!(spec.estimated_cost_usd, 0.001);
+
+    // Cost calculated by aggregator using claude_sonnet_35_pricing() (for haiku):
+    // Input: 200 tokens * $3.00/M = $0.0006
+    // Output: 100 tokens * $15.00/M = $0.0015
+    // Total = $0.0021
+    let expected_cost = 0.0021;
+    assert!(
+        (spec.estimated_cost_usd - expected_cost).abs() < 1e-6,
+        "Spec cost should be {}, got {}",
+        expected_cost,
+        spec.estimated_cost_usd
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&db_path);
@@ -312,7 +350,18 @@ async fn test_cost_accumulation() {
     assert_eq!(subtask.thought_tokens, 300); // 100 + 200
     assert_eq!(subtask.cached_read_tokens, 500); // 0 + 500
     assert_eq!(subtask.cached_write_tokens, 100); // 0 + 100
-    assert_eq!(subtask.estimated_cost_usd, 0.030); // 0.010 + 0.020
+
+    // Cost calculated by aggregator using claude_sonnet_35_pricing():
+    // Session 1: 1000*$3/M + 500*$15/M + 100*$15/M = $0.012
+    // Session 2: 2000*$3/M + 1000*$15/M + 200*$15/M + 500*$0.3/M + 100*$3.75/M = $0.024525
+    // Total = $0.036525
+    let expected_accumulated_cost = 0.036525;
+    assert!(
+        (subtask.estimated_cost_usd - expected_accumulated_cost).abs() < 1e-6,
+        "Subtask cost should be {}, got {}",
+        expected_accumulated_cost,
+        subtask.estimated_cost_usd
+    );
 
     // Check spec (should accumulate both sessions)
     let spec = verify_store
@@ -326,7 +375,12 @@ async fn test_cost_accumulation() {
     assert_eq!(spec.thought_tokens, 300);
     assert_eq!(spec.cached_read_tokens, 500);
     assert_eq!(spec.cached_write_tokens, 100);
-    assert_eq!(spec.estimated_cost_usd, 0.030);
+    assert!(
+        (spec.estimated_cost_usd - expected_accumulated_cost).abs() < 1e-6,
+        "Spec cost should be {}, got {}",
+        expected_accumulated_cost,
+        spec.estimated_cost_usd
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&db_path);
@@ -365,8 +419,15 @@ async fn test_cost_calculation_preservation() {
         .register_session(session_id.clone(), context)
         .await;
 
-    // 6. Send event with specific cost
-    let expected_cost = 0.12345; // Precise cost value
+    // 6. Send event with token counts
+    // Cost will be calculated by aggregator using claude_opus_pricing():
+    // Input: 10000 tokens * $15.00/M = $0.15
+    // Output: 5000 tokens * $75.00/M = $0.375
+    // Thought: 1000 tokens * $75.00/M = $0.075
+    // Cache read: 2000 tokens * $1.50/M = $0.003
+    // Cache write: 500 tokens * $18.75/M = $0.009375
+    // Total = $0.612375
+    let expected_cost = 0.612375;
     let event = SurgeEvent::TokensConsumed {
         session_id: session_id.clone(),
         agent_name: "claude-opus".to_string(),
@@ -377,7 +438,7 @@ async fn test_cost_calculation_preservation() {
         thought_tokens: Some(1000),
         cached_read_tokens: Some(2000),
         cached_write_tokens: Some(500),
-        estimated_cost_usd: Some(expected_cost),
+        estimated_cost_usd: Some(0.99999), // This will be ignored, cost is calculated
     };
 
     tx.send(event).expect("Failed to send event");
@@ -385,28 +446,47 @@ async fn test_cost_calculation_preservation() {
     // 7. Wait for aggregation
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // 8. Verify cost is preserved exactly
+    // 8. Verify cost is calculated correctly using pricing model
     let verify_store = Store::open(&db_path).expect("Failed to open store for verification");
 
     // Check session
     let sessions = verify_store
         .list_sessions_by_spec(spec_id)
         .expect("Failed to list sessions");
-    assert_eq!(sessions[0].estimated_cost_usd, Some(expected_cost));
+    assert!(
+        sessions[0].estimated_cost_usd.is_some(),
+        "Cost should be calculated"
+    );
+    assert!(
+        (sessions[0].estimated_cost_usd.unwrap() - expected_cost).abs() < 1e-6,
+        "Cost should be {}, got {:?}",
+        expected_cost,
+        sessions[0].estimated_cost_usd
+    );
 
     // Check subtask
     let subtask = verify_store
         .get_subtask(subtask_id, task_id, spec_id)
         .expect("Failed to get subtask")
         .expect("Subtask should exist");
-    assert_eq!(subtask.estimated_cost_usd, expected_cost);
+    assert!(
+        (subtask.estimated_cost_usd - expected_cost).abs() < 1e-6,
+        "Subtask cost should be {}, got {}",
+        expected_cost,
+        subtask.estimated_cost_usd
+    );
 
     // Check spec
     let spec = verify_store
         .get_spec(spec_id)
         .expect("Failed to get spec")
         .expect("Spec should exist");
-    assert_eq!(spec.estimated_cost_usd, expected_cost);
+    assert!(
+        (spec.estimated_cost_usd - expected_cost).abs() < 1e-6,
+        "Spec cost should be {}, got {}",
+        expected_cost,
+        spec.estimated_cost_usd
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&db_path);

@@ -62,6 +62,38 @@ impl Default for PricingInfo {
     }
 }
 
+/// Analytics configuration for cost tracking and budgets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyticsConfig {
+    /// Default pricing information for agents that don't specify their own.
+    #[serde(default)]
+    pub default_pricing: PricingInfo,
+    /// Global budget limit in USD. None = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_usd: Option<f64>,
+    /// Global token budget limit. None = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+    /// Warn when cost reaches this percentage of budget (0-100).
+    #[serde(default = "default_budget_warn_threshold")]
+    pub budget_warn_threshold: u8,
+}
+
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            default_pricing: PricingInfo::default(),
+            budget_usd: None,
+            budget_tokens: None,
+            budget_warn_threshold: default_budget_warn_threshold(),
+        }
+    }
+}
+
+fn default_budget_warn_threshold() -> u8 {
+    80
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
     pub default_agent: String,
@@ -79,6 +111,8 @@ pub struct SurgeConfig {
     pub resilience: ResilienceConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub analytics: AnalyticsConfig,
 }
 
 /// Configuration for a single MCP (Model Context Protocol) server passed to an agent.
@@ -525,6 +559,7 @@ impl Default for SurgeConfig {
             ide: IdeConfig::default(),
             resilience: ResilienceConfig::default(),
             log: LogConfig::default(),
+            analytics: AnalyticsConfig::default(),
         }
     }
 }
@@ -1370,6 +1405,7 @@ after_spec = false
             ide: IdeConfig::default(),
             resilience: ResilienceConfig::default(),
             log: LogConfig::default(),
+            analytics: AnalyticsConfig::default(),
         };
         // Should be valid because agents map is empty
         assert!(config.validate().is_ok());
@@ -1608,5 +1644,52 @@ auto_open_worktree = true
         assert_eq!(config.default_agent, "claude");
         assert!(config.agents.contains_key("claude"));
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_analytics_config_defaults() {
+        let config = AnalyticsConfig::default();
+        assert_eq!(config.default_pricing.currency, "USD");
+        assert!(config.default_pricing.input_cost_per_million_tokens.is_none());
+        assert!(config.default_pricing.output_cost_per_million_tokens.is_none());
+        assert!(config.budget_usd.is_none());
+        assert!(config.budget_tokens.is_none());
+        assert_eq!(config.budget_warn_threshold, 80);
+    }
+
+    #[test]
+    fn test_analytics_config_roundtrip() {
+        let toml_str = r#"
+[analytics]
+budget_usd = 100.0
+budget_tokens = 1000000
+budget_warn_threshold = 90
+
+[analytics.default_pricing]
+input_cost_per_million_tokens = 3.0
+output_cost_per_million_tokens = 15.0
+currency = "USD"
+"#;
+        let config: SurgeConfig = toml::from_str(&format!("default_agent = \"test\"\n{}", toml_str)).unwrap();
+        assert_eq!(config.analytics.budget_usd, Some(100.0));
+        assert_eq!(config.analytics.budget_tokens, Some(1000000));
+        assert_eq!(config.analytics.budget_warn_threshold, 90);
+        assert_eq!(config.analytics.default_pricing.input_cost_per_million_tokens, Some(3.0));
+        assert_eq!(config.analytics.default_pricing.output_cost_per_million_tokens, Some(15.0));
+        assert_eq!(config.analytics.default_pricing.currency, "USD");
+    }
+
+    #[test]
+    fn test_analytics_config_optional_fields() {
+        // Test that analytics section with no fields uses defaults
+        let toml_str = r#"
+default_agent = "test"
+
+[analytics]
+"#;
+        let config: SurgeConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.analytics.budget_usd.is_none());
+        assert!(config.analytics.budget_tokens.is_none());
+        assert_eq!(config.analytics.budget_warn_threshold, 80);
     }
 }
