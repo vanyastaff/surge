@@ -1,0 +1,23 @@
+# Simple spec for E2E testing
+# Single subtask with no dependencies
+
+[spec]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V0WX"
+title = "Simple test feature"
+description = "A minimal spec with a single subtask for E2E testing"
+complexity = "simple"
+
+[[spec.subtasks]]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V0WY"
+title = "Create test file"
+description = "Create a simple test file with hello world function"
+complexity = "simple"
+files = ["src/hello.rs"]
+
+[[spec.subtasks.acceptance_criteria]]
+description = "File src/hello.rs exists"
+met = false
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Function compiles without errors"
+met = false
