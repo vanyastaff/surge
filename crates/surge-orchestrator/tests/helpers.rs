@@ -7,7 +7,7 @@
 //! - Spec loading
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use surge_acp::discovery::AgentDiscovery;
 use surge_acp::Registry;
 use surge_core::config::{AgentConfig, PipelineConfig, SurgeConfig, Transport};
@@ -101,7 +101,7 @@ after_qa = false
 /// Create a test surge.toml file in the specified directory.
 ///
 /// Returns the path to the created config file.
-pub fn create_test_config(dir: &PathBuf, default_agent: &str, agent_command: &str) -> PathBuf {
+pub fn create_test_config(dir: &Path, default_agent: &str, agent_command: &str) -> PathBuf {
     let config_content = minimal_surge_config(default_agent, agent_command);
     let config_path = dir.join("surge.toml");
     fs::write(&config_path, config_content).expect("Failed to write surge.toml");
@@ -190,7 +190,8 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// Clean up a temp database file.
 ///
 /// Ignores errors if the file doesn't exist.
-pub fn cleanup_db(path: &PathBuf) {
+#[allow(dead_code)]
+pub fn cleanup_db(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
