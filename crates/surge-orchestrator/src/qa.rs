@@ -79,6 +79,8 @@ pub struct QaCycleResult {
     pub verdict: QaVerdict,
     /// Number of QA iterations performed.
     pub iterations: u32,
+    /// Detailed reasoning or feedback from the QA review.
+    pub reasoning: Option<String>,
 }
 
 /// Drives the QA review loop: review, fix, re-review.
@@ -126,6 +128,7 @@ impl QaReviewer {
                     return QaCycleResult {
                         verdict: QaVerdict::Approved,
                         iterations: iteration,
+                        reasoning: None,
                     };
                 }
             };
@@ -143,6 +146,7 @@ impl QaReviewer {
                     return QaCycleResult {
                         verdict: QaVerdict::Approved,
                         iterations: iteration,
+                        reasoning: None,
                     };
                 }
             }
@@ -160,7 +164,11 @@ impl QaReviewer {
             match &verdict {
                 QaVerdict::Approved => {
                     info!(iteration, "QA approved");
-                    return QaCycleResult { verdict, iterations: iteration };
+                    return QaCycleResult {
+                        verdict,
+                        iterations: iteration,
+                        reasoning: None,
+                    };
                 }
                 QaVerdict::Partial { met, unmet } => {
                     info!(
@@ -227,6 +235,7 @@ impl QaReviewer {
                 ),
             },
             iterations: self.max_iterations,
+            reasoning: None,
         }
     }
 }
