@@ -317,6 +317,36 @@ impl Store {
             .map_err(Into::into)
     }
 
+    /// Get total cost for sessions in a time range.
+    ///
+    /// Sums up all `estimated_cost_usd` values from sessions with timestamps
+    /// between `start_ms` (inclusive) and `end_ms` (exclusive).
+    ///
+    /// # Arguments
+    ///
+    /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
+    /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
+    ///
+    /// # Returns
+    ///
+    /// Total cost in USD for all sessions in the time range. Returns 0.0 if no
+    /// sessions are found or if all sessions have `estimated_cost_usd` as NULL.
+    pub fn get_cost_in_time_range(&self, start_ms: u64, end_ms: u64) -> Result<f64> {
+        let cost: f64 = self
+            .conn
+            .query_row(
+                r#"
+                SELECT COALESCE(SUM(estimated_cost_usd), 0.0)
+                FROM session_usage
+                WHERE timestamp_ms >= ?1 AND timestamp_ms < ?2
+                "#,
+                params![start_ms as i64, end_ms as i64],
+                |row| row.get(0),
+            )?;
+
+        Ok(cost)
+    }
+
     // ── Subtask Usage Operations ────────────────────────────────────
 
     /// Insert or update a subtask usage record.
