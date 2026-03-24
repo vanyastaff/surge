@@ -511,12 +511,52 @@ impl Registry {
     /// Unknown remote entries are appended after all builtin entries.
     #[must_use]
     pub fn merged(builtin: Self, remote: Self) -> Self {
-        let mut entries = builtin.entries;
-        for remote_entry in remote.entries {
-            if !entries.iter().any(|e| e.id == remote_entry.id) {
-                entries.push(remote_entry);
+        Self::merged_impl(None, builtin, remote)
+    }
+
+    /// Merge config, builtin, and remote registries (3-way merge).
+    ///
+    /// Priority order (highest to lowest):
+    /// 1. Config entries (user-defined)
+    /// 2. Builtin entries (hardcoded)
+    /// 3. Remote entries (fetched from registry)
+    ///
+    /// If the same `id` appears in multiple sources, the higher-priority
+    /// version is kept. Unique entries from all sources are included.
+    #[must_use]
+    pub fn merged_with_config(config: Self, builtin: Self, remote: Self) -> Self {
+        Self::merged_impl(Some(config), builtin, remote)
+    }
+
+    /// Internal implementation for 2-way and 3-way registry merging.
+    ///
+    /// Priority: config > builtin > remote
+    fn merged_impl(config: Option<Self>, builtin: Self, remote: Self) -> Self {
+        let mut entries = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        // 1. Add config entries first (highest priority)
+        if let Some(config) = config {
+            for entry in config.entries {
+                seen_ids.insert(entry.id.clone());
+                entries.push(entry);
             }
         }
+
+        // 2. Add builtin entries (skip if already in config)
+        for entry in builtin.entries {
+            if seen_ids.insert(entry.id.clone()) {
+                entries.push(entry);
+            }
+        }
+
+        // 3. Add remote entries (skip if already in config or builtin)
+        for entry in remote.entries {
+            if seen_ids.insert(entry.id.clone()) {
+                entries.push(entry);
+            }
+        }
+
         Self { entries }
     }
 }
@@ -972,6 +1012,50 @@ mod tests {
         let len = builtin.len();
         let merged = Registry::merged(builtin, Registry { entries: vec![] });
         assert_eq!(merged.len(), len);
+    }
+
+    #[test]
+    fn test_merged_three_way() {
+        // Create config registry with custom agent-a
+        let mut config_a = make_entry("agent-a");
+        config_a.display_name = "config-version".to_string();
+        let config = Registry {
+            entries: vec![config_a],
+        };
+
+        // Create builtin registry with agent-a and agent-b
+        let mut builtin_a = make_entry("agent-a");
+        builtin_a.display_name = "builtin-version".to_string();
+        let builtin = Registry {
+            entries: vec![builtin_a, make_entry("agent-b")],
+        };
+
+        // Create remote registry with agent-a, agent-b, and agent-c
+        let mut remote_a = make_entry("agent-a");
+        remote_a.display_name = "remote-version".to_string();
+        let mut remote_b = make_entry("agent-b");
+        remote_b.display_name = "remote-b-version".to_string();
+        let remote = Registry {
+            entries: vec![remote_a, remote_b, make_entry("agent-c")],
+        };
+
+        // Perform 3-way merge
+        let merged = Registry::merged_with_config(config, builtin, remote);
+
+        // Verify merged result
+        assert_eq!(merged.len(), 3);
+
+        // agent-a should come from config (highest priority)
+        assert_eq!(
+            merged.find("agent-a").unwrap().display_name,
+            "config-version"
+        );
+
+        // agent-b should come from builtin (config doesn't have it)
+        assert_eq!(merged.find("agent-b").unwrap().display_name, "agent-b");
+
+        // agent-c should come from remote (only source that has it)
+        assert!(merged.find("agent-c").is_some());
     }
 
     #[test]
