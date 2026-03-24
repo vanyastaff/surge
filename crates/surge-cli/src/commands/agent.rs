@@ -16,6 +16,17 @@ pub enum AgentCommands {
     Status,
     /// Refresh agent discovery cache
     Refresh,
+    /// Add a custom agent to surge.toml
+    Add {
+        /// Agent name
+        name: String,
+        /// Path to the agent command
+        #[arg(short, long)]
+        command: String,
+        /// Optional arguments for the agent
+        #[arg(short, long)]
+        args: Vec<String>,
+    },
 }
 
 pub async fn run(command: AgentCommands) -> Result<()> {
@@ -224,6 +235,44 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             println!("⚡ Refreshing agent discovery cache...");
             Registry::refresh_discovery();
             println!("✅ Agent discovery cache cleared. Next 'surge agent list' will re-scan.");
+        }
+        AgentCommands::Add {
+            name,
+            command,
+            args,
+        } => {
+            let config_path = std::env::current_dir()?.join("surge.toml");
+            if !config_path.exists() {
+                anyhow::bail!("No surge.toml found. Run 'surge init' first.");
+            }
+
+            let contents = std::fs::read_to_string(&config_path)?;
+            let mut doc: toml::Table = contents.parse()?;
+
+            let agents = doc
+                .entry("agents")
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                .as_table_mut()
+                .ok_or_else(|| anyhow::anyhow!("'agents' is not a table in surge.toml"))?;
+
+            if agents.contains_key(&name) {
+                anyhow::bail!("Agent '{}' already exists in surge.toml", name);
+            }
+
+            let mut agent_table = toml::Table::new();
+            agent_table.insert("command".into(), toml::Value::String(command.clone()));
+
+            let args_values: Vec<toml::Value> = args
+                .iter()
+                .map(|a| toml::Value::String(a.clone()))
+                .collect();
+            agent_table.insert("args".into(), toml::Value::Array(args_values));
+            agent_table.insert("transport".into(), toml::Value::String("stdio".into()));
+
+            agents.insert(name.clone(), toml::Value::Table(agent_table));
+
+            std::fs::write(&config_path, doc.to_string())?;
+            println!("✅ Added agent '{}' to surge.toml", name);
         }
     }
     Ok(())
