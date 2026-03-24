@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod planner;
 pub mod project;
 pub mod qa;
+pub mod retry;
 pub mod schedule;
 
 pub use budget::{BudgetStatus, BudgetTracker};

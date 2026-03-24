@@ -90,6 +90,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 1000,
         max_delay_ms: 60000,
         backoff_strategy: BackoffStrategy::Linear,
+        jitter_factor: 0.0,
     };
     assert!(
         matches!(linear_policy.backoff_strategy, BackoffStrategy::Linear),
@@ -104,6 +105,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 500,
         max_delay_ms: 30000,
         backoff_strategy: BackoffStrategy::Exponential,
+        jitter_factor: 0.0,
     };
     assert!(
         matches!(
@@ -119,6 +121,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 2000,
         max_delay_ms: 120000,
         backoff_strategy: BackoffStrategy::ExponentialWithJitter,
+        jitter_factor: 0.25,
     };
     assert!(
         matches!(
