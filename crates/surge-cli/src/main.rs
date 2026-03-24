@@ -9,7 +9,7 @@ mod commands;
 
 use commands::{
     agent::AgentCommands, config::ConfigCommands, insights::InsightsCommands,
-    registry::RegistryCommands, spec::SpecCommands,
+    memory::MemoryCommands, registry::RegistryCommands, spec::SpecCommands,
 };
 
 #[derive(Parser)]
@@ -169,6 +169,12 @@ enum Commands {
     Insights {
         #[command(subcommand)]
         command: InsightsCommands,
+    },
+
+    /// Manage project memory and knowledge base
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
     },
 }
 
@@ -464,6 +470,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Insights { command } => {
             commands::insights::run(command)?;
+        }
+
+        Commands::Memory { command } => {
+            commands::memory::run(command)?;
         }
 
         Commands::Init => {

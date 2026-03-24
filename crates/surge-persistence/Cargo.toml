@@ -13,3 +13,4 @@ tokio = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
 tracing = { workspace = true }
+ulid = { workspace = true }

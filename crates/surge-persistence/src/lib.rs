@@ -15,6 +15,9 @@ pub mod aggregator;
 /// Data models for token usage tracking
 pub mod models;
 
+/// Project memory and knowledge base
+pub mod memory;
+
 /// Pricing models for AI providers
 pub mod pricing;
 
