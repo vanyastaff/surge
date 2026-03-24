@@ -347,6 +347,111 @@ impl Store {
         Ok(cost)
     }
 
+    /// Get all sessions in a time range.
+    ///
+    /// Returns all session usage records with timestamps between `start_ms`
+    /// (inclusive) and `end_ms` (exclusive), ordered by timestamp descending.
+    ///
+    /// # Arguments
+    ///
+    /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
+    /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
+    pub fn get_sessions_by_time_range(&self, start_ms: u64, end_ms: u64) -> Result<Vec<SessionUsage>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT * FROM session_usage
+            WHERE timestamp_ms >= ?1 AND timestamp_ms < ?2
+            ORDER BY timestamp_ms DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![start_ms as i64, end_ms as i64], |row| {
+            Ok(SessionUsage {
+                session_id: row.get(0)?,
+                agent_name: row.get(1)?,
+                task_id: row.get::<_, String>(2)?.parse().unwrap(),
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
+                spec_id: row.get::<_, String>(4)?.parse().unwrap(),
+                timestamp_ms: row.get::<_, i64>(5)? as u64,
+                input_tokens: row.get::<_, i64>(6)? as u64,
+                output_tokens: row.get::<_, i64>(7)? as u64,
+                thought_tokens: row.get::<_, Option<i64>>(8)?.map(|t| t as u64),
+                cached_read_tokens: row.get::<_, Option<i64>>(9)?.map(|t| t as u64),
+                cached_write_tokens: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
+                estimated_cost_usd: row.get(11)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Get total cost by agent in a time range.
+    ///
+    /// Returns a map of agent names to their total cost for sessions with
+    /// timestamps between `start_ms` (inclusive) and `end_ms` (exclusive).
+    ///
+    /// # Arguments
+    ///
+    /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
+    /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
+    pub fn get_cost_by_agent_in_range(&self, start_ms: u64, end_ms: u64) -> Result<std::collections::HashMap<String, f64>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT agent_name, COALESCE(SUM(estimated_cost_usd), 0.0) as total_cost
+            FROM session_usage
+            WHERE timestamp_ms >= ?1 AND timestamp_ms < ?2
+            GROUP BY agent_name
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![start_ms as i64, end_ms as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?;
+
+        let mut result = std::collections::HashMap::new();
+        for row in rows {
+            let (agent_name, cost) = row?;
+            result.insert(agent_name, cost);
+        }
+
+        Ok(result)
+    }
+
+    /// Get top N specs by cost in a time range.
+    ///
+    /// Returns the top N specs by total cost for sessions with timestamps
+    /// between `start_ms` (inclusive) and `end_ms` (exclusive), ordered by
+    /// cost descending.
+    ///
+    /// # Arguments
+    ///
+    /// * `n` - Number of top specs to return
+    /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
+    /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
+    pub fn get_top_n_specs_by_cost(&self, n: usize, start_ms: u64, end_ms: u64) -> Result<Vec<(SpecId, f64)>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT spec_id, COALESCE(SUM(estimated_cost_usd), 0.0) as total_cost
+            FROM session_usage
+            WHERE timestamp_ms >= ?1 AND timestamp_ms < ?2
+            GROUP BY spec_id
+            ORDER BY total_cost DESC
+            LIMIT ?3
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![start_ms as i64, end_ms as i64, n as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?.parse().unwrap(),
+                row.get::<_, f64>(1)?,
+            ))
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     // ── Subtask Usage Operations ────────────────────────────────────
 
     /// Insert or update a subtask usage record.
@@ -1347,5 +1452,191 @@ mod tests {
         assert_eq!(state.last_error, None);
         assert_eq!(state.tripped_at, None);
         assert_eq!(state.next_retry_time, None);
+    }
+
+    #[test]
+    fn test_time_range_get_sessions_by_time_range() {
+        let mut store = Store::in_memory().unwrap();
+
+        // Create sessions with different timestamps
+        let mut session1 = sample_session();
+        session1.session_id = "sess-1".to_string();
+        session1.timestamp_ms = 1_000_000;
+
+        let mut session2 = sample_session();
+        session2.session_id = "sess-2".to_string();
+        session2.timestamp_ms = 2_000_000;
+
+        let mut session3 = sample_session();
+        session3.session_id = "sess-3".to_string();
+        session3.timestamp_ms = 3_000_000;
+
+        store.insert_session(&session1).unwrap();
+        store.insert_session(&session2).unwrap();
+        store.insert_session(&session3).unwrap();
+
+        // Query for sessions between 1.5M and 3.5M (should get session2 and session3)
+        let sessions = store.get_sessions_by_time_range(1_500_000, 3_500_000).unwrap();
+        assert_eq!(sessions.len(), 2);
+        // Results should be ordered by timestamp descending
+        assert_eq!(sessions[0].session_id, "sess-3");
+        assert_eq!(sessions[1].session_id, "sess-2");
+
+        // Query for sessions before 1M (should get none)
+        let sessions = store.get_sessions_by_time_range(0, 1_000_000).unwrap();
+        assert_eq!(sessions.len(), 0);
+
+        // Query for all sessions
+        let sessions = store.get_sessions_by_time_range(0, 5_000_000).unwrap();
+        assert_eq!(sessions.len(), 3);
+    }
+
+    #[test]
+    fn test_time_range_get_cost_by_agent_in_range() {
+        let mut store = Store::in_memory().unwrap();
+
+        // Create sessions with different agents and timestamps
+        let mut session1 = sample_session();
+        session1.session_id = "sess-1".to_string();
+        session1.agent_name = "claude".to_string();
+        session1.timestamp_ms = 1_000_000;
+        session1.estimated_cost_usd = Some(0.01);
+
+        let mut session2 = sample_session();
+        session2.session_id = "sess-2".to_string();
+        session2.agent_name = "claude".to_string();
+        session2.timestamp_ms = 2_000_000;
+        session2.estimated_cost_usd = Some(0.02);
+
+        let mut session3 = sample_session();
+        session3.session_id = "sess-3".to_string();
+        session3.agent_name = "gpt4".to_string();
+        session3.timestamp_ms = 2_500_000;
+        session3.estimated_cost_usd = Some(0.05);
+
+        let mut session4 = sample_session();
+        session4.session_id = "sess-4".to_string();
+        session4.agent_name = "claude".to_string();
+        session4.timestamp_ms = 4_000_000;
+        session4.estimated_cost_usd = Some(0.03);
+
+        store.insert_session(&session1).unwrap();
+        store.insert_session(&session2).unwrap();
+        store.insert_session(&session3).unwrap();
+        store.insert_session(&session4).unwrap();
+
+        // Query for costs between 1.5M and 3M (should get session2 and session3)
+        let costs = store.get_cost_by_agent_in_range(1_500_000, 3_000_000).unwrap();
+        assert_eq!(costs.len(), 2);
+        assert!((costs["claude"] - 0.02).abs() < f64::EPSILON);
+        assert!((costs["gpt4"] - 0.05).abs() < f64::EPSILON);
+
+        // Query for all time
+        let costs = store.get_cost_by_agent_in_range(0, 5_000_000).unwrap();
+        assert_eq!(costs.len(), 2);
+        assert!((costs["claude"] - 0.06).abs() < f64::EPSILON);
+        assert!((costs["gpt4"] - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_time_range_get_top_n_specs_by_cost() {
+        let mut store = Store::in_memory().unwrap();
+        let spec1 = SpecId::new();
+        let spec2 = SpecId::new();
+        let spec3 = SpecId::new();
+
+        // Create sessions with different specs and costs
+        let mut session1 = sample_session();
+        session1.session_id = "sess-1".to_string();
+        session1.spec_id = spec1;
+        session1.timestamp_ms = 1_000_000;
+        session1.estimated_cost_usd = Some(0.10);
+
+        let mut session2 = sample_session();
+        session2.session_id = "sess-2".to_string();
+        session2.spec_id = spec2;
+        session2.timestamp_ms = 2_000_000;
+        session2.estimated_cost_usd = Some(0.50);
+
+        let mut session3 = sample_session();
+        session3.session_id = "sess-3".to_string();
+        session3.spec_id = spec3;
+        session3.timestamp_ms = 2_500_000;
+        session3.estimated_cost_usd = Some(0.25);
+
+        let mut session4 = sample_session();
+        session4.session_id = "sess-4".to_string();
+        session4.spec_id = spec1;
+        session4.timestamp_ms = 3_000_000;
+        session4.estimated_cost_usd = Some(0.15);
+
+        store.insert_session(&session1).unwrap();
+        store.insert_session(&session2).unwrap();
+        store.insert_session(&session3).unwrap();
+        store.insert_session(&session4).unwrap();
+
+        // Get top 2 specs in range 1.5M to 3.5M (should get spec2, spec3)
+        let top = store.get_top_n_specs_by_cost(2, 1_500_000, 3_500_000).unwrap();
+        assert_eq!(top.len(), 2);
+        // Should be ordered by cost descending
+        assert_eq!(top[0].0, spec2);
+        assert!((top[0].1 - 0.50).abs() < f64::EPSILON);
+        assert_eq!(top[1].0, spec3);
+        assert!((top[1].1 - 0.25).abs() < f64::EPSILON);
+
+        // Get top 3 specs across all time
+        let top = store.get_top_n_specs_by_cost(3, 0, 5_000_000).unwrap();
+        assert_eq!(top.len(), 3);
+        assert_eq!(top[0].0, spec2); // 0.50
+        assert!((top[0].1 - 0.50).abs() < f64::EPSILON);
+        // spec1 and spec3 both have 0.25, so check they're both present
+        assert!((top[1].1 - 0.25).abs() < f64::EPSILON);
+        assert!((top[2].1 - 0.25).abs() < f64::EPSILON);
+        // Verify spec1 and spec3 are present (order may vary)
+        let spec_ids: Vec<SpecId> = vec![top[1].0, top[2].0];
+        assert!(spec_ids.contains(&spec1));
+        assert!(spec_ids.contains(&spec3));
+
+        // Get top 1 spec
+        let top = store.get_top_n_specs_by_cost(1, 0, 5_000_000).unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].0, spec2);
+    }
+
+    #[test]
+    fn test_time_range_get_cost_in_time_range() {
+        let mut store = Store::in_memory().unwrap();
+
+        // Create sessions with different timestamps and costs
+        let mut session1 = sample_session();
+        session1.session_id = "sess-1".to_string();
+        session1.timestamp_ms = 1_000_000;
+        session1.estimated_cost_usd = Some(0.01);
+
+        let mut session2 = sample_session();
+        session2.session_id = "sess-2".to_string();
+        session2.timestamp_ms = 2_000_000;
+        session2.estimated_cost_usd = Some(0.02);
+
+        let mut session3 = sample_session();
+        session3.session_id = "sess-3".to_string();
+        session3.timestamp_ms = 3_000_000;
+        session3.estimated_cost_usd = Some(0.03);
+
+        store.insert_session(&session1).unwrap();
+        store.insert_session(&session2).unwrap();
+        store.insert_session(&session3).unwrap();
+
+        // Query for cost between 1.5M and 2.5M (should get session2)
+        let cost = store.get_cost_in_time_range(1_500_000, 2_500_000).unwrap();
+        assert!((cost - 0.02).abs() < f64::EPSILON);
+
+        // Query for all time
+        let cost = store.get_cost_in_time_range(0, 5_000_000).unwrap();
+        assert!((cost - 0.06).abs() < f64::EPSILON);
+
+        // Query for range with no sessions
+        let cost = store.get_cost_in_time_range(10_000_000, 20_000_000).unwrap();
+        assert!((cost - 0.0).abs() < f64::EPSILON);
     }
 }
