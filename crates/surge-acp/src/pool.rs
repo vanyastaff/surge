@@ -161,19 +161,21 @@ impl AgentPool {
                 SurgeError::AgentConnection(format!("Failed to spawn pool worker: {e}"))
             })?;
 
-        // Spawn heartbeat monitoring task
-        let heartbeat_op_tx = op_tx.clone();
-        let heartbeat_health = Arc::clone(&health);
-        let heartbeat_event_tx = event_tx.clone();
-        let heartbeat_sessions = Arc::clone(&active_sessions);
-        tokio::spawn(run_heartbeat_monitor(
-            agent_names,
-            heartbeat_op_tx,
-            heartbeat_health,
-            heartbeat_event_tx,
-            heartbeat_sessions,
-            resilience,
-        ));
+        // Spawn heartbeat monitoring task (only if we're in a Tokio runtime)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let heartbeat_op_tx = op_tx.clone();
+            let heartbeat_health = Arc::clone(&health);
+            let heartbeat_event_tx = event_tx.clone();
+            let heartbeat_sessions = Arc::clone(&active_sessions);
+            handle.spawn(run_heartbeat_monitor(
+                agent_names,
+                heartbeat_op_tx,
+                heartbeat_health,
+                heartbeat_event_tx,
+                heartbeat_sessions,
+                resilience,
+            ));
+        }
 
         Ok(Self {
             op_tx,
@@ -333,9 +335,9 @@ impl Drop for AgentPool {
 /// and idle intervals based on the number of active sessions.
 async fn run_heartbeat_monitor(
     agent_names: Vec<String>,
-    _op_tx: mpsc::UnboundedSender<PoolOp>,
-    _health: Arc<Mutex<HealthTracker>>,
-    _event_tx: broadcast::Sender<SurgeEvent>,
+    op_tx: mpsc::UnboundedSender<PoolOp>,
+    health: Arc<Mutex<HealthTracker>>,
+    event_tx: broadcast::Sender<SurgeEvent>,
     active_sessions: Arc<AtomicUsize>,
     resilience: ResilienceConfig,
 ) {
@@ -352,12 +354,59 @@ async fn run_heartbeat_monitor(
         // Wait for the next heartbeat interval
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
 
-        // TODO (subtask-3-2): Implement heartbeat ping logic
-        // For each agent in agent_names:
-        // 1. Call ping() via op_tx
-        // 2. Record success/failure in health tracker
-        // 3. Emit AgentHeartbeatFailed event on consecutive failures
-        // 4. Emit AgentHealthDegraded after 3 consecutive failures
+        // Ping each agent to verify connectivity
+        for agent_name in &agent_names {
+            let (tx, rx) = oneshot::channel();
+
+            // Send ping operation (Connect is effectively a ping)
+            if op_tx.send(PoolOp::Connect {
+                name: agent_name.clone(),
+                tx,
+            }).is_err() {
+                // Pool worker stopped, exit heartbeat monitor
+                debug!("Heartbeat monitor stopping: pool worker stopped");
+                return;
+            }
+
+            // Wait for response with a timeout
+            let ping_result = tokio::time::timeout(
+                Duration::from_secs(resilience.connect_timeout_secs),
+                rx
+            ).await;
+
+            // Record result in health tracker
+            let mut health_lock = health.lock().await;
+            match ping_result {
+                Ok(Ok(Ok(()))) => {
+                    // Successful ping
+                    health_lock.record_heartbeat_success(agent_name);
+                }
+                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
+                    // Failed ping (connection error, worker dropped response, or timeout)
+                    health_lock.record_heartbeat_failure(agent_name);
+
+                    // Get consecutive failures count
+                    if let Some(agent_health) = health_lock.get_health(agent_name) {
+                        let consecutive = agent_health.consecutive_heartbeat_failures;
+
+                        // Emit heartbeat failure event
+                        let _ = event_tx.send(SurgeEvent::AgentHeartbeatFailed {
+                            agent_name: agent_name.clone(),
+                            consecutive_failures: consecutive as u32,
+                        });
+
+                        // Emit health degraded event after 3 consecutive failures
+                        if consecutive >= 3 {
+                            let _ = event_tx.send(SurgeEvent::AgentHealthDegraded {
+                                agent_name: agent_name.clone(),
+                                error_rate: agent_health.error_rate(),
+                                avg_latency_ms: agent_health.avg_latency_ms,
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
