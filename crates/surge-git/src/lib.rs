@@ -32,7 +32,11 @@ pub(crate) mod test_helpers {
 
         fs::write(path.join("README.md"), "# Test repo\n").unwrap();
 
-        Command::new("git").args(["add", "."]).current_dir(&path).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&path)
+            .output()
+            .unwrap();
         Command::new("git")
             .args(["commit", "-m", "initial commit"])
             .current_dir(&path)

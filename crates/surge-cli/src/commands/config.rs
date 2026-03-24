@@ -51,7 +51,10 @@ pub fn run(command: ConfigCommands) -> Result<()> {
             println!("\n  Gates:");
             println!("    after_spec: {}", config.pipeline.gates.after_spec);
             println!("    after_plan: {}", config.pipeline.gates.after_plan);
-            println!("    after_each_subtask: {}", config.pipeline.gates.after_each_subtask);
+            println!(
+                "    after_each_subtask: {}",
+                config.pipeline.gates.after_each_subtask
+            );
             println!("    after_qa: {}", config.pipeline.gates.after_qa);
         }
     }

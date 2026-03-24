@@ -142,7 +142,8 @@ impl HealthTracker {
                 let retry_after_secs = parse_retry_after(error).unwrap_or(60);
                 warn!(agent, error, retry_after_secs, "rate limit detected");
                 health.rate_limited = true;
-                health.rate_limit_reset = Some(Instant::now() + Duration::from_secs(retry_after_secs));
+                health.rate_limit_reset =
+                    Some(Instant::now() + Duration::from_secs(retry_after_secs));
             }
         }
     }
@@ -273,7 +274,10 @@ mod tests {
         assert!(health.rate_limited);
         assert!(health.rate_limit_reset.is_some());
         // Verify reset time is approximately 120 seconds from now
-        let reset_duration = health.rate_limit_reset.unwrap().duration_since(Instant::now());
+        let reset_duration = health
+            .rate_limit_reset
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(reset_duration.as_secs() >= 119 && reset_duration.as_secs() <= 121);
     }
 
@@ -285,7 +289,10 @@ mod tests {
         let health = monitor.get_health("claude").unwrap();
         assert!(health.rate_limited);
         // Should default to 60 seconds
-        let reset_duration = health.rate_limit_reset.unwrap().duration_since(Instant::now());
+        let reset_duration = health
+            .rate_limit_reset
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(reset_duration.as_secs() >= 59 && reset_duration.as_secs() <= 61);
     }
 
@@ -295,7 +302,10 @@ mod tests {
         assert_eq!(parse_retry_after("retry-after: 30"), Some(30));
         assert_eq!(parse_retry_after("RETRY-AFTER:90"), Some(90));
         assert_eq!(parse_retry_after("Retry-After:  180  "), Some(180));
-        assert_eq!(parse_retry_after("429 Too Many Requests; Retry-After: 60"), Some(60));
+        assert_eq!(
+            parse_retry_after("429 Too Many Requests; Retry-After: 60"),
+            Some(60)
+        );
         assert_eq!(parse_retry_after("no retry header here"), None);
         assert_eq!(parse_retry_after("Retry-After: invalid"), None);
     }

@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::Icon;
 use gpui_component::StyledExt;
 
@@ -39,11 +39,7 @@ impl AppSidebar {
         cx.notify();
     }
 
-    fn render_nav_item(
-        &self,
-        screen: Screen,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn render_nav_item(&self, screen: Screen, cx: &mut Context<Self>) -> Stateful<Div> {
         let is_active = self.active == screen;
         let collapsed = self.collapsed;
         let label = screen.label();
@@ -66,23 +62,18 @@ impl AppSidebar {
                 .text_color(theme::PRIMARY)
         } else {
             base.text_color(theme::TEXT_MUTED)
-                .hover(|s: StyleRefinement| {
-                    s.bg(theme::SURFACE).text_color(theme::TEXT_PRIMARY)
-                })
+                .hover(|s: StyleRefinement| s.bg(theme::SURFACE).text_color(theme::TEXT_PRIMARY))
         };
 
-        let icon_color = if is_active { theme::PRIMARY } else { theme::TEXT_MUTED };
-        let mut row = base.child(
-            Icon::new(screen.icon()).size_4().text_color(icon_color),
-        );
+        let icon_color = if is_active {
+            theme::PRIMARY
+        } else {
+            theme::TEXT_MUTED
+        };
+        let mut row = base.child(Icon::new(screen.icon()).size_4().text_color(icon_color));
 
         if !collapsed {
-            row = row.child(
-                div()
-                    .flex_1()
-                    .text_sm()
-                    .child(label.to_string()),
-            );
+            row = row.child(div().flex_1().text_sm().child(label.to_string()));
 
             if let Some(sc) = screen.shortcut() {
                 row = row.child(

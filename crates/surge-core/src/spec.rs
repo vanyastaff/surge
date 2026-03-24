@@ -1,7 +1,7 @@
 //! Spec types for Surge task definitions.
 
-use serde::{Deserialize, Serialize};
 use crate::id::{SpecId, SubtaskId};
+use serde::{Deserialize, Serialize};
 
 /// Execution state of a single subtask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -139,8 +139,14 @@ mod tests {
             complexity: Complexity,
         }
 
-        for variant in [Complexity::Simple, Complexity::Standard, Complexity::Complex] {
-            let wrapper = Wrapper { complexity: variant };
+        for variant in [
+            Complexity::Simple,
+            Complexity::Standard,
+            Complexity::Complex,
+        ] {
+            let wrapper = Wrapper {
+                complexity: variant,
+            };
             let serialized = toml::to_string(&wrapper).unwrap();
             let deserialized: Wrapper = toml::from_str(&serialized).unwrap();
             assert_eq!(deserialized.complexity, variant);
@@ -266,7 +272,10 @@ mod tests {
     fn test_subtask_agent_skipped_when_none() {
         let subtask = make_subtask();
         let s = toml::to_string(&subtask).unwrap();
-        assert!(!s.contains("agent"), "agent field should be omitted when None");
+        assert!(
+            !s.contains("agent"),
+            "agent field should be omitted when None"
+        );
     }
 
     #[test]

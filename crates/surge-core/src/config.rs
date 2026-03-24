@@ -106,7 +106,9 @@ pub enum Transport {
     },
     /// WebSocket transport for remote agents (reserved, not yet implemented).
     #[serde(rename = "ws")]
-    WebSocket { url: String },
+    WebSocket {
+        url: String,
+    },
 }
 
 fn default_transport() -> Transport {
@@ -147,14 +149,14 @@ impl PipelineConfig {
         // Validate max_qa_iterations is positive
         if self.max_qa_iterations == 0 {
             return Err(crate::SurgeError::Config(
-                "pipeline.max_qa_iterations must be greater than 0".to_string()
+                "pipeline.max_qa_iterations must be greater than 0".to_string(),
             ));
         }
 
         // Validate max_parallel is positive
         if self.max_parallel == 0 {
             return Err(crate::SurgeError::Config(
-                "pipeline.max_parallel must be greater than 0".to_string()
+                "pipeline.max_parallel must be greater than 0".to_string(),
             ));
         }
 
@@ -394,13 +396,27 @@ impl Default for ResilienceConfig {
     }
 }
 
-fn default_connect_timeout_secs() -> u64 { 120 }
-fn default_session_timeout_secs() -> u64 { 10 }
-fn default_prompt_timeout_secs() -> u64 { 300 }
-fn default_prompt_retries() -> u32 { 1 }
-fn default_shutdown_grace_secs() -> u64 { 5 }
-fn default_circuit_breaker_threshold() -> u32 { 5 }
-fn default_auth_failure_immediate_fail() -> bool { true }
+fn default_connect_timeout_secs() -> u64 {
+    120
+}
+fn default_session_timeout_secs() -> u64 {
+    10
+}
+fn default_prompt_timeout_secs() -> u64 {
+    300
+}
+fn default_prompt_retries() -> u32 {
+    1
+}
+fn default_shutdown_grace_secs() -> u64 {
+    5
+}
+fn default_circuit_breaker_threshold() -> u32 {
+    5
+}
+fn default_auth_failure_immediate_fail() -> bool {
+    true
+}
 
 impl Default for SurgeConfig {
     fn default() -> Self {
@@ -420,10 +436,12 @@ impl Default for SurgeConfig {
 impl SurgeConfig {
     /// Load config from a TOML file at the given path.
     pub fn load(path: &PathBuf) -> Result<Self, crate::SurgeError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display())))?;
-        let config: Self = toml::from_str(&content)
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display())))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display()))
+        })?;
+        let config: Self = toml::from_str(&content).map_err(|e| {
+            crate::SurgeError::Config(format!("Failed to parse {}: {e}", path.display()))
+        })?;
         config.validate()?;
         Ok(config)
     }
@@ -435,7 +453,11 @@ impl SurgeConfig {
             return Err(crate::SurgeError::Config(format!(
                 "default_agent '{}' not found in agents. Available agents: {}",
                 self.default_agent,
-                self.agents.keys().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+                self.agents
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
 
@@ -463,8 +485,9 @@ impl SurgeConfig {
     /// Discover surge.toml by searching current directory and parent directories.
     /// Returns a default configuration if no file is found.
     pub fn discover() -> Result<Self, crate::SurgeError> {
-        let start_dir = std::env::current_dir()
-            .map_err(|e| crate::SurgeError::Config(format!("Failed to get current directory: {e}")))?;
+        let start_dir = std::env::current_dir().map_err(|e| {
+            crate::SurgeError::Config(format!("Failed to get current directory: {e}"))
+        })?;
 
         match Self::find_config_file(&start_dir) {
             Ok(config_path) => Self::load(&config_path),
@@ -550,9 +573,10 @@ impl SurgeConfig {
             match current.parent() {
                 Some(parent) => current = parent,
                 None => {
-                    return Err(crate::SurgeError::Config(
-                        format!("surge.toml not found in {} or any parent directory", start_dir.display())
-                    ));
+                    return Err(crate::SurgeError::Config(format!(
+                        "surge.toml not found in {} or any parent directory",
+                        start_dir.display()
+                    )));
                 }
             }
         }
@@ -576,12 +600,16 @@ mod tests {
 
         // Create a surge.toml in the temp_dir
         let config_path = temp_dir.join("surge.toml");
-        fs::write(&config_path, r#"
+        fs::write(
+            &config_path,
+            r#"
 default_agent = "test-agent"
 
 [agents.test-agent]
 command = "test"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         // Test finding from nested directory
         let found_path = SurgeConfig::find_config_file(&nested_dir).unwrap();
@@ -626,13 +654,17 @@ command = "test"
 
         // Test 1: When surge.toml exists, it should load it
         let config_path = temp_dir.join("surge.toml");
-        fs::write(&config_path, r#"
+        fs::write(
+            &config_path,
+            r#"
 default_agent = "custom-agent"
 
 [pipeline]
 max_qa_iterations = 5
 max_parallel = 2
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         // Change to the temp directory to test load_or_default
         let original_dir = std::env::current_dir().unwrap();
@@ -666,23 +698,31 @@ max_parallel = 2
     fn test_config_validation() {
         // Test 1: Valid configuration passes validation
         let mut valid_config = SurgeConfig::default();
-        valid_config.agents.insert("claude-acp".to_string(), AgentConfig {
-            command: "claude".to_string(),
-            args: vec![],
-            transport: Transport::Stdio,
-            mcp_servers: vec![],
-        });
+        valid_config.agents.insert(
+            "claude-acp".to_string(),
+            AgentConfig {
+                command: "claude".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+            },
+        );
         assert!(valid_config.validate().is_ok());
 
         // Test 2: default_agent not in agents map fails
-        let mut invalid_config = SurgeConfig::default();
-        invalid_config.default_agent = "nonexistent".to_string();
-        invalid_config.agents.insert("other-agent".to_string(), AgentConfig {
-            command: "other".to_string(),
-            args: vec![],
-            transport: Transport::Stdio,
-            mcp_servers: vec![],
-        });
+        let mut invalid_config = SurgeConfig {
+            default_agent: "nonexistent".to_string(),
+            ..Default::default()
+        };
+        invalid_config.agents.insert(
+            "other-agent".to_string(),
+            AgentConfig {
+                command: "other".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+            },
+        );
         let result = invalid_config.validate();
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -690,48 +730,63 @@ max_parallel = 2
         assert!(err_msg.contains("Available agents: other-agent"));
 
         // Test 3: Empty command fails
-        let mut config_empty_cmd = SurgeConfig::default();
-        config_empty_cmd.default_agent = "bad-agent".to_string();
-        config_empty_cmd.agents.insert("bad-agent".to_string(), AgentConfig {
-            command: "".to_string(),
-            args: vec![],
-            transport: Transport::Stdio,
-            mcp_servers: vec![],
-        });
+        let mut config_empty_cmd = SurgeConfig {
+            default_agent: "bad-agent".to_string(),
+            ..Default::default()
+        };
+        config_empty_cmd.agents.insert(
+            "bad-agent".to_string(),
+            AgentConfig {
+                command: "".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+            },
+        );
         let result = config_empty_cmd.validate();
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Agent 'bad-agent' has empty command"));
 
         // Test 4: Empty TCP host fails
-        let mut config_empty_host = SurgeConfig::default();
-        config_empty_host.default_agent = "tcp-agent".to_string();
-        config_empty_host.agents.insert("tcp-agent".to_string(), AgentConfig {
-            command: "test".to_string(),
-            args: vec![],
-            transport: Transport::Tcp {
-                host: "".to_string(),
-                port: 8080,
+        let mut config_empty_host = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
+        config_empty_host.agents.insert(
+            "tcp-agent".to_string(),
+            AgentConfig {
+                command: "test".to_string(),
+                args: vec![],
+                transport: Transport::Tcp {
+                    host: "".to_string(),
+                    port: 8080,
+                },
+                mcp_servers: vec![],
             },
-            mcp_servers: vec![],
-        });
+        );
         let result = config_empty_host.validate();
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Agent 'tcp-agent' TCP transport has empty host"));
 
         // Test 5: Invalid TCP port 0 fails
-        let mut config_invalid_port = SurgeConfig::default();
-        config_invalid_port.default_agent = "tcp-agent".to_string();
-        config_invalid_port.agents.insert("tcp-agent".to_string(), AgentConfig {
-            command: "test".to_string(),
-            args: vec![],
-            transport: Transport::Tcp {
-                host: "localhost".to_string(),
-                port: 0,
+        let mut config_invalid_port = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
+        config_invalid_port.agents.insert(
+            "tcp-agent".to_string(),
+            AgentConfig {
+                command: "test".to_string(),
+                args: vec![],
+                transport: Transport::Tcp {
+                    host: "localhost".to_string(),
+                    port: 0,
+                },
+                mcp_servers: vec![],
             },
-            mcp_servers: vec![],
-        });
+        );
         let result = config_invalid_port.validate();
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -754,17 +809,22 @@ max_parallel = 2
         assert!(err_msg.contains("pipeline.max_parallel must be greater than 0"));
 
         // Test 8: Valid TCP configuration passes
-        let mut config_valid_tcp = SurgeConfig::default();
-        config_valid_tcp.default_agent = "tcp-agent".to_string();
-        config_valid_tcp.agents.insert("tcp-agent".to_string(), AgentConfig {
-            command: "test".to_string(),
-            args: vec![],
-            transport: Transport::Tcp {
-                host: "localhost".to_string(),
-                port: 8080,
+        let mut config_valid_tcp = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
+        config_valid_tcp.agents.insert(
+            "tcp-agent".to_string(),
+            AgentConfig {
+                command: "test".to_string(),
+                args: vec![],
+                transport: Transport::Tcp {
+                    host: "localhost".to_string(),
+                    port: 8080,
+                },
+                mcp_servers: vec![],
             },
-            mcp_servers: vec![],
-        });
+        );
         assert!(config_valid_tcp.validate().is_ok());
 
         // Test 9: Empty agents map with default_agent is OK (default config scenario)
@@ -942,7 +1002,9 @@ command = "test"
         fs::create_dir_all(&temp_dir).unwrap();
 
         let config_path = temp_dir.join("surge.toml");
-        fs::write(&config_path, r#"
+        fs::write(
+            &config_path,
+            r#"
 default_agent = "my-agent"
 
 [agents.my-agent]
@@ -952,7 +1014,9 @@ args = ["--verbose"]
 [pipeline]
 max_qa_iterations = 15
 max_parallel = 4
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = SurgeConfig::load(&config_path).unwrap();
         assert_eq!(config.default_agent, "my-agent");
@@ -1002,12 +1066,16 @@ max_parallel = 4
         fs::create_dir_all(&temp_dir).unwrap();
 
         let config_path = temp_dir.join("surge.toml");
-        fs::write(&config_path, r#"
+        fs::write(
+            &config_path,
+            r#"
 default_agent = "missing-agent"
 
 [agents.other-agent]
 command = "test"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let result = SurgeConfig::load(&config_path);
         assert!(result.is_err());
@@ -1137,9 +1205,14 @@ args = ["copilot", "suggest", "--verbose"]
     #[test]
     fn test_config_clone() {
         // Test that SurgeConfig can be cloned
-        let mut config = SurgeConfig::default();
-        config.default_agent = "custom".to_string();
-        config.pipeline.max_qa_iterations = 42;
+        let config = SurgeConfig {
+            default_agent: "custom".to_string(),
+            pipeline: crate::config::PipelineConfig {
+                max_qa_iterations: 42,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         let cloned = config.clone();
         assert_eq!(cloned.default_agent, "custom");
@@ -1279,23 +1352,24 @@ editor = "rustrover"
 
     #[test]
     fn test_websocket_transport_roundtrip() {
-        let toml_str = r#"
+        let _toml_str = r#"
 command = "agent"
 [transport]
 url = "ws://localhost:8080"
 "#;
         // Deserialize using the "ws" tag
-        let toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
+        let _toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
         // Use inline table format that matches serde rename
-        let agent: AgentConfig = toml::from_str(&format!(
-            "command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n"
-        ))
-        .unwrap();
+        let agent: AgentConfig =
+            toml::from_str("command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n")
+                .unwrap();
         assert!(matches!(agent.transport, Transport::WebSocket { .. }));
 
         let serialized = toml::to_string(&agent).unwrap();
         let roundtripped: AgentConfig = toml::from_str(&serialized).unwrap();
-        assert!(matches!(roundtripped.transport, Transport::WebSocket { url } if url == "ws://localhost:8080"));
+        assert!(
+            matches!(roundtripped.transport, Transport::WebSocket { url } if url == "ws://localhost:8080")
+        );
     }
 
     #[test]
@@ -1309,7 +1383,10 @@ url = "ws://localhost:8080"
             mcp_servers: vec![],
         };
         let err = agent.validate("test-agent").unwrap_err();
-        assert!(err.to_string().contains("WebSocket transport not yet supported"));
+        assert!(
+            err.to_string()
+                .contains("WebSocket transport not yet supported")
+        );
     }
 
     #[test]
@@ -1366,7 +1443,10 @@ max_size_mb = 100
 "#;
         let config: SurgeConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.log.level, "debug");
-        assert_eq!(config.log.file.as_ref().unwrap().to_str().unwrap(), "/var/log/surge.log");
+        assert_eq!(
+            config.log.file.as_ref().unwrap().to_str().unwrap(),
+            "/var/log/surge.log"
+        );
         assert_eq!(config.log.max_size_mb, 100);
     }
 
@@ -1390,7 +1470,10 @@ auto_open_worktree = true
 "#;
         let config: SurgeConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.ide.editor.as_deref(), Some("vscode"));
-        assert_eq!(config.ide.open_file_cmd.as_deref(), Some("code {path}:{line}"));
+        assert_eq!(
+            config.ide.open_file_cmd.as_deref(),
+            Some("code {path}:{line}")
+        );
         assert!(config.ide.auto_open_worktree);
     }
 

@@ -1,7 +1,7 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::theme;
 
@@ -116,9 +116,7 @@ pub struct GithubPrsScreen {
 
 impl GithubPrsScreen {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        Self {
-            prs: demo_prs(),
-        }
+        Self { prs: demo_prs() }
     }
 
     fn render_pr_card(&self, idx: usize, pr: &PullRequest) -> Div {
@@ -265,8 +263,16 @@ impl GithubPrsScreen {
 
 impl Render for GithubPrsScreen {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let open_count = self.prs.iter().filter(|p| p.status == PrStatus::Open).count();
-        let merged_count = self.prs.iter().filter(|p| p.status == PrStatus::Merged).count();
+        let open_count = self
+            .prs
+            .iter()
+            .filter(|p| p.status == PrStatus::Open)
+            .count();
+        let merged_count = self
+            .prs
+            .iter()
+            .filter(|p| p.status == PrStatus::Merged)
+            .count();
 
         let cards: Vec<Div> = self
             .prs
@@ -306,11 +312,7 @@ impl Render for GithubPrsScreen {
                                     .child(format!("{open_count} open  {merged_count} merged")),
                             ),
                     )
-                    .child(
-                        Button::new("pr-create")
-                            .primary()
-                            .label("+ Create PR"),
-                    ),
+                    .child(Button::new("pr-create").primary().label("+ Create PR")),
             )
             // PR list
             .child(

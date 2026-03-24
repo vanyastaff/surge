@@ -6,19 +6,23 @@
 //! - Task resume after crash
 //! - Circuit breaker tripping after threshold failures
 
+use std::path::PathBuf;
+use std::time::SystemTime;
 use surge_core::config::{BackoffStrategy, ResilienceConfig, RetryPolicy};
 use surge_core::error::SurgeError;
 use surge_core::id::{SpecId, TaskId};
 use surge_core::state::TaskState;
 use surge_orchestrator::executor::{ExecutorConfig, SubtaskExecutor};
 use surge_persistence::store::Store;
-use std::path::PathBuf;
-use std::time::SystemTime;
 
 /// Helper to create a unique temp database file
 fn temp_db_path(test_name: &str) -> PathBuf {
     let temp_dir = std::env::temp_dir();
-    temp_dir.join(format!("surge-retry-e2e-{}-{}.db", test_name, std::process::id()))
+    temp_dir.join(format!(
+        "surge-retry-e2e-{}-{}.db",
+        test_name,
+        std::process::id()
+    ))
 }
 
 /// Test 1: Verify circuit breaker trips after threshold failures
@@ -102,7 +106,10 @@ fn test_retry_policy_backoff_strategies() {
         backoff_strategy: BackoffStrategy::Exponential,
     };
     assert!(
-        matches!(exponential_policy.backoff_strategy, BackoffStrategy::Exponential),
+        matches!(
+            exponential_policy.backoff_strategy,
+            BackoffStrategy::Exponential
+        ),
         "Exponential backoff strategy should be configured"
     );
 
@@ -114,7 +121,10 @@ fn test_retry_policy_backoff_strategies() {
         backoff_strategy: BackoffStrategy::ExponentialWithJitter,
     };
     assert!(
-        matches!(jitter_policy.backoff_strategy, BackoffStrategy::ExponentialWithJitter),
+        matches!(
+            jitter_policy.backoff_strategy,
+            BackoffStrategy::ExponentialWithJitter
+        ),
         "Exponential with jitter backoff strategy should be configured"
     );
 }
@@ -205,10 +215,7 @@ async fn test_task_checkpoint_and_resume() {
         .expect("Task state should exist");
 
     // 4. Verify resumed state matches checkpointed state
-    assert_eq!(
-        resumed_spec_id, spec_id,
-        "Resumed spec_id should match"
-    );
+    assert_eq!(resumed_spec_id, spec_id, "Resumed spec_id should match");
     assert_eq!(
         resumed_state, initial_state,
         "Resumed state should match checkpointed state"
@@ -236,10 +243,7 @@ async fn test_task_checkpoint_and_resume() {
         .expect("Failed to resume updated state")
         .expect("Task state should exist");
 
-    assert_eq!(
-        final_spec_id, spec_id,
-        "Final spec_id should match"
-    );
+    assert_eq!(final_spec_id, spec_id, "Final spec_id should match");
     assert_eq!(
         final_state, updated_state,
         "Final state should reflect latest checkpoint"
@@ -377,7 +381,10 @@ fn test_default_retry_policy() {
         "Default max delay should be 60000ms (60 seconds)"
     );
     assert!(
-        matches!(default_policy.backoff_strategy, BackoffStrategy::Exponential),
+        matches!(
+            default_policy.backoff_strategy,
+            BackoffStrategy::Exponential
+        ),
         "Default backoff strategy should be Exponential"
     );
 }
@@ -422,15 +429,15 @@ async fn test_checkpoint_all_task_states() {
         // Checkpoint each state
         store
             .checkpoint_task_state(task_id, spec_id, state)
-            .unwrap_or_else(|e| {
-                panic!("Failed to checkpoint state #{} ({:?}): {}", idx, state, e)
-            });
+            .unwrap_or_else(|e| panic!("Failed to checkpoint state #{} ({:?}): {}", idx, state, e));
 
         // Verify it can be resumed
         let (resumed_spec_id, resumed_state) = store
             .resume_task_state(task_id)
             .unwrap_or_else(|e| panic!("Failed to resume state #{} ({:?}): {}", idx, state, e))
-            .unwrap_or_else(|| panic!("State #{} ({:?}) should exist after checkpoint", idx, state));
+            .unwrap_or_else(|| {
+                panic!("State #{} ({:?}) should exist after checkpoint", idx, state)
+            });
 
         assert_eq!(
             resumed_spec_id, spec_id,

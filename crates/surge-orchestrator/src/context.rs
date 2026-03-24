@@ -18,7 +18,11 @@ impl<'a> SubtaskContext<'a> {
     /// is read from that file instead of being assembled from struct fields.
     #[must_use]
     pub fn new(spec: &'a Spec, subtask: &'a Subtask, spec_dir: Option<&'a Path>) -> Self {
-        Self { spec, subtask, spec_dir }
+        Self {
+            spec,
+            subtask,
+            spec_dir,
+        }
     }
 
     /// Build the prompt string sent to the coding agent for this subtask.
@@ -215,7 +219,10 @@ mod tests {
             prompt.contains("+use tracing::info;"),
             "should contain the diff"
         );
-        assert!(prompt.contains("APPROVED"), "should mention APPROVED format");
+        assert!(
+            prompt.contains("APPROVED"),
+            "should mention APPROVED format"
+        );
         assert!(
             prompt.contains("NEEDS_FIX"),
             "should mention NEEDS_FIX format"
@@ -231,8 +238,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stories_dir = dir.path().join("stories");
         std::fs::create_dir_all(&stories_dir).unwrap();
-        std::fs::write(stories_dir.join("story-001.md"), "# Story 001: Setup\n\nDo the thing.")
-            .unwrap();
+        std::fs::write(
+            stories_dir.join("story-001.md"),
+            "# Story 001: Setup\n\nDo the thing.",
+        )
+        .unwrap();
 
         let mut spec = sample_spec();
         spec.subtasks[0].story_file = Some("stories/story-001.md".to_string());
@@ -240,9 +250,15 @@ mod tests {
         let ctx = SubtaskContext::new(&spec, &spec.subtasks[0], Some(dir.path()));
         let prompt = ctx.build_prompt();
 
-        assert!(prompt.contains("# Story 001: Setup"), "should read story file");
+        assert!(
+            prompt.contains("# Story 001: Setup"),
+            "should read story file"
+        );
         assert!(prompt.contains("Do the thing."));
-        assert!(!prompt.contains("## Instructions"), "should NOT have field-based sections");
+        assert!(
+            !prompt.contains("## Instructions"),
+            "should NOT have field-based sections"
+        );
     }
 
     #[test]
@@ -255,7 +271,10 @@ mod tests {
         let prompt = ctx.build_prompt();
 
         // Falls back to field-based prompt
-        assert!(prompt.contains("## Instructions"), "should fall back to field-based prompt");
+        assert!(
+            prompt.contains("## Instructions"),
+            "should fall back to field-based prompt"
+        );
     }
 
     #[test]
@@ -266,21 +285,33 @@ mod tests {
         let ctx = SubtaskContext::new(&spec, &spec.subtasks[0], None);
         let prompt = ctx.build_prompt();
 
-        assert!(prompt.contains("## Instructions"), "should use field-based prompt without spec_dir");
+        assert!(
+            prompt.contains("## Instructions"),
+            "should use field-based prompt without spec_dir"
+        );
     }
 
     #[test]
     fn test_qa_prompt_includes_requirements_when_available() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("requirements.md"), "## Overview\nDo great things.")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("requirements.md"),
+            "## Overview\nDo great things.",
+        )
+        .unwrap();
 
         let spec = sample_spec();
         let diff = "+new code";
         let prompt = build_qa_prompt(&spec, diff, Some(dir.path()));
 
-        assert!(prompt.contains("## Requirements"), "should include requirements section");
-        assert!(prompt.contains("Do great things."), "should include requirements content");
+        assert!(
+            prompt.contains("## Requirements"),
+            "should include requirements section"
+        );
+        assert!(
+            prompt.contains("Do great things."),
+            "should include requirements content"
+        );
     }
 
     #[test]

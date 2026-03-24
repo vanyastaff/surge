@@ -7,15 +7,16 @@ use surge_core::SurgeConfig;
 mod commands;
 
 use commands::{
-    agent::AgentCommands,
-    config::ConfigCommands,
-    insights::InsightsCommands,
-    registry::RegistryCommands,
-    spec::SpecCommands,
+    agent::AgentCommands, config::ConfigCommands, insights::InsightsCommands,
+    registry::RegistryCommands, spec::SpecCommands,
 };
 
 #[derive(Parser)]
-#[command(name = "surge", version, about = "⚡ Any Agent. One Protocol. Pure Rust.")]
+#[command(
+    name = "surge",
+    version,
+    about = "⚡ Any Agent. One Protocol. Pure Rust."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -166,7 +167,10 @@ async fn main() -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
-            let agent_name = agent.as_deref().unwrap_or(&config.default_agent).to_string();
+            let agent_name = agent
+                .as_deref()
+                .unwrap_or(&config.default_agent)
+                .to_string();
 
             if !config.agents.contains_key(&agent_name) {
                 anyhow::bail!("Agent '{}' not found in configuration", agent_name);
@@ -201,7 +205,10 @@ async fn main() -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
-            let agent_name = agent.as_deref().unwrap_or(&config.default_agent).to_string();
+            let agent_name = agent
+                .as_deref()
+                .unwrap_or(&config.default_agent)
+                .to_string();
 
             if !config.agents.contains_key(&agent_name) {
                 anyhow::bail!("Agent '{}' not found in configuration", agent_name);
@@ -239,11 +246,7 @@ async fn main() -> Result<()> {
 
             pool.shutdown().await;
             // Give the print task a moment to flush remaining chunks before exiting
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                print_task,
-            )
-            .await;
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(100), print_task).await;
 
             println!("\n\n✅ Done (stop_reason: {:?})", response.stop_reason);
         }
@@ -256,7 +259,13 @@ async fn main() -> Result<()> {
             commands::spec::run(command)?;
         }
 
-        Commands::Run { spec_id, parallel, planner, coder, resume } => {
+        Commands::Run {
+            spec_id,
+            parallel,
+            planner,
+            coder,
+            resume,
+        } => {
             commands::pipeline::run(spec_id, parallel, planner, coder, resume).await?;
         }
 

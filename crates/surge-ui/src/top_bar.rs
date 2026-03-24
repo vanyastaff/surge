@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::StyledExt;
 
 use crate::project::RecentProjects;
@@ -29,11 +29,7 @@ pub struct TopBar {
 }
 
 impl TopBar {
-    pub fn new(
-        project_name: &str,
-        active_screen: Screen,
-        _cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(project_name: &str, active_screen: Screen, _cx: &mut Context<Self>) -> Self {
         Self {
             project_name: project_name.to_string(),
             branch_name: "main".to_string(),
@@ -64,16 +60,12 @@ impl TopBar {
     }
 
     fn render_breadcrumb(&self) -> Div {
-        div()
-            .h_flex()
-            .gap_1()
-            .items_center()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::TEXT_MUTED)
-                    .child(self.active_screen.label().to_string()),
-            )
+        div().h_flex().gap_1().items_center().child(
+            div()
+                .text_xs()
+                .text_color(theme::TEXT_MUTED)
+                .child(self.active_screen.label().to_string()),
+        )
     }
 
     fn render_agent_dots(&self) -> Div {
@@ -86,11 +78,7 @@ impl TopBar {
                 } else {
                     theme::ERROR
                 };
-                div()
-                    .w(px(8.0))
-                    .h(px(8.0))
-                    .rounded_full()
-                    .bg(color)
+                div().w(px(8.0)).h(px(8.0)).rounded_full().bg(color)
             })
             .collect();
 
@@ -124,12 +112,7 @@ impl TopBar {
                     .child(
                         div()
                             .v_flex()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .child(name),
-                            )
+                            .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(name))
                             .child(
                                 div()
                                     .text_xs()

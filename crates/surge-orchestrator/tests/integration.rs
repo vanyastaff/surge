@@ -4,17 +4,21 @@
 //! system into the persistence layer, with correct session → subtask → spec
 //! aggregation and cost calculations.
 
+use std::path::PathBuf;
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_persistence::aggregator::{SessionContext, UsageAggregator};
 use surge_persistence::store::Store;
-use std::path::PathBuf;
 use tokio::sync::broadcast;
 
 /// Helper to create a unique temp database file
 fn temp_db_path(test_name: &str) -> PathBuf {
     let temp_dir = std::env::temp_dir();
-    temp_dir.join(format!("surge-test-{}-{}.db", test_name, std::process::id()))
+    temp_dir.join(format!(
+        "surge-test-{}-{}.db",
+        test_name,
+        std::process::id()
+    ))
 }
 
 /// Test that TokensConsumed events are aggregated into the store end-to-end.

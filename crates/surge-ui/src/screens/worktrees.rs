@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Icon, IconName, StyledExt};
 
@@ -231,32 +231,19 @@ impl Render for WorktreesScreen {
                                     .text_color(theme::TEXT_PRIMARY)
                                     .child("Worktrees".to_string()),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
-                                    .child(format!(
-                                        "{} worktrees  {:.1} MB total",
-                                        worktrees.len(),
-                                        Self::total_disk(&worktrees)
-                                    )),
-                            ),
+                            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(format!(
+                                "{} worktrees  {:.1} MB total",
+                                worktrees.len(),
+                                Self::total_disk(&worktrees)
+                            ))),
                     )
                     // Bulk actions
                     .child(
                         div()
                             .h_flex()
                             .gap_2()
-                            .child(
-                                Button::new("wt-merge-all")
-                                    .primary()
-                                    .label("Merge All"),
-                            )
-                            .child(
-                                Button::new("wt-prune")
-                                    .ghost()
-                                    .label("Prune"),
-                            ),
+                            .child(Button::new("wt-merge-all").primary().label("Merge All"))
+                            .child(Button::new("wt-prune").ghost().label("Prune")),
                     ),
             )
             // Empty state or cards grid
@@ -290,9 +277,9 @@ impl Render for WorktreesScreen {
                         .gap_4()
                         .overflow_hidden()
                         .children(
-                            cards.into_iter().map(|card| {
-                                card.w(relative(0.48)).min_w(px(340.0))
-                            }),
+                            cards
+                                .into_iter()
+                                .map(|card| card.w(relative(0.48)).min_w(px(340.0))),
                         ),
                 )
             })

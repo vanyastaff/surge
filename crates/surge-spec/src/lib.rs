@@ -9,4 +9,4 @@ pub use parser::SpecFile;
 pub mod templates;
 pub use templates::{TemplateKind, generate as generate_template};
 pub mod validation;
-pub use validation::{validate as validate_spec, ValidationResult};
+pub use validation::{ValidationResult, validate as validate_spec};

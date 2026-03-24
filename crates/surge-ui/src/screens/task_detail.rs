@@ -1,7 +1,7 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::theme;
 
@@ -60,7 +60,8 @@ impl TaskDetailScreen {
             complexity: "Standard".to_string(),
             agent: Some("claude-acp".to_string()),
             description: "Implement JWT-based authentication middleware for all API endpoints. \
-                Must support token refresh and role-based access control.".to_string(),
+                Must support token refresh and role-based access control."
+                .to_string(),
             subtasks: vec![
                 SubtaskInfo {
                     title: "Create JWT validation module".into(),
@@ -190,8 +191,16 @@ impl TaskDetailScreen {
                     .cursor_pointer()
                     .rounded_md()
                     .text_sm()
-                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
-                    .bg(if is_active { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                    .text_color(if is_active {
+                        theme::PRIMARY
+                    } else {
+                        theme::TEXT_MUTED
+                    })
+                    .bg(if is_active {
+                        theme::PRIMARY.opacity(0.1)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.active_tab = tab;
                         cx.notify();
@@ -213,7 +222,11 @@ impl TaskDetailScreen {
     }
 
     fn render_overview(&self) -> Div {
-        let completed = self.subtasks.iter().filter(|s| s.status == "Completed").count();
+        let completed = self
+            .subtasks
+            .iter()
+            .filter(|s| s.status == "Completed")
+            .count();
         let total = self.subtasks.len();
 
         div()
@@ -260,17 +273,13 @@ impl TaskDetailScreen {
                             .h(px(6.0))
                             .rounded_full()
                             .bg(theme::TEXT_MUTED.opacity(0.15))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .rounded_full()
-                                    .bg(theme::PRIMARY)
-                                    .w(relative(if total > 0 {
-                                        completed as f32 / total as f32
-                                    } else {
-                                        0.0
-                                    })),
-                            ),
+                            .child(div().h_full().rounded_full().bg(theme::PRIMARY).w(relative(
+                                if total > 0 {
+                                    completed as f32 / total as f32
+                                } else {
+                                    0.0
+                                },
+                            ))),
                     ),
             )
     }

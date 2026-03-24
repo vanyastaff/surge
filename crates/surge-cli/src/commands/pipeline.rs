@@ -68,13 +68,21 @@ pub async fn run(
                 // Mark the first N subtasks as completed
                 let mut marked = 0;
                 for subtask_id in execution_order.iter().take(*completed) {
-                    if let Some(subtask) = spec_file.spec.subtasks.iter_mut().find(|s| s.id == *subtask_id) {
+                    if let Some(subtask) = spec_file
+                        .spec
+                        .subtasks
+                        .iter_mut()
+                        .find(|s| s.id == *subtask_id)
+                    {
                         subtask.execution.state = surge_core::spec::SubtaskState::Completed;
                         marked += 1;
                     }
                 }
 
-                println!("   ✓ Skipping {marked} completed subtask{}", if marked == 1 { "" } else { "s" });
+                println!(
+                    "   ✓ Skipping {marked} completed subtask{}",
+                    if marked == 1 { "" } else { "s" }
+                );
             }
         } else {
             println!("ℹ️  No completed subtasks to resume from");
@@ -99,7 +107,6 @@ pub async fn run(
 
     let mut events = orchestrator.subscribe();
     tokio::spawn(async move {
-
         while let Ok(event) = events.recv().await {
             match event {
                 SurgeEvent::SubtaskStarted { subtask_id, .. } => {
@@ -108,7 +115,11 @@ pub async fn run(
                     let _ = std::io::stdout().flush();
                     println!("  ▶ Starting subtask {subtask_id}");
                 }
-                SurgeEvent::SubtaskCompleted { subtask_id, success, .. } => {
+                SurgeEvent::SubtaskCompleted {
+                    subtask_id,
+                    success,
+                    ..
+                } => {
                     // Clear the token counter line before printing subtask status
                     print!("\r\x1b[K");
                     let _ = std::io::stdout().flush();
@@ -207,12 +218,22 @@ pub async fn run(
     if final_totals.input_tokens > 0 || final_totals.output_tokens > 0 {
         println!();
         println!("💰 Token Usage Summary:");
-        println!("   Input tokens:   {}", format_tokens(final_totals.input_tokens));
-        println!("   Output tokens:  {}", format_tokens(final_totals.output_tokens));
+        println!(
+            "   Input tokens:   {}",
+            format_tokens(final_totals.input_tokens)
+        );
+        println!(
+            "   Output tokens:  {}",
+            format_tokens(final_totals.output_tokens)
+        );
         if final_totals.thought_tokens > 0 {
-            println!("   Thought tokens: {}", format_tokens(final_totals.thought_tokens));
+            println!(
+                "   Thought tokens: {}",
+                format_tokens(final_totals.thought_tokens)
+            );
         }
-        let total_tokens = final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
+        let total_tokens =
+            final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
         println!("   Total tokens:   {}", format_tokens(total_tokens));
         println!("   Estimated cost: ${:.4}", final_totals.total_cost);
     }
@@ -250,7 +271,10 @@ pub fn status(spec_id: String) -> Result<()> {
             let ac_done = sub.acceptance_criteria.iter().filter(|a| a.met).count();
             let ac_total = sub.acceptance_criteria.len();
             if ac_total > 0 {
-                println!("   ⬜ {} ({}/{} criteria met)", sub.title, ac_done, ac_total);
+                println!(
+                    "   ⬜ {} ({}/{} criteria met)",
+                    sub.title, ac_done, ac_total
+                );
             } else {
                 println!("   ⬜ {}", sub.title);
             }
@@ -266,18 +290,34 @@ pub fn status(spec_id: String) -> Result<()> {
         println!();
         println!("💰 Token Usage:");
         println!("   Sessions:       {}", spec_usage.session_count);
-        println!("   Input tokens:   {}", format_tokens(spec_usage.input_tokens));
-        println!("   Output tokens:  {}", format_tokens(spec_usage.output_tokens));
+        println!(
+            "   Input tokens:   {}",
+            format_tokens(spec_usage.input_tokens)
+        );
+        println!(
+            "   Output tokens:  {}",
+            format_tokens(spec_usage.output_tokens)
+        );
         if spec_usage.thought_tokens > 0 {
-            println!("   Thought tokens: {}", format_tokens(spec_usage.thought_tokens));
+            println!(
+                "   Thought tokens: {}",
+                format_tokens(spec_usage.thought_tokens)
+            );
         }
         if spec_usage.cached_read_tokens > 0 {
-            println!("   Cached read:    {}", format_tokens(spec_usage.cached_read_tokens));
+            println!(
+                "   Cached read:    {}",
+                format_tokens(spec_usage.cached_read_tokens)
+            );
         }
         if spec_usage.cached_write_tokens > 0 {
-            println!("   Cached write:   {}", format_tokens(spec_usage.cached_write_tokens));
+            println!(
+                "   Cached write:   {}",
+                format_tokens(spec_usage.cached_write_tokens)
+            );
         }
-        let total_tokens = spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
+        let total_tokens =
+            spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
         println!("   Total tokens:   {}", format_tokens(total_tokens));
         println!("   Estimated cost: ${:.4}", spec_usage.estimated_cost_usd);
     }
@@ -291,7 +331,11 @@ pub fn status(spec_id: String) -> Result<()> {
             println!();
             println!(
                 "   Worktree: {} {}",
-                if wt.exists_on_disk { "✅" } else { "❌ (missing)" },
+                if wt.exists_on_disk {
+                    "✅"
+                } else {
+                    "❌ (missing)"
+                },
                 wt.path.display()
             );
             println!("   Branch:   {}", wt.branch);
@@ -367,14 +411,18 @@ pub fn plan(spec_id: String, _agent: Option<String>) -> Result<()> {
     println!("   Description: {}", spec.description);
 
     if spec.subtasks.is_empty() {
-        println!("\n   (no subtasks — run 'surge spec show {}' to inspect)", spec_id);
+        println!(
+            "\n   (no subtasks — run 'surge spec show {}' to inspect)",
+            spec_id
+        );
         return Ok(());
     }
 
     let graph = surge_spec::DependencyGraph::from_spec(spec)?;
     let batches = graph.topological_batches()?;
 
-    println!("\n   Execution plan ({} subtasks, {} batch{}):\n",
+    println!(
+        "\n   Execution plan ({} subtasks, {} batch{}):\n",
         spec.subtasks.len(),
         batches.len(),
         if batches.len() == 1 { "" } else { "es" }

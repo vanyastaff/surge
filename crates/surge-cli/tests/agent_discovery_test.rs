@@ -5,8 +5,7 @@ use std::process::Command;
 /// Get the path to the surge binary
 fn surge_bin() -> PathBuf {
     // For integration tests, cargo compiles the binary in target/debug or target/release
-    let mut path = std::env::current_exe()
-        .expect("Failed to get current executable path");
+    let mut path = std::env::current_exe().expect("Failed to get current executable path");
 
     // The test binary is in target/debug/deps, so we go up to target/debug
     path.pop(); // Remove test binary name
@@ -26,7 +25,11 @@ fn surge_bin() -> PathBuf {
 #[test]
 fn test_agent_list_no_config() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test agent list without surge.toml (should use defaults and show discovered agents)
     let temp_dir = std::env::temp_dir().join("surge_agent_test_no_config");
@@ -53,11 +56,26 @@ fn test_agent_list_no_config() {
     assert!(output.status.success(), "surge agent list failed");
 
     // Verify output contains expected sections
-    assert!(stdout.contains("Agent Discovery Report"), "Output should contain 'Agent Discovery Report'");
-    assert!(stdout.contains("Default:"), "Output should contain 'Default:'");
-    assert!(stdout.contains("Available agents"), "Output should contain 'Available agents'");
-    assert!(stdout.contains("Configured agents"), "Output should contain 'Configured agents'");
-    assert!(stdout.contains("Legend:"), "Output should contain 'Legend:'");
+    assert!(
+        stdout.contains("Agent Discovery Report"),
+        "Output should contain 'Agent Discovery Report'"
+    );
+    assert!(
+        stdout.contains("Default:"),
+        "Output should contain 'Default:'"
+    );
+    assert!(
+        stdout.contains("Available agents"),
+        "Output should contain 'Available agents'"
+    );
+    assert!(
+        stdout.contains("Configured agents"),
+        "Output should contain 'Configured agents'"
+    );
+    assert!(
+        stdout.contains("Legend:"),
+        "Output should contain 'Legend:'"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -66,7 +84,11 @@ fn test_agent_list_no_config() {
 #[test]
 fn test_agent_list_with_config() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test agent list with surge.toml containing configured agents
     let temp_dir = std::env::temp_dir().join("surge_agent_test_with_config");
@@ -117,16 +139,40 @@ after_qa = false
         eprintln!("STDERR:\n{}", stderr);
     }
 
-    assert!(output.status.success(), "surge agent list failed with config file");
+    assert!(
+        output.status.success(),
+        "surge agent list failed with config file"
+    );
 
     // Verify output contains configured agents
-    assert!(stdout.contains("Agent Discovery Report"), "Output should contain 'Agent Discovery Report'");
-    assert!(stdout.contains("Default: test-agent"), "Output should contain 'Default: test-agent'");
-    assert!(stdout.contains("Configured agents (2)"), "Output should contain 'Configured agents (2)'");
-    assert!(stdout.contains("test-agent"), "Output should contain 'test-agent'");
-    assert!(stdout.contains("another-agent"), "Output should contain 'another-agent'");
-    assert!(stdout.contains("command: test-command"), "Output should contain 'command: test-command'");
-    assert!(stdout.contains("command: another-command"), "Output should contain 'command: another-command'");
+    assert!(
+        stdout.contains("Agent Discovery Report"),
+        "Output should contain 'Agent Discovery Report'"
+    );
+    assert!(
+        stdout.contains("Default: test-agent"),
+        "Output should contain 'Default: test-agent'"
+    );
+    assert!(
+        stdout.contains("Configured agents (2)"),
+        "Output should contain 'Configured agents (2)'"
+    );
+    assert!(
+        stdout.contains("test-agent"),
+        "Output should contain 'test-agent'"
+    );
+    assert!(
+        stdout.contains("another-agent"),
+        "Output should contain 'another-agent'"
+    );
+    assert!(
+        stdout.contains("command: test-command"),
+        "Output should contain 'command: test-command'"
+    );
+    assert!(
+        stdout.contains("command: another-command"),
+        "Output should contain 'command: another-command'"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -135,7 +181,11 @@ after_qa = false
 #[test]
 fn test_agent_list_shows_availability() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test that agent list properly shows agent availability status
     let temp_dir = std::env::temp_dir().join("surge_agent_test_availability");
@@ -174,13 +224,28 @@ transport = "stdio"
     assert!(output.status.success(), "surge agent list failed");
 
     // Verify that the missing agent section appears
-    assert!(stdout.contains("Missing agents"), "Output should contain 'Missing agents' section");
-    assert!(stdout.contains("nonexistent-agent"), "Output should contain the missing agent name");
+    assert!(
+        stdout.contains("Missing agents"),
+        "Output should contain 'Missing agents' section"
+    );
+    assert!(
+        stdout.contains("nonexistent-agent"),
+        "Output should contain the missing agent name"
+    );
 
     // Verify legend is present
-    assert!(stdout.contains("Legend:"), "Output should contain 'Legend:'");
-    assert!(stdout.contains("✓ = available"), "Output should contain availability marker");
-    assert!(stdout.contains("✗ = missing"), "Output should contain missing marker");
+    assert!(
+        stdout.contains("Legend:"),
+        "Output should contain 'Legend:'"
+    );
+    assert!(
+        stdout.contains("✓ = available"),
+        "Output should contain availability marker"
+    );
+    assert!(
+        stdout.contains("✗ = missing"),
+        "Output should contain missing marker"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -189,7 +254,11 @@ transport = "stdio"
 #[test]
 fn test_agent_refresh() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test agent refresh command
     let temp_dir = std::env::temp_dir().join("surge_agent_test_refresh");
@@ -216,8 +285,14 @@ fn test_agent_refresh() {
     assert!(output.status.success(), "surge agent refresh failed");
 
     // Verify output contains expected message
-    assert!(stdout.contains("Refreshing agent discovery cache"), "Output should contain 'Refreshing agent discovery cache'");
-    assert!(stdout.contains("Agent discovery cache cleared"), "Output should contain 'Agent discovery cache cleared'");
+    assert!(
+        stdout.contains("Refreshing agent discovery cache"),
+        "Output should contain 'Refreshing agent discovery cache'"
+    );
+    assert!(
+        stdout.contains("Agent discovery cache cleared"),
+        "Output should contain 'Agent discovery cache cleared'"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -226,7 +301,11 @@ fn test_agent_refresh() {
 #[test]
 fn test_agent_discovery_full_flow() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test full discovery flow: refresh -> list
     let temp_dir = std::env::temp_dir().join("surge_agent_test_full_flow");
@@ -253,7 +332,10 @@ transport = "stdio"
         .output()
         .expect("Failed to execute surge agent refresh");
 
-    assert!(refresh_output.status.success(), "surge agent refresh failed");
+    assert!(
+        refresh_output.status.success(),
+        "surge agent refresh failed"
+    );
 
     // Step 2: List agents (should re-discover after refresh)
     let list_output = Command::new(&surge_bin)
@@ -273,13 +355,28 @@ transport = "stdio"
         eprintln!("STDERR:\n{}", stderr);
     }
 
-    assert!(list_output.status.success(), "surge agent list failed after refresh");
+    assert!(
+        list_output.status.success(),
+        "surge agent list failed after refresh"
+    );
 
     // Verify the full discovery report is generated
-    assert!(stdout.contains("Agent Discovery Report"), "Output should contain discovery report");
-    assert!(stdout.contains("my-agent"), "Output should contain configured agent");
-    assert!(stdout.contains("Available agents"), "Output should contain available agents section");
-    assert!(stdout.contains("Configured agents"), "Output should contain configured agents section");
+    assert!(
+        stdout.contains("Agent Discovery Report"),
+        "Output should contain discovery report"
+    );
+    assert!(
+        stdout.contains("my-agent"),
+        "Output should contain configured agent"
+    );
+    assert!(
+        stdout.contains("Available agents"),
+        "Output should contain available agents section"
+    );
+    assert!(
+        stdout.contains("Configured agents"),
+        "Output should contain configured agents section"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
@@ -288,7 +385,11 @@ transport = "stdio"
 #[test]
 fn test_agent_list_default_marker() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test that the default agent is properly marked with * in the list
     let temp_dir = std::env::temp_dir().join("surge_agent_test_default_marker");
@@ -332,8 +433,14 @@ transport = "stdio"
     assert!(output.status.success(), "surge agent list failed");
 
     // Verify default agent marker is shown
-    assert!(stdout.contains("Default: primary-agent"), "Output should show default agent");
-    assert!(stdout.contains("* = default agent"), "Legend should explain default marker");
+    assert!(
+        stdout.contains("Default: primary-agent"),
+        "Output should show default agent"
+    );
+    assert!(
+        stdout.contains("* = default agent"),
+        "Legend should explain default marker"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);

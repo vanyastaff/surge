@@ -1,6 +1,6 @@
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::theme;
 
@@ -121,8 +121,16 @@ impl DiffViewerScreen {
                     .cursor_pointer()
                     .rounded_md()
                     .text_sm()
-                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
-                    .bg(if is_active { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                    .text_color(if is_active {
+                        theme::PRIMARY
+                    } else {
+                        theme::TEXT_MUTED
+                    })
+                    .bg(if is_active {
+                        theme::PRIMARY.opacity(0.1)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.active_filter = filter;
                         // Reset selection if current file is filtered out
@@ -155,7 +163,11 @@ impl DiffViewerScreen {
                     .py(px(6.0))
                     .cursor_pointer()
                     .rounded_md()
-                    .bg(if is_selected { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                    .bg(if is_selected {
+                        theme::PRIMARY.opacity(0.1)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.selected_file = idx;
@@ -216,25 +228,17 @@ impl DiffViewerScreen {
             .iter()
             .map(|line| {
                 let (bg, text_color, prefix) = match line.kind {
-                    DiffLineKind::Added => (
-                        theme::SUCCESS.opacity(0.1),
-                        theme::SUCCESS,
-                        "+",
-                    ),
-                    DiffLineKind::Removed => (
-                        theme::ERROR.opacity(0.1),
-                        theme::ERROR,
-                        "-",
-                    ),
-                    DiffLineKind::Context => (
-                        gpui::transparent_black(),
-                        theme::TEXT_MUTED,
-                        " ",
-                    ),
+                    DiffLineKind::Added => (theme::SUCCESS.opacity(0.1), theme::SUCCESS, "+"),
+                    DiffLineKind::Removed => (theme::ERROR.opacity(0.1), theme::ERROR, "-"),
+                    DiffLineKind::Context => (gpui::transparent_black(), theme::TEXT_MUTED, " "),
                 };
 
-                let left = line.left_num.map_or("   ".to_string(), |n| format!("{n:3}"));
-                let right = line.right_num.map_or("   ".to_string(), |n| format!("{n:3}"));
+                let left = line
+                    .left_num
+                    .map_or("   ".to_string(), |n| format!("{n:3}"));
+                let right = line
+                    .right_num
+                    .map_or("   ".to_string(), |n| format!("{n:3}"));
 
                 div()
                     .h_flex()
@@ -294,11 +298,7 @@ impl DiffViewerScreen {
                             .text_color(theme::TEXT_PRIMARY)
                             .child(file.path.clone()),
                     )
-                    .child(
-                        Button::new("open-ide")
-                            .ghost()
-                            .label("Open in IDE"),
-                    ),
+                    .child(Button::new("open-ide").ghost().label("Open in IDE")),
             )
             // Diff lines
             .child(
@@ -343,17 +343,12 @@ impl Render for DiffViewerScreen {
                                     .text_color(theme::TEXT_PRIMARY)
                                     .child("Diff Viewer".to_string()),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
-                                    .child(format!(
-                                        "{} files  +{}  -{}",
-                                        self.files.len(),
-                                        total_added,
-                                        total_removed
-                                    )),
-                            ),
+                            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(format!(
+                                "{} files  +{}  -{}",
+                                self.files.len(),
+                                total_added,
+                                total_removed
+                            ))),
                     )
                     .child(self.render_filter_bar(cx)),
             )

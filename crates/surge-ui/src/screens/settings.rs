@@ -1,6 +1,6 @@
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::app_state::AppState;
 use crate::theme;
@@ -27,7 +27,13 @@ impl SettingsTab {
     }
 
     fn all() -> &'static [SettingsTab] {
-        &[Self::General, Self::Agents, Self::Pipeline, Self::Git, Self::Appearance]
+        &[
+            Self::General,
+            Self::Agents,
+            Self::Pipeline,
+            Self::Git,
+            Self::Appearance,
+        ]
     }
 }
 
@@ -123,7 +129,12 @@ impl SettingsScreen {
             .map(|a| AgentConfig {
                 name: a.entry.id.clone(),
                 enabled: true, // Installed agents are "enabled".
-                model: a.entry.models.first().cloned().unwrap_or_else(|| "-".to_string()),
+                model: a
+                    .entry
+                    .models
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "-".to_string()),
                 routing: "-".to_string(),
             })
             .collect()
@@ -141,8 +152,16 @@ impl SettingsScreen {
                     .cursor_pointer()
                     .rounded_md()
                     .text_sm()
-                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
-                    .bg(if is_active { theme::PRIMARY.opacity(0.1) } else { gpui::transparent_black() })
+                    .text_color(if is_active {
+                        theme::PRIMARY
+                    } else {
+                        theme::TEXT_MUTED
+                    })
+                    .bg(if is_active {
+                        theme::PRIMARY.opacity(0.1)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.active_tab = tab;
                         cx.notify();
@@ -185,7 +204,11 @@ impl SettingsScreen {
         let rows: Vec<Div> = agents
             .iter()
             .map(|agent| {
-                let status_color = if agent.enabled { theme::SUCCESS } else { theme::TEXT_MUTED };
+                let status_color = if agent.enabled {
+                    theme::SUCCESS
+                } else {
+                    theme::TEXT_MUTED
+                };
                 let status_label = if agent.enabled { "Enabled" } else { "Disabled" };
 
                 div()
@@ -251,13 +274,11 @@ impl SettingsScreen {
             .child(self.section("Configured Agents"))
             .children(rows)
             .child(
-                div()
-                    .pt_2()
-                    .child(
-                        Button::new("settings-add-agent")
-                            .ghost()
-                            .label("+ Add Agent"),
-                    ),
+                div().pt_2().child(
+                    Button::new("settings-add-agent")
+                        .ghost()
+                        .label("+ Add Agent"),
+                ),
             )
     }
 
@@ -267,7 +288,11 @@ impl SettingsScreen {
             .iter()
             .enumerate()
             .map(|(idx, gate)| {
-                let indicator_color = if gate.enabled { theme::SUCCESS } else { theme::TEXT_MUTED };
+                let indicator_color = if gate.enabled {
+                    theme::SUCCESS
+                } else {
+                    theme::TEXT_MUTED
+                };
 
                 div()
                     .h_flex()
@@ -300,7 +325,11 @@ impl SettingsScreen {
                             .h(px(22.0))
                             .rounded_full()
                             .cursor_pointer()
-                            .bg(if gate.enabled { theme::SUCCESS.opacity(0.3) } else { theme::TEXT_MUTED.opacity(0.2) })
+                            .bg(if gate.enabled {
+                                theme::SUCCESS.opacity(0.3)
+                            } else {
+                                theme::TEXT_MUTED.opacity(0.2)
+                            })
                             .child(
                                 div()
                                     .w(px(16.0))
@@ -484,11 +513,7 @@ impl Render for SettingsScreen {
                     .h_flex()
                     .justify_end()
                     .gap_2()
-                    .child(
-                        Button::new("settings-reset")
-                            .ghost()
-                            .label("Reset"),
-                    )
+                    .child(Button::new("settings-reset").ghost().label("Reset"))
                     .child(
                         Button::new("settings-save")
                             .primary()

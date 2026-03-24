@@ -1,15 +1,14 @@
 use std::path::PathBuf;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::Button;
-use gpui_component::WindowExt as _;
+use gpui::*;
 use gpui_component::StyledExt as _;
+use gpui_component::WindowExt as _;
+use gpui_component::button::Button;
 
 use crate::actions::*;
 use crate::app_state::AppState;
 use crate::command_palette::{CommandPalette, CommandSelected};
-use gpui_component::Icon;
 use crate::notifications::SurgeNotification;
 use crate::project::RecentProjects;
 use crate::router::Screen;
@@ -30,14 +29,12 @@ use crate::screens::worktrees::WorktreesScreen;
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
 use crate::top_bar::TopBar;
+use gpui_component::Icon;
 
 /// Application mode — Welcome picker or Main project view.
 enum AppMode {
     Welcome(Entity<WelcomeScreen>),
-    Project {
-        _path: PathBuf,
-        _name: String,
-    },
+    Project { _path: PathBuf, _name: String },
 }
 
 /// Root application view.
@@ -76,21 +73,30 @@ impl SurgeApp {
         let active_screen = Screen::Dashboard;
         let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, cx));
 
-        cx.subscribe(&sidebar, |this: &mut Self, _sidebar, event: &NavigateTo, cx| {
-            this.navigate(event.0, cx);
-        })
+        cx.subscribe(
+            &sidebar,
+            |this: &mut Self, _sidebar, event: &NavigateTo, cx| {
+                this.navigate(event.0, cx);
+            },
+        )
         .detach();
 
-        cx.subscribe(&sidebar, |this: &mut Self, _sidebar, _event: &ToggleSidebar, cx| {
-            this.toggle_sidebar(cx);
-        })
+        cx.subscribe(
+            &sidebar,
+            |this: &mut Self, _sidebar, _event: &ToggleSidebar, cx| {
+                this.toggle_sidebar(cx);
+            },
+        )
         .detach();
 
         // Start in Welcome mode.
         let welcome = cx.new(WelcomeScreen::new);
-        cx.subscribe(&welcome, |this: &mut Self, _welcome, event: &WelcomeEvent, cx| {
-            this.handle_welcome_event(event.clone(), cx);
-        })
+        cx.subscribe(
+            &welcome,
+            |this: &mut Self, _welcome, event: &WelcomeEvent, cx| {
+                this.handle_welcome_event(event.clone(), cx);
+            },
+        )
         .detach();
 
         Self {
@@ -234,7 +240,8 @@ impl SurgeApp {
             _name: name,
         };
         self.active_screen = Screen::Dashboard;
-        self.sidebar.update(cx, |sb, cx| sb.set_active(Screen::Dashboard, cx));
+        self.sidebar
+            .update(cx, |sb, cx| sb.set_active(Screen::Dashboard, cx));
         cx.notify();
     }
 
@@ -251,7 +258,8 @@ impl SurgeApp {
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         let collapsed = self.sidebar_collapsed;
-        self.sidebar.update(cx, |sb, cx| sb.set_collapsed(collapsed, cx));
+        self.sidebar
+            .update(cx, |sb, cx| sb.set_collapsed(collapsed, cx));
         cx.notify();
     }
 
@@ -265,13 +273,16 @@ impl SurgeApp {
 
     fn open_palette(&mut self, cx: &mut Context<Self>) {
         let palette = cx.new(CommandPalette::new);
-        cx.subscribe(&palette, |this: &mut Self, _palette, event: &CommandSelected, cx| {
-            if let Some(screen) = event.0 {
-                this.navigate(screen, cx);
-            } else {
-                this.close_palette(cx);
-            }
-        })
+        cx.subscribe(
+            &palette,
+            |this: &mut Self, _palette, event: &CommandSelected, cx| {
+                if let Some(screen) = event.0 {
+                    this.navigate(screen, cx);
+                } else {
+                    this.close_palette(cx);
+                }
+            },
+        )
         .detach();
         self.command_palette = Some(palette);
         self.command_palette_open = true;
@@ -313,9 +324,9 @@ impl SurgeApp {
         match self.active_screen {
             Screen::Dashboard => {
                 let state = self.state.clone();
-                let dashboard = self.dashboard.get_or_insert_with(|| {
-                    cx.new(|cx| DashboardScreen::new(state, cx))
-                });
+                let dashboard = self
+                    .dashboard
+                    .get_or_insert_with(|| cx.new(|cx| DashboardScreen::new(state, cx)));
                 dashboard.clone().into_any_element()
             }
             Screen::Kanban => {
@@ -333,61 +344,73 @@ impl SurgeApp {
             }
             Screen::AgentHub => {
                 let state = self.state.clone();
-                let agent_hub = self.agent_hub.get_or_insert_with(|| {
-                    cx.new(|cx| AgentHubScreen::new(state, cx))
-                });
+                let agent_hub = self
+                    .agent_hub
+                    .get_or_insert_with(|| cx.new(|cx| AgentHubScreen::new(state, cx)));
                 agent_hub.clone().into_any_element()
             }
             Screen::SpecExplorer => {
                 let state = self.state.clone();
-                let spec_explorer = self.spec_explorer.get_or_insert_with(|| {
-                    cx.new(|cx| SpecExplorerScreen::new(state, cx))
-                });
+                let spec_explorer = self
+                    .spec_explorer
+                    .get_or_insert_with(|| cx.new(|cx| SpecExplorerScreen::new(state, cx)));
                 spec_explorer.clone().into_any_element()
             }
             Screen::AgentTerminals => {
                 let state = self.state.clone();
-                let terminal = self.agent_terminal.get_or_insert_with(|| {
-                    cx.new(|cx| AgentTerminalScreen::new(state, cx))
-                });
+                let terminal = self
+                    .agent_terminal
+                    .get_or_insert_with(|| cx.new(|cx| AgentTerminalScreen::new(state, cx)));
                 terminal.clone().into_any_element()
             }
             Screen::SpecWizard => {
-                let spec_wizard = self.spec_wizard.get_or_insert_with(|| {
-                    cx.new(SpecWizardScreen::new)
-                });
+                let spec_wizard = self
+                    .spec_wizard
+                    .get_or_insert_with(|| cx.new(SpecWizardScreen::new));
                 spec_wizard.clone().into_any_element()
             }
             Screen::LiveExecution => {
-                let live_exec = self.live_execution.get_or_insert_with(|| {
-                    cx.new(LiveExecutionScreen::new)
-                });
+                let live_exec = self
+                    .live_execution
+                    .get_or_insert_with(|| cx.new(LiveExecutionScreen::new));
                 live_exec.clone().into_any_element()
             }
             Screen::DiffViewer => {
-                let s = self.diff_viewer.get_or_insert_with(|| cx.new(DiffViewerScreen::new));
+                let s = self
+                    .diff_viewer
+                    .get_or_insert_with(|| cx.new(DiffViewerScreen::new));
                 s.clone().into_any_element()
             }
             Screen::FileExplorer => {
-                let s = self.file_explorer.get_or_insert_with(|| cx.new(FileExplorerScreen::new));
+                let s = self
+                    .file_explorer
+                    .get_or_insert_with(|| cx.new(FileExplorerScreen::new));
                 s.clone().into_any_element()
             }
             Screen::Worktrees => {
                 let state = self.state.clone();
-                let s = self.worktrees.get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
+                let s = self
+                    .worktrees
+                    .get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
                 s.clone().into_any_element()
             }
             Screen::GitHubPRs => {
-                let s = self.github_prs.get_or_insert_with(|| cx.new(GithubPrsScreen::new));
+                let s = self
+                    .github_prs
+                    .get_or_insert_with(|| cx.new(GithubPrsScreen::new));
                 s.clone().into_any_element()
             }
             Screen::Insights => {
-                let s = self.insights.get_or_insert_with(|| cx.new(InsightsScreen::new));
+                let s = self
+                    .insights
+                    .get_or_insert_with(|| cx.new(InsightsScreen::new));
                 s.clone().into_any_element()
             }
             Screen::Settings => {
                 let state = self.state.clone();
-                let s = self.settings.get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
+                let s = self
+                    .settings
+                    .get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
             }
             _ => {
@@ -404,9 +427,7 @@ impl SurgeApp {
                             .h_flex()
                             .gap_3()
                             .items_center()
-                            .child(
-                                Icon::new(icon).size_6().text_color(theme::PRIMARY),
-                            )
+                            .child(Icon::new(icon).size_6().text_color(theme::PRIMARY))
                             .child(
                                 div()
                                     .text_2xl()
@@ -421,20 +442,16 @@ impl SurgeApp {
                             .child(format!("{} — coming soon", label)),
                     )
                     .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .mt_4()
-                            .child(
-                                Button::new("test-notif")
-                                    .label("Test Notification")
-                                    .on_click(|_event, window, cx| {
-                                        window.push_notification(
-                                            SurgeNotification::agent_connected("Claude Code"),
-                                            cx,
-                                        );
-                                    }),
-                            ),
+                        div().h_flex().gap_2().mt_4().child(
+                            Button::new("test-notif")
+                                .label("Test Notification")
+                                .on_click(|_event, window, cx| {
+                                    window.push_notification(
+                                        SurgeNotification::agent_connected("Claude Code"),
+                                        cx,
+                                    );
+                                }),
+                        ),
                     )
                     .into_any_element()
             }
@@ -538,16 +555,13 @@ impl SurgeApp {
                                     .text_color(theme::TEXT_MUTED)
                                     .child("Description"),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .child(if task.description.is_empty() {
-                                        "(no description)".to_string()
-                                    } else {
-                                        task.description.clone()
-                                    }),
-                            ),
+                            .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(
+                                if task.description.is_empty() {
+                                    "(no description)".to_string()
+                                } else {
+                                    task.description.clone()
+                                },
+                            )),
                     )
                     // Subtask progress (if executing)
                     .when(sub_total > 0, |el: Stateful<Div>| {
@@ -594,12 +608,9 @@ impl SurgeApp {
                                             .text_color(theme::TEXT_MUTED)
                                             .child("Agent"),
                                     )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme::TEXT_PRIMARY)
-                                            .child(task.agent.unwrap_or_else(|| "unassigned".to_string())),
-                                    ),
+                                    .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(
+                                        task.agent.unwrap_or_else(|| "unassigned".to_string()),
+                                    )),
                             )
                             .child(
                                 div()
@@ -711,14 +722,12 @@ impl SurgeApp {
 impl Render for SurgeApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.mode {
-            AppMode::Welcome(welcome) => {
-                div()
-                    .key_context("SurgeApp")
-                    .track_focus(&self.focus)
-                    .size_full()
-                    .child(welcome.clone())
-                    .into_any_element()
-            }
+            AppMode::Welcome(welcome) => div()
+                .key_context("SurgeApp")
+                .track_focus(&self.focus)
+                .size_full()
+                .child(welcome.clone())
+                .into_any_element(),
             AppMode::Project { .. } => {
                 div()
                     .key_context("SurgeApp")
@@ -726,25 +735,57 @@ impl Render for SurgeApp {
                     .size_full()
                     .bg(theme::BACKGROUND)
                     .text_color(theme::TEXT_PRIMARY)
-                    .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| this.navigate(Screen::Dashboard, cx)))
-                    .on_action(cx.listener(|this, _: &GoToKanban, _w, cx| this.navigate(Screen::Kanban, cx)))
-                    .on_action(cx.listener(|this, _: &GoToSpecs, _w, cx| this.navigate(Screen::SpecExplorer, cx)))
-                    .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| this.navigate(Screen::AgentHub, cx)))
-                    .on_action(cx.listener(|this, _: &GoToTerminals, _w, cx| this.navigate(Screen::AgentTerminals, cx)))
-                    .on_action(cx.listener(|this, _: &GoToExecution, _w, cx| this.navigate(Screen::LiveExecution, cx)))
-                    .on_action(cx.listener(|this, _: &GoToDiff, _w, cx| this.navigate(Screen::DiffViewer, cx)))
-                    .on_action(cx.listener(|this, _: &GoToInsights, _w, cx| this.navigate(Screen::Insights, cx)))
-                    .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| this.navigate(Screen::Settings, cx)))
-                    .on_action(cx.listener(|this, _: &ToggleSidebarAction, _w, cx| this.toggle_sidebar(cx)))
-                    .on_action(cx.listener(|this, _: &ToggleCommandPalette, _w, cx| this.toggle_palette(cx)))
+                    .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| {
+                        this.navigate(Screen::Dashboard, cx)
+                    }))
+                    .on_action(
+                        cx.listener(|this, _: &GoToKanban, _w, cx| {
+                            this.navigate(Screen::Kanban, cx)
+                        }),
+                    )
+                    .on_action(cx.listener(|this, _: &GoToSpecs, _w, cx| {
+                        this.navigate(Screen::SpecExplorer, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| {
+                        this.navigate(Screen::AgentHub, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToTerminals, _w, cx| {
+                        this.navigate(Screen::AgentTerminals, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToExecution, _w, cx| {
+                        this.navigate(Screen::LiveExecution, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToDiff, _w, cx| {
+                        this.navigate(Screen::DiffViewer, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToInsights, _w, cx| {
+                        this.navigate(Screen::Insights, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| {
+                        this.navigate(Screen::Settings, cx)
+                    }))
+                    .on_action(
+                        cx.listener(|this, _: &ToggleSidebarAction, _w, cx| {
+                            this.toggle_sidebar(cx)
+                        }),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &ToggleCommandPalette, _w, cx| {
+                            this.toggle_palette(cx)
+                        }),
+                    )
                     .on_action(cx.listener(|this, _: &SwitchProject, _w, cx| {
                         // Toggle project switcher in top bar.
                         if let Some(top_bar) = &this.top_bar {
                             top_bar.update(cx, |tb, cx| tb.toggle_switcher(cx));
                         }
                     }))
-                    .on_action(cx.listener(|this, _: &NewTask, _w, cx| this.navigate(Screen::SpecWizard, cx)))
-                    .on_action(cx.listener(|this, _: &OpenDiffViewer, _w, cx| this.navigate(Screen::DiffViewer, cx)))
+                    .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
+                        this.navigate(Screen::SpecWizard, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &OpenDiffViewer, _w, cx| {
+                        this.navigate(Screen::DiffViewer, cx)
+                    }))
                     .on_action(cx.listener(|_this, _: &ApproveGate, _w, _cx| {
                         // TODO: approve current gate in orchestrator
                     }))

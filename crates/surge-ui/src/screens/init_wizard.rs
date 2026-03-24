@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::button::{Button, ButtonVariants};
 
 use crate::theme;
 
@@ -217,12 +217,9 @@ impl InitWizard {
                     .text_color(theme::TEXT_PRIMARY)
                     .child("Choose Directory".to_string()),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::TEXT_MUTED)
-                    .child("Select an existing folder or create a new one for your project.".to_string()),
-            )
+            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(
+                "Select an existing folder or create a new one for your project.".to_string(),
+            ))
             .child(
                 div()
                     .h_flex()
@@ -335,9 +332,21 @@ impl InitWizard {
 
     fn render_step_pipeline(&self) -> Div {
         let presets = [
-            (PipelinePreset::Careful, "Careful", "All gates enabled, max 3 parallel, QA strict"),
-            (PipelinePreset::Fast, "Fast", "Only Human Review gate, max 5 parallel, QA lenient"),
-            (PipelinePreset::Custom, "Custom", "Configure all options manually"),
+            (
+                PipelinePreset::Careful,
+                "Careful",
+                "All gates enabled, max 3 parallel, QA strict",
+            ),
+            (
+                PipelinePreset::Fast,
+                "Fast",
+                "Only Human Review gate, max 5 parallel, QA lenient",
+            ),
+            (
+                PipelinePreset::Custom,
+                "Custom",
+                "Configure all options manually",
+            ),
         ];
 
         let preset_items: Vec<Div> = presets
@@ -506,7 +515,9 @@ impl Render for InitWizard {
                     .h_flex()
                     .justify_between()
                     .child(
-                        div().h_flex().gap_2()
+                        div()
+                            .h_flex()
+                            .gap_2()
                             .child(
                                 Button::new("wizard-cancel")
                                     .ghost()
@@ -516,49 +527,44 @@ impl Render for InitWizard {
                                     })),
                             )
                             .when(has_prev, |el: Div| {
-                                el.child(
-                                    Button::new("wizard-back")
-                                        .ghost()
-                                        .label("Back")
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
-                                            if let Some(prev) = this.step.prev() {
-                                                this.step = prev;
-                                                cx.notify();
-                                            }
-                                        })),
-                                )
+                                el.child(Button::new("wizard-back").ghost().label("Back").on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        if let Some(prev) = this.step.prev() {
+                                            this.step = prev;
+                                            cx.notify();
+                                        }
+                                    }),
+                                ))
                             }),
                     )
-                    .child(
-                        if is_last {
-                            Button::new("wizard-create")
-                                .primary()
-                                .label("Create Project")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    let preset = match this.pipeline_preset {
-                                        PipelinePreset::Careful => "careful",
-                                        PipelinePreset::Fast => "fast",
-                                        PipelinePreset::Custom => "custom",
-                                    };
-                                    cx.emit(InitWizardEvent::Create {
-                                        path: PathBuf::from(&this.directory),
-                                        name: this.project_name.clone(),
-                                        agent: this.agent_name.clone(),
-                                        preset: preset.to_string(),
-                                    });
-                                }))
-                        } else {
-                            Button::new("wizard-next")
-                                .primary()
-                                .label("Next")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    if let Some(next) = this.step.next() {
-                                        this.step = next;
-                                        cx.notify();
-                                    }
-                                }))
-                        },
-                    ),
+                    .child(if is_last {
+                        Button::new("wizard-create")
+                            .primary()
+                            .label("Create Project")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                let preset = match this.pipeline_preset {
+                                    PipelinePreset::Careful => "careful",
+                                    PipelinePreset::Fast => "fast",
+                                    PipelinePreset::Custom => "custom",
+                                };
+                                cx.emit(InitWizardEvent::Create {
+                                    path: PathBuf::from(&this.directory),
+                                    name: this.project_name.clone(),
+                                    agent: this.agent_name.clone(),
+                                    preset: preset.to_string(),
+                                });
+                            }))
+                    } else {
+                        Button::new("wizard-next")
+                            .primary()
+                            .label("Next")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                if let Some(next) = this.step.next() {
+                                    this.step = next;
+                                    cx.notify();
+                                }
+                            }))
+                    }),
             )
     }
 }

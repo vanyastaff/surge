@@ -33,8 +33,7 @@ pub fn run(command: RegistryCommands) -> Result<()> {
             let registry = surge_acp::Registry::builtin();
             println!("⚡ Known agents:\n");
             for entry in registry.list() {
-                let caps: Vec<String> =
-                    entry.capabilities.iter().map(|c| c.to_string()).collect();
+                let caps: Vec<String> = entry.capabilities.iter().map(|c| c.to_string()).collect();
                 println!("  {} — {}", entry.id, entry.display_name);
                 println!("    {}", entry.description);
                 println!("    capabilities: {}", caps.join(", "));
@@ -71,8 +70,12 @@ pub fn run(command: RegistryCommands) -> Result<()> {
             } else {
                 println!("⚡ Detected agents:\n");
                 for agent in &detected {
-                    let caps: Vec<String> =
-                        agent.entry.capabilities.iter().map(|c| c.to_string()).collect();
+                    let caps: Vec<String> = agent
+                        .entry
+                        .capabilities
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect();
                     println!("  ✅ {} ({})", agent.entry.display_name, agent.entry.id);
                     if let Some(path) = &agent.command_path {
                         println!("     Path: {path}");
@@ -81,8 +84,11 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                     println!();
                 }
 
-                let not_installed: Vec<_> =
-                    registry.list().iter().filter(|e| !e.is_installed()).collect();
+                let not_installed: Vec<_> = registry
+                    .list()
+                    .iter()
+                    .filter(|e| !e.is_installed())
+                    .collect();
                 if !not_installed.is_empty() {
                     println!("  Not installed:");
                     for entry in not_installed {
@@ -147,30 +153,22 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                         .entry("agents")
                         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
                         .as_table_mut()
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("'agents' is not a table in surge.toml")
-                        })?;
+                        .ok_or_else(|| anyhow::anyhow!("'agents' is not a table in surge.toml"))?;
 
                     if agents.contains_key(agent_name) {
-                        anyhow::bail!(
-                            "Agent '{}' already exists in surge.toml",
-                            agent_name
-                        );
+                        anyhow::bail!("Agent '{}' already exists in surge.toml", agent_name);
                     }
 
                     let mut agent_table = toml::Table::new();
-                    agent_table.insert(
-                        "command".into(),
-                        toml::Value::String(entry.command.clone()),
-                    );
+                    agent_table
+                        .insert("command".into(), toml::Value::String(entry.command.clone()));
                     let args: Vec<toml::Value> = entry
                         .default_args
                         .iter()
                         .map(|a| toml::Value::String(a.clone()))
                         .collect();
                     agent_table.insert("args".into(), toml::Value::Array(args));
-                    agent_table
-                        .insert("transport".into(), toml::Value::String("stdio".into()));
+                    agent_table.insert("transport".into(), toml::Value::String("stdio".into()));
 
                     agents.insert(agent_name.to_string(), toml::Value::Table(agent_table));
 

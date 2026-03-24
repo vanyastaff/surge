@@ -105,10 +105,7 @@ pub enum SurgeEvent {
     },
 
     /// Permission was granted or denied.
-    PermissionResolved {
-        session_id: String,
-        granted: bool,
-    },
+    PermissionResolved { session_id: String, granted: bool },
 
     // --- Task lifecycle events ---
     /// Task state changed.
@@ -155,10 +152,7 @@ pub enum SurgeEvent {
     },
 
     /// Terminal produced output.
-    TerminalOutput {
-        terminal_id: String,
-        output: String,
-    },
+    TerminalOutput { terminal_id: String, output: String },
 
     /// Terminal command exited.
     TerminalExited {
@@ -256,7 +250,11 @@ impl VersionedEvent {
     /// Wrap an event with the current schema version.
     /// Caller supplies the timestamp to keep this crate free of wall-clock I/O.
     pub fn new(event: SurgeEvent, timestamp_ms: u64) -> Self {
-        Self { version: 1, timestamp_ms, event }
+        Self {
+            version: 1,
+            timestamp_ms,
+            event,
+        }
     }
 }
 
@@ -288,7 +286,9 @@ mod tests {
     #[test]
     fn test_versioned_event_roundtrip() {
         let versioned = VersionedEvent::new(
-            SurgeEvent::AgentConnected { agent_name: "claude".to_string() },
+            SurgeEvent::AgentConnected {
+                agent_name: "claude".to_string(),
+            },
             42,
         );
         let rt = roundtrip(&versioned);

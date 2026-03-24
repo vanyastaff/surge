@@ -27,14 +27,21 @@ pub enum TaskState {
 impl TaskState {
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed { .. } | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::Failed { .. } | Self::Cancelled
+        )
     }
 
     #[must_use]
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Self::Planning | Self::Executing { .. } | Self::QaReview { .. } | Self::QaFix { .. } | Self::Merging
+            Self::Planning
+                | Self::Executing { .. }
+                | Self::QaReview { .. }
+                | Self::QaFix { .. }
+                | Self::Merging
         )
     }
 
@@ -257,3 +264,4 @@ impl std::fmt::Display for TaskState {
         }
     }
 }
+

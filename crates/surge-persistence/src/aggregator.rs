@@ -3,14 +3,14 @@
 //! Listens to `TokensConsumed` events from the ACP pool and aggregates
 //! them into session, subtask, and spec-level usage records in the store.
 
+use crate::Result;
 use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
 use crate::store::Store;
-use crate::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use surge_core::id::{SpecId, SubtaskId, TaskId};
 use surge_core::SurgeEvent;
-use tokio::sync::{broadcast, Mutex};
+use surge_core::id::{SpecId, SubtaskId, TaskId};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, warn};
 
 /// Context associated with an active session.
@@ -286,7 +286,10 @@ mod tests {
         assert_eq!(session.thought_tokens, Some(200));
 
         // Verify subtask was aggregated
-        let subtask = store.get_subtask(subtask_id, task_id, spec_id).unwrap().unwrap();
+        let subtask = store
+            .get_subtask(subtask_id, task_id, spec_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(subtask.input_tokens, 1000);
         assert_eq!(subtask.output_tokens, 500);
         assert_eq!(subtask.thought_tokens, 200);
@@ -373,7 +376,10 @@ mod tests {
         let store = aggregator.store.lock().await;
 
         // Subtask should have both sessions aggregated
-        let subtask = store.get_subtask(subtask_id, task_id, spec_id).unwrap().unwrap();
+        let subtask = store
+            .get_subtask(subtask_id, task_id, spec_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(subtask.input_tokens, 1800); // 1000 + 800
         assert_eq!(subtask.output_tokens, 900); // 500 + 400
         assert_eq!(subtask.session_count, 2);

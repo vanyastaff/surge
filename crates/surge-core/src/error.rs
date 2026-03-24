@@ -31,7 +31,9 @@ pub enum SurgeError {
     Timeout(String),
 
     /// Agent returned HTTP 429 — rate limit hit.
-    #[error("Rate limit exceeded for agent '{agent}': retry after {retry_after_secs}s (attempt {attempt_count})")]
+    #[error(
+        "Rate limit exceeded for agent '{agent}': retry after {retry_after_secs}s (attempt {attempt_count})"
+    )]
     RateLimit {
         agent: String,
         retry_after_secs: u64,
@@ -58,7 +60,10 @@ pub enum SurgeError {
 impl SurgeError {
     /// Construct a `Git` error with a message and no source.
     pub fn git(message: impl Into<String>) -> Self {
-        Self::Git { message: message.into(), source: None }
+        Self::Git {
+            message: message.into(),
+            source: None,
+        }
     }
 
     /// Construct a `Git` error with a message and a source error.
@@ -66,7 +71,10 @@ impl SurgeError {
         message: impl Into<String>,
         source: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
-        Self::Git { message: message.into(), source: Some(Box::new(source)) }
+        Self::Git {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
     }
 }
 

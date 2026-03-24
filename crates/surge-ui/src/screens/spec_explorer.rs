@@ -1,5 +1,5 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Icon, IconName, StyledExt};
 
@@ -130,8 +130,16 @@ impl SpecExplorerScreen {
                     .rounded_full()
                     .cursor_pointer()
                     .text_xs()
-                    .bg(if is_active { theme::PRIMARY.opacity(0.15) } else { theme::SURFACE })
-                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
+                    .bg(if is_active {
+                        theme::PRIMARY.opacity(0.15)
+                    } else {
+                        theme::SURFACE
+                    })
+                    .text_color(if is_active {
+                        theme::PRIMARY
+                    } else {
+                        theme::TEXT_MUTED
+                    })
                     .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.1)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.filter_status = s;
@@ -238,10 +246,8 @@ impl Render for SpecExplorerScreen {
         let specs = self.filtered_specs(&all_specs);
         let is_empty = specs.is_empty() && all_specs.is_empty();
 
-        let cards: Vec<Stateful<Div>> = specs
-            .iter()
-            .map(|s| self.render_spec_card(s, cx))
-            .collect();
+        let cards: Vec<Stateful<Div>> =
+            specs.iter().map(|s| self.render_spec_card(s, cx)).collect();
 
         div()
             .size_full()
@@ -261,11 +267,7 @@ impl Render for SpecExplorerScreen {
                             .text_color(theme::TEXT_PRIMARY)
                             .child("Specs".to_string()),
                     )
-                    .child(
-                        Button::new("new-spec")
-                            .primary()
-                            .label("+ New Spec"),
-                    ),
+                    .child(Button::new("new-spec").primary().label("+ New Spec")),
             )
             // Filters
             .child(self.render_filter_chips(cx))
@@ -299,11 +301,7 @@ impl Render for SpecExplorerScreen {
                         .flex_wrap()
                         .gap_4()
                         .content_start()
-                        .children(
-                            cards.into_iter().map(|card| {
-                                div().w(px(280.0)).child(card)
-                            }),
-                        ),
+                        .children(cards.into_iter().map(|card| div().w(px(280.0)).child(card))),
                 )
             })
     }

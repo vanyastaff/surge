@@ -20,7 +20,10 @@ pub(crate) struct Terminal {
     /// Accumulated output.
     output: Arc<Mutex<String>>,
     /// Maximum output bytes to retain.
+    #[allow(dead_code)]
     output_byte_limit: Option<u64>,
+    /// Whether output was truncated due to byte limit.
+    was_truncated: Arc<Mutex<bool>>,
     /// Cached exit status (set once on exit).
     exit_status: Option<ExitStatus>,
 }
@@ -122,20 +125,23 @@ impl Terminals {
             .map_err(|e| format!("Failed to spawn terminal command '{command}': {e}"))?;
 
         let output = Arc::new(Mutex::new(String::new()));
+        let was_truncated = Arc::new(Mutex::new(false));
 
         // Spawn background tasks to collect stdout and stderr
         if let Some(stdout) = child.stdout.take() {
             let out = Arc::clone(&output);
+            let trunc = Arc::clone(&was_truncated);
             let limit = output_byte_limit;
             tokio::spawn(async move {
-                collect_output(stdout, out, limit).await;
+                collect_output(stdout, out, limit, trunc).await;
             });
         }
         if let Some(stderr) = child.stderr.take() {
             let out = Arc::clone(&output);
+            let trunc = Arc::clone(&was_truncated);
             let limit = output_byte_limit;
             tokio::spawn(async move {
-                collect_output(stderr, out, limit).await;
+                collect_output(stderr, out, limit, trunc).await;
             });
         }
 
@@ -143,6 +149,7 @@ impl Terminals {
             child,
             output,
             output_byte_limit,
+            was_truncated,
             exit_status: None,
         };
 
@@ -189,9 +196,7 @@ impl Terminal {
         }
 
         let output = self.output.lock().await;
-        let truncated = self
-            .output_byte_limit
-            .is_some_and(|limit| output.len() as u64 >= limit);
+        let truncated = *self.was_truncated.lock().await;
 
         (output.clone(), truncated, self.exit_status.clone())
     }
@@ -296,6 +301,7 @@ async fn collect_output<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     output: Arc<Mutex<String>>,
     byte_limit: Option<u64>,
+    was_truncated: Arc<Mutex<bool>>,
 ) {
     let mut buf = [0u8; 4096];
     loop {
@@ -308,12 +314,14 @@ async fn collect_output<R: tokio::io::AsyncRead + Unpin>(
                 if let Some(limit) = byte_limit {
                     let remaining = limit.saturating_sub(out.len() as u64) as usize;
                     if remaining == 0 {
+                        *was_truncated.lock().await = true;
                         break;
                     }
                     // Safe UTF-8 truncation — never split a multi-byte char
                     let take = chunk.floor_char_boundary(remaining);
                     out.push_str(&chunk[..take]);
                     if take < chunk.len() {
+                        *was_truncated.lock().await = true;
                         break;
                     }
                 } else {

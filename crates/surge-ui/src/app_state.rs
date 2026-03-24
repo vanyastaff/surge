@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use surge_acp::{AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry};
+use surge_acp::{
+    AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry,
+};
 use surge_core::{Spec, SpecId, SurgeConfig, SurgeEvent, TaskId, TaskState};
 
 /// Central application state shared across all UI screens.
@@ -136,7 +138,13 @@ impl AppState {
                 }
                 agents.insert(detected.entry.id.clone(), config);
             }
-            if let Ok(pool) = AgentPool::new(agents, default_agent, path.to_path_buf(), PermissionPolicy::default(), surge_core::config::ResilienceConfig::default()) {
+            if let Ok(pool) = AgentPool::new(
+                agents,
+                default_agent,
+                path.to_path_buf(),
+                PermissionPolicy::default(),
+                surge_core::config::ResilienceConfig::default(),
+            ) {
                 self.agent_pool = Some(Arc::new(pool));
             }
         }
@@ -155,9 +163,7 @@ impl AppState {
 
         match &event {
             SurgeEvent::TaskStateChanged {
-                task_id,
-                new_state,
-                ..
+                task_id, new_state, ..
             } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| &t.id == task_id) {
                     task.state = new_state.clone();

@@ -5,8 +5,7 @@ use std::process::Command;
 /// Get the path to the surge binary
 fn surge_bin() -> PathBuf {
     // For integration tests, cargo compiles the binary in target/debug or target/release
-    let mut path = std::env::current_exe()
-        .expect("Failed to get current executable path");
+    let mut path = std::env::current_exe().expect("Failed to get current executable path");
 
     // The test binary is in target/debug/deps, so we go up to target/debug
     path.pop(); // Remove test binary name
@@ -26,7 +25,11 @@ fn surge_bin() -> PathBuf {
 #[test]
 fn test_config_show() {
     let surge_bin = surge_bin();
-    assert!(surge_bin.exists(), "surge binary not found at {:?}", surge_bin);
+    assert!(
+        surge_bin.exists(),
+        "surge binary not found at {:?}",
+        surge_bin
+    );
 
     // Test 1: Run config show without surge.toml (should use defaults)
     let temp_dir = std::env::temp_dir().join("surge_cli_test_no_config");
@@ -53,12 +56,30 @@ fn test_config_show() {
     assert!(output.status.success(), "surge config show failed");
 
     // Verify output contains expected fields
-    assert!(stdout.contains("Surge Configuration"), "Output should contain 'Surge Configuration'");
-    assert!(stdout.contains("Default Agent:"), "Output should contain 'Default Agent:'");
-    assert!(stdout.contains("Agents:"), "Output should contain 'Agents:'");
-    assert!(stdout.contains("Pipeline:"), "Output should contain 'Pipeline:'");
-    assert!(stdout.contains("max_qa_iterations:"), "Output should contain 'max_qa_iterations:'");
-    assert!(stdout.contains("max_parallel:"), "Output should contain 'max_parallel:'");
+    assert!(
+        stdout.contains("Surge Configuration"),
+        "Output should contain 'Surge Configuration'"
+    );
+    assert!(
+        stdout.contains("Default Agent:"),
+        "Output should contain 'Default Agent:'"
+    );
+    assert!(
+        stdout.contains("Agents:"),
+        "Output should contain 'Agents:'"
+    );
+    assert!(
+        stdout.contains("Pipeline:"),
+        "Output should contain 'Pipeline:'"
+    );
+    assert!(
+        stdout.contains("max_qa_iterations:"),
+        "Output should contain 'max_qa_iterations:'"
+    );
+    assert!(
+        stdout.contains("max_parallel:"),
+        "Output should contain 'max_parallel:'"
+    );
     assert!(stdout.contains("Gates:"), "Output should contain 'Gates:'");
 
     // Clean up
@@ -108,15 +129,36 @@ after_qa = false
         eprintln!("STDERR:\n{}", stderr);
     }
 
-    assert!(output.status.success(), "surge config show failed with config file");
+    assert!(
+        output.status.success(),
+        "surge config show failed with config file"
+    );
 
     // Verify output contains custom config values
-    assert!(stdout.contains("test-agent"), "Output should contain 'test-agent'");
-    assert!(stdout.contains("test-command"), "Output should contain 'test-command'");
-    assert!(stdout.contains("max_qa_iterations: 5"), "Output should contain 'max_qa_iterations: 5'");
-    assert!(stdout.contains("max_parallel: 2"), "Output should contain 'max_parallel: 2'");
-    assert!(stdout.contains("after_spec: true"), "Output should contain 'after_spec: true'");
-    assert!(stdout.contains("after_plan: false"), "Output should contain 'after_plan: false'");
+    assert!(
+        stdout.contains("test-agent"),
+        "Output should contain 'test-agent'"
+    );
+    assert!(
+        stdout.contains("test-command"),
+        "Output should contain 'test-command'"
+    );
+    assert!(
+        stdout.contains("max_qa_iterations: 5"),
+        "Output should contain 'max_qa_iterations: 5'"
+    );
+    assert!(
+        stdout.contains("max_parallel: 2"),
+        "Output should contain 'max_parallel: 2'"
+    );
+    assert!(
+        stdout.contains("after_spec: true"),
+        "Output should contain 'after_spec: true'"
+    );
+    assert!(
+        stdout.contains("after_plan: false"),
+        "Output should contain 'after_plan: false'"
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir_with_config);

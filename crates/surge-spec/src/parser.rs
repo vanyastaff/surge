@@ -1,9 +1,9 @@
 //! Spec file parsing and I/O.
 
 use std::path::{Path, PathBuf};
+use surge_core::SurgeError;
 use surge_core::id::SubtaskId;
 use surge_core::spec::{Spec, SubtaskState};
-use surge_core::SurgeError;
 
 /// On-disk spec file wrapping a Spec with file metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -49,9 +49,10 @@ impl SpecFile {
 
     /// Save to the stored path, or error if not set.
     pub fn save_in_place(&self) -> Result<(), SurgeError> {
-        let path = self.path.as_ref().ok_or_else(|| {
-            SurgeError::Spec("SpecFile has no path — use save(path)".to_string())
-        })?;
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| SurgeError::Spec("SpecFile has no path — use save(path)".to_string()))?;
         self.save(path)
     }
 
@@ -253,9 +254,9 @@ impl SpecFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::SubtaskBuilder;
     use surge_core::id::{SpecId, SubtaskId};
     use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask, SubtaskExecution};
-    use crate::builder::SubtaskBuilder;
 
     fn sample_spec() -> Spec {
         let sub1_id = SubtaskId::new();
@@ -298,7 +299,10 @@ mod tests {
 
     #[test]
     fn test_specfile_toml_roundtrip() {
-        let spec_file = SpecFile { spec: sample_spec(), path: None };
+        let spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let toml_str = spec_file.to_toml().unwrap();
         let parsed = SpecFile::from_toml(&toml_str).unwrap();
         assert_eq!(parsed.spec.title, "Test feature");
@@ -313,7 +317,10 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("test-spec.toml");
-        let spec_file = SpecFile { spec: sample_spec(), path: None };
+        let spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
 
         spec_file.save(&path).unwrap();
         assert!(path.exists());
@@ -344,7 +351,10 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("path-test.toml");
-        let spec_file = SpecFile { spec: sample_spec(), path: None };
+        let spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         spec_file.save(&path).unwrap();
 
         let loaded = SpecFile::load(&path).unwrap();
@@ -360,7 +370,10 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("in-place.toml");
-        let spec_file = SpecFile { spec: sample_spec(), path: None };
+        let spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         spec_file.save(&path).unwrap();
 
         let mut loaded = SpecFile::load(&path).unwrap();
@@ -375,7 +388,10 @@ mod tests {
 
     #[test]
     fn test_save_in_place_no_path_errors() {
-        let spec_file = SpecFile { spec: sample_spec(), path: None };
+        let spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         assert!(spec_file.save_in_place().is_err());
     }
 
@@ -386,13 +402,21 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("state-test.toml");
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let subtask_id = spec_file.spec.subtasks[0].id;
 
-        spec_file.update_subtask_state(&path, subtask_id, SubtaskState::Running).unwrap();
+        spec_file
+            .update_subtask_state(&path, subtask_id, SubtaskState::Running)
+            .unwrap();
 
         let loaded = SpecFile::load(&path).unwrap();
-        assert_eq!(loaded.spec.subtasks[0].execution.state, SubtaskState::Running);
+        assert_eq!(
+            loaded.spec.subtasks[0].execution.state,
+            SubtaskState::Running
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -404,7 +428,10 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("state-err.toml");
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let fake_id = SubtaskId::new();
 
         let result = spec_file.update_subtask_state(&path, fake_id, SubtaskState::Running);
@@ -415,7 +442,10 @@ mod tests {
 
     #[test]
     fn test_reorder_subtask() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let first_id = spec_file.spec.subtasks[0].id;
         let second_id = spec_file.spec.subtasks[1].id;
 
@@ -426,7 +456,10 @@ mod tests {
 
     #[test]
     fn test_reorder_subtask_noop_same_index() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let first_id = spec_file.spec.subtasks[0].id;
         spec_file.reorder_subtask(first_id, 0).unwrap();
         assert_eq!(spec_file.spec.subtasks[0].id, first_id);
@@ -434,30 +467,49 @@ mod tests {
 
     #[test]
     fn test_reorder_subtask_unknown_id_errors() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         assert!(spec_file.reorder_subtask(SubtaskId::new(), 0).is_err());
     }
 
     #[test]
     fn test_cancel_subtask() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let id = spec_file.spec.subtasks[0].id;
         spec_file.cancel_subtask(id).unwrap();
-        assert_eq!(spec_file.spec.subtasks[0].execution.state, SubtaskState::Skipped);
+        assert_eq!(
+            spec_file.spec.subtasks[0].execution.state,
+            SubtaskState::Skipped
+        );
     }
 
     #[test]
     fn test_cancel_subtask_unknown_id_errors() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         assert!(spec_file.cancel_subtask(SubtaskId::new()).is_err());
     }
 
     #[test]
     fn test_update_subtask_title_and_description() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let id = spec_file.spec.subtasks[0].id;
         spec_file
-            .update_subtask(id, Some("New title".to_string()), Some("New desc".to_string()))
+            .update_subtask(
+                id,
+                Some("New title".to_string()),
+                Some("New desc".to_string()),
+            )
             .unwrap();
         assert_eq!(spec_file.spec.subtasks[0].title, "New title");
         assert_eq!(spec_file.spec.subtasks[0].description, "New desc");
@@ -465,17 +517,25 @@ mod tests {
 
     #[test]
     fn test_update_subtask_partial() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let id = spec_file.spec.subtasks[0].id;
         let original_desc = spec_file.spec.subtasks[0].description.clone();
-        spec_file.update_subtask(id, Some("Only title".to_string()), None).unwrap();
+        spec_file
+            .update_subtask(id, Some("Only title".to_string()), None)
+            .unwrap();
         assert_eq!(spec_file.spec.subtasks[0].title, "Only title");
         assert_eq!(spec_file.spec.subtasks[0].description, original_desc);
     }
 
     #[test]
     fn test_insert_subtask_after() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let first_id = spec_file.spec.subtasks[0].id;
         let new_sub = SubtaskBuilder::new()
             .title("Middle step")
@@ -491,7 +551,10 @@ mod tests {
 
     #[test]
     fn test_insert_subtask_at_start() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let new_sub = SubtaskBuilder::new()
             .title("First")
             .description("New first step")
@@ -506,7 +569,10 @@ mod tests {
 
     #[test]
     fn test_remove_subtask_no_dependents() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         // subtask[1] depends on subtask[0], so removing subtask[1] is fine
         let second_id = spec_file.spec.subtasks[1].id;
         spec_file.remove_subtask(second_id).unwrap();
@@ -515,12 +581,19 @@ mod tests {
 
     #[test]
     fn test_remove_subtask_with_dependents_fails_and_rolls_back() {
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         // subtask[0] is depended on by subtask[1] — removing it should fail
         let first_id = spec_file.spec.subtasks[0].id;
         let result = spec_file.remove_subtask(first_id);
         assert!(result.is_err());
-        assert_eq!(spec_file.spec.subtasks.len(), 2, "rollback should restore original state");
+        assert_eq!(
+            spec_file.spec.subtasks.len(),
+            2,
+            "rollback should restore original state"
+        );
     }
 
     #[test]
@@ -530,7 +603,10 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let path = temp_dir.join("criterion-test.toml");
-        let mut spec_file = SpecFile { spec: sample_spec(), path: None };
+        let mut spec_file = SpecFile {
+            spec: sample_spec(),
+            path: None,
+        };
         let subtask_id = spec_file.spec.subtasks[0].id;
 
         assert!(!spec_file.spec.subtasks[0].acceptance_criteria[0].met);

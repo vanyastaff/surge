@@ -45,9 +45,7 @@ pub enum GitError {
 
     /// Merge produced conflicts. `conflicting_files` lists affected paths.
     #[error("merge conflict in {} file(s)", conflicting_files.len())]
-    MergeConflict {
-        conflicting_files: Vec<PathBuf>,
-    },
+    MergeConflict { conflicting_files: Vec<PathBuf> },
 
     #[error("repository has no commits")]
     EmptyRepository,
@@ -65,9 +63,7 @@ impl From<GitError> for surge_core::SurgeError {
             GitError::WorktreeNotFound(s) => {
                 surge_core::SurgeError::NotFound(format!("worktree: {s}"))
             }
-            GitError::BranchNotFound(s) => {
-                surge_core::SurgeError::NotFound(format!("branch: {s}"))
-            }
+            GitError::BranchNotFound(s) => surge_core::SurgeError::NotFound(format!("branch: {s}")),
             GitError::Io(e) => surge_core::SurgeError::Io(e),
             GitError::Git2(e) => surge_core::SurgeError::git_source(e.message().to_string(), e),
             e => surge_core::SurgeError::git(e.to_string()),
@@ -95,10 +91,7 @@ impl GitManager {
     /// Discover the git repository from the current working directory.
     pub fn discover() -> Result<Self, GitError> {
         let repo = Repository::discover(".")?;
-        let repo_path = repo
-            .workdir()
-            .unwrap_or_else(|| repo.path())
-            .to_path_buf();
+        let repo_path = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
         Ok(Self { repo_path })
     }
 
@@ -425,7 +418,9 @@ impl GitManager {
                         }
                     }
                 }
-                return Err(GitError::MergeConflict { conflicting_files: files });
+                return Err(GitError::MergeConflict {
+                    conflicting_files: files,
+                });
             }
 
             let tree_oid = merged_index.write_tree_to(&repo)?;
@@ -480,7 +475,9 @@ mod tests {
             repo.branch("feature-base", &head, false).unwrap();
         }
 
-        let info = gm.create_worktree("based-spec", Some("feature-base")).unwrap();
+        let info = gm
+            .create_worktree("based-spec", Some("feature-base"))
+            .unwrap();
         assert!(info.exists_on_disk);
 
         // Non-existent base branch should error
@@ -568,7 +565,10 @@ mod tests {
         let oid = gm.commit("commit-spec", "add new file").unwrap();
         assert!(!oid.is_zero());
         let wt_repo = Repository::open(&info.path).unwrap();
-        assert_eq!(wt_repo.find_commit(oid).unwrap().message(), Some("add new file"));
+        assert_eq!(
+            wt_repo.find_commit(oid).unwrap().message(),
+            Some("add new file")
+        );
     }
 
     #[test]
@@ -603,7 +603,10 @@ mod tests {
         gm.discard("discard-spec").unwrap();
         assert!(!info.path.exists());
         let repo = Repository::open(&path).unwrap();
-        assert!(repo.find_branch("surge/discard-spec", BranchType::Local).is_err());
+        assert!(
+            repo.find_branch("surge/discard-spec", BranchType::Local)
+                .is_err()
+        );
     }
 
     #[test]
@@ -616,7 +619,10 @@ mod tests {
         let oid = gm.merge("merge-spec", None, true).unwrap();
         assert!(!oid.is_zero());
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().message(), Some("add merge file"));
+        assert_eq!(
+            repo.head().unwrap().peel_to_commit().unwrap().message(),
+            Some("add merge file")
+        );
     }
 
     #[test]
@@ -642,7 +648,8 @@ mod tests {
             repo.head().unwrap().name().unwrap().to_string()
         };
 
-        gm.merge("bg-merge-spec", Some(target_branch), false).unwrap();
+        gm.merge("bg-merge-spec", Some(target_branch), false)
+            .unwrap();
 
         let repo_after_head = {
             let repo = Repository::open(&path).unwrap();
@@ -675,7 +682,10 @@ mod tests {
         assert!(matches!(e, SurgeError::NotFound(_)));
         let e: SurgeError = GitError::BranchNotFound("main".into()).into();
         assert!(matches!(e, SurgeError::NotFound(_)));
-        let e: SurgeError = GitError::MergeConflict { conflicting_files: vec![] }.into();
+        let e: SurgeError = GitError::MergeConflict {
+            conflicting_files: vec![],
+        }
+        .into();
         assert!(matches!(e, SurgeError::Git { .. }));
     }
 
