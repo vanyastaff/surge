@@ -46,6 +46,10 @@ enum PoolOp {
         name: String,
         tx: Reply<()>,
     },
+    Reconnect {
+        name: String,
+        tx: Reply<()>,
+    },
     CreateSession {
         agent_name: String,
         mode: Option<String>,
@@ -398,13 +402,42 @@ async fn run_heartbeat_monitor(
                             consecutive_failures: consecutive as u32,
                         });
 
-                        // Emit health degraded event after 3 consecutive failures
+                        // Emit health degraded event and trigger reconnect after 3 consecutive failures
                         if consecutive >= 3 {
                             let _ = event_tx.send(SurgeEvent::AgentHealthDegraded {
                                 agent_name: agent_name.clone(),
                                 error_rate: agent_health.error_rate(),
                                 avg_latency_ms: agent_health.avg_latency_ms,
                             });
+
+                            // Drop the health lock before reconnecting to avoid holding it across await
+                            drop(health_lock);
+
+                            // Trigger reconnection with exponential backoff
+                            debug!("Triggering reconnection for agent '{}' after {} consecutive heartbeat failures", agent_name, consecutive);
+                            let (reconnect_tx, reconnect_rx) = oneshot::channel();
+                            if op_tx.send(PoolOp::Reconnect {
+                                name: agent_name.clone(),
+                                tx: reconnect_tx,
+                            }).is_ok() {
+                                // Wait for reconnection attempt to complete (with timeout)
+                                let reconnect_result = tokio::time::timeout(
+                                    Duration::from_secs(resilience.connect_timeout_secs * resilience.reconnect_max_attempts as u64),
+                                    reconnect_rx
+                                ).await;
+
+                                match reconnect_result {
+                                    Ok(Ok(Ok(()))) => {
+                                        debug!("Successfully reconnected to agent '{}'", agent_name);
+                                    }
+                                    Ok(Ok(Err(e))) => {
+                                        warn!("Failed to reconnect to agent '{}': {}", agent_name, e);
+                                    }
+                                    Ok(Err(_)) | Err(_) => {
+                                        warn!("Reconnection attempt for agent '{}' timed out or was cancelled", agent_name);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -472,6 +505,18 @@ fn run_worker(
                     });
                 }
 
+                PoolOp::Reconnect { name, tx } => {
+                    let st = Rc::clone(&state);
+                    tokio::task::spawn_local(async move {
+                        // First remove the stale connection if it exists
+                        st.borrow_mut().connections.remove(&name);
+
+                        // Attempt reconnection with exponential backoff
+                        let result = try_reconnect_with_backoff(&st, &name).await;
+                        let _ = tx.send(result);
+                    });
+                }
+
                 PoolOp::CreateSession {
                     agent_name,
                     mode,
@@ -512,7 +557,6 @@ fn run_worker(
 /// # Errors
 ///
 /// Returns error if all reconnection attempts fail.
-#[allow(dead_code)] // Will be integrated with heartbeat monitoring in future subtasks
 async fn try_reconnect_with_backoff(
     state: &Rc<RefCell<WorkerState>>,
     name: &str,
@@ -953,6 +997,28 @@ async fn prompt(
                     }
 
                     health.lock().await.record_failure(agent_name, &msg);
+
+                    // If this looks like a connection error, attempt to reconnect
+                    if is_connection_error(&msg) && attempt < max_retries {
+                        warn!(
+                            agent = agent_name.as_str(),
+                            session_id = session.session_id.as_str(),
+                            attempt,
+                            error = %msg,
+                            "connection error detected, attempting to reconnect"
+                        );
+
+                        // Remove stale connection and attempt reconnection
+                        state.borrow_mut().connections.remove(agent_name);
+                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                            warn!(
+                                agent = agent_name.as_str(),
+                                error = %reconnect_err,
+                                "reconnection failed after connection error"
+                            );
+                        }
+                    }
+
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
                     )));
@@ -969,6 +1035,26 @@ async fn prompt(
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
                     health.lock().await.record_failure(agent_name, &msg);
+
+                    // Timeouts might indicate connection issues, attempt to reconnect
+                    if attempt < max_retries {
+                        debug!(
+                            agent = agent_name.as_str(),
+                            session_id = session.session_id.as_str(),
+                            "timeout detected, attempting to reconnect"
+                        );
+
+                        // Remove potentially stale connection and attempt reconnection
+                        state.borrow_mut().connections.remove(agent_name);
+                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                            warn!(
+                                agent = agent_name.as_str(),
+                                error = %reconnect_err,
+                                "reconnection failed after timeout"
+                            );
+                        }
+                    }
+
                     last_error = Some(SurgeError::Timeout(msg));
                     warn!(
                         agent = agent_name.as_str(),
@@ -1028,6 +1114,22 @@ fn is_auth_failure(error_msg: &str) -> bool {
         || msg_lower.contains("invalid api key")
         || msg_lower.contains("invalid_api_key")
         || msg_lower.contains("authentication_error")
+}
+
+/// Check if an error message indicates a connection problem.
+fn is_connection_error(error_msg: &str) -> bool {
+    let msg_lower = error_msg.to_lowercase();
+    msg_lower.contains("connection refused")
+        || msg_lower.contains("connection reset")
+        || msg_lower.contains("connection closed")
+        || msg_lower.contains("broken pipe")
+        || msg_lower.contains("no connection")
+        || msg_lower.contains("connection failed")
+        || msg_lower.contains("connection lost")
+        || msg_lower.contains("connection timeout")
+        || msg_lower.contains("connection error")
+        || msg_lower.contains("network error")
+        || msg_lower.contains("io error")
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
