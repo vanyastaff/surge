@@ -3,13 +3,67 @@
 
 default_agent = "claude"
 
+# Example 1: Basic agent configuration (local installation)
 [agents.claude]
 command = "claude"
 transport = "stdio"
 
+# Example 2: Agent with capability metadata
+# Capabilities help Surge route tasks to the most appropriate agent
 [agents.copilot]
 command = "copilot"
 transport = "stdio"
+capabilities = ["code", "plan", "review", "chat"]
+
+# Example 3: npx-based agent (no local installation required)
+# This runs the agent via npx, downloading it on-demand
+[agents.claude-acp]
+command = "npx"
+args = ["@zed-industries/claude-agent-acp"]
+transport = "stdio"
+capabilities = ["code", "plan", "review", "test", "refactor", "chat"]
+
+# Example 4: Custom agent from PATH with custom args
+[agents.custom-agent]
+command = "/usr/local/bin/my-custom-agent"
+args = ["--verbose", "--log-level=debug"]
+transport = "stdio"
+capabilities = ["code", "test"]
+
+# Example 5: TCP transport agent (for remote agents)
+[agents.remote-agent]
+command = "remote-agent-client"
+capabilities = ["code", "review"]
+
+[agents.remote-agent.transport]
+type = "tcp"
+host = "localhost"
+port = 8080
+
+# Example 6: Agent with MCP servers (Model Context Protocol)
+# MCP servers provide additional context and tools to the agent
+[agents.claude-with-mcp]
+command = "claude"
+transport = "stdio"
+capabilities = ["code", "plan", "review", "test", "refactor", "chat"]
+
+[[agents.claude-with-mcp.mcp_servers]]
+name = "filesystem"
+command = "npx"
+args = ["@modelcontextprotocol/server-filesystem", "/path/to/workspace"]
+
+[[agents.claude-with-mcp.mcp_servers]]
+name = "git"
+command = "npx"
+args = ["@modelcontextprotocol/server-git"]
+
+# Capability reference:
+# - "code"     : Write and modify code
+# - "plan"     : Create implementation plans
+# - "review"   : Code review and QA
+# - "test"     : Write and run tests
+# - "refactor" : Refactor existing code
+# - "chat"     : General conversation and assistance
 
 [pipeline]
 max_qa_iterations = 10
