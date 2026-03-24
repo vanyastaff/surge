@@ -295,11 +295,11 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                     }
 
                     // Last error (if any and agent is not healthy)
-                    if status != surge_acp::HealthStatus::Healthy {
-                        if let Some(err) = last_error {
-                            let truncated = if err.len() > 60 { &err[..60] } else { &err };
-                            println!("       last error: {}", truncated);
-                        }
+                    if status != surge_acp::HealthStatus::Healthy
+                        && let Some(err) = last_error
+                    {
+                        let truncated = if err.len() > 60 { &err[..60] } else { &err };
+                        println!("       last error: {}", truncated);
                     }
                 }
 
