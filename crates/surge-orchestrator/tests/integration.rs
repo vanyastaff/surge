@@ -1170,3 +1170,82 @@ async fn test_qa_verdict_multiple_partial_iterations() {
         panic!("Expected QaVerdictReceived");
     }
 }
+
+/// Test that max QA iterations exceeded results in task transition to Failed state.
+#[tokio::test]
+async fn test_qa_max_iterations_failure() {
+    use surge_core::event::QaVerdictKind;
+    use surge_core::state::TaskState;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+    let max_iterations = 3;
+
+    // 3. Send NEEDS_FIX verdicts up to max_iterations
+    for iteration in 1..=max_iterations {
+        let event = SurgeEvent::QaVerdictReceived {
+            task_id,
+            verdict: QaVerdictKind::NeedsFix,
+            iteration,
+            reasoning: Some(format!("Iteration {} - tests still failing.", iteration)),
+            met_criteria: vec!["Code compiles".to_string()],
+            unmet_criteria: vec!["Tests passing".to_string()],
+            issues: Some(format!("Tests failing on iteration {}", iteration)),
+        };
+        tx.send(event).expect(&format!("Failed to send event {}", iteration));
+
+        let recv = rx.recv().await.expect(&format!("Failed to receive event {}", iteration));
+        if let SurgeEvent::QaVerdictReceived { iteration: recv_iter, verdict, .. } = recv {
+            assert_eq!(recv_iter, iteration);
+            assert_eq!(verdict, QaVerdictKind::NeedsFix);
+        } else {
+            panic!("Expected QaVerdictReceived on iteration {}", iteration);
+        }
+    }
+
+    // 4. After max_iterations exhausted, send TaskStateChanged to Failed
+    let failed_event = SurgeEvent::TaskStateChanged {
+        task_id,
+        old_state: TaskState::QaReview {
+            verdict: Some("needs_fix".to_string()),
+            reasoning: Some(format!("QA did not approve after {} iterations", max_iterations)),
+        },
+        new_state: TaskState::Failed {
+            reason: format!("QA review failed after max iterations: QA did not approve after {} iterations", max_iterations),
+        },
+    };
+    tx.send(failed_event).expect("Failed to send TaskStateChanged event");
+
+    let recv_failed = rx.recv().await.expect("Failed to receive TaskStateChanged event");
+    if let SurgeEvent::TaskStateChanged { task_id: recv_task_id, old_state, new_state } = recv_failed {
+        assert_eq!(recv_task_id, task_id);
+
+        // Verify old state is QaReview
+        if let TaskState::QaReview { verdict, .. } = old_state {
+            assert_eq!(verdict, Some("needs_fix".to_string()));
+        } else {
+            panic!("Expected old_state to be QaReview, got {:?}", old_state);
+        }
+
+        // Verify new state is Failed with correct reason
+        if let TaskState::Failed { reason } = new_state {
+            assert!(
+                reason.contains("max iterations"),
+                "Failure reason should mention max iterations, got: {}",
+                reason
+            );
+            assert!(
+                reason.contains(&max_iterations.to_string()),
+                "Failure reason should include iteration count, got: {}",
+                reason
+            );
+        } else {
+            panic!("Expected new_state to be Failed, got {:?}", new_state);
+        }
+    } else {
+        panic!("Expected TaskStateChanged event");
+    }
+}
