@@ -812,3 +812,361 @@ async fn test_qa_verdict_multiple_needs_fix_iterations() {
         panic!("Expected QaVerdictReceived");
     }
 }
+
+/// Test that PARTIAL verdict is properly emitted with met and unmet criteria.
+#[tokio::test]
+async fn test_qa_verdict_partial() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send QaVerdictReceived event with PARTIAL verdict
+    let event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 1,
+        reasoning: Some("Some acceptance criteria have been met, but others require implementation.".to_string()),
+        met_criteria: vec![
+            "Error handling implemented".to_string(),
+            "Documentation complete".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Tests passing".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        issues: Some("Unit tests are missing for the new error handling code. Performance benchmarks need to be added.".to_string()),
+    };
+
+    tx.send(event).expect("Failed to send event");
+
+    // 4. Receive and verify the event
+    let received_event = rx.recv().await.expect("Failed to receive event");
+
+    match received_event {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::Partial);
+            assert_eq!(iteration, 1);
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("Some acceptance criteria"));
+
+            // Verify met criteria
+            assert_eq!(met_criteria.len(), 2);
+            assert!(met_criteria.contains(&"Error handling implemented".to_string()));
+            assert!(met_criteria.contains(&"Documentation complete".to_string()));
+
+            // Verify unmet criteria
+            assert_eq!(unmet_criteria.len(), 2);
+            assert!(unmet_criteria.contains(&"Tests passing".to_string()));
+            assert!(unmet_criteria.contains(&"Performance optimization".to_string()));
+
+            // Verify issues
+            assert!(issues.is_some());
+            let issues_text = issues.unwrap();
+            assert!(issues_text.contains("Unit tests are missing"));
+            assert!(issues_text.contains("Performance benchmarks"));
+        }
+        _ => panic!("Expected QaVerdictReceived event"),
+    }
+}
+
+/// Test that PARTIAL verdict with minimal data is handled correctly.
+#[tokio::test]
+async fn test_qa_verdict_partial_minimal() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send QaVerdictReceived event with minimal PARTIAL data
+    let event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 1,
+        reasoning: None,
+        met_criteria: vec![],
+        unmet_criteria: vec![],
+        issues: None,
+    };
+
+    tx.send(event).expect("Failed to send event");
+
+    // 4. Receive and verify the event
+    let received_event = rx.recv().await.expect("Failed to receive event");
+
+    match received_event {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::Partial);
+            assert_eq!(iteration, 1);
+            assert!(reasoning.is_none());
+            assert_eq!(met_criteria.len(), 0);
+            assert_eq!(unmet_criteria.len(), 0);
+            assert!(issues.is_none());
+        }
+        _ => panic!("Expected QaVerdictReceived event"),
+    }
+}
+
+/// Test that PARTIAL verdict leads to eventual approval after fixing unmet criteria.
+#[tokio::test]
+async fn test_qa_verdict_partial_fix_loop() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send initial PARTIAL verdict (iteration 1)
+    let partial_event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 1,
+        reasoning: Some("Implementation is partially complete. Some criteria met, others need work.".to_string()),
+        met_criteria: vec![
+            "Error handling implemented".to_string(),
+            "Documentation complete".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Tests passing".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        issues: Some("Missing unit tests and performance benchmarks.".to_string()),
+    };
+
+    tx.send(partial_event).expect("Failed to send PARTIAL event");
+
+    // 4. Receive and verify PARTIAL event
+    let received_partial = rx.recv().await.expect("Failed to receive PARTIAL event");
+
+    match received_partial {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::Partial);
+            assert_eq!(iteration, 1, "Should be first QA iteration");
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("partially complete"));
+
+            // Verify met criteria
+            assert_eq!(met_criteria.len(), 2);
+            assert!(met_criteria.contains(&"Error handling implemented".to_string()));
+            assert!(met_criteria.contains(&"Documentation complete".to_string()));
+
+            // Verify unmet criteria that need to be fixed
+            assert_eq!(unmet_criteria.len(), 2);
+            assert!(unmet_criteria.contains(&"Tests passing".to_string()));
+            assert!(unmet_criteria.contains(&"Performance optimization".to_string()));
+
+            assert!(issues.is_some());
+            assert!(issues.unwrap().contains("Missing unit tests"));
+        }
+        _ => panic!("Expected QaVerdictReceived event with PARTIAL"),
+    }
+
+    // 5. Simulate fix being applied and send APPROVED verdict (iteration 2)
+    let approved_event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Approved,
+        iteration: 2,
+        reasoning: Some("All unmet criteria from iteration 1 have been addressed. All criteria now pass.".to_string()),
+        met_criteria: vec![
+            "Error handling implemented".to_string(),
+            "Documentation complete".to_string(),
+            "Tests passing".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        unmet_criteria: vec![],
+        issues: None,
+    };
+
+    tx.send(approved_event).expect("Failed to send APPROVED event");
+
+    // 6. Receive and verify APPROVED event
+    let received_approved = rx.recv().await.expect("Failed to receive APPROVED event");
+
+    match received_approved {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::Approved);
+            assert_eq!(iteration, 2, "Should be second QA iteration after partial fix");
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("unmet criteria from iteration 1 have been addressed"));
+
+            // All criteria should now be met
+            assert_eq!(met_criteria.len(), 4);
+            assert!(met_criteria.contains(&"Tests passing".to_string()));
+            assert!(met_criteria.contains(&"Performance optimization".to_string()));
+            assert_eq!(unmet_criteria.len(), 0);
+            assert!(issues.is_none());
+        }
+        _ => panic!("Expected QaVerdictReceived event with APPROVED"),
+    }
+}
+
+/// Test that multiple PARTIAL verdicts converge to APPROVED.
+#[tokio::test]
+async fn test_qa_verdict_multiple_partial_iterations() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send first PARTIAL (iteration 1) - 2 met, 3 unmet
+    let event1 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 1,
+        reasoning: Some("Initial review: some progress made.".to_string()),
+        met_criteria: vec![
+            "Code compiles".to_string(),
+            "Error handling implemented".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Tests passing".to_string(),
+            "Documentation complete".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        issues: Some("Tests failing, docs incomplete, perf not optimized.".to_string()),
+    };
+    tx.send(event1).expect("Failed to send event 1");
+
+    let recv1 = rx.recv().await.expect("Failed to receive event 1");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv1 {
+        assert_eq!(iteration, 1);
+        assert_eq!(verdict, QaVerdictKind::Partial);
+        assert_eq!(met_criteria.len(), 2);
+        assert_eq!(unmet_criteria.len(), 3);
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+
+    // 4. Send second PARTIAL (iteration 2) - 3 met, 2 unmet (progress!)
+    let event2 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 2,
+        reasoning: Some("Progress made: tests now passing.".to_string()),
+        met_criteria: vec![
+            "Code compiles".to_string(),
+            "Error handling implemented".to_string(),
+            "Tests passing".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Documentation complete".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        issues: Some("Docs and perf still need work.".to_string()),
+    };
+    tx.send(event2).expect("Failed to send event 2");
+
+    let recv2 = rx.recv().await.expect("Failed to receive event 2");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv2 {
+        assert_eq!(iteration, 2, "Should track second iteration");
+        assert_eq!(verdict, QaVerdictKind::Partial);
+        assert_eq!(met_criteria.len(), 3, "One more criterion met");
+        assert_eq!(unmet_criteria.len(), 2, "Two criteria still unmet");
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+
+    // 5. Send third PARTIAL (iteration 3) - 4 met, 1 unmet (more progress!)
+    let event3 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Partial,
+        iteration: 3,
+        reasoning: Some("Almost there: documentation now complete.".to_string()),
+        met_criteria: vec![
+            "Code compiles".to_string(),
+            "Error handling implemented".to_string(),
+            "Tests passing".to_string(),
+            "Documentation complete".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Performance optimization".to_string(),
+        ],
+        issues: Some("Only performance optimization remaining.".to_string()),
+    };
+    tx.send(event3).expect("Failed to send event 3");
+
+    let recv3 = rx.recv().await.expect("Failed to receive event 3");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv3 {
+        assert_eq!(iteration, 3, "Should track third iteration");
+        assert_eq!(verdict, QaVerdictKind::Partial);
+        assert_eq!(met_criteria.len(), 4, "Four criteria now met");
+        assert_eq!(unmet_criteria.len(), 1, "Only one criterion remaining");
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+
+    // 6. Send final APPROVED (iteration 4) - all met!
+    let event4 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Approved,
+        iteration: 4,
+        reasoning: Some("All criteria now met after multiple partial iterations.".to_string()),
+        met_criteria: vec![
+            "Code compiles".to_string(),
+            "Error handling implemented".to_string(),
+            "Tests passing".to_string(),
+            "Documentation complete".to_string(),
+            "Performance optimization".to_string(),
+        ],
+        unmet_criteria: vec![],
+        issues: None,
+    };
+    tx.send(event4).expect("Failed to send event 4");
+
+    let recv4 = rx.recv().await.expect("Failed to receive event 4");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv4 {
+        assert_eq!(iteration, 4, "Should track fourth iteration before approval");
+        assert_eq!(verdict, QaVerdictKind::Approved);
+        assert_eq!(met_criteria.len(), 5, "All criteria now met");
+        assert_eq!(unmet_criteria.len(), 0, "No unmet criteria");
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+}
