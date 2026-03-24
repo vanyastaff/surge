@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
@@ -95,6 +96,9 @@ pub struct AgentPool {
 
     /// Event broadcast sender for subscribing to agent events.
     event_tx: broadcast::Sender<SurgeEvent>,
+
+    /// Active session counter for heartbeat interval switching.
+    active_sessions: Arc<AtomicUsize>,
 }
 
 impl AgentPool {
@@ -131,15 +135,24 @@ impl AgentPool {
         let worker_health = Arc::clone(&health);
         let worker_event_tx = event_tx.clone();
 
+        let active_sessions = Arc::new(AtomicUsize::new(0));
+
+        // Collect agent names for heartbeat monitoring
+        let agent_names: Vec<String> = configs.keys().cloned().collect();
+
+        // Clone references for the worker
+        let worker_configs = configs.clone();
+        let worker_resilience = resilience.clone();
+
         let worker = std::thread::Builder::new()
             .name("surge-acp-pool".into())
             .spawn(move || {
                 run_worker(
                     op_rx,
-                    configs,
+                    worker_configs,
                     worktree_root,
                     permission_policy,
-                    resilience,
+                    worker_resilience,
                     worker_health,
                     worker_event_tx,
                 );
@@ -148,12 +161,27 @@ impl AgentPool {
                 SurgeError::AgentConnection(format!("Failed to spawn pool worker: {e}"))
             })?;
 
+        // Spawn heartbeat monitoring task
+        let heartbeat_op_tx = op_tx.clone();
+        let heartbeat_health = Arc::clone(&health);
+        let heartbeat_event_tx = event_tx.clone();
+        let heartbeat_sessions = Arc::clone(&active_sessions);
+        tokio::spawn(run_heartbeat_monitor(
+            agent_names,
+            heartbeat_op_tx,
+            heartbeat_health,
+            heartbeat_event_tx,
+            heartbeat_sessions,
+            resilience,
+        ));
+
         Ok(Self {
             op_tx,
             _worker: Some(worker),
             default_agent,
             health,
             event_tx,
+            active_sessions,
         })
     }
 
@@ -294,6 +322,42 @@ impl Drop for AgentPool {
             let _ = self.op_tx.send(PoolOp::Shutdown { tx });
             let _ = worker.join();
         }
+    }
+}
+
+// ── Heartbeat monitoring task ───────────────────────────────────────
+
+/// Background task that periodically pings agents to verify connectivity.
+///
+/// Runs continuously until the pool is dropped. Switches between active
+/// and idle intervals based on the number of active sessions.
+async fn run_heartbeat_monitor(
+    agent_names: Vec<String>,
+    _op_tx: mpsc::UnboundedSender<PoolOp>,
+    _health: Arc<Mutex<HealthTracker>>,
+    _event_tx: broadcast::Sender<SurgeEvent>,
+    active_sessions: Arc<AtomicUsize>,
+    resilience: ResilienceConfig,
+) {
+    debug!("Heartbeat monitor started for {} agents", agent_names.len());
+
+    loop {
+        // Determine interval based on active sessions count
+        let interval_secs = if active_sessions.load(Ordering::Relaxed) > 0 {
+            resilience.heartbeat_interval_active_secs
+        } else {
+            resilience.heartbeat_interval_idle_secs
+        };
+
+        // Wait for the next heartbeat interval
+        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+
+        // TODO (subtask-3-2): Implement heartbeat ping logic
+        // For each agent in agent_names:
+        // 1. Call ping() via op_tx
+        // 2. Record success/failure in health tracker
+        // 3. Emit AgentHeartbeatFailed event on consecutive failures
+        // 4. Emit AgentHealthDegraded after 3 consecutive failures
     }
 }
 
