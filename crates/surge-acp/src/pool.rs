@@ -355,6 +355,11 @@ fn run_worker(
                     }
                     // Final cleanup of any remaining PID files
                     state.borrow().process_tracker.cleanup_all();
+
+                    // Platform-specific process audit on Windows
+                    #[cfg(windows)]
+                    audit_orphaned_processes_windows();
+
                     let _ = tx.send(());
                     break;
                 }
@@ -739,6 +744,89 @@ fn is_auth_failure(error_msg: &str) -> bool {
         || msg_lower.contains("invalid api key")
         || msg_lower.contains("invalid_api_key")
         || msg_lower.contains("authentication_error")
+}
+
+// ── Platform-specific process audit ─────────────────────────────────
+
+/// Audit for orphaned child processes on Windows after shutdown.
+///
+/// On Windows, processes spawned with CREATE_NO_WINDOW may not be properly
+/// cleaned up if the parent terminates unexpectedly. This function performs
+/// a best-effort scan for any child processes that may have been spawned by
+/// agent processes and logs warnings if any are found.
+///
+/// This is a diagnostic aid for manual verification — it logs warnings but
+/// does not attempt to kill orphaned processes, as determining ownership is
+/// unreliable across process trees on Windows.
+#[cfg(windows)]
+fn audit_orphaned_processes_windows() {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    debug!("Starting Windows orphaned process audit");
+
+    let current_pid = std::process::id();
+
+    unsafe {
+        // Create snapshot of all processes
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            warn!("Failed to create process snapshot for orphan audit");
+            return;
+        };
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        // Iterate through all processes
+        if Process32FirstW(snapshot, &mut entry).is_err() {
+            let _ = CloseHandle(snapshot);
+            warn!("Failed to enumerate processes for orphan audit");
+            return;
+        }
+
+        let mut suspicious_count = 0;
+        loop {
+            // Check if this process is a child of the current process
+            if entry.th32ParentProcessID == current_pid && entry.th32ProcessID != current_pid {
+                // Extract process name from wide string
+                let name_end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let process_name = String::from_utf16_lossy(&entry.szExeFile[..name_end]);
+
+                warn!(
+                    pid = entry.th32ProcessID,
+                    parent_pid = entry.th32ParentProcessID,
+                    name = process_name.as_str(),
+                    "Orphaned child process detected after pool shutdown"
+                );
+                suspicious_count += 1;
+            }
+
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+
+        if suspicious_count > 0 {
+            warn!(
+                count = suspicious_count,
+                "Process audit found {} orphaned child process(es) — manual cleanup may be required",
+                suspicious_count
+            );
+        } else {
+            debug!("Process audit complete — no orphaned processes detected");
+        }
+    }
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
