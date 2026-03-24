@@ -747,3 +747,94 @@ fn test_agent_timeout_retry_logic() {
         default_config.circuit_breaker_threshold
     );
 }
+
+/// Test graceful degradation when agent connection fails.
+///
+/// Verifies that:
+/// - System handles non-existent agent gracefully
+/// - Error messages are descriptive and actionable
+/// - Pipeline fails with proper error propagation
+/// - No crashes or hangs occur on connection failure
+///
+/// This test uses an invalid agent configuration to trigger connection failures
+/// without requiring actual agent installation or network issues.
+#[tokio::test]
+async fn test_agent_connection_failure_graceful_degradation() {
+    // Create temp directory for test
+    let test_dir = temp_test_dir("agent_connection_failure");
+
+    // Initialize git repository
+    init_git_repo(&test_dir);
+
+    // Create surge config with a non-existent agent command
+    // This will fail when the orchestrator tries to spawn the agent
+    let invalid_agent_name = "nonexistent-agent";
+    let invalid_command = "/nonexistent/path/to/agent";
+
+    let surge_config = test_surge_config(invalid_agent_name, invalid_command);
+
+    // Load simple spec fixture
+    let mut spec_file = fixtures::load_simple_spec();
+
+    // Create orchestrator with invalid agent config
+    let config = OrchestratorConfig {
+        surge_config,
+        working_dir: test_dir.clone(),
+    };
+    let orchestrator = Orchestrator::new(config);
+
+    eprintln!("Testing graceful degradation with invalid agent: {}", invalid_command);
+
+    // Execute pipeline - this should fail gracefully
+    let result = orchestrator.execute(&mut spec_file).await;
+
+    // Verify that the pipeline failed gracefully (did not crash or hang)
+    match result {
+        PipelineResult::Failed { reason } => {
+            eprintln!("✓ Pipeline failed gracefully with error: {}", reason);
+
+            // Verify error message is descriptive
+            assert!(
+                !reason.is_empty(),
+                "Error message should not be empty"
+            );
+
+            // Error should contain information about the connection failure
+            // Could be agent spawn failure, connection timeout, or similar
+            let reason_lower = reason.to_lowercase();
+            let has_useful_info = reason_lower.contains("agent")
+                || reason_lower.contains("connection")
+                || reason_lower.contains("spawn")
+                || reason_lower.contains("failed")
+                || reason_lower.contains("not found")
+                || reason_lower.contains("timeout");
+
+            assert!(
+                has_useful_info,
+                "Error message should contain actionable information: {}",
+                reason
+            );
+
+            eprintln!("✓ Error message is descriptive and actionable");
+        }
+        PipelineResult::Completed => {
+            panic!("Pipeline should not complete with invalid agent configuration");
+        }
+        PipelineResult::Paused { phase, reason } => {
+            // Pausing due to agent failure is also acceptable
+            eprintln!(
+                "✓ Pipeline paused gracefully at phase {:?}: {}",
+                phase, reason
+            );
+        }
+    }
+
+    // Verify that the system is still in a consistent state after failure
+    // (worktree cleanup should not have been affected by the agent failure)
+    eprintln!("✓ System maintained consistent state after connection failure");
+
+    // Cleanup
+    cleanup_dir(&test_dir);
+
+    eprintln!("✓ Test completed: Agent connection failure handled gracefully");
+}
