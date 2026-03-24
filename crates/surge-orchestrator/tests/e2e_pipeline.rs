@@ -17,6 +17,7 @@ use surge_acp::Registry;
 use surge_core::error::SurgeError;
 use surge_orchestrator::executor::{ExecutorConfig, SubtaskExecutor};
 use surge_orchestrator::pipeline::{Orchestrator, OrchestratorConfig, PipelineResult};
+use surge_orchestrator::qa::{parse_qa_response, QaVerdict};
 use std::process::Command;
 
 /// Initialize a git repository in the specified directory.
@@ -837,4 +838,94 @@ async fn test_agent_connection_failure_graceful_degradation() {
     cleanup_dir(&test_dir);
 
     eprintln!("✓ Test completed: Agent connection failure handled gracefully");
+}
+
+/// Test malformed QA response handling with fallback to text parsing.
+///
+/// Verifies that when the QA agent returns malformed JSON:
+/// 1. JSON parsing fails gracefully
+/// 2. System falls back to text-based parsing
+/// 3. Defaults to Approved verdict when no clear markers are found
+///
+/// This ensures the pipeline doesn't get stuck on agents that produce
+/// unexpected response formats.
+#[test]
+fn test_error_malformed_qa_response() {
+    // Test 1: Malformed JSON (missing closing brace)
+    let malformed_json = r#"{"verdict": "approved""#;
+    let verdict = parse_qa_response(malformed_json);
+
+    // Should fallback to text parsing and default to Approved
+    // (since "approved" is in the text)
+    assert!(
+        matches!(verdict, QaVerdict::Approved),
+        "Malformed JSON with 'approved' text should parse as Approved via fallback"
+    );
+
+    // Test 2: Malformed JSON with no recognizable markers
+    let malformed_no_markers = r#"{"verdict": invalid_json}"#;
+    let verdict = parse_qa_response(malformed_no_markers);
+
+    // Should fallback to text parsing and default to Approved
+    // (no clear APPROVED/NEEDS_FIX/PARTIAL markers)
+    assert!(
+        matches!(verdict, QaVerdict::Approved),
+        "Malformed JSON without clear markers should default to Approved"
+    );
+
+    // Test 3: Malformed JSON but contains NEEDS_FIX in text
+    let malformed_needs_fix = r#"{"verdict": broken} NEEDS_FIX: tests failing"#;
+    let verdict = parse_qa_response(malformed_needs_fix);
+
+    // Should fallback to text parsing and detect NEEDS_FIX marker
+    match verdict {
+        QaVerdict::NeedsFix { issues } => {
+            assert!(
+                issues.contains("tests failing"),
+                "Should extract issue description from text: {}",
+                issues
+            );
+        }
+        _ => panic!("Expected NeedsFix verdict when NEEDS_FIX marker is present"),
+    }
+
+    // Test 4: Invalid JSON array instead of object
+    let invalid_array = r#"["approved", "all good"]"#;
+    let verdict = parse_qa_response(invalid_array);
+
+    // Should fallback to text parsing and find "approved"
+    assert!(
+        matches!(verdict, QaVerdict::Approved),
+        "Invalid JSON array with 'approved' text should parse as Approved via fallback"
+    );
+
+    // Test 5: Completely random malformed JSON
+    let random_malformed = r#"{{{broken json with random text}}}"#;
+    let verdict = parse_qa_response(random_malformed);
+
+    // Should fallback to text parsing and default to Approved
+    assert!(
+        matches!(verdict, QaVerdict::Approved),
+        "Random malformed JSON should default to Approved to avoid blocking pipeline"
+    );
+
+    // Test 6: Malformed JSON in code block
+    let malformed_in_code_block = r#"
+Here's the QA result:
+```json
+{"verdict": "looks_good", missing_field
+```
+APPROVED - everything looks good
+"#;
+    let verdict = parse_qa_response(malformed_in_code_block);
+
+    // Should fail JSON parsing, fallback to text, and find APPROVED
+    assert!(
+        matches!(verdict, QaVerdict::Approved),
+        "Malformed JSON in code block should fallback to text parsing and find APPROVED marker"
+    );
+
+    eprintln!("✓ All malformed QA response tests passed");
+    eprintln!("✓ Verified fallback to text parsing works correctly");
+    eprintln!("✓ Verified default to Approved prevents pipeline blocking");
 }
