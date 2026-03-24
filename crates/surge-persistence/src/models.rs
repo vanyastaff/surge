@@ -25,6 +25,76 @@ pub struct TaskCheckpoint {
     pub retry_count: u32,
 }
 
+// ── Circuit Breaker Models ──────────────────────────────────────────
+
+/// Circuit breaker state persistence record.
+///
+/// Stores the current state of a circuit breaker for a subtask, enabling
+/// recovery after crashes/restarts and preventing infinite retry loops.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CircuitBreakerState {
+    /// Task this circuit breaker belongs to.
+    pub task_id: TaskId,
+
+    /// Subtask this circuit breaker tracks.
+    pub subtask_id: SubtaskId,
+
+    /// Number of consecutive failures recorded.
+    pub consecutive_failures: u32,
+
+    /// Last error message that triggered a failure.
+    pub last_error: Option<String>,
+
+    /// Unix timestamp in milliseconds when the circuit was tripped (if open).
+    pub tripped_at: Option<u64>,
+
+    /// Unix timestamp in milliseconds for the next retry attempt.
+    pub next_retry_time: Option<u64>,
+}
+
+impl CircuitBreakerState {
+    /// Create a new circuit breaker state for a subtask.
+    #[must_use]
+    pub fn new(task_id: TaskId, subtask_id: SubtaskId) -> Self {
+        Self {
+            task_id,
+            subtask_id,
+            consecutive_failures: 0,
+            last_error: None,
+            tripped_at: None,
+            next_retry_time: None,
+        }
+    }
+
+    /// Check if the circuit breaker is tripped (open).
+    ///
+    /// A circuit is considered tripped if it has a `tripped_at` timestamp.
+    #[must_use]
+    pub fn is_tripped(&self) -> bool {
+        self.tripped_at.is_some()
+    }
+
+    /// Reset the circuit breaker state after a successful execution.
+    pub fn reset(&mut self) {
+        self.consecutive_failures = 0;
+        self.last_error = None;
+        self.tripped_at = None;
+        self.next_retry_time = None;
+    }
+
+    /// Record a failure and increment the consecutive failure count.
+    pub fn record_failure(&mut self, error_msg: String, next_retry_time_ms: Option<u64>) {
+        self.consecutive_failures += 1;
+        self.last_error = Some(error_msg);
+        self.next_retry_time = next_retry_time_ms;
+    }
+
+    /// Trip the circuit breaker (mark as open).
+    pub fn trip(&mut self, timestamp_ms: u64) {
+        self.tripped_at = Some(timestamp_ms);
+    }
+}
+
 // ── Token Usage Models ──────────────────────────────────────────────
 
 /// Token usage for a single ACP session.
