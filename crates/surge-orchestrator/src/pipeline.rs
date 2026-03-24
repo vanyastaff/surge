@@ -477,6 +477,19 @@ impl Orchestrator {
                 }
                 info!("merged successfully");
             }
+            QaVerdict::Partial { met, unmet } => {
+                aggregator.unregister_session(&session.session_id).await;
+                pool.shutdown().await;
+                let _ = git.discard(&spec_id_str);
+                return PipelineResult::Failed {
+                    reason: format!(
+                        "QA review incomplete after max iterations: {} criteria met, {} unmet ({})",
+                        met.len(),
+                        unmet.len(),
+                        unmet.join(", ")
+                    ),
+                };
+            }
             QaVerdict::NeedsFix { issues } => {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;

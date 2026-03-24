@@ -18,6 +18,8 @@ use crate::context::build_qa_prompt;
 pub enum QaVerdict {
     /// All acceptance criteria are met.
     Approved,
+    /// Some criteria met, others not yet implemented.
+    Partial { met: Vec<String>, unmet: Vec<String> },
     /// Issues were found that need fixing.
     NeedsFix { issues: String },
 }
@@ -112,6 +114,34 @@ impl QaReviewer {
                     info!(iteration, "QA approved");
                     return QaCycleResult { verdict, iterations: iteration };
                 }
+                QaVerdict::Partial { met, unmet } => {
+                    info!(
+                        iteration,
+                        met_count = met.len(),
+                        unmet_count = unmet.len(),
+                        "QA partial - some criteria not yet met"
+                    );
+
+                    // Subscribe before fix prompt to capture its response too
+                    let _fix_rx = event_tx.subscribe();
+
+                    let unmet_list = unmet.join("\n- ");
+                    let fix_prompt = format!(
+                        "The QA review found that some acceptance criteria are not yet met:\n\n\
+                         Unmet criteria:\n- {unmet_list}\n\n\
+                         Please implement the remaining criteria now."
+                    );
+                    let fix_content = vec![ContentBlock::Text(TextContent::new(fix_prompt))];
+
+                    if let Err(e) = pool.prompt(session, fix_content).await {
+                        warn!(error = %e, "fix prompt failed");
+                    }
+
+                    let commit_msg = format!("surge: QA partial fix iteration {iteration}");
+                    if let Err(e) = git.commit(&spec_id_str, &commit_msg) {
+                        warn!(error = %e, "commit after QA partial fix failed");
+                    }
+                }
                 QaVerdict::NeedsFix { issues } => {
                     info!(iteration, issues = %issues, "QA needs fix");
 
@@ -155,8 +185,9 @@ impl QaReviewer {
 
 /// Parse the agent's response text into a QA verdict.
 ///
-/// Looks for `APPROVED` or `NEEDS_FIX: <description>` markers (case-insensitive).
-/// Defaults to `Approved` when neither marker is found, to avoid blocking the
+/// Looks for `APPROVED`, `PARTIAL`, or `NEEDS_FIX: <description>` markers (case-insensitive).
+/// For PARTIAL, expects lines with "MET:" and "UNMET:" prefixes.
+/// Defaults to `Approved` when no marker is found, to avoid blocking the
 /// pipeline when the agent produces an unexpected response format.
 #[must_use]
 pub fn parse_qa_text(text: &str) -> QaVerdict {
@@ -180,13 +211,35 @@ pub fn parse_qa_text(text: &str) -> QaVerdict {
                 issues
             },
         }
+    } else if upper.contains("PARTIAL") {
+        // Parse PARTIAL response with MET:/UNMET: criteria
+        let mut met = Vec::new();
+        let mut unmet = Vec::new();
+
+        for line in text.lines() {
+            let line_upper = line.to_uppercase();
+            // Check for UNMET: first to avoid matching it as MET:
+            if let Some(pos) = line_upper.find("UNMET:") {
+                let criterion = line[pos + 6..].trim();
+                if !criterion.is_empty() {
+                    unmet.push(criterion.to_string());
+                }
+            } else if let Some(pos) = line_upper.find("MET:") {
+                let criterion = line[pos + 4..].trim();
+                if !criterion.is_empty() {
+                    met.push(criterion.to_string());
+                }
+            }
+        }
+
+        QaVerdict::Partial { met, unmet }
     } else if upper.contains("APPROVED") {
         QaVerdict::Approved
     } else {
         // No clear verdict — default to approved so the pipeline isn't stuck on
         // agents that respond conversationally rather than using the format.
         info!(
-            "QA response has no APPROVED/NEEDS_FIX marker, defaulting to approved; \
+            "QA response has no APPROVED/NEEDS_FIX/PARTIAL marker, defaulting to approved; \
              response preview: {:?}",
             &text[..text.len().min(200)]
         );
@@ -253,5 +306,72 @@ mod tests {
         // NEEDS_FIX takes priority when it appears first
         let verdict = parse_qa_text("NEEDS_FIX: fix the tests. Then it will be APPROVED");
         assert!(matches!(verdict, QaVerdict::NeedsFix { .. }));
+    }
+
+    #[test]
+    fn test_parse_qa_text_partial() {
+        let text = "PARTIAL\nMET: error handling\nMET: documentation\nUNMET: tests\nUNMET: performance optimization";
+        let verdict = parse_qa_text(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert_eq!(unmet.len(), 2);
+                assert!(met.contains(&"error handling".to_string()));
+                assert!(met.contains(&"documentation".to_string()));
+                assert!(unmet.contains(&"tests".to_string()));
+                assert!(unmet.contains(&"performance optimization".to_string()));
+            }
+            _ => panic!("expected Partial verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_text_partial_lowercase() {
+        let text = "partial\nmet: criterion 1\nunmet: criterion 2";
+        let verdict = parse_qa_text(text);
+        assert!(matches!(verdict, QaVerdict::Partial { .. }));
+    }
+
+    #[test]
+    fn test_parse_qa_text_partial_empty_criteria() {
+        let text = "PARTIAL";
+        let verdict = parse_qa_text(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert!(met.is_empty());
+                assert!(unmet.is_empty());
+            }
+            _ => panic!("expected Partial verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_text_partial_only_met() {
+        let text = "PARTIAL\nMET: criterion 1\nMET: criterion 2";
+        let verdict = parse_qa_text(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert!(unmet.is_empty());
+            }
+            _ => panic!("expected Partial verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_text_partial_only_unmet() {
+        let text = "PARTIAL\nUNMET: criterion 1\nUNMET: criterion 2";
+        let verdict = parse_qa_text(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert!(met.is_empty());
+                assert_eq!(unmet.len(), 2);
+            }
+            _ => panic!("expected Partial verdict"),
+        }
     }
 }
