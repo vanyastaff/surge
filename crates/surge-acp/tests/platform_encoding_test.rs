@@ -335,11 +335,7 @@ async fn test_utf8_locale_on_unix() {
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let (output, _, _) = {
-        let m = mgr.lock().await;
-        let term = m.get_terminal(&id).unwrap();
-        term.lock().await.get_output().await
-    };
+    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
 
     assert!(!output.is_empty(), "Output should not be empty");
 }
