@@ -1360,10 +1360,9 @@ url = "ws://localhost:8080"
         // Deserialize using the "ws" tag
         let _toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
         // Use inline table format that matches serde rename
-        let agent: AgentConfig = toml::from_str(
-            "command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n",
-        )
-        .unwrap();
+        let agent: AgentConfig =
+            toml::from_str("command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n")
+                .unwrap();
         assert!(matches!(agent.transport, Transport::WebSocket { .. }));
 
         let serialized = toml::to_string(&agent).unwrap();
