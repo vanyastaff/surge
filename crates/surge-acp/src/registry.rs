@@ -1039,7 +1039,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
         fs::create_dir_all(&temp_dir).unwrap();
 
-        // Test 1: When surge.toml exists with agents, it should load them
+        // Test 1: When surge.toml exists with agents, it should load them with capability metadata
         let config_path = temp_dir.join("surge.toml");
         fs::write(
             &config_path,
@@ -1050,11 +1050,13 @@ default_agent = "test-agent"
 command = "test-cli"
 args = ["--acp", "--mode=test"]
 transport = "stdio"
+capabilities = ["code", "test"]
 
 [agents.another-agent]
 command = "another-cli"
 args = []
 transport = { tcp = { host = "localhost", port = 8080 } }
+capabilities = ["code", "plan", "review"]
 "#,
         )
         .unwrap();
@@ -1070,10 +1072,23 @@ transport = { tcp = { host = "localhost", port = 8080 } }
         assert_eq!(test_agent.command, "test-cli");
         assert_eq!(test_agent.default_args, vec!["--acp", "--mode=test"]);
         assert!(matches!(test_agent.transport, Transport::Stdio));
+        // Verify capability metadata is parsed correctly from TOML
+        assert_eq!(test_agent.capabilities.len(), 2);
+        assert!(test_agent.capabilities.contains(&AgentCapability::Code));
+        assert!(test_agent.capabilities.contains(&AgentCapability::Test));
+        // Models field is not part of AgentConfig (user config), only RegistryEntry (builtin/remote)
+        assert_eq!(test_agent.models.len(), 0);
 
         let another_agent = registry.find("another-agent").unwrap();
         assert_eq!(another_agent.command, "another-cli");
         assert!(matches!(another_agent.transport, Transport::Tcp { .. }));
+        // Verify capabilities are parsed from TOML
+        assert_eq!(another_agent.capabilities.len(), 3);
+        assert!(another_agent.capabilities.contains(&AgentCapability::Code));
+        assert!(another_agent.capabilities.contains(&AgentCapability::Plan));
+        assert!(another_agent
+            .capabilities
+            .contains(&AgentCapability::Review));
 
         // Test 2: When no surge.toml exists, it should return empty registry
         let no_config_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml_no_config");
@@ -1112,5 +1127,137 @@ max_qa_iterations = 5
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&no_config_dir);
         let _ = fs::remove_dir_all(&empty_agents_dir);
+    }
+
+    #[test]
+    fn test_capability_metadata_parsing() {
+        use std::collections::HashMap;
+
+        // Test 1: Agent with all capability types
+        let mut agents = HashMap::new();
+        agents.insert(
+            "full-featured-agent".to_string(),
+            AgentConfig {
+                command: "full-agent".to_string(),
+                args: vec!["--acp".to_string()],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![
+                    surge_core::config::AgentCapability::Code,
+                    surge_core::config::AgentCapability::Plan,
+                    surge_core::config::AgentCapability::Review,
+                    surge_core::config::AgentCapability::Test,
+                    surge_core::config::AgentCapability::Refactor,
+                    surge_core::config::AgentCapability::Chat,
+                ],
+            },
+        );
+
+        let reg = Registry::from_config(agents);
+        let entry = reg.find("full-featured-agent").unwrap();
+
+        // Verify all capabilities are correctly converted
+        assert_eq!(entry.capabilities.len(), 6);
+        assert!(entry.capabilities.contains(&AgentCapability::Code));
+        assert!(entry.capabilities.contains(&AgentCapability::Plan));
+        assert!(entry.capabilities.contains(&AgentCapability::Review));
+        assert!(entry.capabilities.contains(&AgentCapability::Test));
+        assert!(entry.capabilities.contains(&AgentCapability::Refactor));
+        assert!(entry.capabilities.contains(&AgentCapability::Chat));
+
+        // Test 2: Agent with subset of capabilities
+        let mut partial_agents = HashMap::new();
+        partial_agents.insert(
+            "code-only-agent".to_string(),
+            AgentConfig {
+                command: "code-agent".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![surge_core::config::AgentCapability::Code],
+            },
+        );
+
+        let partial_reg = Registry::from_config(partial_agents);
+        let code_entry = partial_reg.find("code-only-agent").unwrap();
+
+        assert_eq!(code_entry.capabilities.len(), 1);
+        assert!(code_entry.capabilities.contains(&AgentCapability::Code));
+        assert!(!code_entry
+            .capabilities
+            .contains(&AgentCapability::Plan));
+
+        // Test 3: Verify capability filtering works
+        let reg_with_multiple = Registry {
+            entries: vec![entry.clone(), code_entry.clone()],
+        };
+
+        let code_capable = reg_with_multiple.by_capability(&AgentCapability::Code);
+        assert_eq!(code_capable.len(), 2); // Both agents have code capability
+
+        let plan_capable = reg_with_multiple.by_capability(&AgentCapability::Plan);
+        assert_eq!(plan_capable.len(), 1); // Only full-featured-agent has plan
+
+        let review_capable = reg_with_multiple.by_capability(&AgentCapability::Review);
+        assert_eq!(review_capable.len(), 1); // Only full-featured-agent has review
+    }
+
+    #[test]
+    fn test_dynamic_registry_end_to_end() {
+        use std::collections::HashMap;
+
+        // Simulate a complete dynamic registry workflow:
+        // 1. Load custom agents from config
+        let mut config_agents = HashMap::new();
+        config_agents.insert(
+            "custom-agent".to_string(),
+            AgentConfig {
+                command: "custom".to_string(),
+                args: vec!["--custom-arg".to_string()],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![surge_core::config::AgentCapability::Code],
+            },
+        );
+        let config_reg = Registry::from_config(config_agents);
+
+        // 2. Get builtin registry
+        let builtin_reg = Registry::builtin();
+
+        // 3. Create empty remote registry (simulating no remote fetch)
+        let remote_reg = Registry { entries: vec![] };
+
+        // 4. Merge all three sources (config > builtin > remote)
+        let merged = Registry::merged_with_config(config_reg, builtin_reg, remote_reg);
+
+        // Verify merged registry contains both custom and builtin agents
+        assert!(merged.find("custom-agent").is_some());
+        assert!(merged.find("claude-acp").is_some());
+        assert!(merged.find("github-copilot-cli").is_some());
+        assert!(merged.find("codex-acp").is_some());
+        assert!(merged.find("gemini").is_some());
+
+        // Total: 1 custom + 4 builtin = 5 agents
+        assert_eq!(merged.len(), 5);
+
+        // Verify custom agent has correct metadata
+        let custom = merged.find("custom-agent").unwrap();
+        assert_eq!(custom.command, "custom");
+        assert_eq!(custom.default_args, vec!["--custom-arg"]);
+        assert_eq!(custom.capabilities.len(), 1);
+        assert!(custom.capabilities.contains(&AgentCapability::Code));
+
+        // Verify builtin agents retained their capabilities
+        let claude = merged.find("claude-acp").unwrap();
+        assert!(claude.capabilities.contains(&AgentCapability::Code));
+        assert!(claude.capabilities.contains(&AgentCapability::Plan));
+
+        // Test search across all sources
+        let code_agents = merged.search("code");
+        assert!(!code_agents.is_empty());
+
+        let custom_search = merged.search("custom");
+        assert_eq!(custom_search.len(), 1);
+        assert_eq!(custom_search[0].id, "custom-agent");
     }
 }
