@@ -379,6 +379,18 @@ pub struct ResilienceConfig {
     /// If true, auth failures (401) fail immediately without retry.
     #[serde(default = "default_auth_failure_immediate_fail")]
     pub auth_failure_immediate_fail: bool,
+    /// Interval for heartbeat checks when agent has active tasks (seconds).
+    #[serde(default = "default_heartbeat_interval_active_secs")]
+    pub heartbeat_interval_active_secs: u64,
+    /// Interval for heartbeat checks when agent is idle (seconds).
+    #[serde(default = "default_heartbeat_interval_idle_secs")]
+    pub heartbeat_interval_idle_secs: u64,
+    /// Maximum number of reconnection attempts before giving up.
+    #[serde(default = "default_reconnect_max_attempts")]
+    pub reconnect_max_attempts: u32,
+    /// Initial delay for reconnection attempts (milliseconds).
+    #[serde(default = "default_reconnect_initial_delay_ms")]
+    pub reconnect_initial_delay_ms: u64,
 }
 
 impl Default for ResilienceConfig {
@@ -392,6 +404,10 @@ impl Default for ResilienceConfig {
             retry_policy: RetryPolicy::default(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),
             auth_failure_immediate_fail: default_auth_failure_immediate_fail(),
+            heartbeat_interval_active_secs: default_heartbeat_interval_active_secs(),
+            heartbeat_interval_idle_secs: default_heartbeat_interval_idle_secs(),
+            reconnect_max_attempts: default_reconnect_max_attempts(),
+            reconnect_initial_delay_ms: default_reconnect_initial_delay_ms(),
         }
     }
 }
@@ -416,6 +432,18 @@ fn default_circuit_breaker_threshold() -> u32 {
 }
 fn default_auth_failure_immediate_fail() -> bool {
     true
+}
+fn default_heartbeat_interval_active_secs() -> u64 {
+    30
+}
+fn default_heartbeat_interval_idle_secs() -> u64 {
+    300
+}
+fn default_reconnect_max_attempts() -> u32 {
+    5
+}
+fn default_reconnect_initial_delay_ms() -> u64 {
+    1000
 }
 
 impl Default for SurgeConfig {
