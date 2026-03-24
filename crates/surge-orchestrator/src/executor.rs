@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, broadcast};
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 
+use crate::circuit_breaker::CircuitBreaker;
 use crate::context::SubtaskContext;
 
 /// Result of executing a single subtask.
@@ -51,28 +52,13 @@ impl Default for ExecutorConfig {
 /// Executes individual subtasks via an ACP agent.
 pub struct SubtaskExecutor {
     config: ExecutorConfig,
-    consecutive_failures: u32,
 }
 
 impl SubtaskExecutor {
     /// Create a new executor with the given configuration.
     #[must_use]
     pub fn new(config: ExecutorConfig) -> Self {
-        Self {
-            config,
-            consecutive_failures: 0,
-        }
-    }
-
-    /// Check whether the circuit breaker has tripped.
-    #[must_use]
-    pub fn is_circuit_broken(&self) -> bool {
-        self.consecutive_failures >= self.config.circuit_breaker_threshold
-    }
-
-    /// Reset the consecutive failure counter.
-    pub fn reset_failures(&mut self) {
-        self.consecutive_failures = 0;
+        Self { config }
     }
 
     /// Execute a subtask: build prompt, send to agent, commit on success.
@@ -103,11 +89,21 @@ impl SubtaskExecutor {
             subtask_id,
         });
 
+        // Initialize circuit breaker for this subtask
+        let mut circuit_breaker = CircuitBreaker::new(
+            task_id,
+            subtask_id,
+            self.config.circuit_breaker_threshold,
+            store.cloned(),
+            event_tx.clone(),
+        )
+        .await;
+
         // Check circuit breaker before attempting execution
-        if self.is_circuit_broken() {
+        if circuit_breaker.is_tripped() {
             warn!(
                 subtask_id = %subtask_id,
-                consecutive_failures = self.consecutive_failures,
+                consecutive_failures = circuit_breaker.consecutive_failures(),
                 "circuit breaker tripped, failing fast without retries"
             );
             let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
@@ -119,7 +115,7 @@ impl SubtaskExecutor {
                 subtask_id,
                 reason: format!(
                     "circuit breaker tripped after {} consecutive failures",
-                    self.consecutive_failures
+                    circuit_breaker.consecutive_failures()
                 ),
             };
         }
@@ -168,7 +164,9 @@ impl SubtaskExecutor {
                                 %oid,
                                 "subtask completed and committed"
                             );
-                            self.consecutive_failures = 0;
+
+                            // Reset circuit breaker on success
+                            circuit_breaker.reset().await;
 
                             // Save checkpoint to enable task resumption
                             if let Some(store_ref) = store {
@@ -273,7 +271,10 @@ impl SubtaskExecutor {
             total_elapsed_ms = retry_start.elapsed().as_millis() as u64,
             "all subtask retries exhausted"
         );
-        self.consecutive_failures += 1;
+
+        // Record failure in circuit breaker
+        circuit_breaker.record_failure(last_error.clone(), None).await;
+
         let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
             task_id,
             subtask_id,
@@ -299,40 +300,27 @@ mod tests {
     }
 
     #[test]
-    fn test_circuit_breaker() {
+    fn test_executor_creation() {
         let config = ExecutorConfig {
             max_retries: 1,
             circuit_breaker_threshold: 2,
         };
-        let mut executor = SubtaskExecutor::new(config);
+        let executor = SubtaskExecutor::new(config.clone());
 
-        assert!(!executor.is_circuit_broken());
-
-        executor.consecutive_failures = 1;
-        assert!(!executor.is_circuit_broken());
-
-        executor.consecutive_failures = 2;
-        assert!(executor.is_circuit_broken());
-
-        executor.reset_failures();
-        assert!(!executor.is_circuit_broken());
+        // Verify config is stored
+        assert_eq!(executor.config.max_retries, 1);
+        assert_eq!(executor.config.circuit_breaker_threshold, 2);
     }
 
     #[test]
-    fn test_executor_rate_limit_does_not_increment_failures() {
-        // Rate limit errors should not count towards consecutive failures
-        // since they're temporary service limits, not agent/task failures
+    fn test_executor_config_cloneable() {
         let config = ExecutorConfig {
             max_retries: 3,
             circuit_breaker_threshold: 2,
         };
-        let executor = SubtaskExecutor::new(config);
 
-        // Verify initial state
-        assert_eq!(executor.consecutive_failures, 0);
-        assert!(!executor.is_circuit_broken());
-
-        // The actual rate limit handling is tested in integration tests
-        // This unit test just verifies the configuration and initial state
+        let cloned = config.clone();
+        assert_eq!(cloned.max_retries, 3);
+        assert_eq!(cloned.circuit_breaker_threshold, 2);
     }
 }

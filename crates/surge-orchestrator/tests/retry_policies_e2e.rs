@@ -49,11 +49,8 @@ fn test_circuit_breaker_config_values() {
     );
 
     // Verify executor is created with config
-    let executor = SubtaskExecutor::new(custom_config);
-    assert!(
-        !executor.is_circuit_broken(),
-        "New executor should start with circuit closed"
-    );
+    let _executor = SubtaskExecutor::new(custom_config);
+    // Circuit breaker state is now per-subtask, checked inside execute()
 }
 
 /// Test 2: Verify auth failure configuration is respected
@@ -360,10 +357,9 @@ fn test_circuit_breaker_config_integration() {
         max_retries: 3,
         circuit_breaker_threshold: custom_config.circuit_breaker_threshold,
     };
-    let executor = SubtaskExecutor::new(executor_config);
+    let _executor = SubtaskExecutor::new(executor_config);
 
-    // Verify executor is created with circuit closed
-    assert!(!executor.is_circuit_broken(), "Circuit should start closed");
+    // Circuit breaker state is now per-subtask, checked inside execute()
 }
 
 /// Test 9: Verify default retry policy values

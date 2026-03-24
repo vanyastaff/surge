@@ -1,6 +1,7 @@
 //! Orchestrator — drives specs through the full pipeline.
 
 pub mod budget;
+pub mod circuit_breaker;
 pub mod conflict;
 pub mod context;
 pub mod executor;
