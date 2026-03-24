@@ -568,3 +568,247 @@ async fn test_qa_verdict_approved_after_iterations() {
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
+
+/// Test that NEEDS_FIX verdict triggers fix loop and eventual approval.
+#[tokio::test]
+async fn test_qa_verdict_needs_fix_loop() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send initial NEEDS_FIX verdict (iteration 1)
+    let needs_fix_event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::NeedsFix,
+        iteration: 1,
+        reasoning: Some("Implementation has issues that need to be addressed.".to_string()),
+        met_criteria: vec![
+            "Error handling implemented".to_string(),
+        ],
+        unmet_criteria: vec![
+            "Tests passing".to_string(),
+            "Documentation complete".to_string(),
+        ],
+        issues: Some("Unit tests are failing due to missing edge case handling. Documentation is incomplete.".to_string()),
+    };
+
+    tx.send(needs_fix_event).expect("Failed to send NEEDS_FIX event");
+
+    // 4. Receive and verify NEEDS_FIX event
+    let received_needs_fix = rx.recv().await.expect("Failed to receive NEEDS_FIX event");
+
+    match received_needs_fix {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::NeedsFix);
+            assert_eq!(iteration, 1, "Should be first QA iteration");
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("issues that need to be addressed"));
+            assert_eq!(met_criteria.len(), 1);
+            assert!(met_criteria.contains(&"Error handling implemented".to_string()));
+            assert_eq!(unmet_criteria.len(), 2);
+            assert!(unmet_criteria.contains(&"Tests passing".to_string()));
+            assert!(unmet_criteria.contains(&"Documentation complete".to_string()));
+            assert!(issues.is_some());
+            assert!(issues.unwrap().contains("Unit tests are failing"));
+        }
+        _ => panic!("Expected QaVerdictReceived event with NEEDS_FIX"),
+    }
+
+    // 5. Simulate fix being applied and send APPROVED verdict (iteration 2)
+    let approved_event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Approved,
+        iteration: 2,
+        reasoning: Some("All issues from iteration 1 have been resolved. Implementation is now complete.".to_string()),
+        met_criteria: vec![
+            "Error handling implemented".to_string(),
+            "Tests passing".to_string(),
+            "Documentation complete".to_string(),
+        ],
+        unmet_criteria: vec![],
+        issues: None,
+    };
+
+    tx.send(approved_event).expect("Failed to send APPROVED event");
+
+    // 6. Receive and verify APPROVED event
+    let received_approved = rx.recv().await.expect("Failed to receive APPROVED event");
+
+    match received_approved {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::Approved);
+            assert_eq!(iteration, 2, "Should be second QA iteration after fix");
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("issues from iteration 1 have been resolved"));
+            assert_eq!(met_criteria.len(), 3);
+            assert!(met_criteria.contains(&"Tests passing".to_string()));
+            assert!(met_criteria.contains(&"Documentation complete".to_string()));
+            assert_eq!(unmet_criteria.len(), 0);
+            assert!(issues.is_none());
+        }
+        _ => panic!("Expected QaVerdictReceived event with APPROVED"),
+    }
+}
+
+/// Test that NEEDS_FIX verdict contains detailed issue information.
+#[tokio::test]
+async fn test_qa_verdict_needs_fix_with_issues() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send NEEDS_FIX verdict with detailed issues
+    let event = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::NeedsFix,
+        iteration: 1,
+        reasoning: Some("Critical bugs found in implementation.".to_string()),
+        met_criteria: vec![],
+        unmet_criteria: vec![
+            "No panics or unwraps in production code".to_string(),
+            "All error paths tested".to_string(),
+            "Performance benchmarks pass".to_string(),
+        ],
+        issues: Some(
+            "1. Found unwrap() on line 45 that could panic.\n\
+             2. Error path in handle_request() is not tested.\n\
+             3. Performance regression: response time increased by 200ms."
+                .to_string()
+        ),
+    };
+
+    tx.send(event).expect("Failed to send event");
+
+    // 4. Receive and verify the event
+    let received_event = rx.recv().await.expect("Failed to receive event");
+
+    match received_event {
+        SurgeEvent::QaVerdictReceived {
+            task_id: recv_task_id,
+            verdict,
+            iteration,
+            reasoning,
+            met_criteria,
+            unmet_criteria,
+            issues,
+        } => {
+            assert_eq!(recv_task_id, task_id);
+            assert_eq!(verdict, QaVerdictKind::NeedsFix);
+            assert_eq!(iteration, 1);
+            assert!(reasoning.is_some());
+            assert!(reasoning.unwrap().contains("Critical bugs"));
+            assert_eq!(met_criteria.len(), 0);
+            assert_eq!(unmet_criteria.len(), 3);
+            assert!(unmet_criteria.contains(&"No panics or unwraps in production code".to_string()));
+            assert!(unmet_criteria.contains(&"All error paths tested".to_string()));
+            assert!(unmet_criteria.contains(&"Performance benchmarks pass".to_string()));
+            assert!(issues.is_some());
+            let issues_text = issues.unwrap();
+            assert!(issues_text.contains("unwrap() on line 45"));
+            assert!(issues_text.contains("Error path in handle_request()"));
+            assert!(issues_text.contains("Performance regression"));
+        }
+        _ => panic!("Expected QaVerdictReceived event"),
+    }
+}
+
+/// Test that multiple NEEDS_FIX iterations are tracked correctly.
+#[tokio::test]
+async fn test_qa_verdict_multiple_needs_fix_iterations() {
+    use surge_core::event::QaVerdictKind;
+
+    // 1. Create broadcast channel
+    let (tx, mut rx) = broadcast::channel(100);
+
+    // 2. Create IDs for the test
+    let task_id = TaskId::new();
+
+    // 3. Send first NEEDS_FIX (iteration 1)
+    let event1 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::NeedsFix,
+        iteration: 1,
+        reasoning: Some("Tests are failing.".to_string()),
+        met_criteria: vec!["Code compiles".to_string()],
+        unmet_criteria: vec!["Tests passing".to_string()],
+        issues: Some("3 unit tests failing".to_string()),
+    };
+    tx.send(event1).expect("Failed to send event 1");
+
+    let recv1 = rx.recv().await.expect("Failed to receive event 1");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv1 {
+        assert_eq!(iteration, 1);
+        assert_eq!(verdict, QaVerdictKind::NeedsFix);
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+
+    // 4. Send second NEEDS_FIX (iteration 2) - still issues after first fix
+    let event2 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::NeedsFix,
+        iteration: 2,
+        reasoning: Some("Some tests still failing.".to_string()),
+        met_criteria: vec!["Code compiles".to_string(), "2 tests fixed".to_string()],
+        unmet_criteria: vec!["All tests passing".to_string()],
+        issues: Some("1 unit test still failing".to_string()),
+    };
+    tx.send(event2).expect("Failed to send event 2");
+
+    let recv2 = rx.recv().await.expect("Failed to receive event 2");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv2 {
+        assert_eq!(iteration, 2, "Should track second iteration");
+        assert_eq!(verdict, QaVerdictKind::NeedsFix);
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+
+    // 5. Send final APPROVED (iteration 3) - all fixed
+    let event3 = SurgeEvent::QaVerdictReceived {
+        task_id,
+        verdict: QaVerdictKind::Approved,
+        iteration: 3,
+        reasoning: Some("All tests now passing.".to_string()),
+        met_criteria: vec![
+            "Code compiles".to_string(),
+            "All tests passing".to_string(),
+        ],
+        unmet_criteria: vec![],
+        issues: None,
+    };
+    tx.send(event3).expect("Failed to send event 3");
+
+    let recv3 = rx.recv().await.expect("Failed to receive event 3");
+    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv3 {
+        assert_eq!(iteration, 3, "Should track third iteration before approval");
+        assert_eq!(verdict, QaVerdictKind::Approved);
+    } else {
+        panic!("Expected QaVerdictReceived");
+    }
+}
