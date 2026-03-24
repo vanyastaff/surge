@@ -1,5 +1,7 @@
 # ⚡ Surge
 
+[![CI](https://github.com/vanyastaff/surge/workflows/CI/badge.svg)](https://github.com/vanyastaff/surge/actions)
+
 **Any Agent. One Protocol. Pure Rust.**
 
 Surge is an agent-agnostic autonomous coding orchestrator built entirely in Rust. It uses the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) to connect to any compatible AI coding agent — Claude Code, GitHub Copilot, Zed Agent, or any future ACP agent — through a single unified interface.
@@ -16,6 +18,17 @@ Current autonomous coding tools (Aperant, Cursor Background Agents) are locked t
 ## Status
 
 🚧 **Early development** — Not ready for use yet.
+
+## Testing & CI
+
+Surge uses GitHub Actions to ensure cross-platform reliability:
+
+- **Tests** run on Windows, macOS, and Linux for every push and pull request
+- **Linting** via `cargo clippy` on all platforms
+- **Formatting** checks via `cargo fmt`
+- **Release builds** for x86_64-pc-windows-msvc, x86_64-apple-darwin, aarch64-apple-darwin, and x86_64-unknown-linux-gnu
+
+This prevents platform-specific regressions and ensures Surge works reliably across all major operating systems. Unlike tools like Aperant that require hundreds of Windows-specific fixes per release, Surge's pure Rust implementation and comprehensive CI testing catch issues early.
 
 ## Architecture
 
