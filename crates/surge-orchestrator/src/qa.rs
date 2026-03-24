@@ -159,7 +159,7 @@ impl QaReviewer {
                 }
             }
 
-            let verdict = parse_qa_text(&response_text);
+            let verdict = parse_qa_response(&response_text);
 
             match &verdict {
                 QaVerdict::Approved => {
@@ -240,18 +240,23 @@ impl QaReviewer {
     }
 }
 
-/// Parse the agent's response as structured JSON into a QA verdict.
+/// Parse the agent's QA response using a fallback strategy.
 ///
-/// Attempts to extract and parse a JSON object from the response text.
+/// First attempts to extract and parse a JSON object from the response text.
 /// The JSON can be wrapped in markdown code blocks (```json ... ```).
 /// On parse failure, falls back to text-based parsing via `parse_qa_text`.
+///
+/// This is the unified entry point for parsing QA responses.
 #[must_use]
-pub fn parse_qa_json(text: &str) -> QaVerdict {
+pub fn parse_qa_response(text: &str) -> QaVerdict {
     // Try to extract JSON from potential markdown code blocks
     let json_text = extract_json_from_text(text);
 
     match serde_json::from_str::<QaResponse>(json_text) {
-        Ok(response) => response.into_verdict(),
+        Ok(response) => {
+            info!("parsed QA response using JSON strategy");
+            response.into_verdict()
+        }
         Err(e) => {
             info!(
                 error = %e,
@@ -625,31 +630,31 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_qa_json_approved() {
+    fn test_parse_qa_response_approved() {
         let json = r#"{"verdict": "approved"}"#;
-        let verdict = parse_qa_json(json);
+        let verdict = parse_qa_response(json);
         assert!(matches!(verdict, QaVerdict::Approved));
     }
 
     #[test]
-    fn test_parse_qa_json_approved_in_markdown() {
+    fn test_parse_qa_response_approved_in_markdown() {
         let text = r#"Here's the QA result:
 ```json
 {"verdict": "approved"}
 ```
 All criteria met!"#;
-        let verdict = parse_qa_json(text);
+        let verdict = parse_qa_response(text);
         assert!(matches!(verdict, QaVerdict::Approved));
     }
 
     #[test]
-    fn test_parse_qa_json_partial() {
+    fn test_parse_qa_response_partial() {
         let json = r#"{
             "verdict": "partial",
             "met": ["error handling", "documentation"],
             "unmet": ["tests", "performance"]
         }"#;
-        let verdict = parse_qa_json(json);
+        let verdict = parse_qa_response(json);
 
         match verdict {
             QaVerdict::Partial { met, unmet } => {
@@ -663,12 +668,12 @@ All criteria met!"#;
     }
 
     #[test]
-    fn test_parse_qa_json_needs_fix() {
+    fn test_parse_qa_response_needs_fix() {
         let json = r#"{
             "verdict": "needs_fix",
             "issues": "Missing error handling in main.rs"
         }"#;
-        let verdict = parse_qa_json(json);
+        let verdict = parse_qa_response(json);
 
         match verdict {
             QaVerdict::NeedsFix { issues } => {
@@ -679,9 +684,9 @@ All criteria met!"#;
     }
 
     #[test]
-    fn test_parse_qa_json_needs_fix_no_issues() {
+    fn test_parse_qa_response_needs_fix_no_issues() {
         let json = r#"{"verdict": "needs_fix"}"#;
-        let verdict = parse_qa_json(json);
+        let verdict = parse_qa_response(json);
 
         match verdict {
             QaVerdict::NeedsFix { issues } => {
@@ -692,7 +697,7 @@ All criteria met!"#;
     }
 
     #[test]
-    fn test_parse_qa_json_with_code_block() {
+    fn test_parse_qa_response_with_code_block() {
         let text = r#"
 ```json
 {
@@ -702,12 +707,12 @@ All criteria met!"#;
 }
 ```
 "#;
-        let verdict = parse_qa_json(text);
+        let verdict = parse_qa_response(text);
         assert!(matches!(verdict, QaVerdict::Partial { .. }));
     }
 
     #[test]
-    fn test_parse_qa_json_with_generic_code_block() {
+    fn test_parse_qa_response_with_generic_code_block() {
         let text = r#"
 ```
 {
@@ -715,22 +720,22 @@ All criteria met!"#;
 }
 ```
 "#;
-        let verdict = parse_qa_json(text);
+        let verdict = parse_qa_response(text);
         assert!(matches!(verdict, QaVerdict::Approved));
     }
 
     #[test]
-    fn test_parse_qa_json_fallback_to_text() {
+    fn test_parse_qa_response_fallback_to_text() {
         // Invalid JSON should fall back to text parsing
         let text = "APPROVED";
-        let verdict = parse_qa_json(text);
+        let verdict = parse_qa_response(text);
         assert!(matches!(verdict, QaVerdict::Approved));
     }
 
     #[test]
-    fn test_parse_qa_json_fallback_to_text_needs_fix() {
+    fn test_parse_qa_response_fallback_to_text_needs_fix() {
         let text = "NEEDS_FIX: fix the tests";
-        let verdict = parse_qa_json(text);
+        let verdict = parse_qa_response(text);
         assert!(matches!(verdict, QaVerdict::NeedsFix { .. }));
     }
 
