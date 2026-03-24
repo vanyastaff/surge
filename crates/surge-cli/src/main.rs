@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Registry { command } => {
-            commands::registry::run(command)?;
+            commands::registry::run(command).await?;
         }
 
         Commands::Insights { command } => {
