@@ -774,4 +774,105 @@ All criteria met!"#;
         let text = "```\nplain text\n```";
         assert_eq!(extract_json_from_text(text), "```\nplain text\n```");
     }
+
+    #[test]
+    fn test_partial_verdict() {
+        // Test PARTIAL verdict parsing from text format
+        let text = "PARTIAL\nMET: error handling implemented\nMET: documentation added\nUNMET: tests missing\nUNMET: performance optimization needed";
+        let verdict = parse_qa_response(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert_eq!(unmet.len(), 2);
+                assert!(met.contains(&"error handling implemented".to_string()));
+                assert!(met.contains(&"documentation added".to_string()));
+                assert!(unmet.contains(&"tests missing".to_string()));
+                assert!(unmet.contains(&"performance optimization needed".to_string()));
+            }
+            _ => panic!("expected Partial verdict, got {:?}", verdict),
+        }
+    }
+
+    #[test]
+    fn test_partial_verdict_json() {
+        // Test PARTIAL verdict parsing from JSON format
+        let json = r#"{
+            "verdict": "partial",
+            "met": ["error handling", "documentation"],
+            "unmet": ["tests", "performance"]
+        }"#;
+        let verdict = parse_qa_response(json);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert_eq!(unmet.len(), 2);
+                assert!(met.contains(&"error handling".to_string()));
+                assert!(met.contains(&"documentation".to_string()));
+                assert!(unmet.contains(&"tests".to_string()));
+                assert!(unmet.contains(&"performance".to_string()));
+            }
+            _ => panic!("expected Partial verdict from JSON, got {:?}", verdict),
+        }
+    }
+
+    #[test]
+    fn test_partial_verdict_with_markdown() {
+        // Test PARTIAL verdict in markdown code block
+        let text = r#"Here's my QA review:
+
+```json
+{
+    "verdict": "partial",
+    "met": ["criterion A", "criterion B"],
+    "unmet": ["criterion C"]
+}
+```
+
+Some criteria are met, others need work."#;
+        let verdict = parse_qa_response(text);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert_eq!(unmet.len(), 1);
+                assert!(met.contains(&"criterion A".to_string()));
+                assert!(unmet.contains(&"criterion C".to_string()));
+            }
+            _ => panic!("expected Partial verdict from markdown, got {:?}", verdict),
+        }
+    }
+
+    #[test]
+    fn test_partial_verdict_focuses_on_unmet_criteria() {
+        // Verify that PARTIAL verdict correctly separates met from unmet criteria
+        let json = r#"{
+            "verdict": "partial",
+            "met": ["logging added", "error handling improved"],
+            "unmet": ["unit tests missing", "integration tests needed", "documentation incomplete"]
+        }"#;
+        let verdict = parse_qa_response(json);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                // Verify met criteria are captured
+                assert_eq!(met.len(), 2);
+                assert!(met.contains(&"logging added".to_string()));
+                assert!(met.contains(&"error handling improved".to_string()));
+
+                // Verify unmet criteria are captured - these will be the focus of the fix
+                assert_eq!(unmet.len(), 3);
+                assert!(unmet.contains(&"unit tests missing".to_string()));
+                assert!(unmet.contains(&"integration tests needed".to_string()));
+                assert!(unmet.contains(&"documentation incomplete".to_string()));
+
+                // Verify met and unmet don't overlap
+                for criterion in &met {
+                    assert!(!unmet.contains(criterion), "met criterion should not be in unmet list");
+                }
+            }
+            _ => panic!("expected Partial verdict, got {:?}", verdict),
+        }
+    }
 }
