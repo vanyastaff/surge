@@ -8,8 +8,15 @@ pub enum TaskState {
     Planning,
     Planned { subtask_count: usize },
     Executing { completed: usize, total: usize },
-    QaReview,
-    QaFix { iteration: u32 },
+    QaReview {
+        verdict: Option<String>,
+        reasoning: Option<String>,
+    },
+    QaFix {
+        iteration: u32,
+        verdict: Option<String>,
+        reasoning: Option<String>,
+    },
     HumanReview,
     Merging,
     Completed,
@@ -27,7 +34,7 @@ impl TaskState {
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Self::Planning | Self::Executing { .. } | Self::QaReview | Self::QaFix { .. } | Self::Merging
+            Self::Planning | Self::Executing { .. } | Self::QaReview { .. } | Self::QaFix { .. } | Self::Merging
         )
     }
 
@@ -57,8 +64,8 @@ mod tests {
     fn test_active_states() {
         assert!(TaskState::Planning.is_active());
         assert!(TaskState::Executing { completed: 1, total: 3 }.is_active());
-        assert!(TaskState::QaReview.is_active());
-        assert!(TaskState::QaFix { iteration: 2 }.is_active());
+        assert!(TaskState::QaReview { verdict: None, reasoning: None }.is_active());
+        assert!(TaskState::QaFix { iteration: 2, verdict: None, reasoning: None }.is_active());
         assert!(TaskState::Merging.is_active());
 
         assert!(!TaskState::Draft.is_active());
@@ -87,8 +94,8 @@ mod tests {
             TaskState::Planning,
             TaskState::Planned { subtask_count: 1 },
             TaskState::Executing { completed: 0, total: 1 },
-            TaskState::QaReview,
-            TaskState::QaFix { iteration: 1 },
+            TaskState::QaReview { verdict: None, reasoning: None },
+            TaskState::QaFix { iteration: 1, verdict: None, reasoning: None },
             TaskState::HumanReview,
             TaskState::Merging,
             TaskState::Completed,
@@ -100,6 +107,56 @@ mod tests {
             assert!(true_count <= 1, "{state} matched multiple categories");
         }
     }
+
+    #[test]
+    fn test_qa_review_with_metadata() {
+        let state = TaskState::QaReview {
+            verdict: Some("NEEDS_FIX".into()),
+            reasoning: Some("Missing error handling".into()),
+        };
+        assert!(state.is_active());
+        assert!(!state.is_terminal());
+        assert!(!state.is_waiting());
+
+        let display = format!("{state}");
+        assert!(display.contains("QA Review"));
+        assert!(display.contains("NEEDS_FIX"));
+        assert!(display.contains("Missing error handling"));
+    }
+
+    #[test]
+    fn test_qa_fix_with_metadata() {
+        let state = TaskState::QaFix {
+            iteration: 2,
+            verdict: Some("PARTIAL".into()),
+            reasoning: Some("2 of 5 tests passing".into()),
+        };
+        assert!(state.is_active());
+        assert!(!state.is_terminal());
+        assert!(!state.is_waiting());
+
+        let display = format!("{state}");
+        assert!(display.contains("QA Fix"));
+        assert!(display.contains("iteration 2"));
+        assert!(display.contains("PARTIAL"));
+        assert!(display.contains("2 of 5 tests passing"));
+    }
+
+    #[test]
+    fn test_qa_states_without_metadata() {
+        let review = TaskState::QaReview {
+            verdict: None,
+            reasoning: None,
+        };
+        assert_eq!(format!("{review}"), "QA Review");
+
+        let fix = TaskState::QaFix {
+            iteration: 1,
+            verdict: None,
+            reasoning: None,
+        };
+        assert_eq!(format!("{fix}"), "QA Fix (iteration 1)");
+    }
 }
 
 impl std::fmt::Display for TaskState {
@@ -109,8 +166,26 @@ impl std::fmt::Display for TaskState {
             Self::Planning => write!(f, "Planning"),
             Self::Planned { subtask_count } => write!(f, "Planned ({subtask_count} subtasks)"),
             Self::Executing { completed, total } => write!(f, "Executing ({completed}/{total})"),
-            Self::QaReview => write!(f, "QA Review"),
-            Self::QaFix { iteration } => write!(f, "QA Fix (iteration {iteration})"),
+            Self::QaReview { verdict, reasoning } => {
+                write!(f, "QA Review")?;
+                if let Some(v) = verdict {
+                    write!(f, " - {v}")?;
+                }
+                if let Some(r) = reasoning {
+                    write!(f, ": {r}")?;
+                }
+                Ok(())
+            }
+            Self::QaFix { iteration, verdict, reasoning } => {
+                write!(f, "QA Fix (iteration {iteration})")?;
+                if let Some(v) = verdict {
+                    write!(f, " - {v}")?;
+                }
+                if let Some(r) = reasoning {
+                    write!(f, ": {r}")?;
+                }
+                Ok(())
+            }
             Self::HumanReview => write!(f, "Human Review"),
             Self::Merging => write!(f, "Merging"),
             Self::Completed => write!(f, "Completed"),
