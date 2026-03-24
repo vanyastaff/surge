@@ -641,6 +641,30 @@ async fn prompt(
                         });
                     }
 
+                    // Check for rate limit errors (429) and return immediately with retry-after info
+                    if is_rate_limit(&msg) {
+                        let retry_after_secs = parse_retry_after(&msg);
+                        let next_retry_time = std::time::SystemTime::now()
+                            .checked_add(Duration::from_secs(retry_after_secs));
+
+                        health.lock().await.record_failure(agent_name, &msg);
+
+                        warn!(
+                            agent = agent_name.as_str(),
+                            session_id = session.session_id.as_str(),
+                            retry_after_secs,
+                            attempt,
+                            "rate limit detected"
+                        );
+
+                        return Err(SurgeError::RateLimit {
+                            agent: agent_name.clone(),
+                            retry_after_secs,
+                            attempt_count: attempt,
+                            next_retry_time,
+                        });
+                    }
+
                     health.lock().await.record_failure(agent_name, &msg);
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
@@ -717,6 +741,73 @@ fn is_auth_failure(error_msg: &str) -> bool {
         || msg_lower.contains("invalid api key")
         || msg_lower.contains("invalid_api_key")
         || msg_lower.contains("authentication_error")
+}
+
+/// Check if an error message indicates a rate limit error (429).
+///
+/// Common patterns:
+/// - HTTP 429 status code
+/// - "rate limit exceeded" or "too many requests"
+/// - "rate_limit_exceeded"
+fn is_rate_limit(error_msg: &str) -> bool {
+    let msg_lower = error_msg.to_lowercase();
+    msg_lower.contains("429")
+        || msg_lower.contains("rate limit")
+        || msg_lower.contains("rate_limit")
+        || msg_lower.contains("too many requests")
+        || msg_lower.contains("quota exceeded")
+        || msg_lower.contains("rate_limit_exceeded")
+}
+
+/// Parse retry-after duration from an error message.
+///
+/// Looks for patterns like:
+/// - "retry after 30 seconds"
+/// - "retry-after: 30"
+/// - "wait 30s"
+///
+/// Returns the number of seconds to wait, or a default of 60 seconds if not found.
+fn parse_retry_after(error_msg: &str) -> u64 {
+    use std::str::FromStr;
+
+    let msg_lower = error_msg.to_lowercase();
+
+    // Strategy: Look for "retry" or "after" keywords and extract the next number
+    // First try to find "retry-after" or "retry after" patterns
+    let patterns = ["retry-after", "retry after", "wait"];
+
+    for pattern in &patterns {
+        if let Some(idx) = msg_lower.find(pattern) {
+            let after_pattern = &msg_lower[idx + pattern.len()..];
+            // Look for the first number in the text after the pattern
+            for word in after_pattern.split_whitespace().take(5) {
+                let cleaned = word
+                    .trim_matches(|c: char| !c.is_ascii_digit())
+                    .trim_end_matches(|c: char| !c.is_ascii_digit());
+                if let Ok(secs) = u64::from_str(cleaned)
+                    && secs > 0 && secs < 3600
+                {
+                    return secs;
+                }
+            }
+        }
+    }
+
+    // Fallback: look for any reasonable number in a message containing retry keywords
+    if msg_lower.contains("retry") || msg_lower.contains("wait") {
+        for word in msg_lower.split_whitespace() {
+            let cleaned = word.trim_end_matches(|c: char| !c.is_ascii_digit());
+            if let Ok(secs) = u64::from_str(cleaned) {
+                // Skip HTTP status codes (typically 3 digits in the 400-500 range)
+                if secs > 0 && secs < 3600 && !(100..600).contains(&secs) {
+                    return secs;
+                }
+            }
+        }
+    }
+
+    // Default retry-after: 60 seconds
+    60
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
@@ -1070,5 +1161,85 @@ mod tests {
         assert!(is_auth_failure("uNaUtHoRiZeD"));
         assert!(is_auth_failure("AUTHENTICATION FAILED"));
         assert!(is_auth_failure("InVaLiD aPi KeY"));
+    }
+
+    // ── Rate limit detection tests ────────────────────────────────────
+
+    #[test]
+    fn test_is_rate_limit_http_429() {
+        assert!(is_rate_limit("HTTP 429 Too Many Requests"));
+        assert!(is_rate_limit("Error: status code 429"));
+        assert!(is_rate_limit("Request failed with 429"));
+    }
+
+    #[test]
+    fn test_is_rate_limit_rate_limit_text() {
+        assert!(is_rate_limit("Rate limit exceeded"));
+        assert!(is_rate_limit("rate_limit_exceeded"));
+        assert!(is_rate_limit("RATE_LIMIT error"));
+        assert!(is_rate_limit("Too many requests"));
+    }
+
+    #[test]
+    fn test_is_rate_limit_quota() {
+        assert!(is_rate_limit("Quota exceeded for agent"));
+        assert!(is_rate_limit("QUOTA EXCEEDED"));
+    }
+
+    #[test]
+    fn test_is_rate_limit_negative_cases() {
+        // These should NOT be detected as rate limits
+        assert!(!is_rate_limit("Connection timeout"));
+        assert!(!is_rate_limit("401 Unauthorized"));
+        assert!(!is_rate_limit("500 Internal Server Error"));
+        assert!(!is_rate_limit("Network error"));
+        assert!(!is_rate_limit("404 Not Found"));
+    }
+
+    #[test]
+    fn test_is_rate_limit_case_insensitive() {
+        assert!(is_rate_limit("rAtE LiMiT"));
+        assert!(is_rate_limit("TOO MANY REQUESTS"));
+        assert!(is_rate_limit("QuOtA eXcEeDeD"));
+    }
+
+    #[test]
+    fn test_parse_retry_after_seconds() {
+        assert_eq!(parse_retry_after("Rate limit: retry after 30 seconds"), 30);
+        assert_eq!(parse_retry_after("Retry-After: 45"), 45);
+        assert_eq!(parse_retry_after("Please retry after 120 seconds"), 120);
+    }
+
+    #[test]
+    fn test_parse_retry_after_with_suffix() {
+        assert_eq!(parse_retry_after("wait 30s before retry"), 30);
+        assert_eq!(parse_retry_after("retry after 60s"), 60);
+    }
+
+    #[test]
+    fn test_parse_retry_after_default() {
+        // Should return default 60 seconds when no valid number found
+        assert_eq!(parse_retry_after("Rate limit exceeded"), 60);
+        assert_eq!(parse_retry_after("Too many requests"), 60);
+        assert_eq!(parse_retry_after("No number here"), 60);
+    }
+
+    #[test]
+    fn test_parse_retry_after_out_of_range() {
+        // Should return default for unreasonable values (< 1 or >= 3600)
+        assert_eq!(parse_retry_after("retry after 0 seconds"), 60);
+        assert_eq!(parse_retry_after("retry after 5000 seconds"), 60);
+    }
+
+    #[test]
+    fn test_parse_retry_after_mixed_content() {
+        assert_eq!(
+            parse_retry_after("Error 429: Rate limit hit. Retry after 90 seconds please"),
+            90
+        );
+        assert_eq!(
+            parse_retry_after("HTTP/1.1 429 Too Many Requests\nRetry-After: 15\n"),
+            15
+        );
     }
 }
