@@ -1,0 +1,51 @@
+# Dependency spec for E2E testing
+# Multiple subtasks with dependency graph
+
+[spec]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V0WZ"
+title = "Feature with dependencies"
+description = "A spec with multiple subtasks and dependencies to test dependency graph execution"
+complexity = "standard"
+
+[[spec.subtasks]]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V100"
+title = "Create base module"
+description = "Create the base module with core types"
+complexity = "simple"
+files = ["src/base.rs"]
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Module compiles"
+met = false
+
+[[spec.subtasks]]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V101"
+title = "Create utils module"
+description = "Create utilities that depend on base module"
+complexity = "simple"
+files = ["src/utils.rs"]
+depends_on = ["01J9Q1K2M3N4P5Q6R7S8T9V100"]
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Utils module compiles"
+met = false
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Utils correctly import from base"
+met = false
+
+[[spec.subtasks]]
+id = "01J9Q1K2M3N4P5Q6R7S8T9V102"
+title = "Create integration"
+description = "Create integration module that uses both base and utils"
+complexity = "simple"
+files = ["src/integration.rs"]
+depends_on = ["01J9Q1K2M3N4P5Q6R7S8T9V100", "01J9Q1K2M3N4P5Q6R7S8T9V101"]
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Integration module compiles"
+met = false
+
+[[spec.subtasks.acceptance_criteria]]
+description = "All dependencies resolved correctly"
+met = false
