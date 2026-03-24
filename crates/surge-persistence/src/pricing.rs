@@ -305,7 +305,9 @@ pub fn get_model_pricing(model_id: &str) -> PricingModel {
 
 // ── Cost Calculation Tests ──────────────────────────────────────────
 // Comprehensive tests for the cost calculator functionality.
-// This is a separate module to allow filtering with: cargo test pricing::cost_calculation_tests
+/// Cost calculation tests for pricing models.
+///
+/// This is a separate module to allow filtering with: `cargo test pricing::cost_calculation_tests`
 #[cfg(test)]
 pub mod cost_calculation_tests {
     use super::*;

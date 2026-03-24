@@ -710,8 +710,10 @@ max_parallel = 2
         assert!(valid_config.validate().is_ok());
 
         // Test 2: default_agent not in agents map fails
-        let mut invalid_config = SurgeConfig::default();
-        invalid_config.default_agent = "nonexistent".to_string();
+        let mut invalid_config = SurgeConfig {
+            default_agent: "nonexistent".to_string(),
+            ..Default::default()
+        };
         invalid_config.agents.insert(
             "other-agent".to_string(),
             AgentConfig {
@@ -728,8 +730,10 @@ max_parallel = 2
         assert!(err_msg.contains("Available agents: other-agent"));
 
         // Test 3: Empty command fails
-        let mut config_empty_cmd = SurgeConfig::default();
-        config_empty_cmd.default_agent = "bad-agent".to_string();
+        let mut config_empty_cmd = SurgeConfig {
+            default_agent: "bad-agent".to_string(),
+            ..Default::default()
+        };
         config_empty_cmd.agents.insert(
             "bad-agent".to_string(),
             AgentConfig {
@@ -745,8 +749,10 @@ max_parallel = 2
         assert!(err_msg.contains("Agent 'bad-agent' has empty command"));
 
         // Test 4: Empty TCP host fails
-        let mut config_empty_host = SurgeConfig::default();
-        config_empty_host.default_agent = "tcp-agent".to_string();
+        let mut config_empty_host = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
         config_empty_host.agents.insert(
             "tcp-agent".to_string(),
             AgentConfig {
@@ -765,8 +771,10 @@ max_parallel = 2
         assert!(err_msg.contains("Agent 'tcp-agent' TCP transport has empty host"));
 
         // Test 5: Invalid TCP port 0 fails
-        let mut config_invalid_port = SurgeConfig::default();
-        config_invalid_port.default_agent = "tcp-agent".to_string();
+        let mut config_invalid_port = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
         config_invalid_port.agents.insert(
             "tcp-agent".to_string(),
             AgentConfig {
@@ -801,8 +809,10 @@ max_parallel = 2
         assert!(err_msg.contains("pipeline.max_parallel must be greater than 0"));
 
         // Test 8: Valid TCP configuration passes
-        let mut config_valid_tcp = SurgeConfig::default();
-        config_valid_tcp.default_agent = "tcp-agent".to_string();
+        let mut config_valid_tcp = SurgeConfig {
+            default_agent: "tcp-agent".to_string(),
+            ..Default::default()
+        };
         config_valid_tcp.agents.insert(
             "tcp-agent".to_string(),
             AgentConfig {
@@ -1195,9 +1205,14 @@ args = ["copilot", "suggest", "--verbose"]
     #[test]
     fn test_config_clone() {
         // Test that SurgeConfig can be cloned
-        let mut config = SurgeConfig::default();
-        config.default_agent = "custom".to_string();
-        config.pipeline.max_qa_iterations = 42;
+        let config = SurgeConfig {
+            default_agent: "custom".to_string(),
+            pipeline: crate::config::PipelineConfig {
+                max_qa_iterations: 42,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         let cloned = config.clone();
         assert_eq!(cloned.default_agent, "custom");
@@ -1337,17 +1352,17 @@ editor = "rustrover"
 
     #[test]
     fn test_websocket_transport_roundtrip() {
-        let toml_str = r#"
+        let _toml_str = r#"
 command = "agent"
 [transport]
 url = "ws://localhost:8080"
 "#;
         // Deserialize using the "ws" tag
-        let toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
+        let _toml_str2 = r#"transport = {ws = {url = "ws://localhost:8080"}}"#;
         // Use inline table format that matches serde rename
-        let agent: AgentConfig = toml::from_str(&format!(
-            "command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n"
-        ))
+        let agent: AgentConfig = toml::from_str(
+            "command = \"agent\"\n[transport.ws]\nurl = \"ws://localhost:8080\"\n",
+        )
         .unwrap();
         assert!(matches!(agent.transport, Transport::WebSocket { .. }));
 

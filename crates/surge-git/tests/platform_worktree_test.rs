@@ -214,7 +214,7 @@ fn test_windows_path_handling() {
     // On Windows, paths should handle backslashes
     let path_str = info.path.to_str().unwrap();
     // Path should be valid and contain drive letter if absolute
-    assert!(path_str.len() > 0);
+    assert!(!path_str.is_empty());
 
     // Should be able to create files with standard path operations
     let test_file = info.path.join("windows_test.txt");

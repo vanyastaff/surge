@@ -46,6 +46,24 @@ impl TaskState {
     }
 }
 
+impl std::fmt::Display for TaskState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Draft => write!(f, "Draft"),
+            Self::Planning => write!(f, "Planning"),
+            Self::Planned { subtask_count } => write!(f, "Planned ({subtask_count} subtasks)"),
+            Self::Executing { completed, total } => write!(f, "Executing ({completed}/{total})"),
+            Self::QaReview => write!(f, "QA Review"),
+            Self::QaFix { iteration } => write!(f, "QA Fix (iteration {iteration})"),
+            Self::HumanReview => write!(f, "Human Review"),
+            Self::Merging => write!(f, "Merging"),
+            Self::Completed => write!(f, "Completed"),
+            Self::Failed { reason } => write!(f, "Failed: {reason}"),
+            Self::Cancelled => write!(f, "Cancelled"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,24 +144,6 @@ mod tests {
             let flags = [state.is_terminal(), state.is_active(), state.is_waiting()];
             let true_count = flags.iter().filter(|&&b| b).count();
             assert!(true_count <= 1, "{state} matched multiple categories");
-        }
-    }
-}
-
-impl std::fmt::Display for TaskState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Draft => write!(f, "Draft"),
-            Self::Planning => write!(f, "Planning"),
-            Self::Planned { subtask_count } => write!(f, "Planned ({subtask_count} subtasks)"),
-            Self::Executing { completed, total } => write!(f, "Executing ({completed}/{total})"),
-            Self::QaReview => write!(f, "QA Review"),
-            Self::QaFix { iteration } => write!(f, "QA Fix (iteration {iteration})"),
-            Self::HumanReview => write!(f, "Human Review"),
-            Self::Merging => write!(f, "Merging"),
-            Self::Completed => write!(f, "Completed"),
-            Self::Failed { reason } => write!(f, "Failed: {reason}"),
-            Self::Cancelled => write!(f, "Cancelled"),
         }
     }
 }
