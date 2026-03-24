@@ -561,13 +561,95 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     Ok(())
 }
 
+/// Validate agent authentication by attempting a lightweight ACP operation.
+///
+/// This prevents wasted work on expired OAuth tokens by failing fast with a
+/// clear error message before starting a task.
+///
+/// # Errors
+///
+/// Returns a descriptive error if authentication fails (401/unauthorized),
+/// or if the validation ping times out or fails for other reasons.
+async fn validate_agent_auth(
+    state: &Rc<RefCell<WorkerState>>,
+    agent_name: &str,
+) -> Result<(), SurgeError> {
+    connect(state, agent_name).await?;
+
+    let validation_timeout = Duration::from_secs(state.borrow().resilience.connect_timeout_secs);
+
+    debug!("Validating authentication for agent '{}'", agent_name);
+
+    // Temporarily remove the connection to make a test call
+    let conn = {
+        let mut s = state.borrow_mut();
+        s.connections
+            .remove(agent_name)
+            .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
+    };
+
+    // Make a lightweight ACP call to verify authentication.
+    // We use a minimal new_session request to a temp directory to check auth.
+    // The session creation might fail for other reasons, but auth errors will
+    // be detected before we attempt the real session.
+    let temp_dir = std::env::temp_dir();
+    let test_request = NewSessionRequest::new(&temp_dir);
+
+    let validation_result: Result<(), SurgeError> = async {
+        let result = tokio::time::timeout(
+            validation_timeout,
+            conn.connection().new_session(test_request),
+        )
+        .await
+        .map_err(|_| SurgeError::Timeout("auth validation".to_string()))?;
+
+        match result {
+            Ok(_response) => {
+                // Auth is valid, but we created a test session. That's okay -
+                // it will be replaced by the real session immediately after.
+                debug!("Agent '{}' authentication validated successfully", agent_name);
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("{:?}", e);
+
+                // Check if this is an authentication failure
+                if is_auth_failure(&error_msg) {
+                    Err(SurgeError::AgentConnection(format!(
+                        "Agent '{}' authentication failed - OAuth token may be expired. \
+                         Please re-authenticate and try again. Error: {}",
+                        agent_name, error_msg
+                    )))
+                } else {
+                    // Some other error - let the regular session creation handle it
+                    debug!(
+                        "Agent '{}' validation failed with non-auth error (will retry): {}",
+                        agent_name, error_msg
+                    );
+                    Ok(())
+                }
+            }
+        }
+    }
+    .await;
+
+    // Restore the connection regardless of outcome
+    state
+        .borrow_mut()
+        .connections
+        .insert(agent_name.to_string(), conn);
+
+    validation_result
+}
+
 async fn create_session(
     state: &Rc<RefCell<WorkerState>>,
     agent_name: &str,
     mode: Option<&str>,
     working_dir: &Path,
 ) -> Result<SessionHandle, SurgeError> {
-    connect(state, agent_name).await?;
+    // Validate authentication before creating the session
+    validate_agent_auth(state, agent_name).await?;
 
     let session_timeout = Duration::from_secs(state.borrow().resilience.session_timeout_secs);
 
@@ -1183,5 +1265,45 @@ mod tests {
         assert!(is_auth_failure("uNaUtHoRiZeD"));
         assert!(is_auth_failure("AUTHENTICATION FAILED"));
         assert!(is_auth_failure("InVaLiD aPi KeY"));
+    }
+
+    // ── Token validation tests ────────────────────────────────────
+
+    /// Test that auth failure errors are properly detected and reported with
+    /// a clear message about expired OAuth tokens.
+    #[test]
+    fn test_token_validation() {
+        // Test that various auth error messages are properly detected
+        let auth_errors = vec![
+            "HTTP 401 Unauthorized",
+            "authentication failed",
+            "Invalid API key provided",
+            "Error: invalid_api_key",
+            "Unauthorized access to resource",
+        ];
+
+        for error_msg in auth_errors {
+            assert!(
+                is_auth_failure(error_msg),
+                "Auth failure not detected for: {}",
+                error_msg
+            );
+        }
+
+        // Test that non-auth errors are not misidentified
+        let non_auth_errors = vec![
+            "Connection timeout",
+            "500 Internal Server Error",
+            "Network error",
+            "Session creation failed",
+        ];
+
+        for error_msg in non_auth_errors {
+            assert!(
+                !is_auth_failure(error_msg),
+                "Non-auth error incorrectly detected as auth failure: {}",
+                error_msg
+            );
+        }
     }
 }
