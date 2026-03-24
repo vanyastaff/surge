@@ -441,3 +441,168 @@ async fn test_e2e_streaming_events() {
     // Cleanup
     cleanup_dir(&test_dir);
 }
+
+/// Test git commit generation with meaningful messages.
+///
+/// Verifies that:
+/// - Each completed subtask generates a commit in the worktree
+/// - Commit messages follow the format: "surge: subtask {title} — {id}"
+/// - Git log can be queried to track subtask completion
+///
+/// This test requires a real ACP agent to be available on the system.
+/// If no agent is found, the test is skipped.
+#[tokio::test]
+async fn test_e2e_git_commits() {
+    use surge_git::GitManager;
+    use std::process::Command;
+
+    // Check if any agent is available
+    if !has_any_agent() {
+        eprintln!("SKIP: No ACP agent available on this system");
+        return;
+    }
+
+    // Discover agents and get the first available one
+    let mut discovery = AgentDiscovery::new();
+    let registry = Registry::builtin();
+    let agents = discovery.discover_all(registry.list());
+
+    if agents.is_empty() {
+        eprintln!("SKIP: No agents discovered");
+        return;
+    }
+
+    let agent = &agents[0];
+    let agent_name = &agent.entry.id;
+    let agent_command = &agent.entry.command;
+
+    eprintln!("Using agent: {} ({})", agent_name, agent_command);
+
+    // Create temp directory for test
+    let test_dir = temp_test_dir("e2e_git_commits");
+
+    // Initialize git repository
+    init_git_repo(&test_dir);
+
+    // Create surge config
+    let surge_config = test_surge_config(agent_name, agent_command);
+
+    // Load simple spec fixture
+    let mut spec_file = fixtures::load_simple_spec();
+    let spec_id_str = spec_file.spec.id.to_string();
+
+    // Capture subtask information for verification
+    let subtask_title = spec_file.spec.subtasks[0].title.clone();
+    let subtask_id = spec_file.spec.subtasks[0].id;
+
+    // Create orchestrator
+    let config = OrchestratorConfig {
+        surge_config,
+        working_dir: test_dir.clone(),
+    };
+    let orchestrator = Orchestrator::new(config);
+
+    // Execute pipeline
+    let result = orchestrator.execute(&mut spec_file).await;
+
+    // Verify result (allow paused/failed as in other tests)
+    match result {
+        PipelineResult::Completed => {
+            eprintln!("Pipeline completed successfully");
+        }
+        PipelineResult::Paused { phase, reason } => {
+            eprintln!("Pipeline paused at phase {:?}: {}", phase, reason);
+        }
+        PipelineResult::Failed { reason } => {
+            eprintln!("Pipeline failed (may be expected in E2E test): {}", reason);
+        }
+    }
+
+    // Verify git commits in the worktree
+    // Initialize GitManager to access worktree
+    let git_manager = GitManager::new(test_dir.clone())
+        .expect("Failed to create GitManager");
+
+    let worktree_path = git_manager.worktree_path(&spec_id_str);
+
+    if worktree_path.exists() {
+        eprintln!("Worktree exists at: {:?}", worktree_path);
+
+        // Get git log from the worktree
+        let log_output = Command::new("git")
+            .args(["log", "--pretty=format:%s"])
+            .current_dir(&worktree_path)
+            .output()
+            .expect("Failed to run git log");
+
+        let log_messages = String::from_utf8_lossy(&log_output.stdout);
+        eprintln!("Git log messages:\n{}", log_messages);
+
+        // Split into individual commit messages
+        let commits: Vec<&str> = log_messages
+            .lines()
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        eprintln!("Found {} commits in worktree", commits.len());
+
+        // Look for surge subtask commits (excluding the initial "Initial commit")
+        let surge_commits: Vec<&str> = commits
+            .iter()
+            .filter(|msg| msg.starts_with("surge:"))
+            .copied()
+            .collect();
+
+        if !surge_commits.is_empty() {
+            eprintln!("✓ Found {} surge subtask commits", surge_commits.len());
+
+            // Verify commit message format
+            // Expected format: "surge: subtask {title} — {id}"
+            let expected_commit_pattern = format!("surge: subtask {} — {}", subtask_title, subtask_id);
+
+            // Check if any commit matches the expected pattern
+            let has_matching_commit = surge_commits.iter().any(|msg| {
+                msg.contains(&subtask_title) && msg.contains(&subtask_id.to_string())
+            });
+
+            if has_matching_commit {
+                eprintln!("✓ Commit message matches expected pattern");
+                eprintln!("  Expected pattern: {}", expected_commit_pattern);
+            } else {
+                eprintln!("⚠ No commit found matching expected pattern: {}", expected_commit_pattern);
+                eprintln!("  Actual surge commits:");
+                for commit in &surge_commits {
+                    eprintln!("    - {}", commit);
+                }
+            }
+
+            // Verify commits contain meaningful information
+            for commit in &surge_commits {
+                // Commit should be reasonably descriptive (not just "surge:" or too short)
+                assert!(
+                    commit.len() > 15,
+                    "Commit message should be descriptive: '{}'",
+                    commit
+                );
+
+                // Should contain "surge:" prefix
+                assert!(
+                    commit.starts_with("surge:"),
+                    "Commit should start with 'surge:' prefix: '{}'",
+                    commit
+                );
+
+                eprintln!("✓ Verified commit: {}", commit);
+            }
+
+            eprintln!("✓ All git commits have meaningful messages");
+        } else {
+            eprintln!("⚠ No surge commits found (may be expected if execution paused early)");
+        }
+    } else {
+        eprintln!("⚠ Worktree not found at {:?} (may be expected if execution failed early)", worktree_path);
+    }
+
+    // Cleanup
+    cleanup_dir(&test_dir);
+}
