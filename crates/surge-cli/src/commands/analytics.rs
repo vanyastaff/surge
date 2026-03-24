@@ -29,6 +29,28 @@ struct AnalyticsSummary {
     cached_read_tokens: u64,
     cached_write_tokens: u64,
     total_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_tasks: Option<Vec<TaskCost>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_breakdown: Option<Vec<AgentCost>>,
+}
+
+/// Cost data for a task (spec)
+#[derive(Debug, Serialize)]
+struct TaskCost {
+    spec_id: String,
+    session_count: usize,
+    total_cost_usd: f64,
+    total_tokens: u64,
+}
+
+/// Cost data for an agent
+#[derive(Debug, Serialize)]
+struct AgentCost {
+    agent_name: String,
+    session_count: usize,
+    total_cost_usd: f64,
+    total_tokens: u64,
 }
 
 /// Detailed session export data
@@ -140,6 +162,8 @@ fn show_summary(
                     cached_read_tokens: 0,
                     cached_write_tokens: 0,
                     total_tokens: 0,
+                    top_tasks: None,
+                    agent_breakdown: None,
                 };
                 println!("{}", serde_json::to_string_pretty(&empty_summary)?);
             }
@@ -158,15 +182,27 @@ fn show_summary(
 
     let store = Store::open(&store_path)?;
 
+    // Default to "this week" if no date range specified
+    let (from_ts, to_ts, is_this_week) = if from_ts.is_none() && to_ts.is_none() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let week_ago_ms = now_ms - (7 * 24 * 60 * 60 * 1000); // 7 days in milliseconds
+        (Some(week_ago_ms), Some(now_ms), true)
+    } else {
+        (from_ts, to_ts, false)
+    };
+
     // Determine which spec(s) to query
-    let (sessions, spec_id_str) = if let Some(spec_id_str) = spec_filter {
+    let (sessions, spec_id_str, has_spec_filter) = if let Some(ref spec_id_str) = spec_filter {
         // Load spec to get proper SpecId
-        let spec_file = load_spec_by_id(&spec_id_str)?;
+        let spec_file = load_spec_by_id(spec_id_str)?;
         let spec_id = spec_file.spec.id;
 
         // Get sessions for this spec
         let sessions = store.list_sessions_by_spec(spec_id)?;
-        (sessions, Some(spec_id.to_string()))
+        (sessions, Some(spec_id.to_string()), true)
     } else {
         // Get all specs and their sessions
         let all_specs = store.list_all_specs()?;
@@ -177,7 +213,7 @@ fn show_summary(
             all_sessions.extend(spec_sessions);
         }
 
-        (all_sessions, None)
+        (all_sessions, None, false)
     };
 
     // Apply filters
@@ -229,6 +265,108 @@ fn show_summary(
     let total_tokens =
         total_input + total_output + total_thought + total_cached_read + total_cached_write;
 
+    // Aggregate by task (spec_id) for top tasks - only when not filtering by spec
+    let top_tasks = if !has_spec_filter {
+        let mut task_map: std::collections::HashMap<String, Vec<&SessionUsage>> =
+            std::collections::HashMap::new();
+
+        for session in &filtered_sessions {
+            let spec_id = session.spec_id.to_string();
+            task_map.entry(spec_id).or_default().push(session);
+        }
+
+        let mut task_costs: Vec<TaskCost> = task_map
+            .into_iter()
+            .map(|(spec_id, sessions)| {
+                let session_count = sessions.len();
+                let cost: f64 = sessions
+                    .iter()
+                    .map(|s| s.estimated_cost_usd.unwrap_or(0.0))
+                    .sum();
+                let tokens: u64 = sessions
+                    .iter()
+                    .map(|s| {
+                        s.input_tokens
+                            + s.output_tokens
+                            + s.thought_tokens.unwrap_or(0)
+                            + s.cached_read_tokens.unwrap_or(0)
+                            + s.cached_write_tokens.unwrap_or(0)
+                    })
+                    .sum();
+
+                TaskCost {
+                    spec_id,
+                    session_count,
+                    total_cost_usd: cost,
+                    total_tokens: tokens,
+                }
+            })
+            .collect();
+
+        // Sort by cost descending
+        task_costs.sort_by(|a, b| {
+            b.total_cost_usd
+                .partial_cmp(&a.total_cost_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Take top 3
+        task_costs.truncate(3);
+        Some(task_costs)
+    } else {
+        None
+    };
+
+    // Aggregate by agent for per-agent breakdown
+    let agent_breakdown = if agent_filter.is_none() {
+        let mut agent_map: std::collections::HashMap<String, Vec<&SessionUsage>> =
+            std::collections::HashMap::new();
+
+        for session in &filtered_sessions {
+            let agent_name = session.agent_name.clone();
+            agent_map.entry(agent_name).or_default().push(session);
+        }
+
+        let mut agent_costs: Vec<AgentCost> = agent_map
+            .into_iter()
+            .map(|(agent_name, sessions)| {
+                let session_count = sessions.len();
+                let cost: f64 = sessions
+                    .iter()
+                    .map(|s| s.estimated_cost_usd.unwrap_or(0.0))
+                    .sum();
+                let tokens: u64 = sessions
+                    .iter()
+                    .map(|s| {
+                        s.input_tokens
+                            + s.output_tokens
+                            + s.thought_tokens.unwrap_or(0)
+                            + s.cached_read_tokens.unwrap_or(0)
+                            + s.cached_write_tokens.unwrap_or(0)
+                    })
+                    .sum();
+
+                AgentCost {
+                    agent_name,
+                    session_count,
+                    total_cost_usd: cost,
+                    total_tokens: tokens,
+                }
+            })
+            .collect();
+
+        // Sort by cost descending
+        agent_costs.sort_by(|a, b| {
+            b.total_cost_usd
+                .partial_cmp(&a.total_cost_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Some(agent_costs)
+    } else {
+        None
+    };
+
     let summary = AnalyticsSummary {
         spec_id: spec_id_str,
         total_sessions,
@@ -239,12 +377,19 @@ fn show_summary(
         cached_read_tokens: total_cached_read,
         cached_write_tokens: total_cached_write,
         total_tokens,
+        top_tasks,
+        agent_breakdown,
     };
 
     // Output based on format
     match format {
         OutputFormat::Text => {
-            println!("📊 Analytics Summary\n");
+            if is_this_week {
+                println!("📊 Analytics Summary - This Week\n");
+            } else {
+                println!("📊 Analytics Summary\n");
+            }
+
             if let Some(spec_id) = &summary.spec_id {
                 println!("Spec ID: {}", spec_id);
             } else {
@@ -252,6 +397,8 @@ fn show_summary(
             }
             println!();
             println!("Sessions: {}", summary.total_sessions);
+            println!();
+            println!("💰 Total Cost This Week: ${:.4}", summary.total_cost_usd);
             println!();
             println!("Token Usage:");
             println!("  Input:        {:>12}", format_number(summary.input_tokens));
@@ -275,8 +422,36 @@ fn show_summary(
                 "  Total:        {:>12}",
                 format_number(summary.total_tokens)
             );
-            println!();
-            println!("Estimated Cost: ${:.4}", summary.total_cost_usd);
+
+            // Display top 3 tasks
+            if let Some(ref top_tasks) = summary.top_tasks {
+                if !top_tasks.is_empty() {
+                    println!();
+                    println!("🏆 Top 3 Costliest Tasks:");
+                    for (i, task) in top_tasks.iter().enumerate() {
+                        println!();
+                        println!("   {}. {}", i + 1, task.spec_id);
+                        println!("      Sessions: {}", task.session_count);
+                        println!("      Tokens:   {}", format_number(task.total_tokens));
+                        println!("      Cost:     ${:.4}", task.total_cost_usd);
+                    }
+                }
+            }
+
+            // Display per-agent breakdown
+            if let Some(ref agents) = summary.agent_breakdown {
+                if !agents.is_empty() {
+                    println!();
+                    println!("🤖 Per-Agent Breakdown:");
+                    for agent in agents {
+                        println!();
+                        println!("   Agent: {}", agent.agent_name);
+                        println!("      Sessions: {}", agent.session_count);
+                        println!("      Tokens:   {}", format_number(agent.total_tokens));
+                        println!("      Cost:     ${:.4}", agent.total_cost_usd);
+                    }
+                }
+            }
         }
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&summary)?);
