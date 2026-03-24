@@ -477,6 +477,41 @@ fn resolve_spec_id_for_logs(id: &str, specs_dir: &std::path::Path) -> Result<Str
     Ok(id.to_string())
 }
 
+/// Skip a subtask by marking it as skipped.
+pub fn skip(spec_id: String, subtask_id: String) -> Result<()> {
+    let mut spec_file = load_spec_by_id(&spec_id)?;
+
+    // Find the subtask
+    let subtask = spec_file
+        .spec
+        .subtasks
+        .iter_mut()
+        .find(|s| s.id.to_string() == subtask_id)
+        .ok_or_else(|| anyhow::anyhow!("Subtask '{}' not found in spec", subtask_id))?;
+
+    // Check if already skipped
+    if subtask.execution.state == surge_core::spec::SubtaskState::Skipped {
+        println!("⚠️  Subtask '{}' is already skipped", subtask_id);
+        return Ok(());
+    }
+
+    // Check if already completed
+    if subtask.execution.state == surge_core::spec::SubtaskState::Completed {
+        println!("⚠️  Subtask '{}' is already completed", subtask_id);
+        return Ok(());
+    }
+
+    // Mark as skipped
+    subtask.execution.state = surge_core::spec::SubtaskState::Skipped;
+
+    // Save the spec
+    spec_file.save_in_place()?;
+
+    println!("✅ Subtask '{}' marked as skipped", subtask_id);
+
+    Ok(())
+}
+
 /// Format token count with thousands separator
 fn format_tokens(tokens: u64) -> String {
     let s = tokens.to_string();
