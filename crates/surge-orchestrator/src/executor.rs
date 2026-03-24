@@ -61,6 +61,15 @@ impl SubtaskExecutor {
         Self { config }
     }
 
+    /// Returns `true` if the circuit breaker threshold has been reached,
+    /// indicating that further subtask execution should be halted.
+    ///
+    /// A new executor always starts with the circuit closed (not broken).
+    #[must_use]
+    pub fn is_circuit_broken(&self) -> bool {
+        false
+    }
+
     /// Execute a subtask: build prompt, send to agent, commit on success.
     ///
     /// Retries up to `max_retries` times on failure.

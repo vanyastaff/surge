@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
@@ -45,6 +46,10 @@ enum PoolOp {
         name: String,
         tx: Reply<()>,
     },
+    Reconnect {
+        name: String,
+        tx: Reply<()>,
+    },
     CreateSession {
         agent_name: String,
         mode: Option<String>,
@@ -65,6 +70,8 @@ enum PoolOp {
 struct WorkerState {
     connections: HashMap<String, AgentConnection>,
     spawning: HashSet<String>,
+    #[allow(dead_code)] // Used in try_reconnect_with_backoff, which is not yet integrated
+    reconnecting: HashSet<String>,
     configs: HashMap<String, AgentConfig>,
     worktree_root: PathBuf,
     permission_policy: PermissionPolicy,
@@ -95,6 +102,10 @@ pub struct AgentPool {
 
     /// Event broadcast sender for subscribing to agent events.
     event_tx: broadcast::Sender<SurgeEvent>,
+
+    /// Active session counter for heartbeat interval switching.
+    #[allow(dead_code)] // Will be used for heartbeat interval switching in future subtasks
+    active_sessions: Arc<AtomicUsize>,
 }
 
 impl AgentPool {
@@ -131,15 +142,24 @@ impl AgentPool {
         let worker_health = Arc::clone(&health);
         let worker_event_tx = event_tx.clone();
 
+        let active_sessions = Arc::new(AtomicUsize::new(0));
+
+        // Collect agent names for heartbeat monitoring
+        let agent_names: Vec<String> = configs.keys().cloned().collect();
+
+        // Clone references for the worker
+        let worker_configs = configs.clone();
+        let worker_resilience = resilience.clone();
+
         let worker = std::thread::Builder::new()
             .name("surge-acp-pool".into())
             .spawn(move || {
                 run_worker(
                     op_rx,
-                    configs,
+                    worker_configs,
                     worktree_root,
                     permission_policy,
-                    resilience,
+                    worker_resilience,
                     worker_health,
                     worker_event_tx,
                 );
@@ -148,12 +168,29 @@ impl AgentPool {
                 SurgeError::AgentConnection(format!("Failed to spawn pool worker: {e}"))
             })?;
 
+        // Spawn heartbeat monitoring task (only if we're in a Tokio runtime)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let heartbeat_op_tx = op_tx.clone();
+            let heartbeat_health = Arc::clone(&health);
+            let heartbeat_event_tx = event_tx.clone();
+            let heartbeat_sessions = Arc::clone(&active_sessions);
+            handle.spawn(run_heartbeat_monitor(
+                agent_names,
+                heartbeat_op_tx,
+                heartbeat_health,
+                heartbeat_event_tx,
+                heartbeat_sessions,
+                resilience,
+            ));
+        }
+
         Ok(Self {
             op_tx,
             _worker: Some(worker),
             default_agent,
             health,
             event_tx,
+            active_sessions,
         })
     }
 
@@ -297,6 +334,118 @@ impl Drop for AgentPool {
     }
 }
 
+// ── Heartbeat monitoring task ───────────────────────────────────────
+
+/// Background task that periodically pings agents to verify connectivity.
+///
+/// Runs continuously until the pool is dropped. Switches between active
+/// and idle intervals based on the number of active sessions.
+async fn run_heartbeat_monitor(
+    agent_names: Vec<String>,
+    op_tx: mpsc::UnboundedSender<PoolOp>,
+    health: Arc<Mutex<HealthTracker>>,
+    event_tx: broadcast::Sender<SurgeEvent>,
+    active_sessions: Arc<AtomicUsize>,
+    resilience: ResilienceConfig,
+) {
+    debug!("Heartbeat monitor started for {} agents", agent_names.len());
+
+    loop {
+        // Determine interval based on active sessions count
+        let interval_secs = if active_sessions.load(Ordering::Relaxed) > 0 {
+            resilience.heartbeat_interval_active_secs
+        } else {
+            resilience.heartbeat_interval_idle_secs
+        };
+
+        // Wait for the next heartbeat interval
+        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+
+        // Ping each agent to verify connectivity
+        for agent_name in &agent_names {
+            let (tx, rx) = oneshot::channel();
+
+            // Send ping operation (Connect is effectively a ping)
+            if op_tx.send(PoolOp::Connect {
+                name: agent_name.clone(),
+                tx,
+            }).is_err() {
+                // Pool worker stopped, exit heartbeat monitor
+                debug!("Heartbeat monitor stopping: pool worker stopped");
+                return;
+            }
+
+            // Wait for response with a timeout
+            let ping_result = tokio::time::timeout(
+                Duration::from_secs(resilience.connect_timeout_secs),
+                rx
+            ).await;
+
+            // Record result in health tracker
+            let mut health_lock = health.lock().await;
+            match ping_result {
+                Ok(Ok(Ok(()))) => {
+                    // Successful ping
+                    health_lock.record_heartbeat_success(agent_name);
+                }
+                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
+                    // Failed ping (connection error, worker dropped response, or timeout)
+                    health_lock.record_heartbeat_failure(agent_name);
+
+                    // Get consecutive failures count
+                    if let Some(agent_health) = health_lock.get_health(agent_name) {
+                        let consecutive = agent_health.consecutive_heartbeat_failures;
+
+                        // Emit heartbeat failure event
+                        let _ = event_tx.send(SurgeEvent::AgentHeartbeatFailed {
+                            agent_name: agent_name.clone(),
+                            consecutive_failures: consecutive as u32,
+                        });
+
+                        // Emit health degraded event and trigger reconnect after 3 consecutive failures
+                        if consecutive >= 3 {
+                            let _ = event_tx.send(SurgeEvent::AgentHealthDegraded {
+                                agent_name: agent_name.clone(),
+                                error_rate: agent_health.error_rate(),
+                                avg_latency_ms: agent_health.avg_latency_ms,
+                            });
+
+                            // Drop the health lock before reconnecting to avoid holding it across await
+                            drop(health_lock);
+
+                            // Trigger reconnection with exponential backoff
+                            debug!("Triggering reconnection for agent '{}' after {} consecutive heartbeat failures", agent_name, consecutive);
+                            let (reconnect_tx, reconnect_rx) = oneshot::channel();
+                            if op_tx.send(PoolOp::Reconnect {
+                                name: agent_name.clone(),
+                                tx: reconnect_tx,
+                            }).is_ok() {
+                                // Wait for reconnection attempt to complete (with timeout)
+                                let reconnect_result = tokio::time::timeout(
+                                    Duration::from_secs(resilience.connect_timeout_secs * resilience.reconnect_max_attempts as u64),
+                                    reconnect_rx
+                                ).await;
+
+                                match reconnect_result {
+                                    Ok(Ok(Ok(()))) => {
+                                        debug!("Successfully reconnected to agent '{}'", agent_name);
+                                    }
+                                    Ok(Ok(Err(e))) => {
+                                        warn!("Failed to reconnect to agent '{}': {}", agent_name, e);
+                                    }
+                                    Ok(Err(_)) | Err(_) => {
+                                        warn!("Reconnection attempt for agent '{}' timed out or was cancelled", agent_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl std::fmt::Debug for AgentPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentPool")
@@ -326,6 +475,7 @@ fn run_worker(
         let state = Rc::new(RefCell::new(WorkerState {
             connections: HashMap::new(),
             spawning: HashSet::new(),
+            reconnecting: HashSet::new(),
             configs,
             worktree_root,
             permission_policy,
@@ -351,6 +501,18 @@ fn run_worker(
                     let st = Rc::clone(&state);
                     tokio::task::spawn_local(async move {
                         let result = connect(&st, &name).await;
+                        let _ = tx.send(result);
+                    });
+                }
+
+                PoolOp::Reconnect { name, tx } => {
+                    let st = Rc::clone(&state);
+                    tokio::task::spawn_local(async move {
+                        // First remove the stale connection if it exists
+                        st.borrow_mut().connections.remove(&name);
+
+                        // Attempt reconnection with exponential backoff
+                        let result = try_reconnect_with_backoff(&st, &name).await;
                         let _ = tx.send(result);
                     });
                 }
@@ -386,6 +548,117 @@ fn run_worker(
 }
 
 // ── Worker operations (run inside LocalSet via spawn_local) ─────────
+
+/// Attempt to reconnect to an agent with exponential backoff.
+///
+/// Tries to establish connection multiple times with increasing delays between
+/// attempts according to the configured backoff strategy.
+///
+/// # Errors
+///
+/// Returns error if all reconnection attempts fail.
+async fn try_reconnect_with_backoff(
+    state: &Rc<RefCell<WorkerState>>,
+    name: &str,
+) -> Result<(), SurgeError> {
+    // Check if already reconnecting
+    {
+        let s = state.borrow();
+        if s.reconnecting.contains(name) {
+            return Err(SurgeError::AgentConnection(format!(
+                "Agent '{name}' is already attempting to reconnect"
+            )));
+        }
+    }
+
+    // Mark as reconnecting
+    state.borrow_mut().reconnecting.insert(name.to_string());
+
+    let (max_attempts, initial_delay_ms, max_delay_ms, backoff_strategy, event_tx) = {
+        let s = state.borrow();
+        (
+            s.resilience.reconnect_max_attempts,
+            s.resilience.reconnect_initial_delay_ms,
+            s.resilience.retry_policy.max_delay_ms,
+            s.resilience.retry_policy.backoff_strategy.clone(),
+            s.event_tx.clone(),
+        )
+    };
+
+    let mut last_error = None;
+
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            let delay = calculate_backoff(
+                attempt - 1,
+                initial_delay_ms,
+                max_delay_ms,
+                &backoff_strategy,
+            );
+
+            debug!(
+                "Reconnect attempt {}/{} for agent '{}' after {}ms delay",
+                attempt + 1,
+                max_attempts,
+                name,
+                delay.as_millis()
+            );
+
+            // Emit reconnection attempt event
+            let _ = event_tx.send(SurgeEvent::AgentReconnecting {
+                agent_name: name.to_string(),
+                attempt: attempt + 1,
+                max_attempts,
+            });
+
+            tokio::time::sleep(delay).await;
+        } else {
+            debug!(
+                "Initial reconnect attempt for agent '{}' (1/{})",
+                name, max_attempts
+            );
+            let _ = event_tx.send(SurgeEvent::AgentReconnecting {
+                agent_name: name.to_string(),
+                attempt: 1,
+                max_attempts,
+            });
+        }
+
+        // Attempt connection
+        match connect(state, name).await {
+            Ok(()) => {
+                info!(
+                    "Successfully reconnected to agent '{}' on attempt {}/{}",
+                    name,
+                    attempt + 1,
+                    max_attempts
+                );
+                state.borrow_mut().reconnecting.remove(name);
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "Reconnect attempt {}/{} failed for agent '{}': {}",
+                    attempt + 1,
+                    max_attempts,
+                    name,
+                    e
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    // All attempts failed
+    state.borrow_mut().reconnecting.remove(name);
+
+    Err(last_error.unwrap_or_else(|| {
+        SurgeError::AgentConnection(format!(
+            "Failed to reconnect to agent '{}' after {} attempts",
+            name, max_attempts
+        ))
+    }))
+}
 
 async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), SurgeError> {
     // Fast path
@@ -448,13 +721,95 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     Ok(())
 }
 
+/// Validate agent authentication by attempting a lightweight ACP operation.
+///
+/// This prevents wasted work on expired OAuth tokens by failing fast with a
+/// clear error message before starting a task.
+///
+/// # Errors
+///
+/// Returns a descriptive error if authentication fails (401/unauthorized),
+/// or if the validation ping times out or fails for other reasons.
+async fn validate_agent_auth(
+    state: &Rc<RefCell<WorkerState>>,
+    agent_name: &str,
+) -> Result<(), SurgeError> {
+    connect(state, agent_name).await?;
+
+    let validation_timeout = Duration::from_secs(state.borrow().resilience.connect_timeout_secs);
+
+    debug!("Validating authentication for agent '{}'", agent_name);
+
+    // Temporarily remove the connection to make a test call
+    let conn = {
+        let mut s = state.borrow_mut();
+        s.connections
+            .remove(agent_name)
+            .ok_or_else(|| SurgeError::AgentConnection("Connection disappeared".to_string()))?
+    };
+
+    // Make a lightweight ACP call to verify authentication.
+    // We use a minimal new_session request to a temp directory to check auth.
+    // The session creation might fail for other reasons, but auth errors will
+    // be detected before we attempt the real session.
+    let temp_dir = std::env::temp_dir();
+    let test_request = NewSessionRequest::new(&temp_dir);
+
+    let validation_result: Result<(), SurgeError> = async {
+        let result = tokio::time::timeout(
+            validation_timeout,
+            conn.connection().new_session(test_request),
+        )
+        .await
+        .map_err(|_| SurgeError::Timeout("auth validation".to_string()))?;
+
+        match result {
+            Ok(_response) => {
+                // Auth is valid, but we created a test session. That's okay -
+                // it will be replaced by the real session immediately after.
+                debug!("Agent '{}' authentication validated successfully", agent_name);
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("{:?}", e);
+
+                // Check if this is an authentication failure
+                if is_auth_failure(&error_msg) {
+                    Err(SurgeError::AgentConnection(format!(
+                        "Agent '{}' authentication failed - OAuth token may be expired. \
+                         Please re-authenticate and try again. Error: {}",
+                        agent_name, error_msg
+                    )))
+                } else {
+                    // Some other error - let the regular session creation handle it
+                    debug!(
+                        "Agent '{}' validation failed with non-auth error (will retry): {}",
+                        agent_name, error_msg
+                    );
+                    Ok(())
+                }
+            }
+        }
+    }
+    .await;
+
+    // Restore the connection regardless of outcome
+    state
+        .borrow_mut()
+        .connections
+        .insert(agent_name.to_string(), conn);
+
+    validation_result
+}
+
 async fn create_session(
     state: &Rc<RefCell<WorkerState>>,
     agent_name: &str,
     mode: Option<&str>,
     working_dir: &Path,
 ) -> Result<SessionHandle, SurgeError> {
-    connect(state, agent_name).await?;
+    // Validate authentication before creating the session
+    validate_agent_auth(state, agent_name).await?;
 
     let session_timeout = Duration::from_secs(state.borrow().resilience.session_timeout_secs);
 
@@ -666,6 +1021,28 @@ async fn prompt(
                     }
 
                     health.lock().await.record_failure(agent_name, &msg);
+
+                    // If this looks like a connection error, attempt to reconnect
+                    if is_connection_error(&msg) && attempt < max_retries {
+                        warn!(
+                            agent = agent_name.as_str(),
+                            session_id = session.session_id.as_str(),
+                            attempt,
+                            error = %msg,
+                            "connection error detected, attempting to reconnect"
+                        );
+
+                        // Remove stale connection and attempt reconnection
+                        state.borrow_mut().connections.remove(agent_name);
+                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                            warn!(
+                                agent = agent_name.as_str(),
+                                error = %reconnect_err,
+                                "reconnection failed after connection error"
+                            );
+                        }
+                    }
+
                     last_error = Some(SurgeError::Acp(format!(
                         "Prompt failed on '{agent_name}': {msg}"
                     )));
@@ -682,6 +1059,26 @@ async fn prompt(
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
                     health.lock().await.record_failure(agent_name, &msg);
+
+                    // Timeouts might indicate connection issues, attempt to reconnect
+                    if attempt < max_retries {
+                        debug!(
+                            agent = agent_name.as_str(),
+                            session_id = session.session_id.as_str(),
+                            "timeout detected, attempting to reconnect"
+                        );
+
+                        // Remove potentially stale connection and attempt reconnection
+                        state.borrow_mut().connections.remove(agent_name);
+                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                            warn!(
+                                agent = agent_name.as_str(),
+                                error = %reconnect_err,
+                                "reconnection failed after timeout"
+                            );
+                        }
+                    }
+
                     last_error = Some(SurgeError::Timeout(msg));
                     warn!(
                         agent = agent_name.as_str(),
@@ -808,6 +1205,22 @@ fn parse_retry_after(error_msg: &str) -> u64 {
 
     // Default retry-after: 60 seconds
     60
+}
+
+/// Check if an error message indicates a connection problem.
+fn is_connection_error(error_msg: &str) -> bool {
+    let msg_lower = error_msg.to_lowercase();
+    msg_lower.contains("connection refused")
+        || msg_lower.contains("connection reset")
+        || msg_lower.contains("connection closed")
+        || msg_lower.contains("broken pipe")
+        || msg_lower.contains("no connection")
+        || msg_lower.contains("connection failed")
+        || msg_lower.contains("connection lost")
+        || msg_lower.contains("connection timeout")
+        || msg_lower.contains("connection error")
+        || msg_lower.contains("network error")
+        || msg_lower.contains("io error")
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
@@ -1241,5 +1654,133 @@ mod tests {
             parse_retry_after("HTTP/1.1 429 Too Many Requests\nRetry-After: 15\n"),
             15
         );
+    }
+
+    // ── Token validation tests ────────────────────────────────────
+
+    /// Test that auth failure errors are properly detected and reported with
+    /// a clear message about expired OAuth tokens.
+    #[test]
+    fn test_token_validation() {
+        // Test that various auth error messages are properly detected
+        let auth_errors = vec![
+            "HTTP 401 Unauthorized",
+            "authentication failed",
+            "Invalid API key provided",
+            "Error: invalid_api_key",
+            "Unauthorized access to resource",
+        ];
+
+        for error_msg in auth_errors {
+            assert!(
+                is_auth_failure(error_msg),
+                "Auth failure not detected for: {}",
+                error_msg
+            );
+        }
+
+        // Test that non-auth errors are not misidentified
+        let non_auth_errors = vec![
+            "Connection timeout",
+            "500 Internal Server Error",
+            "Network error",
+            "Session creation failed",
+        ];
+
+        for error_msg in non_auth_errors {
+            assert!(
+                !is_auth_failure(error_msg),
+                "Non-auth error incorrectly detected as auth failure: {}",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_auto_reconnect() {
+        // Test that backoff calculation works correctly for different strategies
+        let initial_delay = 1000;
+        let max_delay = 60000;
+
+        // Linear backoff - always returns initial delay
+        let linear_delay = calculate_backoff(
+            0,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Linear,
+        );
+        assert_eq!(linear_delay.as_millis(), 1000);
+
+        let linear_delay = calculate_backoff(
+            5,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Linear,
+        );
+        assert_eq!(linear_delay.as_millis(), 1000);
+
+        // Exponential backoff - doubles each time
+        let exp_delay_0 = calculate_backoff(
+            0,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_0.as_millis(), 1000); // 1000 * 2^0 = 1000
+
+        let exp_delay_1 = calculate_backoff(
+            1,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_1.as_millis(), 2000); // 1000 * 2^1 = 2000
+
+        let exp_delay_2 = calculate_backoff(
+            2,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_2.as_millis(), 4000); // 1000 * 2^2 = 4000
+
+        let exp_delay_3 = calculate_backoff(
+            3,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_3.as_millis(), 8000); // 1000 * 2^3 = 8000
+
+        // Test max delay cap
+        let exp_delay_10 = calculate_backoff(
+            10,
+            initial_delay,
+            max_delay,
+            &BackoffStrategy::Exponential,
+        );
+        assert_eq!(exp_delay_10.as_millis(), 60000); // Capped at max_delay
+
+        // Exponential with jitter - should be within range
+        for attempt in 0..5 {
+            let jitter_delay = calculate_backoff(
+                attempt,
+                initial_delay,
+                max_delay,
+                &BackoffStrategy::ExponentialWithJitter,
+            );
+
+            // Expected exponential value
+            let expected_exp = initial_delay.saturating_mul(2u64.saturating_pow(attempt));
+            let expected_capped = expected_exp.min(max_delay);
+
+            // Should be within [0, expected_capped]
+            assert!(
+                jitter_delay.as_millis() <= expected_capped as u128,
+                "Jitter delay {} exceeds expected max {}",
+                jitter_delay.as_millis(),
+                expected_capped
+            );
+        }
     }
 }

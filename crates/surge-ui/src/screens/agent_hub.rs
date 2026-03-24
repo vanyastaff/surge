@@ -189,12 +189,20 @@ impl AgentHubScreen {
                 this.selected = Some(idx);
                 cx.notify();
             }))
-            // Status dot — green for installed binary, blue for npx/uvx
+            // Status dot — green for healthy, yellow for degraded, red for offline
             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(
-                if agent.install_method == InstallMethod::Installed {
-                    theme::SUCCESS
-                } else {
-                    theme::PRIMARY
+                match agent.health_status {
+                    Some(surge_acp::HealthStatus::Healthy) => theme::SUCCESS,
+                    Some(surge_acp::HealthStatus::Degraded) => theme::WARNING,
+                    Some(surge_acp::HealthStatus::Offline) => theme::ERROR,
+                    None => {
+                        // Fallback to install method if health status not available
+                        if agent.install_method == InstallMethod::Installed {
+                            theme::SUCCESS
+                        } else {
+                            theme::PRIMARY
+                        }
+                    }
                 },
             ))
             // Name
@@ -340,6 +348,77 @@ impl AgentHubScreen {
                         &format!("{}", agent.sessions_today),
                     )),
             )
+            // Health metrics row
+            .when(agent.health_status.is_some(), |el: Div| {
+                let health_status_label = match agent.health_status {
+                    Some(surge_acp::HealthStatus::Healthy) => "Healthy",
+                    Some(surge_acp::HealthStatus::Degraded) => "Degraded",
+                    Some(surge_acp::HealthStatus::Offline) => "Offline",
+                    None => "Unknown",
+                };
+                let health_color = match agent.health_status {
+                    Some(surge_acp::HealthStatus::Healthy) => theme::SUCCESS,
+                    Some(surge_acp::HealthStatus::Degraded) => theme::WARNING,
+                    Some(surge_acp::HealthStatus::Offline) => theme::ERROR,
+                    None => theme::TEXT_MUTED,
+                };
+                el.child(
+                    div()
+                        .h_flex()
+                        .gap_6()
+                        .pt_2()
+                        .pb_1()
+                        .border_b_1()
+                        .border_color(theme::TEXT_MUTED.opacity(0.06))
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                        .child("Health Status"),
+                                )
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .gap(px(4.0))
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .w(px(6.0))
+                                                .h(px(6.0))
+                                                .rounded_full()
+                                                .bg(health_color),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(health_color)
+                                                .child(health_status_label.to_string()),
+                                        ),
+                                ),
+                        )
+                        .child(info_item(
+                            "Error Rate",
+                            &format!("{:.1}%", agent.error_rate),
+                        ))
+                        .child(info_item(
+                            "Latency P50",
+                            &format!("{} ms", agent.latency_p50_ms),
+                        ))
+                        .child(info_item(
+                            "Latency P99",
+                            &format!("{} ms", agent.latency_p99_ms),
+                        ))
+                        .child(info_item(
+                            "Total Failures",
+                            &format!("{}", agent.total_failures),
+                        )),
+                )
+            })
             // ── Models ── (label outside, card inside)
             .when(agent.capabilities.models.is_some(), |el: Div| {
                 let rows: Vec<Div> = agent

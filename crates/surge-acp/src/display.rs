@@ -4,7 +4,7 @@
 //! data into structures suitable for UI rendering. Agent metadata itself
 //! lives on [`AgentKind`] methods in the registry module.
 
-use crate::health::AgentHealth;
+use crate::health::{AgentHealth, HealthStatus};
 use crate::registry::{AgentKind, DetectedAgent, RegistryEntry};
 
 // ── Display types ───────────────────────────────────────────────────
@@ -162,17 +162,21 @@ pub struct AgentDetail {
     pub uptime: String,
     pub last_seen: Option<String>,
     pub recent_sessions: Vec<SessionEntry>,
+    // Health metrics
+    pub health_status: Option<HealthStatus>,
+    pub total_failures: u32,
+    pub error_rate: f32,
+    pub rate_limited: bool,
+    pub latency_p50_ms: u32,
+    pub latency_p99_ms: u32,
+    pub total_heartbeat_failures: u32,
+    pub consecutive_heartbeat_failures: u32,
 }
 
 impl AgentDetail {
     /// Build from a detected agent and optional health stats.
     #[must_use]
     pub fn from_detected(detected: &DetectedAgent, health: Option<&AgentHealth>) -> Self {
-        let (requests, latency, failures) = match health {
-            Some(h) => (h.total_requests, h.avg_latency_ms, h.total_failures),
-            None => (0, 0, 0),
-        };
-
         let kind = detected.entry.kind;
         let install_method = if detected.entry.is_npx() {
             InstallMethod::Npx
@@ -180,6 +184,34 @@ impl AgentDetail {
             InstallMethod::Uvx
         } else {
             InstallMethod::Installed
+        };
+
+        // Extract health metrics if available
+        let (
+            requests,
+            latency,
+            failures,
+            health_status,
+            error_rate,
+            rate_limited,
+            latency_p50,
+            latency_p99,
+            total_hb_failures,
+            consecutive_hb_failures,
+        ) = match health {
+            Some(h) => (
+                h.total_requests,
+                h.avg_latency_ms,
+                h.total_failures,
+                Some(h.status()),
+                h.error_rate() as f32,
+                h.rate_limited,
+                h.latency_p50_ms(),
+                h.latency_p99_ms(),
+                h.total_heartbeat_failures,
+                h.consecutive_heartbeat_failures,
+            ),
+            None => (0, 0, 0, None, 0.0, false, 0, 0, 0, 0),
         };
 
         Self {
@@ -200,12 +232,20 @@ impl AgentDetail {
             capabilities: capabilities(kind),
             usage: usage(kind),
             subtasks_completed: 0,
-            subtasks_failed: failures as u32,
+            subtasks_failed: 0,
             avg_subtask_secs: 0,
             qa_first_pass_rate: 0.0,
             uptime: "—".into(),
             last_seen: None,
             recent_sessions: vec![],
+            health_status,
+            total_failures: failures as u32,
+            error_rate,
+            rate_limited,
+            latency_p50_ms: latency_p50 as u32,
+            latency_p99_ms: latency_p99 as u32,
+            total_heartbeat_failures: total_hb_failures as u32,
+            consecutive_heartbeat_failures: consecutive_hb_failures as u32,
         }
     }
 }

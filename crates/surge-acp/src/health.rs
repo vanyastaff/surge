@@ -1,8 +1,19 @@
 //! Health monitoring and fallback routing for ACP agents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+/// Health status of an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Agent is operating normally.
+    Healthy,
+    /// Agent is experiencing issues (high error rate or rate-limited).
+    Degraded,
+    /// Agent is offline or unresponsive.
+    Offline,
+}
 
 /// Parses a `Retry-After` header value from an error message.
 /// Supports delay-seconds format (e.g., "Retry-After: 120").
@@ -40,6 +51,14 @@ pub struct AgentHealth {
     pub avg_latency_ms: u64,
     /// Last error message, if any.
     pub last_error: Option<String>,
+    /// Last 100 latency samples for percentile calculation.
+    latency_samples: VecDeque<Duration>,
+    /// When the agent was registered (used for uptime tracking).
+    pub uptime_start: Instant,
+    /// Total number of heartbeat failures.
+    pub total_heartbeat_failures: u64,
+    /// Number of consecutive heartbeat failures.
+    pub consecutive_heartbeat_failures: u64,
 }
 
 impl AgentHealth {
@@ -52,6 +71,10 @@ impl AgentHealth {
             rate_limit_reset: None,
             avg_latency_ms: 0,
             last_error: None,
+            latency_samples: VecDeque::with_capacity(100),
+            uptime_start: Instant::now(),
+            total_heartbeat_failures: 0,
+            consecutive_heartbeat_failures: 0,
         }
     }
 
@@ -69,6 +92,65 @@ impl AgentHealth {
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         !self.rate_limited && self.error_rate() < 50.0
+    }
+
+    /// Returns the current health status of the agent.
+    ///
+    /// Status is determined by the following rules:
+    /// - `Offline`: 3 or more consecutive heartbeat failures
+    /// - `Degraded`: error rate >= 50% OR rate-limited (but not offline)
+    /// - `Healthy`: otherwise
+    #[must_use]
+    pub fn status(&self) -> HealthStatus {
+        // Offline: 3+ consecutive heartbeat failures
+        if self.consecutive_heartbeat_failures >= 3 {
+            return HealthStatus::Offline;
+        }
+
+        // Degraded: rate-limited or high error rate
+        if self.rate_limited || self.error_rate() >= 50.0 {
+            return HealthStatus::Degraded;
+        }
+
+        HealthStatus::Healthy
+    }
+
+    /// Returns the p50 (median) latency in milliseconds.
+    /// Returns 0 if no latency samples are available.
+    #[must_use]
+    pub fn latency_p50_ms(&self) -> u64 {
+        self.calculate_percentile(50.0)
+    }
+
+    /// Returns the p99 latency in milliseconds.
+    /// Returns 0 if no latency samples are available.
+    #[must_use]
+    pub fn latency_p99_ms(&self) -> u64 {
+        self.calculate_percentile(99.0)
+    }
+
+    /// Calculates a percentile from latency samples.
+    /// Percentile should be between 0.0 and 100.0.
+    fn calculate_percentile(&self, percentile: f64) -> u64 {
+        if self.latency_samples.is_empty() {
+            return 0;
+        }
+
+        let mut sorted: Vec<u64> = self
+            .latency_samples
+            .iter()
+            .map(|d| d.as_millis() as u64)
+            .collect();
+        sorted.sort_unstable();
+
+        let index = ((percentile / 100.0) * (sorted.len() as f64 - 1.0)).round() as usize;
+        sorted[index]
+    }
+
+    /// Returns the uptime duration since agent registration.
+    #[must_use]
+    pub fn uptime(&self) -> Duration {
+        Instant::now().duration_since(self.uptime_start)
     }
 }
 
@@ -115,6 +197,12 @@ impl HealthTracker {
                 (health.avg_latency_ms * prev_total + latency_ms) / health.total_requests
             };
 
+            // Store latency sample for percentile calculation
+            health.latency_samples.push_back(latency);
+            if health.latency_samples.len() > 100 {
+                health.latency_samples.pop_front();
+            }
+
             // Clear rate limit if past reset time
             if health.rate_limited
                 && health
@@ -145,6 +233,36 @@ impl HealthTracker {
                 health.rate_limit_reset =
                     Some(Instant::now() + Duration::from_secs(retry_after_secs));
             }
+        }
+    }
+
+    /// Records a successful heartbeat from an agent.
+    /// Clears consecutive heartbeat failure count.
+    pub fn record_heartbeat_success(&mut self, agent: &str) {
+        if let Some(health) = self.agents.get_mut(agent)
+            && health.consecutive_heartbeat_failures > 0
+        {
+            info!(
+                agent,
+                "heartbeat recovered after {} consecutive failures",
+                health.consecutive_heartbeat_failures
+            );
+            health.consecutive_heartbeat_failures = 0;
+        }
+    }
+
+    /// Records a failed heartbeat from an agent.
+    /// Increments both total and consecutive heartbeat failure counts.
+    pub fn record_heartbeat_failure(&mut self, agent: &str) {
+        if let Some(health) = self.agents.get_mut(agent) {
+            health.total_heartbeat_failures += 1;
+            health.consecutive_heartbeat_failures += 1;
+            warn!(
+                agent,
+                total = health.total_heartbeat_failures,
+                consecutive = health.consecutive_heartbeat_failures,
+                "heartbeat failure"
+            );
         }
     }
 
@@ -308,5 +426,193 @@ mod tests {
         );
         assert_eq!(parse_retry_after("no retry header here"), None);
         assert_eq!(parse_retry_after("Retry-After: invalid"), None);
+    }
+
+    #[test]
+    fn test_latency_percentiles() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record latencies: 10ms, 20ms, 30ms, ..., 100ms (10 samples)
+        for i in 1..=10 {
+            monitor.record_success("claude", Duration::from_millis(i * 10));
+        }
+
+        let health = monitor.get_health("claude").unwrap();
+        // p50: index = (0.5 * 9).round() = 4.5.round() = 5 → sorted[5] = 60
+        assert_eq!(health.latency_p50_ms(), 60);
+        // p99: index = (0.99 * 9).round() = 8.91.round() = 9 → sorted[9] = 100
+        assert_eq!(health.latency_p99_ms(), 100);
+    }
+
+    #[test]
+    fn test_latency_percentiles_with_no_data() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        let health = monitor.get_health("claude").unwrap();
+        // Should return 0 when no samples
+        assert_eq!(health.latency_p50_ms(), 0);
+        assert_eq!(health.latency_p99_ms(), 0);
+    }
+
+    #[test]
+    fn test_latency_samples_bounded_to_100() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record 150 latencies
+        for i in 1..=150 {
+            monitor.record_success("claude", Duration::from_millis(i));
+        }
+
+        let health = monitor.get_health("claude").unwrap();
+        // Should only keep last 100 samples (51-150ms)
+        // p50 of 51-150 should be around 100ms
+        let p50 = health.latency_p50_ms();
+        assert!(p50 >= 95 && p50 <= 105, "p50 was {}", p50);
+    }
+
+    #[test]
+    fn test_uptime_tracking() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Sleep briefly to ensure uptime is measurable
+        std::thread::sleep(Duration::from_millis(10));
+
+        let health = monitor.get_health("claude").unwrap();
+        let uptime = health.uptime();
+
+        // Uptime should be at least 10ms
+        assert!(uptime.as_millis() >= 10);
+    }
+
+    #[test]
+    fn test_heartbeat_failure_tracking() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record 3 heartbeat failures
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 3);
+        assert_eq!(health.consecutive_heartbeat_failures, 3);
+    }
+
+    #[test]
+    fn test_heartbeat_recovery() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record failures then success
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_success("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 2);
+        assert_eq!(health.consecutive_heartbeat_failures, 0);
+
+        // Record more failures after recovery
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 3);
+        assert_eq!(health.consecutive_heartbeat_failures, 1);
+    }
+
+    #[test]
+    fn test_health_status_healthy() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_success("claude", Duration::from_millis(100));
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_health_status_degraded_high_error_rate() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // 60% error rate
+        for _ in 0..4 {
+            monitor.record_success("claude", Duration::from_millis(50));
+        }
+        for _ in 0..6 {
+            monitor.record_failure("claude", "server error");
+        }
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_health_status_degraded_rate_limited() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+        monitor.record_failure("claude", "429 Too Many Requests");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_health_status_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // 3 consecutive heartbeat failures
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
+    }
+
+    #[test]
+    fn test_health_status_recovery_from_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Go offline
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
+
+        // Recover
+        monitor.record_heartbeat_success("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_health_status_degraded_before_offline() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Rate-limited AND 2 heartbeat failures
+        monitor.record_failure("claude", "429 Too Many Requests");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        // Should be degraded (not offline yet, only 2 consecutive heartbeat failures)
+        assert_eq!(health.status(), HealthStatus::Degraded);
+
+        // Third heartbeat failure pushes to offline
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.status(), HealthStatus::Offline);
     }
 }

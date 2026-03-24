@@ -24,7 +24,7 @@ pub use display::{
     InstallMethod, Model, Permission, SessionEntry, SessionStatus, Usage, VersionInfo,
     detect_installed_version,
 };
-pub use health::{AgentHealth, HealthTracker};
+pub use health::{AgentHealth, HealthStatus, HealthTracker};
 pub use pool::{AgentPool, SessionHandle};
 pub use registry::{AgentCapability, AgentKind, DetectedAgent, Registry, RegistryEntry};
 pub use router::{AgentRouter, RouteDecision};

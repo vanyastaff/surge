@@ -171,7 +171,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                 return Ok(());
             }
 
-            println!("⚡ Agent status:\n");
+            println!("⚡ Agent Health Dashboard\n");
 
             let cwd = std::env::current_dir()?;
             let pool = surge_acp::AgentPool::new(
@@ -191,13 +191,124 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                 } else {
                     ""
                 };
-                match pool.ping(name).await {
-                    Ok(()) => println!("  ✅ {name}{marker} — online"),
-                    Err(e) => {
-                        println!("  ❌ {name}{marker} — {e}");
-                        any_offline = true;
+
+                // Ping the agent to check connectivity
+                let ping_result = pool.ping(name).await;
+
+                // Access health metrics and extract needed data
+                let health_lock = pool.health().lock().await;
+                let health_data = health_lock.get_health(name).map(|h| {
+                    (
+                        h.status(),
+                        h.latency_p50_ms(),
+                        h.latency_p99_ms(),
+                        h.total_requests,
+                        h.error_rate(),
+                        h.uptime(),
+                        h.rate_limited,
+                        h.rate_limit_reset,
+                        h.last_error.clone(),
+                    )
+                });
+                drop(health_lock); // Release lock early
+
+                // Determine status display
+                let (status_icon, status_text) = if let Some((status, ..)) = health_data {
+                    match status {
+                        surge_acp::HealthStatus::Healthy => ("✅", "online"),
+                        surge_acp::HealthStatus::Degraded => {
+                            any_offline = true;
+                            ("⚠️ ", "degraded")
+                        }
+                        surge_acp::HealthStatus::Offline => {
+                            any_offline = true;
+                            ("❌", "offline")
+                        }
+                    }
+                } else if ping_result.is_ok() {
+                    ("✅", "online")
+                } else {
+                    any_offline = true;
+                    ("❌", "offline")
+                };
+
+                println!("  {} {}{} — {}", status_icon, name, marker, status_text);
+
+                // Display detailed health metrics if available
+                if let Some((
+                    status,
+                    p50,
+                    p99,
+                    total_requests,
+                    error_rate,
+                    uptime,
+                    rate_limited,
+                    rate_limit_reset,
+                    last_error,
+                )) = health_data
+                {
+                    // Latency percentiles
+                    if p50 > 0 || p99 > 0 {
+                        println!("       latency: p50={}ms, p99={}ms", p50, p99);
+                    }
+
+                    // Error rate
+                    if total_requests > 0 {
+                        println!(
+                            "       requests: {} total, {:.1}% errors",
+                            total_requests, error_rate
+                        );
+                    }
+
+                    // Uptime
+                    let uptime_secs = uptime.as_secs();
+                    if uptime_secs > 0 {
+                        if uptime_secs < 60 {
+                            println!("       uptime: {}s", uptime_secs);
+                        } else if uptime_secs < 3600 {
+                            println!("       uptime: {}m {}s", uptime_secs / 60, uptime_secs % 60);
+                        } else {
+                            println!(
+                                "       uptime: {}h {}m",
+                                uptime_secs / 3600,
+                                (uptime_secs % 3600) / 60
+                            );
+                        }
+                    }
+
+                    // Rate limit cooldown
+                    if rate_limited {
+                        if let Some(reset_time) = rate_limit_reset {
+                            let now = std::time::Instant::now();
+                            if reset_time > now {
+                                let cooldown = reset_time.duration_since(now);
+                                println!(
+                                    "       ⏳ rate-limited: cooldown {}s remaining",
+                                    cooldown.as_secs()
+                                );
+                            } else {
+                                println!("       ⏳ rate-limited: cooldown expired");
+                            }
+                        } else {
+                            println!("       ⏳ rate-limited");
+                        }
+                    }
+
+                    // Last error (if any and agent is not healthy)
+                    if status != surge_acp::HealthStatus::Healthy
+                        && let Some(err) = last_error
+                    {
+                        let truncated = if err.len() > 60 { &err[..60] } else { &err };
+                        println!("       last error: {}", truncated);
                     }
                 }
+
+                // Show error if ping failed
+                if let Err(e) = ping_result {
+                    println!("       error: {}", e);
+                }
+
+                println!();
             }
 
             pool.shutdown().await;
