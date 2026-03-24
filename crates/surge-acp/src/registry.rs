@@ -504,6 +504,24 @@ impl Registry {
         Self { entries }
     }
 
+    /// Load registry from agents defined in surge.toml.
+    ///
+    /// Discovers surge.toml by walking up from the current directory,
+    /// loads the config, and creates a registry from the `agents` section.
+    ///
+    /// Returns an empty registry if no surge.toml is found or if the
+    /// config has no agents defined.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if surge.toml exists but cannot be parsed.
+    pub fn load_from_toml() -> Result<Self, surge_core::SurgeError> {
+        use surge_core::config::SurgeConfig;
+
+        let config = SurgeConfig::discover()?;
+        Ok(Self::from_config(config.agents))
+    }
+
     /// Merge a builtin and a remote registry.
     ///
     /// Builtin entries take priority: if both catalogs contain an entry with
@@ -1257,5 +1275,89 @@ mod tests {
         assert_eq!(multi_reg.len(), 2);
         assert!(multi_reg.find("agent-1").is_some());
         assert!(multi_reg.find("agent-2").is_some());
+    }
+
+    #[test]
+    fn test_load_from_toml() {
+        use std::fs;
+
+        // Create a temporary directory structure
+        let temp_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml");
+        let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Test 1: When surge.toml exists with agents, it should load them
+        let config_path = temp_dir.join("surge.toml");
+        fs::write(
+            &config_path,
+            r#"
+default_agent = "test-agent"
+
+[agents.test-agent]
+command = "test-cli"
+args = ["--acp", "--mode=test"]
+transport = "stdio"
+
+[agents.another-agent]
+command = "another-cli"
+args = []
+transport = { tcp = { host = "localhost", port = 8080 } }
+"#,
+        )
+        .unwrap();
+
+        // Change to the temp directory to test load_from_toml
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        let registry = Registry::load_from_toml().unwrap();
+        assert_eq!(registry.len(), 2);
+
+        let test_agent = registry.find("test-agent").unwrap();
+        assert_eq!(test_agent.command, "test-cli");
+        assert_eq!(test_agent.default_args, vec!["--acp", "--mode=test"]);
+        assert!(matches!(test_agent.transport, Transport::Stdio));
+
+        let another_agent = registry.find("another-agent").unwrap();
+        assert_eq!(another_agent.command, "another-cli");
+        assert!(matches!(another_agent.transport, Transport::Tcp { .. }));
+
+        // Test 2: When no surge.toml exists, it should return empty registry
+        let no_config_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml_no_config");
+        let _ = fs::remove_dir_all(&no_config_dir);
+        fs::create_dir_all(&no_config_dir).unwrap();
+        std::env::set_current_dir(&no_config_dir).unwrap();
+
+        let empty_registry = Registry::load_from_toml().unwrap();
+        assert_eq!(empty_registry.len(), 0);
+        assert!(empty_registry.is_empty());
+
+        // Test 3: When surge.toml exists but has no agents, return empty registry
+        let empty_agents_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml_empty_agents");
+        let _ = fs::remove_dir_all(&empty_agents_dir);
+        fs::create_dir_all(&empty_agents_dir).unwrap();
+        let empty_config_path = empty_agents_dir.join("surge.toml");
+        fs::write(
+            &empty_config_path,
+            r#"
+default_agent = "claude-acp"
+
+[pipeline]
+max_qa_iterations = 5
+"#,
+        )
+        .unwrap();
+        std::env::set_current_dir(&empty_agents_dir).unwrap();
+
+        let empty_agents_registry = Registry::load_from_toml().unwrap();
+        assert_eq!(empty_agents_registry.len(), 0);
+
+        // Restore original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&no_config_dir);
+        let _ = fs::remove_dir_all(&empty_agents_dir);
     }
 }
