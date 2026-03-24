@@ -3,6 +3,7 @@ use std::io::{self, Write as _};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use surge_core::SurgeConfig;
+use tokio::signal;
 
 mod commands;
 
@@ -151,6 +152,34 @@ enum Commands {
     },
 }
 
+/// Set up signal handlers for graceful shutdown.
+///
+/// Listens for SIGINT (Ctrl+C) and SIGTERM and triggers graceful shutdown.
+async fn setup_signal_handler() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                eprintln!("\n⚡ Received SIGTERM. Shutting down gracefully...");
+            }
+            _ = sigint.recv() => {
+                eprintln!("\n⚡ Received SIGINT. Shutting down gracefully...");
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+        eprintln!("\n⚡ Received Ctrl+C. Shutting down gracefully...");
+    }
+}
+
 /// Check for orphaned worktrees at startup and prompt user for cleanup.
 ///
 /// Returns `true` if cleanup was performed or if no orphans were found.
@@ -228,7 +257,21 @@ async fn main() -> Result<()> {
         let _ = check_and_cleanup_orphans();
     }
 
-    match cli.command {
+    // Run command with signal handling
+    tokio::select! {
+        result = run_command(cli.command) => {
+            result
+        }
+        _ = setup_signal_handler() => {
+            // Signal received, exit gracefully
+            std::process::exit(130); // Standard exit code for SIGINT
+        }
+    }
+}
+
+/// Execute the CLI command.
+async fn run_command(command: Commands) -> Result<()> {
+    match command {
         Commands::Ping { agent } => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
