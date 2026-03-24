@@ -12,6 +12,7 @@ use surge_core::state::TaskState;
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
 use tokio::sync::{Mutex, broadcast};
+use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 
 use crate::context::SubtaskContext;
@@ -138,13 +139,20 @@ impl SubtaskExecutor {
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
+                // Calculate exponential backoff: 1s, 2s, 4s, 8s...
+                let backoff_secs = 2u64.pow(attempt - 1);
+                let backoff_duration = Duration::from_secs(backoff_secs);
+
                 info!(
                     subtask_id = %subtask_id,
                     attempt,
                     max_retries = self.config.max_retries,
+                    backoff_secs,
                     elapsed_ms = retry_start.elapsed().as_millis() as u64,
-                    "retrying subtask"
+                    "retrying subtask after backoff delay"
                 );
+
+                sleep(backoff_duration).await;
             }
 
             match pool.prompt(session, content.clone()).await {
