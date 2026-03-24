@@ -107,6 +107,39 @@ pub enum SurgeEvent {
     /// Permission was granted or denied.
     PermissionResolved { session_id: String, granted: bool },
 
+    // --- Agent health monitoring events ---
+    /// Agent health has degraded (high error rate or latency).
+    AgentHealthDegraded {
+        agent_name: String,
+        error_rate: f64,
+        avg_latency_ms: u64,
+    },
+
+    /// Agent hit rate limit from provider.
+    AgentRateLimited {
+        agent_name: String,
+        retry_after_secs: u64,
+    },
+
+    /// Agent reconnection attempt in progress.
+    AgentReconnecting {
+        agent_name: String,
+        attempt: u32,
+        max_attempts: u32,
+    },
+
+    /// Agent successfully reconnected.
+    AgentReconnected {
+        agent_name: String,
+        attempts_taken: u32,
+    },
+
+    /// Agent heartbeat check failed.
+    AgentHeartbeatFailed {
+        agent_name: String,
+        consecutive_failures: u32,
+    },
+
     // --- Task lifecycle events ---
     /// Task state changed.
     TaskStateChanged {
