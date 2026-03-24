@@ -5,7 +5,7 @@
 
 use crate::Result;
 use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
-use crate::pricing::{PricingModel, claude_sonnet_35_pricing, gpt4_turbo_pricing, gemini_pro_pricing};
+use crate::pricing::{PricingModel, claude_opus_pricing, claude_sonnet_35_pricing, gpt4_turbo_pricing, gemini_pro_pricing};
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,9 +46,59 @@ impl UsageAggregator {
     pub fn new(store: Store) -> Self {
         // Initialize pricing map with default models for common agents
         let mut pricing = HashMap::new();
+
+        // Claude variants
         pricing.insert("claude".to_string(), claude_sonnet_35_pricing());
+        pricing.insert("claude-sonnet".to_string(), claude_sonnet_35_pricing());
+        pricing.insert("claude-opus".to_string(), claude_opus_pricing());
+        pricing.insert("claude-haiku".to_string(), claude_sonnet_35_pricing()); // Use sonnet pricing for haiku
+
+        // GPT variants
         pricing.insert("gpt".to_string(), gpt4_turbo_pricing());
+        pricing.insert("gpt-4".to_string(), gpt4_turbo_pricing());
+        pricing.insert("gpt4".to_string(), gpt4_turbo_pricing());
+
+        // Gemini variants
         pricing.insert("gemini".to_string(), gemini_pro_pricing());
+        pricing.insert("gemini-pro".to_string(), gemini_pro_pricing());
+
+        Self {
+            store: Arc::new(Mutex::new(store)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            pricing: Arc::new(pricing),
+        }
+    }
+
+    /// Create a new usage aggregator with the given store and custom pricing.
+    ///
+    /// If `custom_pricing` is provided, it will be used for all agents.
+    /// Otherwise, falls back to default pricing models for common agents.
+    pub fn new_with_pricing(store: Store, custom_pricing: Option<PricingModel>) -> Self {
+        let mut pricing = HashMap::new();
+
+        if let Some(model) = custom_pricing {
+            // Use custom pricing for all common agent name variants
+            pricing.insert("claude".to_string(), model.clone());
+            pricing.insert("claude-sonnet".to_string(), model.clone());
+            pricing.insert("claude-opus".to_string(), model.clone());
+            pricing.insert("claude-haiku".to_string(), model.clone());
+            pricing.insert("gpt".to_string(), model.clone());
+            pricing.insert("gpt-4".to_string(), model.clone());
+            pricing.insert("gpt4".to_string(), model.clone());
+            pricing.insert("gemini".to_string(), model.clone());
+            pricing.insert("gemini-pro".to_string(), model);
+        } else {
+            // Fall back to defaults
+            pricing.insert("claude".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("claude-sonnet".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("claude-opus".to_string(), claude_opus_pricing());
+            pricing.insert("claude-haiku".to_string(), claude_sonnet_35_pricing());
+            pricing.insert("gpt".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gpt-4".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gpt4".to_string(), gpt4_turbo_pricing());
+            pricing.insert("gemini".to_string(), gemini_pro_pricing());
+            pricing.insert("gemini-pro".to_string(), gemini_pro_pricing());
+        }
 
         Self {
             store: Arc::new(Mutex::new(store)),
