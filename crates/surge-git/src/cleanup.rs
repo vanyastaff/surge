@@ -3,8 +3,12 @@
 //! Provides [`LifecycleManager`] which wraps a [`GitManager`] and offers
 //! automated cleanup of orphaned worktrees and merged branches.
 
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
+
 use git2::{BranchType, Repository};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::audit::CleanupAudit;
 use crate::worktree::{GitError, GitManager};
@@ -16,6 +20,76 @@ pub struct CleanupReport {
     pub removed_worktrees: Vec<String>,
     /// Branches that were removed.
     pub removed_branches: Vec<String>,
+}
+
+/// Maximum number of retry attempts for Windows locked file deletion.
+const MAX_RETRY_ATTEMPTS: u32 = 5;
+
+/// Initial delay in milliseconds before retrying file deletion.
+const INITIAL_RETRY_DELAY_MS: u64 = 100;
+
+/// Remove a directory with retry logic for Windows locked file issues.
+///
+/// On Windows, file deletion can fail due to:
+/// - Antivirus software scanning files
+/// - Windows Search indexing
+/// - Explorer thumbnails being generated
+/// - Other processes with handles to files
+///
+/// This function retries deletion with exponential backoff on Windows.
+/// On Unix, it simply calls `fs::remove_dir_all` once.
+///
+/// # Errors
+///
+/// Returns an error if deletion fails after all retry attempts.
+pub fn remove_dir_with_retry(path: &Path) -> Result<(), GitError> {
+    #[cfg(windows)]
+    {
+        let mut last_error = None;
+        for attempt in 0..MAX_RETRY_ATTEMPTS {
+            match fs::remove_dir_all(path) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    // Check if it's a permission/access error that might be temporary
+                    let is_retryable = matches!(
+                        e.kind(),
+                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Other
+                    );
+
+                    if !is_retryable || attempt == MAX_RETRY_ATTEMPTS - 1 {
+                        return Err(GitError::Io(e));
+                    }
+
+                    // Exponential backoff: 100ms, 200ms, 400ms, 800ms
+                    let delay = Duration::from_millis(INITIAL_RETRY_DELAY_MS * 2u64.pow(attempt));
+                    warn!(
+                        ?path,
+                        attempt = attempt + 1,
+                        max_attempts = MAX_RETRY_ATTEMPTS,
+                        delay_ms = delay.as_millis(),
+                        error = %e,
+                        "directory deletion failed, retrying after delay"
+                    );
+
+                    std::thread::sleep(delay);
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        // This should never be reached due to the loop logic, but satisfy the compiler
+        Err(GitError::Io(
+            last_error.unwrap_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "max retries exceeded"
+            ))
+        ))
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::remove_dir_all(path).map_err(GitError::Io)
+    }
 }
 
 /// Manages lifecycle cleanup of Surge worktrees and branches.
@@ -327,5 +401,103 @@ mod tests {
         assert!(event_types.contains(&&CleanupEventType::WorktreeRemoved));
         assert!(event_types.contains(&&CleanupEventType::MergedBranchDetected));
         assert!(event_types.contains(&&CleanupEventType::BranchDeleted));
+    }
+
+    /// Windows-specific tests for locked file retry logic.
+    #[cfg(test)]
+    mod windows {
+        use super::*;
+
+        #[test]
+        fn test_remove_dir_with_retry_success() {
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("test_dir");
+            fs::create_dir(&test_dir).unwrap();
+            fs::write(test_dir.join("file.txt"), "content").unwrap();
+
+            // Should succeed on first try
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_ok());
+            assert!(!test_dir.exists());
+        }
+
+        #[test]
+        fn test_remove_dir_with_retry_nonexistent() {
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("nonexistent");
+
+            // Should fail - directory doesn't exist
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_remove_dir_with_retry_nested() {
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("nested");
+            let subdir = test_dir.join("subdir");
+            fs::create_dir_all(&subdir).unwrap();
+            fs::write(subdir.join("file1.txt"), "content1").unwrap();
+            fs::write(test_dir.join("file2.txt"), "content2").unwrap();
+
+            // Should successfully remove nested directory
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_ok());
+            assert!(!test_dir.exists());
+        }
+
+        #[cfg(windows)]
+        #[test]
+        fn test_remove_dir_with_retry_multiple_files() {
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("multi_file_dir");
+            fs::create_dir(&test_dir).unwrap();
+
+            // Create multiple files
+            for i in 0..10 {
+                fs::write(test_dir.join(format!("file{}.txt", i)), format!("content {}", i)).unwrap();
+            }
+
+            // Should successfully remove directory with multiple files
+            // The retry logic ensures it works even if Windows temporarily locks files
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_ok());
+            assert!(!test_dir.exists());
+        }
+
+        #[cfg(windows)]
+        #[test]
+        fn test_remove_dir_with_retry_readonly_recovery() {
+            use std::fs;
+
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("readonly_dir");
+            fs::create_dir(&test_dir).unwrap();
+            let file_path = test_dir.join("readonly.txt");
+            fs::write(&file_path, "content").unwrap();
+
+            // Make file read-only
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_readonly(true);
+            fs::set_permissions(&file_path, perms).unwrap();
+
+            // Directory removal should handle read-only files
+            // remove_dir_all removes read-only files on Windows
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_ok());
+            assert!(!test_dir.exists());
+        }
+
+        #[test]
+        fn test_remove_dir_with_retry_empty_dir() {
+            let temp = tempfile::tempdir().unwrap();
+            let test_dir = temp.path().join("empty_dir");
+            fs::create_dir(&test_dir).unwrap();
+
+            // Should successfully remove empty directory
+            let result = remove_dir_with_retry(&test_dir);
+            assert!(result.is_ok());
+            assert!(!test_dir.exists());
+        }
     }
 }
