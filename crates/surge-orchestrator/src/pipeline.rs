@@ -445,7 +445,10 @@ impl Orchestrator {
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
             old_state: TaskState::Executing { completed, total },
-            new_state: TaskState::QaReview,
+            new_state: TaskState::QaReview {
+                verdict: None,
+                reasoning: None,
+            },
         });
 
         let qa_reviewer = QaReviewer::new(self.config.surge_config.pipeline.max_qa_iterations);
@@ -463,7 +466,10 @@ impl Orchestrator {
             QaVerdict::Approved => {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
                     task_id,
-                    old_state: TaskState::QaReview,
+                    old_state: TaskState::QaReview {
+                        verdict: None,
+                        reasoning: None,
+                    },
                     new_state: TaskState::Merging,
                 });
 

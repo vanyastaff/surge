@@ -240,6 +240,56 @@ impl QaReviewer {
     }
 }
 
+/// Parse the agent's response as structured JSON into a QA verdict.
+///
+/// Attempts to extract and parse a JSON object from the response text.
+/// The JSON can be wrapped in markdown code blocks (```json ... ```).
+/// On parse failure, falls back to text-based parsing via `parse_qa_text`.
+#[must_use]
+pub fn parse_qa_json(text: &str) -> QaVerdict {
+    // Try to extract JSON from potential markdown code blocks
+    let json_text = extract_json_from_text(text);
+
+    match serde_json::from_str::<QaResponse>(json_text) {
+        Ok(response) => response.into_verdict(),
+        Err(e) => {
+            info!(
+                error = %e,
+                "failed to parse JSON response, falling back to text parsing"
+            );
+            parse_qa_text(text)
+        }
+    }
+}
+
+/// Extract JSON from text, handling markdown code blocks.
+///
+/// Looks for JSON content within ```json ... ``` blocks or uses the entire text.
+fn extract_json_from_text(text: &str) -> &str {
+    // Look for ```json ... ``` code blocks
+    if let Some(start) = text.find("```json") {
+        let after_marker = &text[start + 7..];
+        if let Some(end) = after_marker.find("```") {
+            return after_marker[..end].trim();
+        }
+    }
+
+    // Look for ``` ... ``` code blocks (without json marker)
+    if let Some(start) = text.find("```") {
+        let after_marker = &text[start + 3..];
+        if let Some(end) = after_marker.find("```") {
+            let content = after_marker[..end].trim();
+            // Only use if it looks like JSON (starts with { or [)
+            if content.starts_with('{') || content.starts_with('[') {
+                return content;
+            }
+        }
+    }
+
+    // No code blocks found, use entire text
+    text.trim()
+}
+
 /// Parse the agent's response text into a QA verdict.
 ///
 /// Looks for `APPROVED`, `PARTIAL`, or `NEEDS_FIX: <description>` markers (case-insensitive).
@@ -572,5 +622,148 @@ mod tests {
             serde_json::to_string(&QaVerdictKind::NeedsFix).unwrap(),
             "\"needs_fix\""
         );
+    }
+
+    #[test]
+    fn test_parse_qa_json_approved() {
+        let json = r#"{"verdict": "approved"}"#;
+        let verdict = parse_qa_json(json);
+        assert!(matches!(verdict, QaVerdict::Approved));
+    }
+
+    #[test]
+    fn test_parse_qa_json_approved_in_markdown() {
+        let text = r#"Here's the QA result:
+```json
+{"verdict": "approved"}
+```
+All criteria met!"#;
+        let verdict = parse_qa_json(text);
+        assert!(matches!(verdict, QaVerdict::Approved));
+    }
+
+    #[test]
+    fn test_parse_qa_json_partial() {
+        let json = r#"{
+            "verdict": "partial",
+            "met": ["error handling", "documentation"],
+            "unmet": ["tests", "performance"]
+        }"#;
+        let verdict = parse_qa_json(json);
+
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 2);
+                assert_eq!(unmet.len(), 2);
+                assert!(met.contains(&"error handling".to_string()));
+                assert!(unmet.contains(&"tests".to_string()));
+            }
+            _ => panic!("expected Partial verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_json_needs_fix() {
+        let json = r#"{
+            "verdict": "needs_fix",
+            "issues": "Missing error handling in main.rs"
+        }"#;
+        let verdict = parse_qa_json(json);
+
+        match verdict {
+            QaVerdict::NeedsFix { issues } => {
+                assert_eq!(issues, "Missing error handling in main.rs");
+            }
+            _ => panic!("expected NeedsFix verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_json_needs_fix_no_issues() {
+        let json = r#"{"verdict": "needs_fix"}"#;
+        let verdict = parse_qa_json(json);
+
+        match verdict {
+            QaVerdict::NeedsFix { issues } => {
+                assert_eq!(issues, "QA requested fixes (no details provided)");
+            }
+            _ => panic!("expected NeedsFix verdict"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qa_json_with_code_block() {
+        let text = r#"
+```json
+{
+    "verdict": "partial",
+    "met": ["criterion 1"],
+    "unmet": ["criterion 2"]
+}
+```
+"#;
+        let verdict = parse_qa_json(text);
+        assert!(matches!(verdict, QaVerdict::Partial { .. }));
+    }
+
+    #[test]
+    fn test_parse_qa_json_with_generic_code_block() {
+        let text = r#"
+```
+{
+    "verdict": "approved"
+}
+```
+"#;
+        let verdict = parse_qa_json(text);
+        assert!(matches!(verdict, QaVerdict::Approved));
+    }
+
+    #[test]
+    fn test_parse_qa_json_fallback_to_text() {
+        // Invalid JSON should fall back to text parsing
+        let text = "APPROVED";
+        let verdict = parse_qa_json(text);
+        assert!(matches!(verdict, QaVerdict::Approved));
+    }
+
+    #[test]
+    fn test_parse_qa_json_fallback_to_text_needs_fix() {
+        let text = "NEEDS_FIX: fix the tests";
+        let verdict = parse_qa_json(text);
+        assert!(matches!(verdict, QaVerdict::NeedsFix { .. }));
+    }
+
+    #[test]
+    fn test_extract_json_from_text_plain() {
+        let json = r#"{"verdict": "approved"}"#;
+        assert_eq!(extract_json_from_text(json), json);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_markdown_json() {
+        let text = "Result:\n```json\n{\"verdict\": \"approved\"}\n```\nDone";
+        let extracted = extract_json_from_text(text);
+        assert_eq!(extracted, r#"{"verdict": "approved"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_markdown_generic() {
+        let text = "Result:\n```\n{\"verdict\": \"approved\"}\n```\nDone";
+        let extracted = extract_json_from_text(text);
+        assert_eq!(extracted, r#"{"verdict": "approved"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_no_code_block() {
+        let text = "  {\"verdict\": \"approved\"}  ";
+        assert_eq!(extract_json_from_text(text), r#"{"verdict": "approved"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_non_json_code_block() {
+        // Code block with non-JSON content should not be extracted
+        let text = "```\nplain text\n```";
+        assert_eq!(extract_json_from_text(text), "```\nplain text\n```");
     }
 }

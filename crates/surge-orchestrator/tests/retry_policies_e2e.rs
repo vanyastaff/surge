@@ -400,8 +400,15 @@ async fn test_checkpoint_all_task_states() {
             completed: 3,
             total: 7,
         },
-        TaskState::QaReview,
-        TaskState::QaFix { iteration: 1 },
+        TaskState::QaReview {
+            verdict: None,
+            reasoning: None,
+        },
+        TaskState::QaFix {
+            iteration: 1,
+            verdict: None,
+            reasoning: None,
+        },
         TaskState::HumanReview,
         TaskState::Merging,
         TaskState::Completed,
