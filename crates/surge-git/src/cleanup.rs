@@ -212,6 +212,29 @@ impl LifecycleManager {
         report.removed_branches = branch_report.removed_branches;
         Ok(report)
     }
+
+    /// Discard a worktree and branch for a specific spec.
+    ///
+    /// This is the audited version of [`GitManager::discard`] that logs
+    /// cleanup events when audit logging is enabled.
+    pub fn discard(&self, spec_id: &str) -> Result<(), GitError> {
+        info!(spec_id, "discarding worktree and branch");
+
+        // Log discard operation if audit is enabled
+        if let Some(audit) = &self.audit {
+            let _ = audit.log_worktree_removed(spec_id, Some("explicit discard".to_string()));
+        }
+
+        self.git_manager.discard(spec_id)?;
+
+        // Log branch deletion (discard removes both worktree and branch)
+        if let Some(audit) = &self.audit {
+            let branch_name = format!("surge/{}", spec_id);
+            let _ = audit.log_branch_deleted(&branch_name, Some("explicit discard".to_string()));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -401,6 +424,52 @@ mod tests {
         assert!(event_types.contains(&&CleanupEventType::WorktreeRemoved));
         assert!(event_types.contains(&&CleanupEventType::MergedBranchDetected));
         assert!(event_types.contains(&&CleanupEventType::BranchDeleted));
+    }
+
+    #[test]
+    fn test_discard_with_audit() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+
+        // Create a worktree
+        let info = gm.create_worktree("test-discard", None).unwrap();
+        assert!(info.path.exists());
+
+        // Create audit logger
+        let audit_path = path.join(".surge").join("cleanup.log");
+        let audit = CleanupAudit::new(audit_path.clone()).unwrap();
+
+        // Discard with audit
+        let lm = LifecycleManager::with_audit(GitManager::new(path.clone()).unwrap(), audit);
+        lm.discard("test-discard").unwrap();
+
+        // Verify worktree and branch are removed
+        let gm_verify = GitManager::new(path).unwrap();
+        let worktrees = gm_verify.list_worktrees().unwrap();
+        assert!(worktrees.is_empty());
+
+        // Verify audit log exists
+        assert!(audit_path.exists());
+
+        // Read and verify audit events
+        let audit_verify = CleanupAudit::new(audit_path).unwrap();
+        let events = audit_verify.read_events().unwrap();
+        assert_eq!(events.len(), 2); // worktree_removed, branch_deleted
+
+        // Verify event types
+        assert_eq!(events[0].event_type, CleanupEventType::WorktreeRemoved);
+        assert_eq!(events[0].resource_id, "test-discard");
+        assert_eq!(
+            events[0].context,
+            Some("explicit discard".to_string())
+        );
+
+        assert_eq!(events[1].event_type, CleanupEventType::BranchDeleted);
+        assert_eq!(events[1].resource_id, "surge/test-discard");
+        assert_eq!(
+            events[1].context,
+            Some("explicit discard".to_string())
+        );
     }
 
     /// Windows-specific tests for locked file retry logic.
