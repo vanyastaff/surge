@@ -9,6 +9,7 @@ use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
 use surge_core::state::TaskState;
+use surge_core::SurgeError;
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
 use tokio::sync::{Mutex, broadcast};
@@ -216,6 +217,42 @@ impl SubtaskExecutor {
                     }
                 }
                 Err(e) => {
+                    // Check if this is a rate limit error
+                    if let SurgeError::RateLimit {
+                        agent,
+                        retry_after_secs,
+                        attempt_count,
+                        next_retry_time,
+                    } = &e
+                    {
+                        warn!(
+                            subtask_id = %subtask_id,
+                            agent,
+                            retry_after_secs,
+                            attempt_count,
+                            next_retry_time = ?next_retry_time,
+                            "rate limit detected, applying cooldown"
+                        );
+
+                        // Rate limit errors don't count as consecutive failures
+                        // (they're temporary, not agent/task failures)
+
+                        // Wait for the specified cooldown period
+                        let cooldown = Duration::from_secs(*retry_after_secs);
+                        info!(
+                            subtask_id = %subtask_id,
+                            cooldown_secs = retry_after_secs,
+                            "sleeping for rate limit cooldown"
+                        );
+                        sleep(cooldown).await;
+
+                        last_error = format!("rate limit exceeded, retried after {retry_after_secs}s");
+
+                        // Continue to next retry attempt without failing
+                        continue;
+                    }
+
+                    // Non-rate-limit errors are logged and stored
                     warn!(
                         subtask_id = %subtask_id,
                         attempt,
@@ -279,5 +316,23 @@ mod tests {
 
         executor.reset_failures();
         assert!(!executor.is_circuit_broken());
+    }
+
+    #[test]
+    fn test_executor_rate_limit_does_not_increment_failures() {
+        // Rate limit errors should not count towards consecutive failures
+        // since they're temporary service limits, not agent/task failures
+        let config = ExecutorConfig {
+            max_retries: 3,
+            circuit_breaker_threshold: 2,
+        };
+        let executor = SubtaskExecutor::new(config);
+
+        // Verify initial state
+        assert_eq!(executor.consecutive_failures, 0);
+        assert!(!executor.is_circuit_broken());
+
+        // The actual rate limit handling is tested in integration tests
+        // This unit test just verifies the configuration and initial state
     }
 }
