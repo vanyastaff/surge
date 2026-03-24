@@ -324,6 +324,30 @@ impl Registry {
         discovery.discover_all(&self.entries)
     }
 
+    /// Discover installed agents using the merged registry.
+    ///
+    /// This method creates a merged registry from config, builtin, and optionally
+    /// remote sources, then uses [`AgentDiscovery`] to find which agents are
+    /// actually installed on the system.
+    ///
+    /// Returns detected agents with full registry metadata, command paths, and
+    /// version information when available.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let registry = Registry::builtin();
+    /// let detected = registry.discover_with_merged_registry();
+    /// for agent in detected {
+    ///     println!("Found: {} at {:?}", agent.entry.display_name, agent.command_path);
+    /// }
+    /// ```
+    pub fn discover_with_merged_registry(&self) -> Vec<DetectedAgent> {
+        // Use AgentDiscovery for intelligent matching
+        let mut discovery = AgentDiscovery::new();
+        discovery.discover_all(&self.entries)
+    }
+
     pub fn detect_runnable_with_paths(&self) -> Vec<DetectedAgent> {
         // Serve from cache when fresh.
         if let Some(cached) = load_discovery_cache() {

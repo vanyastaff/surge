@@ -10,6 +10,26 @@
 //! | Combined discovery | [`AgentDiscovery::discover_all()`] |
 //!
 //! Discovery results are cached to avoid repeated filesystem probing.
+//!
+//! # Integration with Registry
+//!
+//! The discovery system integrates with the [`Registry`](crate::registry::Registry)
+//! to provide intelligent agent matching. Discovery accepts registry entries from
+//! any source (builtin, remote, or config) and returns [`DetectedAgent`](crate::registry::DetectedAgent)
+//! instances with full metadata when agents are found on the system.
+//!
+//! ```ignore
+//! use surge_acp::registry::Registry;
+//! use surge_acp::discovery::AgentDiscovery;
+//!
+//! // Create a merged registry from multiple sources
+//! let builtin = Registry::builtin();
+//! let merged = Registry::merged(builtin, remote);
+//!
+//! // Discover which agents are actually installed
+//! let mut discovery = AgentDiscovery::new();
+//! let detected = discovery.discover_all(merged.list());
+//! ```
 
 use crate::registry::{AgentKind, DetectedAgent, RegistryEntry};
 use serde::{Deserialize, Serialize};
@@ -245,6 +265,24 @@ impl AgentDiscovery {
     /// 2. Probes standard installation paths
     /// 3. Detects versions for found agents
     /// 4. Caches results
+    ///
+    /// # Registry Integration
+    ///
+    /// Accepts registry entries from any source (builtin, remote, or merged).
+    /// This enables intelligent matching of discovered binaries against registry
+    /// metadata, returning full agent information including capabilities, models,
+    /// and vendor details.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let registry = Registry::builtin();
+    /// let mut discovery = AgentDiscovery::new();
+    /// let detected = discovery.discover_all(registry.list());
+    /// for agent in detected {
+    ///     println!("Found: {} v{:?}", agent.entry.display_name, agent.detected_version);
+    /// }
+    /// ```
     ///
     /// Returns a list of detected agents with their paths and metadata.
     pub fn discover_all(&mut self, registry_entries: &[RegistryEntry]) -> Vec<DetectedAgent> {
@@ -503,5 +541,61 @@ mod tests {
             }
             let _ = std::fs::remove_file(&temp_file3);
         }
+    }
+
+    #[test]
+    fn test_registry_integration() {
+        use crate::registry::Registry;
+
+        // Create a merged registry from builtin sources
+        let builtin = Registry::builtin();
+        let entries = builtin.list();
+
+        // Verify registry has agents
+        assert!(!entries.is_empty(), "Builtin registry should have agents");
+
+        // Create discovery instance
+        let mut discovery = AgentDiscovery::new();
+
+        // Run discovery against registry entries
+        let detected = discovery.discover_all(entries);
+
+        // Verify discovery returns results (may be empty if no agents installed)
+        // The key test is that discovery accepts registry entries and doesn't panic
+        assert!(
+            detected.len() <= entries.len(),
+            "Detected agents should not exceed registry entries"
+        );
+
+        // Each detected agent should have matching registry metadata
+        for agent in &detected {
+            assert!(
+                entries.iter().any(|e| e.kind == agent.entry.kind),
+                "Detected agent {:?} should match a registry entry",
+                agent.entry.kind
+            );
+
+            // Verify DetectedAgent has full registry metadata
+            assert!(!agent.entry.id.is_empty(), "Agent ID should not be empty");
+            assert!(
+                !agent.entry.display_name.is_empty(),
+                "Display name should not be empty"
+            );
+        }
+
+        // Test with merged registry (builtin + empty remote)
+        let empty_remote = Registry::builtin();
+        let merged = Registry::merged(builtin.clone(), empty_remote);
+        let merged_entries = merged.list();
+
+        // Discovery should work with merged registry
+        let detected_merged = discovery.discover_all(merged_entries);
+
+        // Results should be consistent (discovery uses cached results)
+        assert_eq!(
+            detected.len(),
+            detected_merged.len(),
+            "Merged registry discovery should produce consistent results"
+        );
     }
 }
