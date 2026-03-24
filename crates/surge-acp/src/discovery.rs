@@ -169,9 +169,8 @@ impl AgentDiscovery {
         }
 
         // For backwards compatibility, add known aliases
-        match entry.id.as_str() {
-            "github-copilot-cli" => env_vars.push("GH_PATH".to_string()),
-            _ => {}
+        if entry.id.as_str() == "github-copilot-cli" {
+            env_vars.push("GH_PATH".to_string());
         }
 
         // Try each environment variable in order

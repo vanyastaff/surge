@@ -34,11 +34,7 @@ capabilities = ["code", "test"]
 [agents.remote-agent]
 command = "remote-agent-client"
 capabilities = ["code", "review"]
-
-[agents.remote-agent.transport]
-type = "tcp"
-host = "localhost"
-port = 8080
+transport = { tcp = { host = "localhost", port = 8080 } }
 
 # Example 6: Agent with MCP servers (Model Context Protocol)
 # MCP servers provide additional context and tools to the agent

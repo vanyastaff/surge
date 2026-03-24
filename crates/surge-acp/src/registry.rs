@@ -628,8 +628,7 @@ fn resolve_command_uncached(command: &str) -> Option<String> {
 
 /// Convert a kebab-case or snake_case name to a human-readable display name.
 fn prettify_name(name: &str) -> String {
-    name.replace('-', " ")
-        .replace('_', " ")
+    name.replace(['-', '_'], " ")
         .split_whitespace()
         .map(|word| {
             let mut chars = word.chars();
