@@ -37,6 +37,7 @@ max_retries = 3                  # Maximum retry attempts
 initial_delay_ms = 1000          # Initial delay: 1 second
 max_delay_ms = 60000             # Maximum delay: 60 seconds
 backoff_strategy = "exponential" # Options: "linear", "exponential", "exponential_jitter"
+jitter_factor = 0.1              # Randomness factor: 0.0 = no jitter, 1.0 = full jitter (default: 0.1)
 
 # Example: Aggressive retry with jitter (uncomment to use)
 # [resilience.retry_policy]
@@ -44,6 +45,7 @@ backoff_strategy = "exponential" # Options: "linear", "exponential", "exponentia
 # initial_delay_ms = 500
 # max_delay_ms = 30000
 # backoff_strategy = "exponential_jitter"  # Adds randomness to prevent thundering herd
+# jitter_factor = 0.25             # 25% randomness for better load distribution
 
 # Example: Conservative retry with linear backoff (uncomment to use)
 # [resilience.retry_policy]
@@ -51,3 +53,4 @@ backoff_strategy = "exponential" # Options: "linear", "exponential", "exponentia
 # initial_delay_ms = 2000
 # max_delay_ms = 10000
 # backoff_strategy = "linear"  # Fixed delay between retries
+# jitter_factor = 0.05         # Small jitter to avoid synchronized retries

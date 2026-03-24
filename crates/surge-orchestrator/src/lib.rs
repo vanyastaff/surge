@@ -1,6 +1,7 @@
 //! Orchestrator — drives specs through the full pipeline.
 
 pub mod budget;
+pub mod circuit_breaker;
 pub mod conflict;
 pub mod context;
 pub mod executor;
@@ -11,6 +12,7 @@ pub mod pipeline;
 pub mod planner;
 pub mod project;
 pub mod qa;
+pub mod retry;
 pub mod schedule;
 
 pub use budget::{BudgetStatus, BudgetTracker};

@@ -10,7 +10,6 @@ use surge_core::spec::{Spec, Subtask};
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
 use tokio::sync::{Mutex, Semaphore, broadcast};
-use tracing::warn;
 
 use crate::executor::{ExecutorConfig, SubtaskExecutor, SubtaskResult};
 
@@ -98,15 +97,6 @@ impl ParallelExecutor {
 
         for (i, subtask) in subtasks.iter().enumerate() {
             let _permit = semaphore.acquire().await.expect("semaphore closed");
-
-            if executor.is_circuit_broken() {
-                warn!(
-                    subtask_id = %subtask.id,
-                    "circuit breaker tripped — skipping subtask"
-                );
-                failures.push((subtask.id, "circuit breaker tripped".to_string()));
-                continue;
-            }
 
             // Human input only goes to the first subtask in the batch.
             let input = if i == 0 { human_input } else { None };

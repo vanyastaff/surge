@@ -329,6 +329,9 @@ pub struct RetryPolicy {
     /// Backoff strategy for calculating delays.
     #[serde(default)]
     pub backoff_strategy: BackoffStrategy,
+    /// Jitter factor for randomizing retry delays (0.0 = no jitter, 1.0 = full jitter).
+    #[serde(default = "default_jitter_factor")]
+    pub jitter_factor: f64,
 }
 
 impl Default for RetryPolicy {
@@ -338,6 +341,7 @@ impl Default for RetryPolicy {
             initial_delay_ms: default_initial_delay_ms(),
             max_delay_ms: default_max_delay_ms(),
             backoff_strategy: BackoffStrategy::default(),
+            jitter_factor: default_jitter_factor(),
         }
     }
 }
@@ -350,6 +354,9 @@ fn default_initial_delay_ms() -> u64 {
 }
 fn default_max_delay_ms() -> u64 {
     60000
+}
+fn default_jitter_factor() -> f64 {
+    0.1
 }
 
 /// Resilience configuration for agent connections.

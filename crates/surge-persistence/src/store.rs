@@ -1,6 +1,6 @@
 //! SQLite-based storage for token usage data.
 
-use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
+use crate::models::{CircuitBreakerState, SessionUsage, SpecUsage, SubtaskUsage};
 use crate::{PersistenceError, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
@@ -88,6 +88,24 @@ CREATE TABLE IF NOT EXISTS task_state (
 const CREATE_TASK_STATE_SPEC_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS idx_task_state_spec ON task_state(spec_id)";
 
+const CREATE_CIRCUIT_BREAKER_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS circuit_breaker (
+    task_id TEXT NOT NULL,
+    subtask_id TEXT NOT NULL,
+    consecutive_failures INTEGER NOT NULL,
+    last_error TEXT,
+    tripped_at INTEGER,
+    next_retry_time INTEGER,
+    PRIMARY KEY (task_id, subtask_id)
+)
+"#;
+
+const CREATE_CIRCUIT_BREAKER_TASK_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS idx_circuit_breaker_task ON circuit_breaker(task_id)";
+
+const CREATE_CIRCUIT_BREAKER_TRIPPED_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS idx_circuit_breaker_tripped ON circuit_breaker(tripped_at)";
+
 // ── Store ───────────────────────────────────────────────────────────
 
 /// SQLite-based storage for token usage data.
@@ -168,11 +186,14 @@ impl Store {
             self.conn.execute(CREATE_SUBTASK_USAGE_TABLE, [])?;
             self.conn.execute(CREATE_SPEC_USAGE_TABLE, [])?;
             self.conn.execute(CREATE_TASK_STATE_TABLE, [])?;
+            self.conn.execute(CREATE_CIRCUIT_BREAKER_TABLE, [])?;
             self.conn.execute(CREATE_SESSION_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_SESSION_SUBTASK_INDEX, [])?;
             self.conn.execute(CREATE_SESSION_TIMESTAMP_INDEX, [])?;
             self.conn.execute(CREATE_SUBTASK_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_TASK_STATE_SPEC_INDEX, [])?;
+            self.conn.execute(CREATE_CIRCUIT_BREAKER_TASK_INDEX, [])?;
+            self.conn.execute(CREATE_CIRCUIT_BREAKER_TRIPPED_INDEX, [])?;
 
             self.conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?1)",
@@ -543,6 +564,125 @@ impl Store {
                 PersistenceError::Storage(format!("Failed to deserialize task state: {e}"))
             })?;
             Ok((task_id, state, updated_at))
+        })
+        .collect()
+    }
+
+    // ── Circuit Breaker Operations ──────────────────────────────────
+
+    /// Save circuit breaker state for a subtask.
+    ///
+    /// Creates or updates the circuit breaker state, allowing persistence
+    /// across restarts to prevent infinite retry loops.
+    pub fn save_circuit_breaker_state(&mut self, state: &CircuitBreakerState) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO circuit_breaker (
+                task_id, subtask_id, consecutive_failures, last_error,
+                tripped_at, next_retry_time
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                state.task_id.to_string(),
+                state.subtask_id.to_string(),
+                state.consecutive_failures as i64,
+                state.last_error.as_ref(),
+                state.tripped_at.map(|t| t as i64),
+                state.next_retry_time.map(|t| t as i64),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load circuit breaker state for a specific subtask.
+    ///
+    /// Returns `None` if no circuit breaker state exists for the given task/subtask.
+    pub fn load_circuit_breaker_state(
+        &self,
+        task_id: TaskId,
+        subtask_id: SubtaskId,
+    ) -> Result<Option<CircuitBreakerState>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT consecutive_failures, last_error, tripped_at, next_retry_time
+                FROM circuit_breaker
+                WHERE task_id = ?1 AND subtask_id = ?2
+                "#,
+                params![task_id.to_string(), subtask_id.to_string()],
+                |row| {
+                    Ok(CircuitBreakerState {
+                        task_id,
+                        subtask_id,
+                        consecutive_failures: row.get::<_, i64>(0)? as u32,
+                        last_error: row.get(1)?,
+                        tripped_at: row.get::<_, Option<i64>>(2)?.map(|t| t as u64),
+                        next_retry_time: row.get::<_, Option<i64>>(3)?.map(|t| t as u64),
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Delete circuit breaker state for a specific subtask.
+    ///
+    /// Used when resetting a circuit breaker after successful execution.
+    pub fn delete_circuit_breaker_state(
+        &mut self,
+        task_id: TaskId,
+        subtask_id: SubtaskId,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM circuit_breaker WHERE task_id = ?1 AND subtask_id = ?2",
+            params![task_id.to_string(), subtask_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// List all circuit breaker states for a given task.
+    ///
+    /// Returns all circuit breaker states associated with the task,
+    /// useful for debugging and monitoring.
+    pub fn list_circuit_breaker_states_by_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<CircuitBreakerState>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT subtask_id, consecutive_failures, last_error, tripped_at, next_retry_time
+            FROM circuit_breaker
+            WHERE task_id = ?1
+            ORDER BY tripped_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([task_id.to_string()], |row| {
+            let subtask_id_str: String = row.get(0)?;
+            Ok((
+                subtask_id_str,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        })?;
+
+        rows.map(|row| {
+            let (subtask_id_str, consecutive_failures, last_error, tripped_at, next_retry_time) =
+                row?;
+            let subtask_id = subtask_id_str
+                .parse()
+                .map_err(|e| PersistenceError::Storage(format!("Invalid subtask_id: {e}")))?;
+
+            Ok(CircuitBreakerState {
+                task_id,
+                subtask_id,
+                consecutive_failures: consecutive_failures as u32,
+                last_error,
+                tripped_at: tripped_at.map(|t| t as u64),
+                next_retry_time: next_retry_time.map(|t| t as u64),
+            })
         })
         .collect()
     }
@@ -1015,5 +1155,167 @@ mod tests {
         assert!(task_ids.contains(&task1));
         assert!(task_ids.contains(&task2));
         assert!(task_ids.contains(&task3));
+    }
+
+    // ── Circuit Breaker Tests ───────────────────────────────────────
+
+    #[test]
+    fn test_save_and_load_circuit_breaker_state() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        let mut state = CircuitBreakerState::new(task_id, subtask_id);
+        state.record_failure("Test error".to_string(), Some(1_700_000_000_000));
+        state.trip(1_700_000_000_000);
+
+        store.save_circuit_breaker_state(&state).unwrap();
+
+        let loaded = store
+            .load_circuit_breaker_state(task_id, subtask_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(loaded.task_id, task_id);
+        assert_eq!(loaded.subtask_id, subtask_id);
+        assert_eq!(loaded.consecutive_failures, 1);
+        assert_eq!(loaded.last_error, Some("Test error".to_string()));
+        assert_eq!(loaded.tripped_at, Some(1_700_000_000_000));
+        assert_eq!(loaded.next_retry_time, Some(1_700_000_000_000));
+        assert!(loaded.is_tripped());
+    }
+
+    #[test]
+    fn test_load_nonexistent_circuit_breaker_returns_none() {
+        let store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        let loaded = store
+            .load_circuit_breaker_state(task_id, subtask_id)
+            .unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_save_circuit_breaker_replaces_existing() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        // Save initial state
+        let mut state = CircuitBreakerState::new(task_id, subtask_id);
+        state.record_failure("First error".to_string(), None);
+        store.save_circuit_breaker_state(&state).unwrap();
+
+        // Update and save again
+        state.record_failure("Second error".to_string(), Some(1_700_000_100_000));
+        store.save_circuit_breaker_state(&state).unwrap();
+
+        let loaded = store
+            .load_circuit_breaker_state(task_id, subtask_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(loaded.consecutive_failures, 2);
+        assert_eq!(loaded.last_error, Some("Second error".to_string()));
+        assert_eq!(loaded.next_retry_time, Some(1_700_000_100_000));
+    }
+
+    #[test]
+    fn test_delete_circuit_breaker_state() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        let state = CircuitBreakerState::new(task_id, subtask_id);
+        store.save_circuit_breaker_state(&state).unwrap();
+
+        // Verify it exists
+        assert!(store
+            .load_circuit_breaker_state(task_id, subtask_id)
+            .unwrap()
+            .is_some());
+
+        // Delete it
+        store
+            .delete_circuit_breaker_state(task_id, subtask_id)
+            .unwrap();
+
+        // Verify it's gone
+        assert!(store
+            .load_circuit_breaker_state(task_id, subtask_id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_list_circuit_breaker_states_by_task() {
+        let mut store = Store::in_memory().unwrap();
+        let task_id = TaskId::new();
+        let subtask1 = SubtaskId::new();
+        let subtask2 = SubtaskId::new();
+        let subtask3 = SubtaskId::new();
+
+        // Save circuit breaker states for multiple subtasks
+        let mut state1 = CircuitBreakerState::new(task_id, subtask1);
+        state1.trip(1_700_000_000_000);
+        store.save_circuit_breaker_state(&state1).unwrap();
+
+        let mut state2 = CircuitBreakerState::new(task_id, subtask2);
+        state2.trip(1_700_000_100_000);
+        store.save_circuit_breaker_state(&state2).unwrap();
+
+        let state3 = CircuitBreakerState::new(task_id, subtask3);
+        store.save_circuit_breaker_state(&state3).unwrap();
+
+        // Also save state for a different task (should not be included)
+        let other_task = TaskId::new();
+        let state4 = CircuitBreakerState::new(other_task, SubtaskId::new());
+        store.save_circuit_breaker_state(&state4).unwrap();
+
+        // List states for the first task
+        let states = store.list_circuit_breaker_states_by_task(task_id).unwrap();
+        assert_eq!(states.len(), 3);
+
+        // Verify all subtask IDs are present
+        let subtask_ids: Vec<SubtaskId> = states.iter().map(|s| s.subtask_id).collect();
+        assert!(subtask_ids.contains(&subtask1));
+        assert!(subtask_ids.contains(&subtask2));
+        assert!(subtask_ids.contains(&subtask3));
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_methods() {
+        let task_id = TaskId::new();
+        let subtask_id = SubtaskId::new();
+
+        let mut state = CircuitBreakerState::new(task_id, subtask_id);
+        assert!(!state.is_tripped());
+        assert_eq!(state.consecutive_failures, 0);
+
+        // Record failures
+        state.record_failure("Error 1".to_string(), None);
+        assert_eq!(state.consecutive_failures, 1);
+        assert_eq!(state.last_error, Some("Error 1".to_string()));
+        assert!(!state.is_tripped());
+
+        state.record_failure("Error 2".to_string(), Some(1_700_000_000_000));
+        assert_eq!(state.consecutive_failures, 2);
+        assert_eq!(state.last_error, Some("Error 2".to_string()));
+        assert_eq!(state.next_retry_time, Some(1_700_000_000_000));
+
+        // Trip the circuit
+        state.trip(1_700_000_000_000);
+        assert!(state.is_tripped());
+        assert_eq!(state.tripped_at, Some(1_700_000_000_000));
+
+        // Reset the circuit
+        state.reset();
+        assert!(!state.is_tripped());
+        assert_eq!(state.consecutive_failures, 0);
+        assert_eq!(state.last_error, None);
+        assert_eq!(state.tripped_at, None);
+        assert_eq!(state.next_retry_time, None);
     }
 }

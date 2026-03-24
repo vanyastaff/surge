@@ -95,6 +95,26 @@ enum Commands {
         agent: Option<String>,
     },
 
+    /// Skip a subtask by marking it as skipped
+    Skip {
+        /// Spec ID
+        spec_id: String,
+        /// Subtask ID to skip
+        subtask_id: String,
+    },
+
+    /// Pause a running task
+    Pause {
+        /// Task ID or spec ID
+        task_id: String,
+    },
+
+    /// Resume a paused task
+    Resume {
+        /// Task ID or spec ID
+        task_id: String,
+    },
+
     /// Show diff for a spec's worktree
     Diff {
         /// Spec ID
@@ -279,6 +299,21 @@ async fn main() -> Result<()> {
 
         Commands::Plan { spec_id, agent } => {
             commands::pipeline::plan(spec_id, agent)?;
+        }
+
+        Commands::Skip {
+            spec_id,
+            subtask_id,
+        } => {
+            commands::pipeline::skip(spec_id, subtask_id)?;
+        }
+
+        Commands::Pause { task_id } => {
+            commands::pipeline::pause(task_id)?;
+        }
+
+        Commands::Resume { task_id } => {
+            commands::pipeline::resume(task_id).await?;
         }
 
         Commands::Diff { spec_id } => {

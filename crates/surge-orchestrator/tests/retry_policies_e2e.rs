@@ -49,11 +49,8 @@ fn test_circuit_breaker_config_values() {
     );
 
     // Verify executor is created with config
-    let executor = SubtaskExecutor::new(custom_config);
-    assert!(
-        !executor.is_circuit_broken(),
-        "New executor should start with circuit closed"
-    );
+    let _executor = SubtaskExecutor::new(custom_config);
+    // Circuit breaker state is now per-subtask, checked inside execute()
 }
 
 /// Test 2: Verify auth failure configuration is respected
@@ -90,6 +87,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 1000,
         max_delay_ms: 60000,
         backoff_strategy: BackoffStrategy::Linear,
+        jitter_factor: 0.0,
     };
     assert!(
         matches!(linear_policy.backoff_strategy, BackoffStrategy::Linear),
@@ -104,6 +102,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 500,
         max_delay_ms: 30000,
         backoff_strategy: BackoffStrategy::Exponential,
+        jitter_factor: 0.0,
     };
     assert!(
         matches!(
@@ -119,6 +118,7 @@ fn test_retry_policy_backoff_strategies() {
         initial_delay_ms: 2000,
         max_delay_ms: 120000,
         backoff_strategy: BackoffStrategy::ExponentialWithJitter,
+        jitter_factor: 0.25,
     };
     assert!(
         matches!(
@@ -357,10 +357,9 @@ fn test_circuit_breaker_config_integration() {
         max_retries: 3,
         circuit_breaker_threshold: custom_config.circuit_breaker_threshold,
     };
-    let executor = SubtaskExecutor::new(executor_config);
+    let _executor = SubtaskExecutor::new(executor_config);
 
-    // Verify executor is created with circuit closed
-    assert!(!executor.is_circuit_broken(), "Circuit should start closed");
+    // Circuit breaker state is now per-subtask, checked inside execute()
 }
 
 /// Test 9: Verify default retry policy values

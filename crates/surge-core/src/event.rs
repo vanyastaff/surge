@@ -107,6 +107,33 @@ pub enum SurgeEvent {
     /// Permission was granted or denied.
     PermissionResolved { session_id: String, granted: bool },
 
+    // --- Resilience events ---
+    /// Circuit breaker opened due to repeated failures.
+    CircuitBreakerOpened {
+        agent_name: String,
+        reason: String,
+        failure_count: u32,
+    },
+
+    /// Circuit breaker transitioned to half-open state for testing.
+    CircuitBreakerHalfOpen { agent_name: String },
+
+    /// Circuit breaker closed after successful recovery.
+    CircuitBreakerClosed { agent_name: String },
+
+    /// Rate limit threshold reached for an agent.
+    RateLimitHit {
+        agent_name: String,
+        limit_type: String,
+        retry_after_ms: Option<u64>,
+    },
+
+    /// Rate limit window reset.
+    RateLimitReset {
+        agent_name: String,
+        limit_type: String,
+    },
+
     // --- Task lifecycle events ---
     /// Task state changed.
     TaskStateChanged {
