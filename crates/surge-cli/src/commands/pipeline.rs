@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use surge_core::{SurgeConfig, SurgeEvent};
+use surge_core::state::TaskState;
 
 use super::load_spec_by_id;
 
@@ -13,6 +14,14 @@ struct RunTotals {
     output_tokens: u64,
     thought_tokens: u64,
     total_cost: f64,
+}
+
+/// QA summary information for display.
+#[derive(Debug, Clone, Default)]
+struct QaSummary {
+    verdict: Option<String>,
+    reasoning: Option<String>,
+    iterations: u32,
 }
 
 /// Run a spec through the full pipeline.
@@ -85,6 +94,9 @@ pub async fn run(
     let totals = Arc::new(Mutex::new(RunTotals::default()));
     let totals_clone = Arc::clone(&totals);
 
+    let qa_summary = Arc::new(Mutex::new(QaSummary::default()));
+    let qa_summary_clone = Arc::clone(&qa_summary);
+
     let mut events = orchestrator.subscribe();
     tokio::spawn(async move {
 
@@ -104,6 +116,31 @@ pub async fn run(
                     println!("  {mark} Subtask {subtask_id}");
                 }
                 SurgeEvent::TaskStateChanged { new_state, .. } => {
+                    // Capture QA state information
+                    match &new_state {
+                        TaskState::QaReview { verdict, reasoning } => {
+                            let mut qa = qa_summary_clone.lock().unwrap();
+                            qa.iterations = qa.iterations.max(1);
+                            if let Some(v) = verdict {
+                                qa.verdict = Some(v.clone());
+                            }
+                            if let Some(r) = reasoning {
+                                qa.reasoning = Some(r.clone());
+                            }
+                        }
+                        TaskState::QaFix { iteration, verdict, reasoning } => {
+                            let mut qa = qa_summary_clone.lock().unwrap();
+                            qa.iterations = *iteration;
+                            if let Some(v) = verdict {
+                                qa.verdict = Some(v.clone());
+                            }
+                            if let Some(r) = reasoning {
+                                qa.reasoning = Some(r.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+
                     // Clear the token counter line before printing state change
                     print!("\r\x1b[K");
                     let _ = std::io::stdout().flush();
@@ -178,6 +215,20 @@ pub async fn run(
         let total_tokens = final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
         println!("   Total tokens:   {}", format_tokens(total_tokens));
         println!("   Estimated cost: ${:.4}", final_totals.total_cost);
+    }
+
+    // Display QA summary if QA was performed
+    let final_qa = qa_summary.lock().unwrap();
+    if final_qa.iterations > 0 {
+        println!();
+        println!("🔍 QA Review Summary:");
+        if let Some(verdict) = &final_qa.verdict {
+            println!("   Verdict:    {}", verdict);
+        }
+        if let Some(reasoning) = &final_qa.reasoning {
+            println!("   Reasoning:  {}", reasoning);
+        }
+        println!("   Iterations: {}", final_qa.iterations);
     }
 
     Ok(())
