@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod display;
 pub mod health;
 pub mod pool;
+pub mod process_tracker;
 pub mod registry;
 pub mod router;
 pub mod secrets;
@@ -26,6 +27,7 @@ pub use display::{
 };
 pub use health::{AgentHealth, HealthTracker};
 pub use pool::{AgentPool, SessionHandle};
+pub use process_tracker::{Pid, ProcessTracker};
 pub use registry::{AgentCapability, AgentKind, DetectedAgent, Registry, RegistryEntry};
 pub use router::{AgentRouter, RouteDecision};
 pub use surge_core::SurgeEvent;
