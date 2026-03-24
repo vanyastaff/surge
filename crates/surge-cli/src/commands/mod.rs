@@ -2,6 +2,7 @@ pub mod agent;
 pub mod config;
 pub mod git;
 pub mod insights;
+pub mod memory;
 pub mod pipeline;
 pub mod registry;
 pub mod spec;
