@@ -157,6 +157,69 @@ mod tests {
         };
         assert_eq!(format!("{fix}"), "QA Fix (iteration 1)");
     }
+
+    #[test]
+    fn test_task_state_display() {
+        // Test all TaskState variants have proper Display implementation
+        assert_eq!(format!("{}", TaskState::Draft), "Draft");
+        assert_eq!(format!("{}", TaskState::Planning), "Planning");
+        assert_eq!(format!("{}", TaskState::Planned { subtask_count: 5 }), "Planned (5 subtasks)");
+        assert_eq!(format!("{}", TaskState::Executing { completed: 3, total: 5 }), "Executing (3/5)");
+        assert_eq!(format!("{}", TaskState::HumanReview), "Human Review");
+        assert_eq!(format!("{}", TaskState::Merging), "Merging");
+        assert_eq!(format!("{}", TaskState::Completed), "Completed");
+        assert_eq!(format!("{}", TaskState::Failed { reason: "test error".into() }), "Failed: test error");
+        assert_eq!(format!("{}", TaskState::Cancelled), "Cancelled");
+
+        // QA Review without metadata
+        let qa_review_basic = TaskState::QaReview {
+            verdict: None,
+            reasoning: None,
+        };
+        let display = format!("{qa_review_basic}");
+        assert_eq!(display, "QA Review");
+
+        // QA Review with verdict only
+        let qa_review_verdict = TaskState::QaReview {
+            verdict: Some("APPROVED".into()),
+            reasoning: None,
+        };
+        let display = format!("{qa_review_verdict}");
+        assert_eq!(display, "QA Review - APPROVED");
+
+        // QA Review with verdict and reasoning
+        let qa_review_full = TaskState::QaReview {
+            verdict: Some("NEEDS_FIX".into()),
+            reasoning: Some("Missing error handling".into()),
+        };
+        let display = format!("{qa_review_full}");
+        assert!(display.contains("QA Review"));
+        assert!(display.contains("NEEDS_FIX"));
+        assert!(display.contains("Missing error handling"));
+        assert_eq!(display, "QA Review - NEEDS_FIX: Missing error handling");
+
+        // QA Fix without metadata
+        let qa_fix_basic = TaskState::QaFix {
+            iteration: 1,
+            verdict: None,
+            reasoning: None,
+        };
+        let display = format!("{qa_fix_basic}");
+        assert_eq!(display, "QA Fix (iteration 1)");
+
+        // QA Fix with verdict and reasoning
+        let qa_fix_full = TaskState::QaFix {
+            iteration: 2,
+            verdict: Some("PARTIAL".into()),
+            reasoning: Some("2 of 5 tests passing".into()),
+        };
+        let display = format!("{qa_fix_full}");
+        assert!(display.contains("QA Fix"));
+        assert!(display.contains("iteration 2"));
+        assert!(display.contains("PARTIAL"));
+        assert!(display.contains("2 of 5 tests passing"));
+        assert_eq!(display, "QA Fix (iteration 2) - PARTIAL: 2 of 5 tests passing");
+    }
 }
 
 impl std::fmt::Display for TaskState {
