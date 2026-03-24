@@ -115,9 +115,23 @@ pub fn build_qa_prompt(spec: &Spec, diff: &str, spec_dir: Option<&Path>) -> Stri
 
     // Response format
     prompt.push_str("## Response Format\n\n");
-    prompt.push_str("Respond with exactly one of:\n");
-    prompt.push_str("- APPROVED — if all acceptance criteria are met\n");
-    prompt.push_str("- NEEDS_FIX: <description of issues> — if changes are needed\n");
+    prompt.push_str("Respond with a JSON object using one of these formats:\n\n");
+    prompt.push_str("### Approved\n\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"verdict\": \"APPROVED\"\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n\n");
+    prompt.push_str("### Needs Fix\n\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"verdict\": \"NEEDS_FIX\",\n");
+    prompt.push_str("  \"issues\": [\n");
+    prompt.push_str("    \"Description of issue 1\",\n");
+    prompt.push_str("    \"Description of issue 2\"\n");
+    prompt.push_str("  ]\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n");
 
     prompt
 }
@@ -267,5 +281,20 @@ mod tests {
 
         assert!(prompt.contains("## Requirements"), "should include requirements section");
         assert!(prompt.contains("Do great things."), "should include requirements content");
+    }
+
+    #[test]
+    fn test_build_qa_prompt() {
+        let spec = sample_spec();
+        let diff = "+use tracing::info;\n-use println;";
+        let prompt = build_qa_prompt(&spec, diff, None);
+
+        // Verify JSON format instructions are included
+        assert!(prompt.contains("## Response Format"), "should contain Response Format section");
+        assert!(prompt.contains("JSON object"), "should mention JSON object");
+        assert!(prompt.contains("\"verdict\": \"APPROVED\""), "should include APPROVED JSON example");
+        assert!(prompt.contains("\"verdict\": \"NEEDS_FIX\""), "should include NEEDS_FIX JSON example");
+        assert!(prompt.contains("\"issues\""), "should include issues field in JSON example");
+        assert!(prompt.contains("```json"), "should include JSON code blocks");
     }
 }
