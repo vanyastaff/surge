@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use agent_client_protocol::{ContentBlock, TextContent};
+use serde::{Deserialize, Serialize};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::event::SurgeEvent;
 use surge_core::id::TaskId;
@@ -22,6 +23,53 @@ pub enum QaVerdict {
     Partial { met: Vec<String>, unmet: Vec<String> },
     /// Issues were found that need fixing.
     NeedsFix { issues: String },
+}
+
+/// Verdict kind for JSON response parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QaVerdictKind {
+    /// All acceptance criteria are met.
+    Approved,
+    /// Some criteria met, others not yet implemented.
+    Partial,
+    /// Issues were found that need fixing.
+    NeedsFix,
+}
+
+/// Structured JSON response from QA review agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QaResponse {
+    /// The verdict type.
+    pub verdict: QaVerdictKind,
+    /// Criteria that have been met (for Partial verdict).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub met: Vec<String>,
+    /// Criteria that have not been met (for Partial verdict).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmet: Vec<String>,
+    /// Description of issues that need fixing (for NeedsFix verdict).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issues: Option<String>,
+}
+
+impl QaResponse {
+    /// Convert JSON response to QaVerdict.
+    #[must_use]
+    pub fn into_verdict(self) -> QaVerdict {
+        match self.verdict {
+            QaVerdictKind::Approved => QaVerdict::Approved,
+            QaVerdictKind::Partial => QaVerdict::Partial {
+                met: self.met,
+                unmet: self.unmet,
+            },
+            QaVerdictKind::NeedsFix => QaVerdict::NeedsFix {
+                issues: self.issues.unwrap_or_else(|| {
+                    "QA requested fixes (no details provided)".to_string()
+                }),
+            },
+        }
+    }
 }
 
 /// Result of a complete QA review cycle.
@@ -373,5 +421,147 @@ mod tests {
             }
             _ => panic!("expected Partial verdict"),
         }
+    }
+
+    #[test]
+    fn test_qa_response_approved_json_roundtrip() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::Approved,
+            met: vec![],
+            unmet: vec![],
+            issues: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: QaResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.verdict, QaVerdictKind::Approved);
+        assert!(deserialized.met.is_empty());
+        assert!(deserialized.unmet.is_empty());
+        assert!(deserialized.issues.is_none());
+    }
+
+    #[test]
+    fn test_qa_response_partial_json_roundtrip() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::Partial,
+            met: vec!["error handling".to_string(), "documentation".to_string()],
+            unmet: vec!["tests".to_string()],
+            issues: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: QaResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.verdict, QaVerdictKind::Partial);
+        assert_eq!(deserialized.met.len(), 2);
+        assert_eq!(deserialized.unmet.len(), 1);
+        assert!(deserialized.met.contains(&"error handling".to_string()));
+        assert!(deserialized.unmet.contains(&"tests".to_string()));
+    }
+
+    #[test]
+    fn test_qa_response_needs_fix_json_roundtrip() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::NeedsFix,
+            met: vec![],
+            unmet: vec![],
+            issues: Some("Missing error handling in main.rs".to_string()),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: QaResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.verdict, QaVerdictKind::NeedsFix);
+        assert_eq!(
+            deserialized.issues,
+            Some("Missing error handling in main.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn test_qa_response_into_verdict_approved() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::Approved,
+            met: vec![],
+            unmet: vec![],
+            issues: None,
+        };
+
+        let verdict = response.into_verdict();
+        assert!(matches!(verdict, QaVerdict::Approved));
+    }
+
+    #[test]
+    fn test_qa_response_into_verdict_partial() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::Partial,
+            met: vec!["criterion 1".to_string()],
+            unmet: vec!["criterion 2".to_string()],
+            issues: None,
+        };
+
+        let verdict = response.into_verdict();
+        match verdict {
+            QaVerdict::Partial { met, unmet } => {
+                assert_eq!(met.len(), 1);
+                assert_eq!(unmet.len(), 1);
+                assert!(met.contains(&"criterion 1".to_string()));
+                assert!(unmet.contains(&"criterion 2".to_string()));
+            }
+            _ => panic!("expected Partial verdict"),
+        }
+    }
+
+    #[test]
+    fn test_qa_response_into_verdict_needs_fix() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::NeedsFix,
+            met: vec![],
+            unmet: vec![],
+            issues: Some("issues found".to_string()),
+        };
+
+        let verdict = response.into_verdict();
+        match verdict {
+            QaVerdict::NeedsFix { issues } => {
+                assert_eq!(issues, "issues found");
+            }
+            _ => panic!("expected NeedsFix verdict"),
+        }
+    }
+
+    #[test]
+    fn test_qa_response_into_verdict_needs_fix_no_issues() {
+        let response = QaResponse {
+            verdict: QaVerdictKind::NeedsFix,
+            met: vec![],
+            unmet: vec![],
+            issues: None,
+        };
+
+        let verdict = response.into_verdict();
+        match verdict {
+            QaVerdict::NeedsFix { issues } => {
+                assert_eq!(issues, "QA requested fixes (no details provided)");
+            }
+            _ => panic!("expected NeedsFix verdict"),
+        }
+    }
+
+    #[test]
+    fn test_qa_verdict_kind_serialization() {
+        assert_eq!(
+            serde_json::to_string(&QaVerdictKind::Approved).unwrap(),
+            "\"approved\""
+        );
+        assert_eq!(
+            serde_json::to_string(&QaVerdictKind::Partial).unwrap(),
+            "\"partial\""
+        );
+        assert_eq!(
+            serde_json::to_string(&QaVerdictKind::NeedsFix).unwrap(),
+            "\"needs_fix\""
+        );
     }
 }
