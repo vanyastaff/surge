@@ -428,7 +428,9 @@ async fn test_qa_verdict_approved() {
         task_id,
         verdict: QaVerdictKind::Approved,
         iteration: 1,
-        reasoning: Some("All acceptance criteria have been met. The implementation is correct.".to_string()),
+        reasoning: Some(
+            "All acceptance criteria have been met. The implementation is correct.".to_string(),
+        ),
         met_criteria: vec![
             "Error handling implemented".to_string(),
             "Tests passing".to_string(),
@@ -534,7 +536,9 @@ async fn test_qa_verdict_approved_after_iterations() {
         task_id,
         verdict: QaVerdictKind::Approved,
         iteration: 3,
-        reasoning: Some("After fixing issues from previous iterations, all criteria now pass.".to_string()),
+        reasoning: Some(
+            "After fixing issues from previous iterations, all criteria now pass.".to_string(),
+        ),
         met_criteria: vec![
             "Error handling implemented".to_string(),
             "Tests passing".to_string(),
@@ -562,7 +566,10 @@ async fn test_qa_verdict_approved_after_iterations() {
         } => {
             assert_eq!(recv_task_id, task_id);
             assert_eq!(verdict, QaVerdictKind::Approved);
-            assert_eq!(iteration, 3, "Should track that approval came on iteration 3");
+            assert_eq!(
+                iteration, 3,
+                "Should track that approval came on iteration 3"
+            );
             assert!(reasoning.is_some());
             assert!(reasoning.unwrap().contains("previous iterations"));
             assert_eq!(met_criteria.len(), 4);
@@ -600,7 +607,8 @@ async fn test_qa_verdict_needs_fix_loop() {
         issues: Some("Unit tests are failing due to missing edge case handling. Documentation is incomplete.".to_string()),
     };
 
-    tx.send(needs_fix_event).expect("Failed to send NEEDS_FIX event");
+    tx.send(needs_fix_event)
+        .expect("Failed to send NEEDS_FIX event");
 
     // 4. Receive and verify NEEDS_FIX event
     let received_needs_fix = rx.recv().await.expect("Failed to receive NEEDS_FIX event");
@@ -619,7 +627,11 @@ async fn test_qa_verdict_needs_fix_loop() {
             assert_eq!(verdict, QaVerdictKind::NeedsFix);
             assert_eq!(iteration, 1, "Should be first QA iteration");
             assert!(reasoning.is_some());
-            assert!(reasoning.unwrap().contains("issues that need to be addressed"));
+            assert!(
+                reasoning
+                    .unwrap()
+                    .contains("issues that need to be addressed")
+            );
             assert_eq!(met_criteria.len(), 1);
             assert!(met_criteria.contains(&"Error handling implemented".to_string()));
             assert_eq!(unmet_criteria.len(), 2);
@@ -636,7 +648,10 @@ async fn test_qa_verdict_needs_fix_loop() {
         task_id,
         verdict: QaVerdictKind::Approved,
         iteration: 2,
-        reasoning: Some("All issues from iteration 1 have been resolved. Implementation is now complete.".to_string()),
+        reasoning: Some(
+            "All issues from iteration 1 have been resolved. Implementation is now complete."
+                .to_string(),
+        ),
         met_criteria: vec![
             "Error handling implemented".to_string(),
             "Tests passing".to_string(),
@@ -646,7 +661,8 @@ async fn test_qa_verdict_needs_fix_loop() {
         issues: None,
     };
 
-    tx.send(approved_event).expect("Failed to send APPROVED event");
+    tx.send(approved_event)
+        .expect("Failed to send APPROVED event");
 
     // 6. Receive and verify APPROVED event
     let received_approved = rx.recv().await.expect("Failed to receive APPROVED event");
@@ -665,7 +681,11 @@ async fn test_qa_verdict_needs_fix_loop() {
             assert_eq!(verdict, QaVerdictKind::Approved);
             assert_eq!(iteration, 2, "Should be second QA iteration after fix");
             assert!(reasoning.is_some());
-            assert!(reasoning.unwrap().contains("issues from iteration 1 have been resolved"));
+            assert!(
+                reasoning
+                    .unwrap()
+                    .contains("issues from iteration 1 have been resolved")
+            );
             assert_eq!(met_criteria.len(), 3);
             assert!(met_criteria.contains(&"Tests passing".to_string()));
             assert!(met_criteria.contains(&"Documentation complete".to_string()));
@@ -703,7 +723,7 @@ async fn test_qa_verdict_needs_fix_with_issues() {
             "1. Found unwrap() on line 45 that could panic.\n\
              2. Error path in handle_request() is not tested.\n\
              3. Performance regression: response time increased by 200ms."
-                .to_string()
+                .to_string(),
         ),
     };
 
@@ -729,7 +749,9 @@ async fn test_qa_verdict_needs_fix_with_issues() {
             assert!(reasoning.unwrap().contains("Critical bugs"));
             assert_eq!(met_criteria.len(), 0);
             assert_eq!(unmet_criteria.len(), 3);
-            assert!(unmet_criteria.contains(&"No panics or unwraps in production code".to_string()));
+            assert!(
+                unmet_criteria.contains(&"No panics or unwraps in production code".to_string())
+            );
             assert!(unmet_criteria.contains(&"All error paths tested".to_string()));
             assert!(unmet_criteria.contains(&"Performance benchmarks pass".to_string()));
             assert!(issues.is_some());
@@ -766,7 +788,10 @@ async fn test_qa_verdict_multiple_needs_fix_iterations() {
     tx.send(event1).expect("Failed to send event 1");
 
     let recv1 = rx.recv().await.expect("Failed to receive event 1");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv1 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration, verdict, ..
+    } = recv1
+    {
         assert_eq!(iteration, 1);
         assert_eq!(verdict, QaVerdictKind::NeedsFix);
     } else {
@@ -786,7 +811,10 @@ async fn test_qa_verdict_multiple_needs_fix_iterations() {
     tx.send(event2).expect("Failed to send event 2");
 
     let recv2 = rx.recv().await.expect("Failed to receive event 2");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv2 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration, verdict, ..
+    } = recv2
+    {
         assert_eq!(iteration, 2, "Should track second iteration");
         assert_eq!(verdict, QaVerdictKind::NeedsFix);
     } else {
@@ -799,17 +827,17 @@ async fn test_qa_verdict_multiple_needs_fix_iterations() {
         verdict: QaVerdictKind::Approved,
         iteration: 3,
         reasoning: Some("All tests now passing.".to_string()),
-        met_criteria: vec![
-            "Code compiles".to_string(),
-            "All tests passing".to_string(),
-        ],
+        met_criteria: vec!["Code compiles".to_string(), "All tests passing".to_string()],
         unmet_criteria: vec![],
         issues: None,
     };
     tx.send(event3).expect("Failed to send event 3");
 
     let recv3 = rx.recv().await.expect("Failed to receive event 3");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, .. } = recv3 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration, verdict, ..
+    } = recv3
+    {
         assert_eq!(iteration, 3, "Should track third iteration before approval");
         assert_eq!(verdict, QaVerdictKind::Approved);
     } else {
@@ -951,7 +979,10 @@ async fn test_qa_verdict_partial_fix_loop() {
         task_id,
         verdict: QaVerdictKind::Partial,
         iteration: 1,
-        reasoning: Some("Implementation is partially complete. Some criteria met, others need work.".to_string()),
+        reasoning: Some(
+            "Implementation is partially complete. Some criteria met, others need work."
+                .to_string(),
+        ),
         met_criteria: vec![
             "Error handling implemented".to_string(),
             "Documentation complete".to_string(),
@@ -963,7 +994,8 @@ async fn test_qa_verdict_partial_fix_loop() {
         issues: Some("Missing unit tests and performance benchmarks.".to_string()),
     };
 
-    tx.send(partial_event).expect("Failed to send PARTIAL event");
+    tx.send(partial_event)
+        .expect("Failed to send PARTIAL event");
 
     // 4. Receive and verify PARTIAL event
     let received_partial = rx.recv().await.expect("Failed to receive PARTIAL event");
@@ -1005,7 +1037,10 @@ async fn test_qa_verdict_partial_fix_loop() {
         task_id,
         verdict: QaVerdictKind::Approved,
         iteration: 2,
-        reasoning: Some("All unmet criteria from iteration 1 have been addressed. All criteria now pass.".to_string()),
+        reasoning: Some(
+            "All unmet criteria from iteration 1 have been addressed. All criteria now pass."
+                .to_string(),
+        ),
         met_criteria: vec![
             "Error handling implemented".to_string(),
             "Documentation complete".to_string(),
@@ -1016,7 +1051,8 @@ async fn test_qa_verdict_partial_fix_loop() {
         issues: None,
     };
 
-    tx.send(approved_event).expect("Failed to send APPROVED event");
+    tx.send(approved_event)
+        .expect("Failed to send APPROVED event");
 
     // 6. Receive and verify APPROVED event
     let received_approved = rx.recv().await.expect("Failed to receive APPROVED event");
@@ -1033,9 +1069,16 @@ async fn test_qa_verdict_partial_fix_loop() {
         } => {
             assert_eq!(recv_task_id, task_id);
             assert_eq!(verdict, QaVerdictKind::Approved);
-            assert_eq!(iteration, 2, "Should be second QA iteration after partial fix");
+            assert_eq!(
+                iteration, 2,
+                "Should be second QA iteration after partial fix"
+            );
             assert!(reasoning.is_some());
-            assert!(reasoning.unwrap().contains("unmet criteria from iteration 1 have been addressed"));
+            assert!(
+                reasoning
+                    .unwrap()
+                    .contains("unmet criteria from iteration 1 have been addressed")
+            );
 
             // All criteria should now be met
             assert_eq!(met_criteria.len(), 4);
@@ -1079,7 +1122,14 @@ async fn test_qa_verdict_multiple_partial_iterations() {
     tx.send(event1).expect("Failed to send event 1");
 
     let recv1 = rx.recv().await.expect("Failed to receive event 1");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv1 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration,
+        verdict,
+        met_criteria,
+        unmet_criteria,
+        ..
+    } = recv1
+    {
         assert_eq!(iteration, 1);
         assert_eq!(verdict, QaVerdictKind::Partial);
         assert_eq!(met_criteria.len(), 2);
@@ -1108,7 +1158,14 @@ async fn test_qa_verdict_multiple_partial_iterations() {
     tx.send(event2).expect("Failed to send event 2");
 
     let recv2 = rx.recv().await.expect("Failed to receive event 2");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv2 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration,
+        verdict,
+        met_criteria,
+        unmet_criteria,
+        ..
+    } = recv2
+    {
         assert_eq!(iteration, 2, "Should track second iteration");
         assert_eq!(verdict, QaVerdictKind::Partial);
         assert_eq!(met_criteria.len(), 3, "One more criterion met");
@@ -1129,15 +1186,20 @@ async fn test_qa_verdict_multiple_partial_iterations() {
             "Tests passing".to_string(),
             "Documentation complete".to_string(),
         ],
-        unmet_criteria: vec![
-            "Performance optimization".to_string(),
-        ],
+        unmet_criteria: vec!["Performance optimization".to_string()],
         issues: Some("Only performance optimization remaining.".to_string()),
     };
     tx.send(event3).expect("Failed to send event 3");
 
     let recv3 = rx.recv().await.expect("Failed to receive event 3");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv3 {
+    if let SurgeEvent::QaVerdictReceived {
+        iteration,
+        verdict,
+        met_criteria,
+        unmet_criteria,
+        ..
+    } = recv3
+    {
         assert_eq!(iteration, 3, "Should track third iteration");
         assert_eq!(verdict, QaVerdictKind::Partial);
         assert_eq!(met_criteria.len(), 4, "Four criteria now met");
@@ -1165,8 +1227,18 @@ async fn test_qa_verdict_multiple_partial_iterations() {
     tx.send(event4).expect("Failed to send event 4");
 
     let recv4 = rx.recv().await.expect("Failed to receive event 4");
-    if let SurgeEvent::QaVerdictReceived { iteration, verdict, met_criteria, unmet_criteria, .. } = recv4 {
-        assert_eq!(iteration, 4, "Should track fourth iteration before approval");
+    if let SurgeEvent::QaVerdictReceived {
+        iteration,
+        verdict,
+        met_criteria,
+        unmet_criteria,
+        ..
+    } = recv4
+    {
+        assert_eq!(
+            iteration, 4,
+            "Should track fourth iteration before approval"
+        );
         assert_eq!(verdict, QaVerdictKind::Approved);
         assert_eq!(met_criteria.len(), 5, "All criteria now met");
         assert_eq!(unmet_criteria.len(), 0, "No unmet criteria");
@@ -1199,10 +1271,19 @@ async fn test_qa_max_iterations_failure() {
             unmet_criteria: vec!["Tests passing".to_string()],
             issues: Some(format!("Tests failing on iteration {}", iteration)),
         };
-        tx.send(event).expect(&format!("Failed to send event {}", iteration));
+        tx.send(event)
+            .expect(&format!("Failed to send event {}", iteration));
 
-        let recv = rx.recv().await.expect(&format!("Failed to receive event {}", iteration));
-        if let SurgeEvent::QaVerdictReceived { iteration: recv_iter, verdict, .. } = recv {
+        let recv = rx
+            .recv()
+            .await
+            .expect(&format!("Failed to receive event {}", iteration));
+        if let SurgeEvent::QaVerdictReceived {
+            iteration: recv_iter,
+            verdict,
+            ..
+        } = recv
+        {
             assert_eq!(recv_iter, iteration);
             assert_eq!(verdict, QaVerdictKind::NeedsFix);
         } else {
@@ -1215,16 +1296,31 @@ async fn test_qa_max_iterations_failure() {
         task_id,
         old_state: TaskState::QaReview {
             verdict: Some("needs_fix".to_string()),
-            reasoning: Some(format!("QA did not approve after {} iterations", max_iterations)),
+            reasoning: Some(format!(
+                "QA did not approve after {} iterations",
+                max_iterations
+            )),
         },
         new_state: TaskState::Failed {
-            reason: format!("QA review failed after max iterations: QA did not approve after {} iterations", max_iterations),
+            reason: format!(
+                "QA review failed after max iterations: QA did not approve after {} iterations",
+                max_iterations
+            ),
         },
     };
-    tx.send(failed_event).expect("Failed to send TaskStateChanged event");
+    tx.send(failed_event)
+        .expect("Failed to send TaskStateChanged event");
 
-    let recv_failed = rx.recv().await.expect("Failed to receive TaskStateChanged event");
-    if let SurgeEvent::TaskStateChanged { task_id: recv_task_id, old_state, new_state } = recv_failed {
+    let recv_failed = rx
+        .recv()
+        .await
+        .expect("Failed to receive TaskStateChanged event");
+    if let SurgeEvent::TaskStateChanged {
+        task_id: recv_task_id,
+        old_state,
+        new_state,
+    } = recv_failed
+    {
         assert_eq!(recv_task_id, task_id);
 
         // Verify old state is QaReview

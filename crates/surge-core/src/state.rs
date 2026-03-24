@@ -6,8 +6,13 @@ use serde::{Deserialize, Serialize};
 pub enum TaskState {
     Draft,
     Planning,
-    Planned { subtask_count: usize },
-    Executing { completed: usize, total: usize },
+    Planned {
+        subtask_count: usize,
+    },
+    Executing {
+        completed: usize,
+        total: usize,
+    },
     QaReview {
         verdict: Option<String>,
         reasoning: Option<String>,
@@ -20,7 +25,9 @@ pub enum TaskState {
     HumanReview,
     Merging,
     Completed,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     Cancelled,
 }
 
@@ -51,6 +58,16 @@ impl TaskState {
     pub fn is_waiting(&self) -> bool {
         matches!(self, Self::Draft | Self::Planned { .. } | Self::HumanReview)
     }
+
+    /// Returns `true` when transitioning to this state requires cleanup of
+    /// task resources (worktrees, processes, temp files).
+    ///
+    /// Cleanup is required for all terminal states to enforce the
+    /// zero-garbage guarantee.
+    #[must_use]
+    pub fn requires_cleanup(&self) -> bool {
+        self.is_terminal()
+    }
 }
 
 #[cfg(test)]
@@ -64,15 +81,40 @@ mod tests {
         assert!(TaskState::Cancelled.is_terminal());
 
         assert!(!TaskState::Draft.is_terminal());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_terminal());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_terminal()
+        );
     }
 
     #[test]
     fn test_active_states() {
         assert!(TaskState::Planning.is_active());
-        assert!(TaskState::Executing { completed: 1, total: 3 }.is_active());
-        assert!(TaskState::QaReview { verdict: None, reasoning: None }.is_active());
-        assert!(TaskState::QaFix { iteration: 2, verdict: None, reasoning: None }.is_active());
+        assert!(
+            TaskState::Executing {
+                completed: 1,
+                total: 3
+            }
+            .is_active()
+        );
+        assert!(
+            TaskState::QaReview {
+                verdict: None,
+                reasoning: None
+            }
+            .is_active()
+        );
+        assert!(
+            TaskState::QaFix {
+                iteration: 2,
+                verdict: None,
+                reasoning: None
+            }
+            .is_active()
+        );
         assert!(TaskState::Merging.is_active());
 
         assert!(!TaskState::Draft.is_active());
@@ -88,7 +130,13 @@ mod tests {
         assert!(TaskState::HumanReview.is_waiting());
 
         assert!(!TaskState::Planning.is_waiting());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_waiting());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_waiting()
+        );
         assert!(!TaskState::Completed.is_waiting());
         assert!(!TaskState::Failed { reason: "x".into() }.is_waiting());
     }
@@ -100,9 +148,19 @@ mod tests {
             TaskState::Draft,
             TaskState::Planning,
             TaskState::Planned { subtask_count: 1 },
-            TaskState::Executing { completed: 0, total: 1 },
-            TaskState::QaReview { verdict: None, reasoning: None },
-            TaskState::QaFix { iteration: 1, verdict: None, reasoning: None },
+            TaskState::Executing {
+                completed: 0,
+                total: 1,
+            },
+            TaskState::QaReview {
+                verdict: None,
+                reasoning: None,
+            },
+            TaskState::QaFix {
+                iteration: 1,
+                verdict: None,
+                reasoning: None,
+            },
             TaskState::HumanReview,
             TaskState::Merging,
             TaskState::Completed,
@@ -112,6 +170,182 @@ mod tests {
             let flags = [state.is_terminal(), state.is_active(), state.is_waiting()];
             let true_count = flags.iter().filter(|&&b| b).count();
             assert!(true_count <= 1, "{state} matched multiple categories");
+        }
+    }
+
+    #[test]
+    fn test_cleanup_required_on_terminal_states() {
+        // All terminal states require cleanup (zero-garbage guarantee)
+        assert!(TaskState::Completed.requires_cleanup());
+        assert!(
+            TaskState::Failed {
+                reason: "test".into()
+            }
+            .requires_cleanup()
+        );
+        assert!(TaskState::Cancelled.requires_cleanup());
+    }
+
+    #[test]
+    fn test_cleanup_not_required_on_non_terminal_states() {
+        // Non-terminal states should not trigger cleanup
+        assert!(!TaskState::Draft.requires_cleanup());
+        assert!(!TaskState::Planning.requires_cleanup());
+        assert!(!TaskState::Planned { subtask_count: 1 }.requires_cleanup());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .requires_cleanup()
+        );
+        assert!(
+            !TaskState::QaReview {
+                verdict: None,
+                reasoning: None
+            }
+            .requires_cleanup()
+        );
+        assert!(
+            !TaskState::QaFix {
+                iteration: 1,
+                verdict: None,
+                reasoning: None
+            }
+            .requires_cleanup()
+        );
+        assert!(!TaskState::HumanReview.requires_cleanup());
+        assert!(!TaskState::Merging.requires_cleanup());
+    }
+
+    #[test]
+    fn test_cleanup_hooks_on_state_transitions() {
+        // Simulate state transitions and verify cleanup is triggered
+        // at the right time (only on transitions to terminal states)
+
+        // Test successful completion flow
+        let states = vec![
+            TaskState::Draft,
+            TaskState::Planning,
+            TaskState::Planned { subtask_count: 3 },
+            TaskState::Executing {
+                completed: 0,
+                total: 3,
+            },
+            TaskState::Executing {
+                completed: 1,
+                total: 3,
+            },
+            TaskState::Executing {
+                completed: 2,
+                total: 3,
+            },
+            TaskState::Executing {
+                completed: 3,
+                total: 3,
+            },
+            TaskState::QaReview {
+                verdict: Some("APPROVED".into()),
+                reasoning: None,
+            },
+            TaskState::HumanReview,
+            TaskState::Merging,
+            TaskState::Completed,
+        ];
+
+        let mut cleanup_triggered = false;
+        for (i, state) in states.iter().enumerate() {
+            if state.requires_cleanup() {
+                cleanup_triggered = true;
+                // Cleanup should only trigger on the last state (Completed)
+                assert_eq!(
+                    i,
+                    states.len() - 1,
+                    "Cleanup triggered too early at {state}"
+                );
+            }
+        }
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for completion flow"
+        );
+
+        // Test failure flow
+        let failure_states = vec![
+            TaskState::Draft,
+            TaskState::Planning,
+            TaskState::Failed {
+                reason: "Agent crashed".into(),
+            },
+        ];
+
+        cleanup_triggered = false;
+        for (i, state) in failure_states.iter().enumerate() {
+            if state.requires_cleanup() {
+                cleanup_triggered = true;
+                assert_eq!(i, failure_states.len() - 1, "Cleanup triggered too early");
+            }
+        }
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for failure flow"
+        );
+
+        // Test cancellation flow
+        let cancel_states = vec![
+            TaskState::Executing {
+                completed: 1,
+                total: 5,
+            },
+            TaskState::Cancelled,
+        ];
+
+        cleanup_triggered = false;
+        for (i, state) in cancel_states.iter().enumerate() {
+            if state.requires_cleanup() {
+                cleanup_triggered = true;
+                assert_eq!(i, cancel_states.len() - 1, "Cleanup triggered too early");
+            }
+        }
+        assert!(
+            cleanup_triggered,
+            "Cleanup never triggered for cancellation flow"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_invariant() {
+        // Invariant: requires_cleanup() == is_terminal()
+        // This ensures cleanup is always triggered for terminal states
+        // and never for non-terminal states
+        for state in [
+            TaskState::Draft,
+            TaskState::Planning,
+            TaskState::Planned { subtask_count: 1 },
+            TaskState::Executing {
+                completed: 0,
+                total: 1,
+            },
+            TaskState::QaReview {
+                verdict: None,
+                reasoning: None,
+            },
+            TaskState::QaFix {
+                iteration: 1,
+                verdict: None,
+                reasoning: None,
+            },
+            TaskState::HumanReview,
+            TaskState::Merging,
+            TaskState::Completed,
+            TaskState::Failed { reason: "x".into() },
+            TaskState::Cancelled,
+        ] {
+            assert_eq!(
+                state.requires_cleanup(),
+                state.is_terminal(),
+                "Cleanup invariant violated for {state}"
+            );
         }
     }
 
@@ -170,12 +404,32 @@ mod tests {
         // Test all TaskState variants have proper Display implementation
         assert_eq!(format!("{}", TaskState::Draft), "Draft");
         assert_eq!(format!("{}", TaskState::Planning), "Planning");
-        assert_eq!(format!("{}", TaskState::Planned { subtask_count: 5 }), "Planned (5 subtasks)");
-        assert_eq!(format!("{}", TaskState::Executing { completed: 3, total: 5 }), "Executing (3/5)");
+        assert_eq!(
+            format!("{}", TaskState::Planned { subtask_count: 5 }),
+            "Planned (5 subtasks)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                TaskState::Executing {
+                    completed: 3,
+                    total: 5
+                }
+            ),
+            "Executing (3/5)"
+        );
         assert_eq!(format!("{}", TaskState::HumanReview), "Human Review");
         assert_eq!(format!("{}", TaskState::Merging), "Merging");
         assert_eq!(format!("{}", TaskState::Completed), "Completed");
-        assert_eq!(format!("{}", TaskState::Failed { reason: "test error".into() }), "Failed: test error");
+        assert_eq!(
+            format!(
+                "{}",
+                TaskState::Failed {
+                    reason: "test error".into()
+                }
+            ),
+            "Failed: test error"
+        );
         assert_eq!(format!("{}", TaskState::Cancelled), "Cancelled");
 
         // QA Review without metadata
@@ -225,7 +479,10 @@ mod tests {
         assert!(display.contains("iteration 2"));
         assert!(display.contains("PARTIAL"));
         assert!(display.contains("2 of 5 tests passing"));
-        assert_eq!(display, "QA Fix (iteration 2) - PARTIAL: 2 of 5 tests passing");
+        assert_eq!(
+            display,
+            "QA Fix (iteration 2) - PARTIAL: 2 of 5 tests passing"
+        );
     }
 }
 
@@ -246,7 +503,11 @@ impl std::fmt::Display for TaskState {
                 }
                 Ok(())
             }
-            Self::QaFix { iteration, verdict, reasoning } => {
+            Self::QaFix {
+                iteration,
+                verdict,
+                reasoning,
+            } => {
                 write!(f, "QA Fix (iteration {iteration})")?;
                 if let Some(v) = verdict {
                     write!(f, " - {v}")?;
@@ -264,4 +525,3 @@ impl std::fmt::Display for TaskState {
         }
     }
 }
-

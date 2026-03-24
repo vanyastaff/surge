@@ -321,11 +321,26 @@ mod tests {
         let prompt = build_qa_prompt(&spec, diff, None);
 
         // Verify JSON format instructions are included
-        assert!(prompt.contains("## Response Format"), "should contain Response Format section");
+        assert!(
+            prompt.contains("## Response Format"),
+            "should contain Response Format section"
+        );
         assert!(prompt.contains("JSON object"), "should mention JSON object");
-        assert!(prompt.contains("\"verdict\": \"APPROVED\""), "should include APPROVED JSON example");
-        assert!(prompt.contains("\"verdict\": \"NEEDS_FIX\""), "should include NEEDS_FIX JSON example");
-        assert!(prompt.contains("\"issues\""), "should include issues field in JSON example");
-        assert!(prompt.contains("```json"), "should include JSON code blocks");
+        assert!(
+            prompt.contains("\"verdict\": \"APPROVED\""),
+            "should include APPROVED JSON example"
+        );
+        assert!(
+            prompt.contains("\"verdict\": \"NEEDS_FIX\""),
+            "should include NEEDS_FIX JSON example"
+        );
+        assert!(
+            prompt.contains("\"issues\""),
+            "should include issues field in JSON example"
+        );
+        assert!(
+            prompt.contains("```json"),
+            "should include JSON code blocks"
+        );
     }
 }

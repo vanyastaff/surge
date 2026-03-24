@@ -1,9 +1,13 @@
 //! Git worktree management for Surge — isolated workspaces per task.
 
+pub mod audit;
 pub mod cleanup;
+pub mod orphan;
 pub mod worktree;
 
+pub use audit::{CleanupAudit, CleanupEvent, CleanupEventType};
 pub use cleanup::LifecycleManager;
+pub use orphan::{OrphanReport, OrphanScanner, OrphanedWorktree};
 pub use worktree::{GitError, GitManager, WorktreeInfo};
 
 #[cfg(test)]

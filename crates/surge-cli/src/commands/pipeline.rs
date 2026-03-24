@@ -2,8 +2,8 @@ use std::io::Write as _;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use surge_core::{SurgeConfig, SurgeEvent};
 use surge_core::state::TaskState;
+use surge_core::{SurgeConfig, SurgeEvent};
 
 use super::load_spec_by_id;
 
@@ -139,7 +139,11 @@ pub async fn run(
                                 qa.reasoning = Some(r.clone());
                             }
                         }
-                        TaskState::QaFix { iteration, verdict, reasoning } => {
+                        TaskState::QaFix {
+                            iteration,
+                            verdict,
+                            reasoning,
+                        } => {
                             let mut qa = qa_summary_clone.lock().unwrap();
                             qa.iterations = *iteration;
                             if let Some(v) = verdict {

@@ -32,14 +32,26 @@ pub fn discard(spec_id: String, yes: bool) -> Result<()> {
     }
 
     let mgr = surge_git::GitManager::discover()?;
-    mgr.discard(&spec_id)?;
+    let repo_path = mgr.repo_path().to_path_buf();
+
+    // Create audit logger in .surge/cleanup.log
+    let audit_path = repo_path.join(".surge").join("cleanup.log");
+    let audit = surge_git::CleanupAudit::new(audit_path)?;
+    let lifecycle = surge_git::LifecycleManager::with_audit(mgr, audit);
+
+    lifecycle.discard(&spec_id)?;
     println!("✅ Discarded worktree for '{spec_id}'");
     Ok(())
 }
 
 pub fn clean(yes: bool) -> Result<()> {
     let mgr = surge_git::GitManager::discover()?;
-    let lifecycle = surge_git::LifecycleManager::new(mgr);
+    let repo_path = mgr.repo_path().to_path_buf();
+
+    // Create audit logger in .surge/cleanup.log
+    let audit_path = repo_path.join(".surge").join("cleanup.log");
+    let audit = surge_git::CleanupAudit::new(audit_path)?;
+    let lifecycle = surge_git::LifecycleManager::with_audit(mgr, audit);
 
     if !yes {
         println!("⚡ Cleanup preview (run with -y to execute):");

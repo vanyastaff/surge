@@ -1,8 +1,9 @@
-use std::io::Write as _;
+use std::io::{self, Write as _};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use surge_core::SurgeConfig;
+use tokio::signal;
 
 mod commands;
 
@@ -171,6 +172,98 @@ enum Commands {
     },
 }
 
+/// Set up signal handlers for graceful shutdown.
+///
+/// Listens for SIGINT (Ctrl+C) and SIGTERM and triggers graceful shutdown.
+async fn setup_signal_handler() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                eprintln!("\n⚡ Received SIGTERM. Shutting down gracefully...");
+            }
+            _ = sigint.recv() => {
+                eprintln!("\n⚡ Received SIGINT. Shutting down gracefully...");
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        eprintln!("\n⚡ Received Ctrl+C. Shutting down gracefully...");
+    }
+}
+
+/// Check for orphaned worktrees at startup and prompt user for cleanup.
+///
+/// Returns `true` if cleanup was performed or if no orphans were found.
+/// Returns `false` if user declined cleanup.
+fn check_and_cleanup_orphans() -> Result<bool> {
+    // Try to discover a git repo - if not found, skip orphan check
+    let mgr = match surge_git::GitManager::discover() {
+        Ok(m) => m,
+        Err(_) => return Ok(true), // Not a git repo, skip check
+    };
+
+    let scanner = surge_git::OrphanScanner::new(mgr);
+    let report = scanner.scan()?;
+
+    if report.is_empty() {
+        return Ok(true);
+    }
+
+    // Found orphans - prompt user
+    let count = report.total_count();
+    println!(
+        "⚡ Found {} orphaned worktree{}. Clean up? [Y/n]",
+        count,
+        if count == 1 { "" } else { "s" }
+    );
+
+    // Read user input
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim().to_lowercase();
+
+    // Default to yes if user just presses enter
+    if input.is_empty() || input == "y" || input == "yes" {
+        // Rediscover git manager for cleanup
+        let mgr = surge_git::GitManager::discover()?;
+
+        // Enable audit logging to .surge/cleanup.log
+        let audit_path = mgr.repo_path().join(".surge").join("cleanup.log");
+        let audit = surge_git::CleanupAudit::new(audit_path)?;
+        let lifecycle = surge_git::LifecycleManager::with_audit(mgr, audit);
+
+        let cleanup_report = lifecycle.full_cleanup()?;
+
+        if cleanup_report.removed_worktrees.is_empty() && cleanup_report.removed_branches.is_empty()
+        {
+            println!("✅ Nothing to clean up");
+        } else {
+            for wt in &cleanup_report.removed_worktrees {
+                println!("  Removed worktree: {wt}");
+            }
+            for br in &cleanup_report.removed_branches {
+                println!("  Deleted branch: {br}");
+            }
+            println!("✅ Cleanup complete");
+        }
+        Ok(true)
+    } else {
+        println!("Skipping cleanup. Run 'surge clean -y' to clean up later.");
+        Ok(false)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -182,7 +275,32 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    match cli.command {
+    // Check for orphaned worktrees at startup (skip for certain commands)
+    let should_check_orphans = !matches!(
+        cli.command,
+        Commands::Init | Commands::Clean { .. } | Commands::Config { .. }
+    );
+
+    if should_check_orphans {
+        // Run orphan check - if it fails, just log and continue
+        let _ = check_and_cleanup_orphans();
+    }
+
+    // Run command with signal handling
+    tokio::select! {
+        result = run_command(cli.command) => {
+            result
+        }
+        _ = setup_signal_handler() => {
+            // Signal received, exit gracefully
+            std::process::exit(130); // Standard exit code for SIGINT
+        }
+    }
+}
+
+/// Execute the CLI command.
+async fn run_command(command: Commands) -> Result<()> {
+    match command {
         Commands::Ping { agent } => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();

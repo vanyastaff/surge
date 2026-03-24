@@ -27,6 +27,7 @@ use tracing::{debug, info, warn};
 use crate::client::PermissionPolicy;
 use crate::connection::AgentConnection;
 use crate::health::HealthTracker;
+use crate::process_tracker::ProcessTracker;
 
 /// Handle to an active agent session.
 #[derive(Debug, Clone)]
@@ -78,6 +79,7 @@ struct WorkerState {
     resilience: ResilienceConfig,
     health: Arc<Mutex<HealthTracker>>,
     event_tx: broadcast::Sender<SurgeEvent>,
+    process_tracker: ProcessTracker,
 }
 
 /// Pool for managing multiple agent connections.
@@ -472,6 +474,11 @@ fn run_worker(
 
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
+        // Initialize ProcessTracker for PID file management
+        let pid_dir = worktree_root.join(".surge").join("pids");
+        let process_tracker =
+            ProcessTracker::new(&pid_dir).expect("failed to initialize ProcessTracker");
+
         let state = Rc::new(RefCell::new(WorkerState {
             connections: HashMap::new(),
             spawning: HashSet::new(),
@@ -482,6 +489,7 @@ fn run_worker(
             resilience,
             health,
             event_tx,
+            process_tracker,
         }));
 
         while let Some(op) = op_rx.recv().await {
@@ -491,8 +499,17 @@ fn run_worker(
                     let conns: Vec<_> = state.borrow_mut().connections.drain().collect();
                     for (name, mut conn) in conns {
                         debug!(agent = name.as_str(), "shutting down agent");
+                        // Untrack process before killing
+                        let _ = state.borrow().process_tracker.untrack(&name);
                         conn.wait_or_kill(grace).await;
                     }
+                    // Final cleanup of any remaining PID files
+                    state.borrow().process_tracker.cleanup_all();
+
+                    // Platform-specific process audit on Windows
+                    #[cfg(windows)]
+                    audit_orphaned_processes_windows();
+
                     let _ = tx.send(());
                     break;
                 }
@@ -713,6 +730,16 @@ async fn connect(state: &Rc<RefCell<WorkerState>>, name: &str) -> Result<(), Sur
     state.borrow_mut().spawning.remove(name);
 
     let connection = result?;
+
+    // Track the process PID if available (stdio transport)
+    if let Some(pid) = connection.pid() {
+        if let Err(e) = state.borrow().process_tracker.track(name, pid) {
+            warn!("Failed to track PID {} for agent '{}': {}", pid, name, e);
+        } else {
+            debug!("Tracked PID {} for agent '{}'", pid, name);
+        }
+    }
+
     state
         .borrow_mut()
         .connections
@@ -1221,6 +1248,89 @@ fn is_connection_error(error_msg: &str) -> bool {
         || msg_lower.contains("connection error")
         || msg_lower.contains("network error")
         || msg_lower.contains("io error")
+}
+
+// ── Platform-specific process audit ─────────────────────────────────
+
+/// Audit for orphaned child processes on Windows after shutdown.
+///
+/// On Windows, processes spawned with CREATE_NO_WINDOW may not be properly
+/// cleaned up if the parent terminates unexpectedly. This function performs
+/// a best-effort scan for any child processes that may have been spawned by
+/// agent processes and logs warnings if any are found.
+///
+/// This is a diagnostic aid for manual verification — it logs warnings but
+/// does not attempt to kill orphaned processes, as determining ownership is
+/// unreliable across process trees on Windows.
+#[cfg(windows)]
+fn audit_orphaned_processes_windows() {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    debug!("Starting Windows orphaned process audit");
+
+    let current_pid = std::process::id();
+
+    unsafe {
+        // Create snapshot of all processes
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            warn!("Failed to create process snapshot for orphan audit");
+            return;
+        };
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        // Iterate through all processes
+        if Process32FirstW(snapshot, &mut entry).is_err() {
+            let _ = CloseHandle(snapshot);
+            warn!("Failed to enumerate processes for orphan audit");
+            return;
+        }
+
+        let mut suspicious_count = 0;
+        loop {
+            // Check if this process is a child of the current process
+            if entry.th32ParentProcessID == current_pid && entry.th32ProcessID != current_pid {
+                // Extract process name from wide string
+                let name_end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let process_name = String::from_utf16_lossy(&entry.szExeFile[..name_end]);
+
+                warn!(
+                    pid = entry.th32ProcessID,
+                    parent_pid = entry.th32ParentProcessID,
+                    name = process_name.as_str(),
+                    "Orphaned child process detected after pool shutdown"
+                );
+                suspicious_count += 1;
+            }
+
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+
+        if suspicious_count > 0 {
+            warn!(
+                count = suspicious_count,
+                "Process audit found {} orphaned child process(es) — manual cleanup may be required",
+                suspicious_count
+            );
+        } else {
+            debug!("Process audit complete — no orphaned processes detected");
+        }
+    }
 }
 
 // ── Backoff calculation ─────────────────────────────────────────────
@@ -1780,6 +1890,124 @@ mod tests {
                 "Jitter delay {} exceeds expected max {}",
                 jitter_delay.as_millis(),
                 expected_capped
+            );
+        }
+    }
+
+    // ── Shutdown tests ─────────────────────────────────────────────
+
+    mod shutdown {
+        use super::*;
+
+        /// Test that PID files are created during pool initialization
+        #[test]
+        fn test_pool_initializes_pid_directory() {
+            use tempfile::TempDir;
+
+            let tmp = TempDir::new().unwrap();
+            let mut configs = HashMap::new();
+            configs.insert("test-agent".to_string(), test_agent_config());
+
+            let pool = AgentPool::new(
+                configs,
+                "test-agent".to_string(),
+                tmp.path().to_path_buf(),
+                PermissionPolicy::default(),
+                ResilienceConfig::default(),
+            )
+            .unwrap();
+
+            // Give the worker thread time to start and create the PID directory
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // The PID directory should be created during pool initialization
+            let pid_dir = tmp.path().join(".surge").join("pids");
+            assert!(pid_dir.exists(), "PID directory was not created");
+
+            drop(pool);
+        }
+
+        /// Test that shutdown cleans up all PID files
+        #[tokio::test]
+        async fn test_shutdown_cleanup() {
+            use std::fs;
+            use tempfile::TempDir;
+
+            let tmp = TempDir::new().unwrap();
+            let pid_dir = tmp.path().join(".surge").join("pids");
+
+            // Pre-create some PID files to simulate orphaned processes
+            fs::create_dir_all(&pid_dir).unwrap();
+            fs::write(pid_dir.join("agent-1.pid"), "12345\n").unwrap();
+            fs::write(pid_dir.join("agent-2.pid"), "67890\n").unwrap();
+
+            let mut configs = HashMap::new();
+            configs.insert("test-agent".to_string(), test_agent_config());
+
+            let pool = AgentPool::new(
+                configs,
+                "test-agent".to_string(),
+                tmp.path().to_path_buf(),
+                PermissionPolicy::default(),
+                ResilienceConfig::default(),
+            )
+            .unwrap();
+
+            // Verify PID files exist before shutdown
+            assert!(pid_dir.join("agent-1.pid").exists());
+            assert!(pid_dir.join("agent-2.pid").exists());
+
+            // Shutdown the pool
+            pool.shutdown().await;
+
+            // Verify PID files are cleaned up
+            assert!(
+                !pid_dir.join("agent-1.pid").exists(),
+                "PID file for agent-1 was not cleaned up"
+            );
+            assert!(
+                !pid_dir.join("agent-2.pid").exists(),
+                "PID file for agent-2 was not cleaned up"
+            );
+        }
+
+        /// Test that Drop triggers shutdown and cleanup
+        #[test]
+        fn test_drop_cleanup() {
+            use std::fs;
+            use tempfile::TempDir;
+
+            let tmp = TempDir::new().unwrap();
+            let pid_dir = tmp.path().join(".surge").join("pids");
+
+            // Pre-create a PID file
+            fs::create_dir_all(&pid_dir).unwrap();
+            fs::write(pid_dir.join("test-agent.pid"), "99999\n").unwrap();
+
+            let mut configs = HashMap::new();
+            configs.insert("test-agent".to_string(), test_agent_config());
+
+            {
+                let _pool = AgentPool::new(
+                    configs,
+                    "test-agent".to_string(),
+                    tmp.path().to_path_buf(),
+                    PermissionPolicy::default(),
+                    ResilienceConfig::default(),
+                )
+                .unwrap();
+
+                // Pool is active, PID file exists
+                assert!(pid_dir.join("test-agent.pid").exists());
+            } // Pool dropped here
+
+            // Give the worker thread time to cleanup
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // PID file should be cleaned up after drop
+            assert!(
+                !pid_dir.join("test-agent.pid").exists(),
+                "PID file was not cleaned up after pool drop"
             );
         }
     }

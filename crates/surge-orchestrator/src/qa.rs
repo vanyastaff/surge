@@ -20,7 +20,10 @@ pub enum QaVerdict {
     /// All acceptance criteria are met.
     Approved,
     /// Some criteria met, others not yet implemented.
-    Partial { met: Vec<String>, unmet: Vec<String> },
+    Partial {
+        met: Vec<String>,
+        unmet: Vec<String>,
+    },
     /// Issues were found that need fixing.
     NeedsFix { issues: String },
 }
@@ -64,9 +67,9 @@ impl QaResponse {
                 unmet: self.unmet,
             },
             QaVerdictKind::NeedsFix => QaVerdict::NeedsFix {
-                issues: self.issues.unwrap_or_else(|| {
-                    "QA requested fixes (no details provided)".to_string()
-                }),
+                issues: self
+                    .issues
+                    .unwrap_or_else(|| "QA requested fixes (no details provided)".to_string()),
             },
         }
     }
@@ -869,7 +872,10 @@ Some criteria are met, others need work."#;
 
                 // Verify met and unmet don't overlap
                 for criterion in &met {
-                    assert!(!unmet.contains(criterion), "met criterion should not be in unmet list");
+                    assert!(
+                        !unmet.contains(criterion),
+                        "met criterion should not be in unmet list"
+                    );
                 }
             }
             _ => panic!("expected Partial verdict, got {:?}", verdict),
