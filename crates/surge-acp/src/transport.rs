@@ -293,6 +293,7 @@ mod tests {
                 port,
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         }
     }
 

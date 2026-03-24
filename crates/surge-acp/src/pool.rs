@@ -773,6 +773,7 @@ mod tests {
             args: vec!["test".to_string()],
             transport: Transport::Stdio,
             mcp_servers: vec![],
+            capabilities: vec![],
         }
     }
 

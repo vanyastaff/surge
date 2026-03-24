@@ -211,6 +211,18 @@ impl RegistryEntry {
             args: self.default_args.clone(),
             transport: self.transport.clone(),
             mcp_servers: vec![],
+            capabilities: self
+                .capabilities
+                .iter()
+                .map(|cap| match cap {
+                    AgentCapability::Code => surge_core::config::AgentCapability::Code,
+                    AgentCapability::Plan => surge_core::config::AgentCapability::Plan,
+                    AgentCapability::Review => surge_core::config::AgentCapability::Review,
+                    AgentCapability::Test => surge_core::config::AgentCapability::Test,
+                    AgentCapability::Refactor => surge_core::config::AgentCapability::Refactor,
+                    AgentCapability::Chat => surge_core::config::AgentCapability::Chat,
+                })
+                .collect(),
         }
     }
 
@@ -422,6 +434,74 @@ impl Registry {
         save_registry_cache(&entries);
 
         Ok(Self { entries })
+    }
+
+    /// Create a registry from agents defined in surge.toml.
+    ///
+    /// Converts each `AgentConfig` to a `RegistryEntry` with sensible defaults
+    /// for missing metadata. The agent name (HashMap key) becomes the entry `id`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut agents = HashMap::new();
+    /// agents.insert("my-agent".to_string(), AgentConfig {
+    ///     command: "my-agent".to_string(),
+    ///     args: vec!["--acp".to_string()],
+    ///     transport: Transport::Stdio,
+    ///     mcp_servers: vec![],
+    ///     capabilities: vec![],
+    /// });
+    /// let registry = Registry::from_config(agents);
+    /// assert_eq!(registry.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn from_config(agents: HashMap<String, AgentConfig>) -> Self {
+        let entries = agents
+            .into_iter()
+            .map(|(name, config)| {
+                // Try to infer AgentKind from command or name
+                let kind = infer_agent_kind(&name, &config.command);
+
+                RegistryEntry {
+                    kind,
+                    id: name.clone(),
+                    display_name: prettify_name(&name),
+                    description: format!("Custom agent: {}", name),
+                    version: "custom".to_string(),
+                    authors: vec![],
+                    license: "unknown".to_string(),
+                    command: config.command,
+                    default_args: config.args,
+                    transport: config.transport,
+                    install_instructions: String::new(),
+                    cli_binary: None,
+                    website: None,
+                    tags: vec!["custom".to_string()],
+                    capabilities: if config.capabilities.is_empty() {
+                        // Default to all capabilities if none specified
+                        vec![
+                            AgentCapability::Code,
+                            AgentCapability::Plan,
+                            AgentCapability::Review,
+                            AgentCapability::Test,
+                            AgentCapability::Refactor,
+                            AgentCapability::Chat,
+                        ]
+                    } else {
+                        config
+                            .capabilities
+                            .iter()
+                            .map(convert_capability)
+                            .collect()
+                    },
+                    models: vec![],
+                    long_description: String::new(),
+                }
+            })
+            .collect();
+
+        Self { entries }
     }
 
     /// Merge a builtin and a remote registry.
@@ -686,6 +766,57 @@ fn resolve_command_uncached(command: &str) -> Option<String> {
     }
 }
 
+/// Try to infer `AgentKind` from agent name or command.
+/// Falls back to Claude if no match is found.
+fn infer_agent_kind(name: &str, command: &str) -> AgentKind {
+    let name_lower = name.to_lowercase();
+    let command_lower = command.to_lowercase();
+
+    if name_lower.contains("claude") || command_lower.contains("claude") {
+        AgentKind::Claude
+    } else if name_lower.contains("copilot")
+        || name_lower.contains("gh")
+        || command_lower.contains("copilot")
+    {
+        AgentKind::Copilot
+    } else if name_lower.contains("codex") || command_lower.contains("codex") {
+        AgentKind::Codex
+    } else if name_lower.contains("gemini") || command_lower.contains("gemini") {
+        AgentKind::Gemini
+    } else {
+        // Default to Claude for unknown agents
+        AgentKind::Claude
+    }
+}
+
+/// Convert a kebab-case or snake_case name to a human-readable display name.
+fn prettify_name(name: &str) -> String {
+    name.replace('-', " ")
+        .replace('_', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Convert from `surge_core::config::AgentCapability` to the local `AgentCapability`.
+fn convert_capability(cap: &surge_core::config::AgentCapability) -> AgentCapability {
+    match cap {
+        surge_core::config::AgentCapability::Code => AgentCapability::Code,
+        surge_core::config::AgentCapability::Plan => AgentCapability::Plan,
+        surge_core::config::AgentCapability::Review => AgentCapability::Review,
+        surge_core::config::AgentCapability::Test => AgentCapability::Test,
+        surge_core::config::AgentCapability::Refactor => AgentCapability::Refactor,
+        surge_core::config::AgentCapability::Chat => AgentCapability::Chat,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +1065,113 @@ mod tests {
             assert!(!agent.entry.display_name.is_empty());
             // command_path may be Some or None depending on what's installed
         }
+    }
+
+    #[test]
+    fn test_from_config() {
+        use std::collections::HashMap;
+
+        // Test 1: Empty config produces empty registry
+        let empty_agents: HashMap<String, AgentConfig> = HashMap::new();
+        let empty_reg = Registry::from_config(empty_agents);
+        assert_eq!(empty_reg.len(), 0);
+
+        // Test 2: Single agent with minimal config
+        let mut agents = HashMap::new();
+        agents.insert(
+            "my-custom-agent".to_string(),
+            AgentConfig {
+                command: "my-agent".to_string(),
+                args: vec!["--acp".to_string()],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        );
+
+        let reg = Registry::from_config(agents);
+        assert_eq!(reg.len(), 1);
+
+        let entry = reg.find("my-custom-agent").unwrap();
+        assert_eq!(entry.id, "my-custom-agent");
+        assert_eq!(entry.display_name, "My Custom Agent");
+        assert_eq!(entry.command, "my-agent");
+        assert_eq!(entry.default_args, vec!["--acp"]);
+        assert_eq!(entry.tags, vec!["custom"]);
+        // Should default to all capabilities when none specified
+        assert_eq!(entry.capabilities.len(), 6);
+        assert!(entry.capabilities.contains(&AgentCapability::Code));
+        assert!(entry.capabilities.contains(&AgentCapability::Chat));
+
+        // Test 3: Agent with explicit capabilities
+        let mut agents_with_caps = HashMap::new();
+        agents_with_caps.insert(
+            "test-agent".to_string(),
+            AgentConfig {
+                command: "test".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![
+                    surge_core::config::AgentCapability::Code,
+                    surge_core::config::AgentCapability::Test,
+                ],
+            },
+        );
+
+        let reg_with_caps = Registry::from_config(agents_with_caps);
+        let entry_with_caps = reg_with_caps.find("test-agent").unwrap();
+        assert_eq!(entry_with_caps.capabilities.len(), 2);
+        assert!(entry_with_caps
+            .capabilities
+            .contains(&AgentCapability::Code));
+        assert!(entry_with_caps
+            .capabilities
+            .contains(&AgentCapability::Test));
+
+        // Test 4: Inferred AgentKind from name
+        let mut claude_agent = HashMap::new();
+        claude_agent.insert(
+            "claude-custom".to_string(),
+            AgentConfig {
+                command: "npx".to_string(),
+                args: vec!["@custom/claude".to_string()],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        );
+
+        let claude_reg = Registry::from_config(claude_agent);
+        let claude_entry = claude_reg.find("claude-custom").unwrap();
+        assert_eq!(claude_entry.kind, AgentKind::Claude);
+
+        // Test 5: Multiple agents
+        let mut multi_agents = HashMap::new();
+        multi_agents.insert(
+            "agent-1".to_string(),
+            AgentConfig {
+                command: "agent1".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        );
+        multi_agents.insert(
+            "agent-2".to_string(),
+            AgentConfig {
+                command: "agent2".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        );
+
+        let multi_reg = Registry::from_config(multi_agents);
+        assert_eq!(multi_reg.len(), 2);
+        assert!(multi_reg.find("agent-1").is_some());
+        assert!(multi_reg.find("agent-2").is_some());
     }
 }
