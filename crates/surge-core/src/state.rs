@@ -6,8 +6,13 @@ use serde::{Deserialize, Serialize};
 pub enum TaskState {
     Draft,
     Planning,
-    Planned { subtask_count: usize },
-    Executing { completed: usize, total: usize },
+    Planned {
+        subtask_count: usize,
+    },
+    Executing {
+        completed: usize,
+        total: usize,
+    },
     QaReview {
         verdict: Option<String>,
         reasoning: Option<String>,
@@ -20,7 +25,9 @@ pub enum TaskState {
     HumanReview,
     Merging,
     Completed,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     Cancelled,
 }
 
@@ -64,15 +71,40 @@ mod tests {
         assert!(TaskState::Cancelled.is_terminal());
 
         assert!(!TaskState::Draft.is_terminal());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_terminal());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_terminal()
+        );
     }
 
     #[test]
     fn test_active_states() {
         assert!(TaskState::Planning.is_active());
-        assert!(TaskState::Executing { completed: 1, total: 3 }.is_active());
-        assert!(TaskState::QaReview { verdict: None, reasoning: None }.is_active());
-        assert!(TaskState::QaFix { iteration: 2, verdict: None, reasoning: None }.is_active());
+        assert!(
+            TaskState::Executing {
+                completed: 1,
+                total: 3
+            }
+            .is_active()
+        );
+        assert!(
+            TaskState::QaReview {
+                verdict: None,
+                reasoning: None
+            }
+            .is_active()
+        );
+        assert!(
+            TaskState::QaFix {
+                iteration: 2,
+                verdict: None,
+                reasoning: None
+            }
+            .is_active()
+        );
         assert!(TaskState::Merging.is_active());
 
         assert!(!TaskState::Draft.is_active());
@@ -88,7 +120,13 @@ mod tests {
         assert!(TaskState::HumanReview.is_waiting());
 
         assert!(!TaskState::Planning.is_waiting());
-        assert!(!TaskState::Executing { completed: 0, total: 1 }.is_waiting());
+        assert!(
+            !TaskState::Executing {
+                completed: 0,
+                total: 1
+            }
+            .is_waiting()
+        );
         assert!(!TaskState::Completed.is_waiting());
         assert!(!TaskState::Failed { reason: "x".into() }.is_waiting());
     }
@@ -100,9 +138,19 @@ mod tests {
             TaskState::Draft,
             TaskState::Planning,
             TaskState::Planned { subtask_count: 1 },
-            TaskState::Executing { completed: 0, total: 1 },
-            TaskState::QaReview { verdict: None, reasoning: None },
-            TaskState::QaFix { iteration: 1, verdict: None, reasoning: None },
+            TaskState::Executing {
+                completed: 0,
+                total: 1,
+            },
+            TaskState::QaReview {
+                verdict: None,
+                reasoning: None,
+            },
+            TaskState::QaFix {
+                iteration: 1,
+                verdict: None,
+                reasoning: None,
+            },
             TaskState::HumanReview,
             TaskState::Merging,
             TaskState::Completed,
@@ -170,12 +218,32 @@ mod tests {
         // Test all TaskState variants have proper Display implementation
         assert_eq!(format!("{}", TaskState::Draft), "Draft");
         assert_eq!(format!("{}", TaskState::Planning), "Planning");
-        assert_eq!(format!("{}", TaskState::Planned { subtask_count: 5 }), "Planned (5 subtasks)");
-        assert_eq!(format!("{}", TaskState::Executing { completed: 3, total: 5 }), "Executing (3/5)");
+        assert_eq!(
+            format!("{}", TaskState::Planned { subtask_count: 5 }),
+            "Planned (5 subtasks)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                TaskState::Executing {
+                    completed: 3,
+                    total: 5
+                }
+            ),
+            "Executing (3/5)"
+        );
         assert_eq!(format!("{}", TaskState::HumanReview), "Human Review");
         assert_eq!(format!("{}", TaskState::Merging), "Merging");
         assert_eq!(format!("{}", TaskState::Completed), "Completed");
-        assert_eq!(format!("{}", TaskState::Failed { reason: "test error".into() }), "Failed: test error");
+        assert_eq!(
+            format!(
+                "{}",
+                TaskState::Failed {
+                    reason: "test error".into()
+                }
+            ),
+            "Failed: test error"
+        );
         assert_eq!(format!("{}", TaskState::Cancelled), "Cancelled");
 
         // QA Review without metadata
@@ -225,7 +293,10 @@ mod tests {
         assert!(display.contains("iteration 2"));
         assert!(display.contains("PARTIAL"));
         assert!(display.contains("2 of 5 tests passing"));
-        assert_eq!(display, "QA Fix (iteration 2) - PARTIAL: 2 of 5 tests passing");
+        assert_eq!(
+            display,
+            "QA Fix (iteration 2) - PARTIAL: 2 of 5 tests passing"
+        );
     }
 }
 
@@ -246,7 +317,11 @@ impl std::fmt::Display for TaskState {
                 }
                 Ok(())
             }
-            Self::QaFix { iteration, verdict, reasoning } => {
+            Self::QaFix {
+                iteration,
+                verdict,
+                reasoning,
+            } => {
                 write!(f, "QA Fix (iteration {iteration})")?;
                 if let Some(v) = verdict {
                     write!(f, " - {v}")?;
@@ -264,4 +339,3 @@ impl std::fmt::Display for TaskState {
         }
     }
 }
-

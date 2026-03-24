@@ -55,7 +55,8 @@ impl LifecycleManager {
 
                 // Log orphan detection
                 if let Some(audit) = &self.audit {
-                    let _ = audit.log_orphan_detected(&wt.spec_id, Some("directory missing".to_string()));
+                    let _ = audit
+                        .log_orphan_detected(&wt.spec_id, Some("directory missing".to_string()));
                 }
 
                 self.git_manager.discard(&wt.spec_id)?;
@@ -63,7 +64,8 @@ impl LifecycleManager {
 
                 // Log worktree removal
                 if let Some(audit) = &self.audit {
-                    let _ = audit.log_worktree_removed(&wt.spec_id, Some("orphaned cleanup".to_string()));
+                    let _ = audit
+                        .log_worktree_removed(&wt.spec_id, Some("orphaned cleanup".to_string()));
                 }
             }
         }
@@ -108,7 +110,10 @@ impl LifecycleManager {
 
                 // Log merged branch detection
                 if let Some(audit) = &self.audit {
-                    let _ = audit.log_merged_branch_detected(&name, Some("fully merged into HEAD".to_string()));
+                    let _ = audit.log_merged_branch_detected(
+                        &name,
+                        Some("fully merged into HEAD".to_string()),
+                    );
                 }
 
                 // Need to re-find since we can't mutably borrow from the iterator

@@ -327,8 +327,8 @@ fn run_worker(
     local.block_on(&rt, async move {
         // Initialize ProcessTracker for PID file management
         let pid_dir = worktree_root.join(".surge").join("pids");
-        let process_tracker = ProcessTracker::new(&pid_dir)
-            .expect("failed to initialize ProcessTracker");
+        let process_tracker =
+            ProcessTracker::new(&pid_dir).expect("failed to initialize ProcessTracker");
 
         let state = Rc::new(RefCell::new(WorkerState {
             connections: HashMap::new(),
@@ -1130,8 +1130,8 @@ mod tests {
         /// Test that shutdown cleans up all PID files
         #[tokio::test]
         async fn test_shutdown_cleanup() {
-            use tempfile::TempDir;
             use std::fs;
+            use tempfile::TempDir;
 
             let tmp = TempDir::new().unwrap();
             let pid_dir = tmp.path().join(".surge").join("pids");
@@ -1174,8 +1174,8 @@ mod tests {
         /// Test that Drop triggers shutdown and cleanup
         #[test]
         fn test_drop_cleanup() {
-            use tempfile::TempDir;
             use std::fs;
+            use tempfile::TempDir;
 
             let tmp = TempDir::new().unwrap();
             let pid_dir = tmp.path().join(".surge").join("pids");

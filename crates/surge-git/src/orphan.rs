@@ -97,9 +97,7 @@ impl OrphanScanner {
             let spec_id = name.strip_prefix("surge/").unwrap_or(&name);
 
             // Check if this branch has a corresponding worktree
-            let has_worktree = worktree_infos
-                .iter()
-                .any(|wt| wt.spec_id == spec_id);
+            let has_worktree = worktree_infos.iter().any(|wt| wt.spec_id == spec_id);
 
             if !has_worktree {
                 debug!(branch = %name, "detected orphaned branch");
@@ -158,9 +156,7 @@ impl OrphanScanner {
             }
 
             let spec_id = name.strip_prefix("surge/").unwrap_or(&name);
-            let has_worktree = worktree_infos
-                .iter()
-                .any(|wt| wt.spec_id == spec_id);
+            let has_worktree = worktree_infos.iter().any(|wt| wt.spec_id == spec_id);
 
             if !has_worktree {
                 orphaned.push(name);
@@ -224,8 +220,7 @@ mod tests {
         let repo = Repository::open(&path).unwrap();
         let head = repo.head().unwrap();
         let commit = head.peel_to_commit().unwrap();
-        repo.branch("surge/orphan-branch", &commit, false)
-            .unwrap();
+        repo.branch("surge/orphan-branch", &commit, false).unwrap();
 
         let scanner = OrphanScanner::new(GitManager::new(path).unwrap());
         let report = scanner.scan().unwrap();
@@ -282,8 +277,7 @@ mod tests {
         let repo = Repository::open(&path).unwrap();
         let head = repo.head().unwrap();
         let commit = head.peel_to_commit().unwrap();
-        repo.branch("surge/orphan-branch", &commit, false)
-            .unwrap();
+        repo.branch("surge/orphan-branch", &commit, false).unwrap();
 
         let gm = GitManager::new(path).unwrap();
         let scanner = OrphanScanner::new(gm);
@@ -317,8 +311,7 @@ mod tests {
         let commit = head.peel_to_commit().unwrap();
 
         // Create a non-surge branch
-        repo.branch("feature/my-feature", &commit, false)
-            .unwrap();
+        repo.branch("feature/my-feature", &commit, false).unwrap();
 
         let gm = GitManager::new(path).unwrap();
         let scanner = OrphanScanner::new(gm);

@@ -41,11 +41,7 @@ pub struct CleanupEvent {
 
 impl CleanupEvent {
     /// Create a new cleanup event.
-    pub fn new(
-        event_type: CleanupEventType,
-        resource_id: String,
-        context: Option<String>,
-    ) -> Self {
+    pub fn new(event_type: CleanupEventType, resource_id: String, context: Option<String>) -> Self {
         Self {
             timestamp: Utc::now(),
             event_type,
@@ -134,8 +130,11 @@ impl CleanupAudit {
         spec_id: &str,
         context: Option<String>,
     ) -> Result<(), GitError> {
-        let event =
-            CleanupEvent::new(CleanupEventType::OrphanDetected, spec_id.to_string(), context);
+        let event = CleanupEvent::new(
+            CleanupEventType::OrphanDetected,
+            spec_id.to_string(),
+            context,
+        );
         self.log(event)
     }
 
@@ -210,9 +209,7 @@ mod tests {
         let log_path = dir.path().join("cleanup.log");
         let audit = CleanupAudit::new(&log_path).unwrap();
 
-        audit
-            .log_branch_deleted("surge/test-branch", None)
-            .unwrap();
+        audit.log_branch_deleted("surge/test-branch", None).unwrap();
 
         let events = audit.read_events().unwrap();
         assert_eq!(events.len(), 1);
@@ -234,9 +231,7 @@ mod tests {
         audit
             .log_merged_branch_detected("surge/old-branch", None)
             .unwrap();
-        audit
-            .log_branch_deleted("surge/old-branch", None)
-            .unwrap();
+        audit.log_branch_deleted("surge/old-branch", None).unwrap();
 
         let events = audit.read_events().unwrap();
         assert_eq!(events.len(), 4);

@@ -175,7 +175,9 @@ async fn setup_signal_handler() {
 
     #[cfg(not(unix))]
     {
-        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
         eprintln!("\n⚡ Received Ctrl+C. Shutting down gracefully...");
     }
 }
@@ -200,7 +202,8 @@ fn check_and_cleanup_orphans() -> Result<bool> {
 
     // Found orphans - prompt user
     let count = report.total_count();
-    println!("⚡ Found {} orphaned worktree{}. Clean up? [Y/n]",
+    println!(
+        "⚡ Found {} orphaned worktree{}. Clean up? [Y/n]",
         count,
         if count == 1 { "" } else { "s" }
     );
@@ -217,7 +220,8 @@ fn check_and_cleanup_orphans() -> Result<bool> {
         let lifecycle = surge_git::LifecycleManager::new(mgr);
         let cleanup_report = lifecycle.full_cleanup()?;
 
-        if cleanup_report.removed_worktrees.is_empty() && cleanup_report.removed_branches.is_empty() {
+        if cleanup_report.removed_worktrees.is_empty() && cleanup_report.removed_branches.is_empty()
+        {
             println!("✅ Nothing to clean up");
         } else {
             for wt in &cleanup_report.removed_worktrees {

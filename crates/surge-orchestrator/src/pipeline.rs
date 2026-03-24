@@ -491,15 +491,19 @@ impl Orchestrator {
                 info!("merged successfully");
             }
             QaVerdict::Partial { met, unmet } => {
-                let verdict_str = format!(
-                    "partial ({} met, {} unmet)",
-                    met.len(),
-                    unmet.len()
-                );
+                let verdict_str = format!("partial ({} met, {} unmet)", met.len(), unmet.len());
                 let reasoning_str = format!(
                     "Met: {}; Unmet: {}",
-                    if met.is_empty() { "none".to_string() } else { met.join(", ") },
-                    if unmet.is_empty() { "none".to_string() } else { unmet.join(", ") }
+                    if met.is_empty() {
+                        "none".to_string()
+                    } else {
+                        met.join(", ")
+                    },
+                    if unmet.is_empty() {
+                        "none".to_string()
+                    } else {
+                        unmet.join(", ")
+                    }
                 );
 
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {

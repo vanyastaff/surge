@@ -371,10 +371,9 @@ impl AgentConnection {
                 if let Some(pid) = pid {
                     debug!("Killing Unix process PID {}", pid);
                 }
-                process
-                    .kill()
-                    .await
-                    .map_err(|e| SurgeError::AgentConnection(format!("Failed to kill agent: {}", e)))?;
+                process.kill().await.map_err(|e| {
+                    SurgeError::AgentConnection(format!("Failed to kill agent: {}", e))
+                })?;
             }
 
             // Reap the process to prevent zombies
@@ -466,7 +465,10 @@ mod tests {
             let pid = child.id().expect("Failed to get child PID");
 
             // Verify process is running
-            assert!(child.try_wait().unwrap().is_none(), "Process should be running");
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "Process should be running"
+            );
 
             // Create a mock AgentConnection with just the process field
             let mut mock_connection = TestAgentConnection::new(child);
@@ -507,7 +509,10 @@ mod tests {
             let pid = child.id().expect("Failed to get child PID");
 
             // Verify process is running
-            assert!(child.try_wait().unwrap().is_none(), "Process should be running");
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "Process should be running"
+            );
 
             // Create a mock AgentConnection with just the process field
             let mut mock_connection = TestAgentConnection::new(child);
@@ -553,7 +558,10 @@ mod tests {
                 .expect("Failed to spawn test process");
 
             // Verify process is running
-            assert!(child.try_wait().unwrap().is_none(), "Process should be running");
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "Process should be running"
+            );
 
             let mut mock_connection = TestAgentConnection::new(child);
 
@@ -575,7 +583,10 @@ mod tests {
             );
 
             // Process should be None after wait_or_kill
-            assert!(mock_connection.process.is_none(), "Process should be cleared");
+            assert!(
+                mock_connection.process.is_none(),
+                "Process should be cleared"
+            );
         }
 
         /// Helper struct for testing AgentConnection methods without full initialization.
@@ -613,10 +624,9 @@ mod tests {
 
                     #[cfg(not(windows))]
                     {
-                        process
-                            .kill()
-                            .await
-                            .map_err(|e| SurgeError::AgentConnection(format!("Failed to kill agent: {}", e)))?;
+                        process.kill().await.map_err(|e| {
+                            SurgeError::AgentConnection(format!("Failed to kill agent: {}", e))
+                        })?;
                     }
 
                     let _ = process.wait().await;
