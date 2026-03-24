@@ -42,6 +42,12 @@ pub struct AgentHealth {
     pub last_error: Option<String>,
     /// Last 100 latency samples for percentile calculation.
     latency_samples: VecDeque<Duration>,
+    /// When the agent was registered (used for uptime tracking).
+    pub uptime_start: Instant,
+    /// Total number of heartbeat failures.
+    pub total_heartbeat_failures: u64,
+    /// Number of consecutive heartbeat failures.
+    pub consecutive_heartbeat_failures: u64,
 }
 
 impl AgentHealth {
@@ -55,6 +61,9 @@ impl AgentHealth {
             avg_latency_ms: 0,
             last_error: None,
             latency_samples: VecDeque::with_capacity(100),
+            uptime_start: Instant::now(),
+            total_heartbeat_failures: 0,
+            consecutive_heartbeat_failures: 0,
         }
     }
 
@@ -104,6 +113,12 @@ impl AgentHealth {
 
         let index = ((percentile / 100.0) * (sorted.len() as f64 - 1.0)).round() as usize;
         sorted[index]
+    }
+
+    /// Returns the uptime duration since agent registration.
+    #[must_use]
+    pub fn uptime(&self) -> Duration {
+        Instant::now().duration_since(self.uptime_start)
     }
 }
 
@@ -186,6 +201,36 @@ impl HealthTracker {
                 health.rate_limit_reset =
                     Some(Instant::now() + Duration::from_secs(retry_after_secs));
             }
+        }
+    }
+
+    /// Records a successful heartbeat from an agent.
+    /// Clears consecutive heartbeat failure count.
+    pub fn record_heartbeat_success(&mut self, agent: &str) {
+        if let Some(health) = self.agents.get_mut(agent) {
+            if health.consecutive_heartbeat_failures > 0 {
+                info!(
+                    agent,
+                    "heartbeat recovered after {} consecutive failures",
+                    health.consecutive_heartbeat_failures
+                );
+                health.consecutive_heartbeat_failures = 0;
+            }
+        }
+    }
+
+    /// Records a failed heartbeat from an agent.
+    /// Increments both total and consecutive heartbeat failure counts.
+    pub fn record_heartbeat_failure(&mut self, agent: &str) {
+        if let Some(health) = self.agents.get_mut(agent) {
+            health.total_heartbeat_failures += 1;
+            health.consecutive_heartbeat_failures += 1;
+            warn!(
+                agent,
+                total = health.total_heartbeat_failures,
+                consecutive = health.consecutive_heartbeat_failures,
+                "heartbeat failure"
+            );
         }
     }
 
@@ -393,5 +438,57 @@ mod tests {
         // p50 of 51-150 should be around 100ms
         let p50 = health.latency_p50_ms();
         assert!(p50 >= 95 && p50 <= 105, "p50 was {}", p50);
+    }
+
+    #[test]
+    fn test_uptime_tracking() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Sleep briefly to ensure uptime is measurable
+        std::thread::sleep(Duration::from_millis(10));
+
+        let health = monitor.get_health("claude").unwrap();
+        let uptime = health.uptime();
+
+        // Uptime should be at least 10ms
+        assert!(uptime.as_millis() >= 10);
+    }
+
+    #[test]
+    fn test_heartbeat_failure_tracking() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record 3 heartbeat failures
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 3);
+        assert_eq!(health.consecutive_heartbeat_failures, 3);
+    }
+
+    #[test]
+    fn test_heartbeat_recovery() {
+        let mut monitor = HealthTracker::new();
+        monitor.register("claude");
+
+        // Record failures then success
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_failure("claude");
+        monitor.record_heartbeat_success("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 2);
+        assert_eq!(health.consecutive_heartbeat_failures, 0);
+
+        // Record more failures after recovery
+        monitor.record_heartbeat_failure("claude");
+
+        let health = monitor.get_health("claude").unwrap();
+        assert_eq!(health.total_heartbeat_failures, 3);
+        assert_eq!(health.consecutive_heartbeat_failures, 1);
     }
 }
