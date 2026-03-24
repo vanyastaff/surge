@@ -217,7 +217,12 @@ fn check_and_cleanup_orphans() -> Result<bool> {
     if input.is_empty() || input == "y" || input == "yes" {
         // Rediscover git manager for cleanup
         let mgr = surge_git::GitManager::discover()?;
-        let lifecycle = surge_git::LifecycleManager::new(mgr);
+
+        // Enable audit logging to .surge/cleanup.log
+        let audit_path = mgr.repo_path().join(".surge").join("cleanup.log");
+        let audit = surge_git::CleanupAudit::new(audit_path)?;
+        let lifecycle = surge_git::LifecycleManager::with_audit(mgr, audit);
+
         let cleanup_report = lifecycle.full_cleanup()?;
 
         if cleanup_report.removed_worktrees.is_empty() && cleanup_report.removed_branches.is_empty()
