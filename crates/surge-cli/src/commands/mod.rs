@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod analytics;
 pub mod config;
 pub mod git;
 pub mod insights;

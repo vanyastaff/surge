@@ -8,8 +8,8 @@ use tokio::signal;
 mod commands;
 
 use commands::{
-    agent::AgentCommands, config::ConfigCommands, insights::InsightsCommands,
-    registry::RegistryCommands, spec::SpecCommands,
+    agent::AgentCommands, analytics::AnalyticsCommands, config::ConfigCommands,
+    insights::InsightsCommands, registry::RegistryCommands, spec::SpecCommands,
 };
 
 #[derive(Parser)]
@@ -169,6 +169,12 @@ enum Commands {
     Insights {
         #[command(subcommand)]
         command: InsightsCommands,
+    },
+
+    /// View token and cost analytics
+    Analytics {
+        #[command(subcommand)]
+        command: AnalyticsCommands,
     },
 }
 
@@ -464,6 +470,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Insights { command } => {
             commands::insights::run(command)?;
+        }
+
+        Commands::Analytics { command } => {
+            commands::analytics::run(command)?;
         }
 
         Commands::Init => {
