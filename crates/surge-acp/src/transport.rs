@@ -184,15 +184,18 @@ impl AgentTransport for StdioTransport {
 /// For agents whose env var is not yet known, a `warn!` is emitted and no env
 /// var is set — the agent starts normally but without the MCP servers.
 fn setup_mcp_env(agent_name: &str, servers: &[McpServerConfig], cmd: &mut tokio::process::Command) {
-    use crate::registry::AgentKind;
-
-    let Some(env_var) = AgentKind::from_id(agent_name).and_then(|k| k.mcp_config_env_var()) else {
-        warn!(
-            agent = agent_name,
-            servers = servers.len(),
-            "MCP servers configured but no known env var for this agent type — skipping"
-        );
-        return;
+    // Map agent ID to MCP config environment variable
+    let env_var = match agent_name {
+        "claude-acp" => "CLAUDE_MCP_CONFIG",
+        // TODO: discover the correct env var for other agents
+        _ => {
+            warn!(
+                agent = agent_name,
+                servers = servers.len(),
+                "MCP servers configured but no known env var for this agent type — skipping"
+            );
+            return;
+        }
     };
 
     match write_mcp_config_file(agent_name, servers) {
@@ -293,6 +296,7 @@ mod tests {
                 port,
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         }
     }
 

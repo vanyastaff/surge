@@ -119,6 +119,7 @@ pub fn test_surge_config(agent_name: &str, command: &str) -> SurgeConfig {
             args: vec![],
             transport: Transport::Stdio,
             mcp_servers: vec![],
+            capabilities: vec![],
         },
     );
 

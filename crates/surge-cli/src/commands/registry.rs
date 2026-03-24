@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap::Subcommand;
 
+/// Default remote registry URL for ACP agents
+const DEFAULT_REGISTRY_URL: &str = "https://acp-registry.jetbrains.com/api/v1/agents.json";
+
 #[derive(Subcommand)]
 pub enum RegistryCommands {
     /// List all known agents in the registry
@@ -25,9 +28,15 @@ pub enum RegistryCommands {
         #[arg(short, long)]
         name: Option<String>,
     },
+    /// Fetch and cache the remote agent registry
+    Fetch {
+        /// Optional custom registry URL (defaults to official ACP registry)
+        #[arg(short, long)]
+        url: Option<String>,
+    },
 }
 
-pub fn run(command: RegistryCommands) -> Result<()> {
+pub async fn run(command: RegistryCommands) -> Result<()> {
     match command {
         RegistryCommands::List => {
             let registry = surge_acp::Registry::builtin();
@@ -79,6 +88,9 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                     println!("  ✅ {} ({})", agent.entry.display_name, agent.entry.id);
                     if let Some(path) = &agent.command_path {
                         println!("     Path: {path}");
+                    }
+                    if let Some(version) = &agent.detected_version {
+                        println!("     Version: {version}");
                     }
                     println!("     Capabilities: {}", caps.join(", "));
                     println!();
@@ -182,6 +194,19 @@ pub fn run(command: RegistryCommands) -> Result<()> {
                     );
                 }
             }
+        }
+        RegistryCommands::Fetch { url } => {
+            let registry_url = url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL);
+            println!("⚡ Fetching remote registry from {}...", registry_url);
+
+            let registry = surge_acp::Registry::fetch_remote(registry_url)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to fetch remote registry: {}", e))?;
+
+            let count = registry.list().len();
+            println!("✅ Successfully fetched and cached {} agents", count);
+            println!("   Cache location: ~/.surge/registry-cache.json");
+            println!("\nUse 'surge registry list' to view all agents.");
         }
     }
     Ok(())

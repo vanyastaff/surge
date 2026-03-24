@@ -459,7 +459,7 @@ async fn run_command(command: Commands) -> Result<()> {
         }
 
         Commands::Registry { command } => {
-            commands::registry::run(command)?;
+            commands::registry::run(command).await?;
         }
 
         Commands::Insights { command } => {

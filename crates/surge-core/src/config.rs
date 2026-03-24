@@ -2,7 +2,65 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+
+/// Capabilities an agent may support.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentCapability {
+    Code,
+    Plan,
+    Review,
+    Test,
+    Refactor,
+    Chat,
+}
+
+impl fmt::Display for AgentCapability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Code => "code",
+            Self::Plan => "plan",
+            Self::Review => "review",
+            Self::Test => "test",
+            Self::Refactor => "refactor",
+            Self::Chat => "chat",
+        };
+        write!(f, "{s}")
+    }
+}
+
+/// Pricing information for agent cost estimation.
+///
+/// Used to track and estimate costs for agent operations based on token usage.
+/// All costs are per million tokens.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PricingInfo {
+    /// Cost per million input tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_million_tokens: Option<f64>,
+    /// Cost per million output tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_million_tokens: Option<f64>,
+    /// Currency code (default: "USD").
+    #[serde(default = "default_currency")]
+    pub currency: String,
+}
+
+fn default_currency() -> String {
+    "USD".to_string()
+}
+
+impl Default for PricingInfo {
+    fn default() -> Self {
+        Self {
+            input_cost_per_million_tokens: None,
+            output_cost_per_million_tokens: None,
+            currency: default_currency(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
@@ -56,6 +114,9 @@ pub struct AgentConfig {
     /// Claude Code) before spawning the process.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Capabilities this agent supports.
+    #[serde(default)]
+    pub capabilities: Vec<AgentCapability>,
 }
 
 impl AgentConfig {
@@ -740,6 +801,7 @@ max_parallel = 2
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         assert!(valid_config.validate().is_ok());
@@ -756,6 +818,7 @@ max_parallel = 2
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         let result = invalid_config.validate();
@@ -776,6 +839,7 @@ max_parallel = 2
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         let result = config_empty_cmd.validate();
@@ -798,6 +862,7 @@ max_parallel = 2
                     port: 8080,
                 },
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         let result = config_empty_host.validate();
@@ -820,6 +885,7 @@ max_parallel = 2
                     port: 0,
                 },
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         let result = config_invalid_port.validate();
@@ -858,6 +924,7 @@ max_parallel = 2
                     port: 8080,
                 },
                 mcp_servers: vec![],
+                capabilities: vec![],
             },
         );
         assert!(config_valid_tcp.validate().is_ok());
@@ -1184,6 +1251,7 @@ transport = "stdio"
             args: vec![],
             transport: Transport::Stdio,
             mcp_servers: vec![],
+            capabilities: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -1203,6 +1271,7 @@ transport = "stdio"
                 port: 8080,
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -1317,6 +1386,7 @@ after_spec = false
                 port: 1,
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         };
         assert!(agent_min.validate("test").is_ok());
 
@@ -1328,6 +1398,7 @@ after_spec = false
                 port: 65535,
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         };
         assert!(agent_max.validate("test").is_ok());
     }
@@ -1416,6 +1487,7 @@ url = "ws://localhost:8080"
                 url: "ws://localhost:8080".to_string(),
             },
             mcp_servers: vec![],
+            capabilities: vec![],
         };
         let err = agent.validate("test-agent").unwrap_err();
         assert!(

@@ -47,6 +47,7 @@ fn test_agent_config(command: &str, args: Vec<&str>) -> AgentConfig {
         args: args.iter().map(|s| s.to_string()).collect(),
         transport: Transport::Stdio,
         mcp_servers: vec![],
+        capabilities: vec![],
     }
 }
 
