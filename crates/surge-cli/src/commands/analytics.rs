@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use serde::Serialize;
-use surge_persistence::{models::SessionUsage, store::Store};
+use surge_core::config::SurgeConfig;
+use surge_persistence::{budget::BudgetTracker, models::SessionUsage, store::Store};
 
 use super::load_spec_by_id;
 
@@ -70,6 +71,21 @@ struct SessionExport {
     estimated_cost_usd: f64,
 }
 
+/// Budget status export data
+#[derive(Debug, Serialize)]
+struct BudgetStatusExport {
+    daily_budget_usd: Option<f64>,
+    daily_spending_usd: f64,
+    daily_usage_percentage: f64,
+    daily_warning_level: String,
+    daily_remaining_usd: f64,
+    weekly_budget_usd: Option<f64>,
+    weekly_spending_usd: f64,
+    weekly_usage_percentage: f64,
+    weekly_warning_level: String,
+    weekly_remaining_usd: f64,
+}
+
 #[derive(Subcommand)]
 pub enum AnalyticsCommands {
     /// Show summary statistics for token usage and costs
@@ -117,6 +133,13 @@ pub enum AnalyticsCommands {
         #[arg(long, value_enum, default_value = "json")]
         format: OutputFormat,
     },
+
+    /// Check budget status with threshold warnings
+    BudgetStatus {
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        format: OutputFormat,
+    },
 }
 
 pub fn run(command: AnalyticsCommands) -> Result<()> {
@@ -135,6 +158,7 @@ pub fn run(command: AnalyticsCommands) -> Result<()> {
             to,
             format,
         } => export_sessions(spec, agent, from, to, format),
+        AnalyticsCommands::BudgetStatus { format } => show_budget_status(format),
     }
 }
 
@@ -616,6 +640,221 @@ fn export_sessions(
                     session.cached_write_tokens,
                     session.total_tokens,
                     session.estimated_cost_usd
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn show_budget_status(format: OutputFormat) -> Result<()> {
+    // Load config to get budget settings
+    let mut config = SurgeConfig::load_or_default()?;
+    config.apply_env_overrides();
+
+    let daily_budget_usd = config.analytics.budget_usd;
+    let weekly_budget_usd = config.analytics.budget_usd.map(|d| d * 7.0);
+    let warn_threshold = config.analytics.budget_warn_threshold;
+
+    // If no budget configured, inform the user
+    if daily_budget_usd.is_none() {
+        match format {
+            OutputFormat::Json => {
+                let export = BudgetStatusExport {
+                    daily_budget_usd: None,
+                    daily_spending_usd: 0.0,
+                    daily_usage_percentage: 0.0,
+                    daily_warning_level: "none".to_string(),
+                    daily_remaining_usd: 0.0,
+                    weekly_budget_usd: None,
+                    weekly_spending_usd: 0.0,
+                    weekly_usage_percentage: 0.0,
+                    weekly_warning_level: "none".to_string(),
+                    weekly_remaining_usd: 0.0,
+                };
+                println!("{}", serde_json::to_string_pretty(&export)?);
+            }
+            OutputFormat::Csv => {
+                println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
+            }
+            OutputFormat::Text => {
+                println!("💰 Budget Status\n");
+                println!("⚠️  No budget configured.");
+                println!("   Set budget_usd in [analytics] section of surge.toml to enable budget tracking.");
+            }
+        }
+        return Ok(());
+    }
+
+    // Open the persistence store
+    let store_path = Store::default_path()?;
+
+    if !store_path.exists() {
+        match format {
+            OutputFormat::Json => {
+                let export = BudgetStatusExport {
+                    daily_budget_usd,
+                    daily_spending_usd: 0.0,
+                    daily_usage_percentage: 0.0,
+                    daily_warning_level: "ok".to_string(),
+                    daily_remaining_usd: daily_budget_usd.unwrap_or(0.0),
+                    weekly_budget_usd,
+                    weekly_spending_usd: 0.0,
+                    weekly_usage_percentage: 0.0,
+                    weekly_warning_level: "ok".to_string(),
+                    weekly_remaining_usd: weekly_budget_usd.unwrap_or(0.0),
+                };
+                println!("{}", serde_json::to_string_pretty(&export)?);
+            }
+            OutputFormat::Csv => {
+                println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
+                if let Some(daily) = daily_budget_usd {
+                    println!("daily,{},0.0,0.0,ok,{}", daily, daily);
+                }
+                if let Some(weekly) = weekly_budget_usd {
+                    println!("weekly,{},0.0,0.0,ok,{}", weekly, weekly);
+                }
+            }
+            OutputFormat::Text => {
+                println!("💰 Budget Status\n");
+                println!("⚠️  No analytics data available yet.");
+                println!("   Budget tracking will begin after running specs with the orchestrator.");
+            }
+        }
+        return Ok(());
+    }
+
+    let store = Store::open(&store_path)?;
+
+    // Create budget tracker with configured threshold
+    let tracker = BudgetTracker::new(warn_threshold);
+
+    // Check daily budget
+    let daily_status = if let Some(daily) = daily_budget_usd {
+        Some(tracker.check_daily_budget(&store, daily)?)
+    } else {
+        None
+    };
+
+    // Check weekly budget
+    let weekly_status = if let Some(weekly) = weekly_budget_usd {
+        Some(tracker.check_weekly_budget(&store, weekly)?)
+    } else {
+        None
+    };
+
+    // Output based on format
+    match format {
+        OutputFormat::Text => {
+            println!("💰 Budget Status\n");
+
+            if let Some(ref status) = daily_status {
+                println!("Daily Budget:");
+                print!("  ");
+                match status.warning_level {
+                    surge_persistence::budget::BudgetWarningLevel::Ok => {
+                        println!(
+                            "✅ ${:.2}/${:.2} used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                    surge_persistence::budget::BudgetWarningLevel::Warning => {
+                        println!(
+                            "⚠️  Warning: ${:.2}/${:.2} daily budget used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                    surge_persistence::budget::BudgetWarningLevel::Critical => {
+                        println!(
+                            "🚨 Critical: ${:.2}/${:.2} daily budget used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                }
+                println!("  Remaining: ${:.2}", status.remaining_usd());
+                println!();
+            }
+
+            if let Some(ref status) = weekly_status {
+                println!("Weekly Budget:");
+                print!("  ");
+                match status.warning_level {
+                    surge_persistence::budget::BudgetWarningLevel::Ok => {
+                        println!(
+                            "✅ ${:.2}/${:.2} used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                    surge_persistence::budget::BudgetWarningLevel::Warning => {
+                        println!(
+                            "⚠️  Warning: ${:.2}/${:.2} weekly budget used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                    surge_persistence::budget::BudgetWarningLevel::Critical => {
+                        println!(
+                            "🚨 Critical: ${:.2}/${:.2} weekly budget used ({:.1}%)",
+                            status.actual_spending_usd,
+                            status.budget_limit_usd,
+                            status.usage_percentage
+                        );
+                    }
+                }
+                println!("  Remaining: ${:.2}", status.remaining_usd());
+            }
+        }
+        OutputFormat::Json => {
+            let export = BudgetStatusExport {
+                daily_budget_usd,
+                daily_spending_usd: daily_status.as_ref().map(|s| s.actual_spending_usd).unwrap_or(0.0),
+                daily_usage_percentage: daily_status.as_ref().map(|s| s.usage_percentage).unwrap_or(0.0),
+                daily_warning_level: daily_status
+                    .as_ref()
+                    .map(|s| format!("{:?}", s.warning_level).to_lowercase())
+                    .unwrap_or_else(|| "none".to_string()),
+                daily_remaining_usd: daily_status.as_ref().map(|s| s.remaining_usd()).unwrap_or(0.0),
+                weekly_budget_usd,
+                weekly_spending_usd: weekly_status.as_ref().map(|s| s.actual_spending_usd).unwrap_or(0.0),
+                weekly_usage_percentage: weekly_status.as_ref().map(|s| s.usage_percentage).unwrap_or(0.0),
+                weekly_warning_level: weekly_status
+                    .as_ref()
+                    .map(|s| format!("{:?}", s.warning_level).to_lowercase())
+                    .unwrap_or_else(|| "none".to_string()),
+                weekly_remaining_usd: weekly_status.as_ref().map(|s| s.remaining_usd()).unwrap_or(0.0),
+            };
+            println!("{}", serde_json::to_string_pretty(&export)?);
+        }
+        OutputFormat::Csv => {
+            println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
+            if let Some(ref status) = daily_status {
+                println!(
+                    "daily,{:.2},{:.2},{:.2},{:?},{:.2}",
+                    status.budget_limit_usd,
+                    status.actual_spending_usd,
+                    status.usage_percentage,
+                    format!("{:?}", status.warning_level).to_lowercase(),
+                    status.remaining_usd()
+                );
+            }
+            if let Some(ref status) = weekly_status {
+                println!(
+                    "weekly,{:.2},{:.2},{:.2},{:?},{:.2}",
+                    status.budget_limit_usd,
+                    status.actual_spending_usd,
+                    status.usage_percentage,
+                    format!("{:?}", status.warning_level).to_lowercase(),
+                    status.remaining_usd()
                 );
             }
         }
