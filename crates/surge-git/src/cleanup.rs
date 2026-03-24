@@ -79,10 +79,7 @@ pub fn remove_dir_with_retry(path: &Path) -> Result<(), GitError> {
 
         // This should never be reached due to the loop logic, but satisfy the compiler
         Err(GitError::Io(
-            last_error.unwrap_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "max retries exceeded"
-            ))
+            last_error.unwrap_or_else(|| std::io::Error::other("max retries exceeded"))
         ))
     }
 
