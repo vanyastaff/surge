@@ -229,6 +229,14 @@ impl AgentConnection {
         &self.name
     }
 
+    /// Get the process ID of the agent (if running via stdio transport).
+    ///
+    /// Returns `None` for TCP/WebSocket transports or if the process handle is unavailable.
+    #[must_use]
+    pub fn pid(&self) -> Option<u32> {
+        self.process.as_ref().and_then(|child| child.id())
+    }
+
     /// Get the raw ACP capabilities from the initialization handshake.
     #[must_use]
     pub fn capabilities(&self) -> &AgentCapabilities {
