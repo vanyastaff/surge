@@ -149,27 +149,40 @@ impl AgentDiscovery {
     ///
     /// Returns the path to the agent binary if found via env vars.
     #[must_use]
-    pub fn from_env(&self, agent_id: &str) -> Option<PathBuf> {
-        debug!("Checking environment for {agent_id}");
+    pub fn from_env(&self, entry: &RegistryEntry) -> Option<PathBuf> {
+        debug!("Checking environment for {}", entry.id);
 
-        // Define environment variable names to check for each agent ID
-        let env_vars = match agent_id {
-            "claude-acp" => vec!["CLAUDE_PATH", "CLAUDE_BIN"],
-            "github-copilot-cli" => vec!["COPILOT_PATH", "COPILOT_BIN", "GH_PATH"],
-            "codex-acp" => vec!["CODEX_PATH", "CODEX_BIN"],
-            "gemini" => vec!["GEMINI_PATH", "GEMINI_BIN"],
-            _ => vec![],
-        };
+        // Generate generic environment variable names from agent ID
+        // For "claude-acp" → ["CLAUDE_ACP_PATH", "CLAUDE_PATH", "CLAUDE_BIN"]
+        // For "github-copilot-cli" → ["GITHUB_COPILOT_CLI_PATH", "COPILOT_PATH", "GH_PATH"]
+        let mut env_vars = Vec::new();
+
+        // Add ID-based env var (e.g., CLAUDE_ACP_PATH)
+        let id_upper = entry.id.to_uppercase().replace('-', "_");
+        env_vars.push(format!("{}_PATH", id_upper));
+
+        // Add simplified name-based env vars if cli_binary is available
+        if let Some(cli_binary) = &entry.cli_binary {
+            let binary_upper = cli_binary.to_uppercase();
+            env_vars.push(format!("{}_PATH", binary_upper));
+            env_vars.push(format!("{}_BIN", binary_upper));
+        }
+
+        // For backwards compatibility, add known aliases
+        match entry.id.as_str() {
+            "github-copilot-cli" => env_vars.push("GH_PATH".to_string()),
+            _ => {}
+        }
 
         // Try each environment variable in order
-        for env_var in env_vars {
+        for env_var in &env_vars {
             if let Ok(value) = std::env::var(env_var) {
                 debug!("Found {env_var}={value}");
                 let path = PathBuf::from(value);
 
                 // Validate the path exists and is a file
                 if path.exists() && path.is_file() {
-                    debug!("Validated {agent_id} at {:?} from {env_var}", path);
+                    debug!("Validated {} at {:?} from {env_var}", entry.id, path);
                     return Some(path);
                 } else {
                     warn!(
@@ -180,7 +193,7 @@ impl AgentDiscovery {
             }
         }
 
-        debug!("No environment variables found for {agent_id}");
+        debug!("No environment variables found for {}", entry.id);
         None
     }
 
@@ -188,16 +201,22 @@ impl AgentDiscovery {
     ///
     /// Returns the path to the agent binary if found in standard locations.
     #[must_use]
-    pub fn from_standard_paths(&self, agent_id: &str) -> Option<PathBuf> {
-        debug!("Probing standard paths for {agent_id}");
+    pub fn from_standard_paths(&self, entry: &RegistryEntry) -> Option<PathBuf> {
+        debug!("Probing standard paths for {}", entry.id);
 
-        // Map agent ID to binary name
-        let binary_name = match agent_id {
-            "claude-acp" => "claude",
-            "github-copilot-cli" => "gh",
-            "codex-acp" => "codex",
-            "gemini" => "gemini",
-            _ => return None,
+        // Use cli_binary from registry entry if available, otherwise use command
+        let binary_name = if let Some(cli_binary) = &entry.cli_binary {
+            cli_binary.as_str()
+        } else {
+            // For npx/uvx commands, don't probe standard paths
+            if entry.is_npx() || entry.is_uvx() {
+                debug!(
+                    "Skipping standard path detection for {}: npx/uvx command",
+                    entry.id
+                );
+                return None;
+            }
+            entry.command.as_str()
         };
 
         // Get platform-specific standard paths
@@ -216,13 +235,13 @@ impl AgentDiscovery {
 
             for path in paths_to_check {
                 if path.exists() && path.is_file() {
-                    debug!("Found {agent_id} at {:?}", path);
+                    debug!("Found {} at {:?}", entry.id, path);
                     return Some(path);
                 }
             }
         }
 
-        debug!("Agent {agent_id} not found in standard paths");
+        debug!("Agent {} not found in standard paths", entry.id);
         None
     }
 
@@ -230,26 +249,28 @@ impl AgentDiscovery {
     ///
     /// Executes `<agent> --version` to determine the installed version.
     #[must_use]
-    pub fn detect_version(&self, agent_id: &str, path: &PathBuf) -> Option<String> {
+    pub fn detect_version(&self, entry: &RegistryEntry, path: &PathBuf) -> Option<String> {
         use std::process::Command;
 
-        debug!("Detecting version for {} at {:?}", agent_id, path);
+        debug!("Detecting version for {} at {:?}", entry.id, path);
 
-        // Map agent ID to version command args
-        let args: &[&str] = match agent_id {
-            "claude-acp" => &["--version"],
-            "github-copilot-cli" => &["copilot", "--version"],
-            "codex-acp" => &["--version"],
-            "gemini" => &["--version"],
-            _ => return None,
+        // Use standard --version for most agents
+        // Special case for github-copilot-cli which needs "gh copilot --version"
+        let args: Vec<&str> = if entry.id == "github-copilot-cli" {
+            vec!["copilot", "--version"]
+        } else {
+            vec!["--version"]
         };
 
         // Execute the version command using the provided path
-        let output = Command::new(path).args(args).output().ok()?;
+        let output = Command::new(path).args(&args).output().ok()?;
 
         // Check if command succeeded
         if !output.status.success() {
-            warn!("Version command failed for {}: {:?}", agent_id, output.status);
+            warn!(
+                "Version command failed for {}: {:?}",
+                entry.id, output.status
+            );
             return None;
         }
 
@@ -258,11 +279,11 @@ impl AgentDiscovery {
         let version_line = stdout.lines().next()?.trim();
 
         if version_line.is_empty() {
-            warn!("Empty version output for {}", agent_id);
+            warn!("Empty version output for {}", entry.id);
             return None;
         }
 
-        debug!("Detected version for {}: {}", agent_id, version_line);
+        debug!("Detected version for {}: {}", entry.id, version_line);
         Some(version_line.to_string())
     }
 
@@ -301,7 +322,7 @@ impl AgentDiscovery {
             // Skip if already cached
             if let Some(cached_path) = self.cache.get(&entry.id) {
                 if let Some(path) = cached_path {
-                    let version = self.detect_version(&entry.id, path);
+                    let version = self.detect_version(entry, path);
                     detected.push(DetectedAgent {
                         entry: entry.clone(),
                         command_path: Some(path.to_string_lossy().to_string()),
@@ -313,15 +334,15 @@ impl AgentDiscovery {
 
             // Try environment variables first
             let path = self
-                .from_env(&entry.id)
-                .or_else(|| self.from_standard_paths(&entry.id));
+                .from_env(entry)
+                .or_else(|| self.from_standard_paths(entry));
 
             // Cache the result (even if None)
             self.cache.insert(entry.id.clone(), path.clone());
 
             if let Some(found_path) = path {
                 debug!("Discovered {} at {:?}", entry.id, found_path);
-                let version = self.detect_version(&entry.id, &found_path);
+                let version = self.detect_version(entry, &found_path);
                 detected.push(DetectedAgent {
                     entry: entry.clone(),
                     command_path: Some(found_path.to_string_lossy().to_string()),
@@ -382,6 +403,8 @@ mod tests {
 
     #[test]
     fn test_platform_paths() {
+        use crate::registry::Registry;
+
         let discovery = AgentDiscovery::new();
         let platform = discovery.platform();
 
@@ -415,38 +438,45 @@ mod tests {
             }
         }
 
-        // Test from_standard_paths returns None for non-existent agents
-        // (unless the agent happens to be installed, which is fine)
-        let result = discovery.from_standard_paths("claude-acp");
-        // We can't assert the result since the agent might or might not be installed
-        // Just verify the method runs without panicking
-        match result {
-            Some(path) => {
-                // If found, verify it's a valid path
-                assert!(path.exists(), "Found path should exist: {:?}", path);
-                assert!(path.is_file(), "Found path should be a file: {:?}", path);
-            }
-            None => {
-                // Not found, which is fine for testing
+        // Test from_standard_paths with a real registry entry
+        let registry = Registry::builtin();
+        if let Some(claude_entry) = registry.find("claude-acp") {
+            let result = discovery.from_standard_paths(claude_entry);
+            // We can't assert the result since the agent might or might not be installed
+            // Just verify the method runs without panicking
+            match result {
+                Some(path) => {
+                    // If found, verify it's a valid path
+                    assert!(path.exists(), "Found path should exist: {:?}", path);
+                    assert!(path.is_file(), "Found path should be a file: {:?}", path);
+                }
+                None => {
+                    // Not found, which is fine for testing
+                }
             }
         }
     }
 
     #[test]
     fn test_version_detection() {
+        use crate::registry::Registry;
+
         let discovery = AgentDiscovery::new();
+        let registry = Registry::builtin();
 
         // Test version detection with a known command (git should be present in CI)
         // We'll use a mock approach by testing that the method handles non-existent commands gracefully
-        let fake_path = PathBuf::from("/fake/path/to/agent");
-        let result = discovery.detect_version("claude-acp", &fake_path);
+        if let Some(claude_entry) = registry.find("claude-acp") {
+            let fake_path = PathBuf::from("/fake/path/to/agent");
+            let result = discovery.detect_version(claude_entry, &fake_path);
 
-        // For a non-existent path, we expect None
-        // This tests the error handling path
-        assert!(
-            result.is_none(),
-            "Version detection should return None for fake path"
-        );
+            // For a non-existent path, we expect None
+            // This tests the error handling path
+            assert!(
+                result.is_none(),
+                "Version detection should return None for fake path"
+            );
+        }
 
         // If git is available (very likely), test with a real command
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -466,13 +496,19 @@ mod tests {
 
     #[test]
     fn test_env_detection() {
+        use crate::registry::Registry;
         use std::env;
         use std::fs::File;
 
         let discovery = AgentDiscovery::new();
+        let registry = Registry::builtin();
+        let claude_entry = registry.find("claude-acp").expect("Claude should be in builtin registry");
+        let copilot_entry = registry
+            .find("github-copilot-cli")
+            .expect("Copilot should be in builtin registry");
 
         // Test 1: No environment variables set
-        let _result = discovery.from_env("claude-acp");
+        let _result = discovery.from_env(claude_entry);
         // Should return None if no env vars are set (unless user has them set)
         // We can't assert None here because the user might have these set
 
@@ -480,7 +516,7 @@ mod tests {
         unsafe {
             env::set_var("CLAUDE_PATH", "/non/existent/path");
         }
-        let result = discovery.from_env("claude-acp");
+        let result = discovery.from_env(claude_entry);
         assert!(result.is_none(), "Should return None for non-existent path");
         unsafe {
             env::remove_var("CLAUDE_PATH");
@@ -497,7 +533,7 @@ mod tests {
                 env::set_var("CLAUDE_PATH", temp_file.to_string_lossy().as_ref());
             }
 
-            let result = discovery.from_env("claude-acp");
+            let result = discovery.from_env(claude_entry);
             assert!(
                 result.is_some(),
                 "Should find agent via CLAUDE_PATH env var"
@@ -523,7 +559,7 @@ mod tests {
                 env::set_var("CLAUDE_BIN", temp_file2.to_string_lossy().as_ref());
             }
 
-            let result = discovery.from_env("claude-acp");
+            let result = discovery.from_env(claude_entry);
             assert!(result.is_some(), "Should find agent via CLAUDE_BIN env var");
 
             // Clean up
@@ -540,7 +576,7 @@ mod tests {
                 env::set_var("GH_PATH", temp_file3.to_string_lossy().as_ref());
             }
 
-            let result = discovery.from_env("github-copilot-cli");
+            let result = discovery.from_env(copilot_entry);
             assert!(result.is_some(), "Should find Copilot via GH_PATH env var");
 
             // Clean up
