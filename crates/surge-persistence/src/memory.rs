@@ -13,5 +13,9 @@ pub mod schema;
 /// SQLite-based memory store
 pub mod store;
 
+/// Full-text search functionality
+pub mod fts;
+
+pub use fts::{CategorySearchResults, MemoryCategory, SearchResults};
 pub use models::{Discovery, FileContext, Gotcha, Pattern};
 pub use store::MemoryStore;
