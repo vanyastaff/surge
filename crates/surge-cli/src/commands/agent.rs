@@ -46,6 +46,20 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                         .as_ref()
                         .map_or(String::new(), |p| format!(" ({})", p));
                     println!("   ✓ {}{}{}", detected.entry.display_name, version, path);
+
+                    // Show capabilities if available
+                    if !detected.entry.capabilities.is_empty() {
+                        let caps: Vec<String> = detected.entry.capabilities
+                            .iter()
+                            .map(|c| c.to_string())
+                            .collect();
+                        println!("       capabilities: {}", caps.join(", "));
+                    }
+
+                    // Show models if available
+                    if !detected.entry.models.is_empty() {
+                        println!("       models: {}", detected.entry.models.join(", "));
+                    }
                 }
             }
 
