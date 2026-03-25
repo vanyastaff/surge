@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use surge_acp::PermissionPolicy;
 use surge_acp::pool::AgentPool;
 use surge_core::SurgeConfig;
+use surge_core::config::GateDecision;
 use surge_core::event::SurgeEvent;
 use surge_core::id::TaskId;
 use surge_core::spec::SubtaskState;
@@ -166,7 +167,7 @@ impl Orchestrator {
         // Forward pool events to the orchestrator broadcast channel.
         let mut pool_rx = pool.subscribe();
         let pipeline_event_tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        let event_forwarder = tokio::spawn(async move {
             while let Ok(event) = pool_rx.recv().await {
                 let _ = pipeline_event_tx.send(event);
             }
@@ -180,6 +181,7 @@ impl Orchestrator {
             Err(e) => {
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("Failed to create ACP session: {e}"),
                 };
@@ -224,6 +226,7 @@ impl Orchestrator {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("Spec creation failed: {e}"),
                 };
@@ -242,6 +245,7 @@ impl Orchestrator {
                     });
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Paused {
                         phase: Phase::SpecCreation,
                         reason,
@@ -250,6 +254,7 @@ impl Orchestrator {
                 GateAction::Timeout { elapsed } => {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
@@ -278,6 +283,7 @@ impl Orchestrator {
                             aggregator.unregister_session(&session.session_id).await;
                             pool.shutdown().await;
                             let _ = git.discard(&spec_id_str);
+                            event_forwarder.abort();
                             return PipelineResult::Failed {
                                 reason: format!(
                                     "Spec creation gate rejected: {}. Feedback: {}",
@@ -289,6 +295,7 @@ impl Orchestrator {
                             aggregator.unregister_session(&session.session_id).await;
                             pool.shutdown().await;
                             let _ = git.discard(&spec_id_str);
+                            event_forwarder.abort();
                             return PipelineResult::Failed {
                                 reason: format!(
                                     "Spec creation gate aborted: {}",
@@ -310,6 +317,7 @@ impl Orchestrator {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("Planning failed: {e}"),
                 };
@@ -328,6 +336,7 @@ impl Orchestrator {
                     });
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Paused {
                         phase: Phase::Planning,
                         reason,
@@ -336,6 +345,7 @@ impl Orchestrator {
                 GateAction::Timeout { elapsed } => {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
@@ -364,6 +374,7 @@ impl Orchestrator {
                             aggregator.unregister_session(&session.session_id).await;
                             pool.shutdown().await;
                             let _ = git.discard(&spec_id_str);
+                            event_forwarder.abort();
                             return PipelineResult::Failed {
                                 reason: format!(
                                     "Planning gate rejected: {}. Feedback: {}",
@@ -375,6 +386,7 @@ impl Orchestrator {
                             aggregator.unregister_session(&session.session_id).await;
                             pool.shutdown().await;
                             let _ = git.discard(&spec_id_str);
+                            event_forwarder.abort();
                             return PipelineResult::Failed {
                                 reason: format!(
                                     "Planning gate aborted: {}",
@@ -398,6 +410,7 @@ impl Orchestrator {
             aggregator.unregister_session(&session.session_id).await;
             pool.shutdown().await;
             let _ = git.discard(&spec_id_str);
+            event_forwarder.abort();
             return PipelineResult::Failed {
                 reason: format!("Spec validation failed: {}", validation.errors.join("; ")),
             };
@@ -410,6 +423,7 @@ impl Orchestrator {
             Err(e) => {
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("Failed to build dependency graph: {e}"),
                 };
@@ -421,6 +435,7 @@ impl Orchestrator {
             Err(e) => {
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("Topological batches failed: {e}"),
                 };
@@ -478,6 +493,7 @@ impl Orchestrator {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("Token budget exceeded: {used} / {limit}"),
                     };
@@ -495,6 +511,7 @@ impl Orchestrator {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("Cost budget exceeded: ${used_usd:.4} / ${limit_usd:.4}"),
                     };
@@ -512,6 +529,7 @@ impl Orchestrator {
                         reason: Some(reason.clone()),
                     });
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Paused {
                         phase: Phase::Executing,
                         reason,
@@ -519,6 +537,7 @@ impl Orchestrator {
                 }
                 GateAction::Timeout { elapsed } => {
                     pool.shutdown().await;
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
@@ -537,8 +556,8 @@ impl Orchestrator {
                                 approved_by: None,
                             });
                             // Check for approval feedback to inject
-                            if let Some(feedback) = decision.rejection_feedback() {
-                                pending_human_input = Some(feedback.to_string());
+                            if let GateDecision::Approved { feedback: Some(fb) } = &decision {
+                                pending_human_input = Some(fb.clone());
                             }
                         } else if decision.is_rejected() {
                             let _ = self.event_tx.send(SurgeEvent::GateRejected {
@@ -554,6 +573,7 @@ impl Orchestrator {
                             }
                         } else if decision.is_aborted() {
                             pool.shutdown().await;
+                            event_forwarder.abort();
                             return PipelineResult::Failed {
                                 reason: format!(
                                     "Execution gate aborted: {}",
@@ -663,6 +683,7 @@ impl Orchestrator {
                 });
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
+                event_forwarder.abort();
                 return PipelineResult::Paused {
                     phase: Phase::QaReview,
                     reason,
@@ -671,6 +692,7 @@ impl Orchestrator {
             GateAction::Timeout { elapsed } => {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                 };
@@ -699,6 +721,7 @@ impl Orchestrator {
                         aggregator.unregister_session(&session.session_id).await;
                         pool.shutdown().await;
                         let _ = git.discard(&spec_id_str);
+                        event_forwarder.abort();
                         return PipelineResult::Failed {
                             reason: format!(
                                 "QA gate rejected: {}",
@@ -709,6 +732,7 @@ impl Orchestrator {
                         aggregator.unregister_session(&session.session_id).await;
                         pool.shutdown().await;
                         let _ = git.discard(&spec_id_str);
+                        event_forwarder.abort();
                         return PipelineResult::Failed {
                             reason: format!(
                                 "QA gate aborted: {}",
@@ -735,6 +759,7 @@ impl Orchestrator {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     let _ = git.discard(&spec_id_str);
+                    event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("Merge failed: {e}"),
                     };
@@ -776,6 +801,7 @@ impl Orchestrator {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!(
                         "QA review incomplete after max iterations: {} criteria met, {} unmet ({})",
@@ -800,6 +826,7 @@ impl Orchestrator {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
                 let _ = git.discard(&spec_id_str);
+                event_forwarder.abort();
                 return PipelineResult::Failed {
                     reason: format!("QA review failed after max iterations: {issues}"),
                 };
@@ -810,6 +837,7 @@ impl Orchestrator {
         aggregator.unregister_session(&session.session_id).await;
         let _ = git.discard(&spec_id_str);
         pool.shutdown().await;
+        event_forwarder.abort();
 
         let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
             task_id,
