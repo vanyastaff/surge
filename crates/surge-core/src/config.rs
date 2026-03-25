@@ -94,6 +94,10 @@ fn default_budget_warn_threshold() -> u8 {
     80
 }
 
+/// Top-level Surge configuration, loaded from `surge.toml`.
+///
+/// Controls agent routing, pipeline behaviour, resilience policies,
+/// cleanup strategy, and analytics. Validated on load via [`SurgeConfig::validate`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
     pub default_agent: String,
@@ -134,6 +138,10 @@ pub struct McpServerConfig {
     pub env: HashMap<String, String>,
 }
 
+/// Configuration for a single coding agent (Claude Code, Copilot CLI, etc.).
+///
+/// Specifies the command to spawn, transport layer, MCP servers to inject,
+/// and declared capabilities for routing decisions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub command: String,
@@ -210,6 +218,7 @@ fn default_transport() -> Transport {
     Transport::Stdio
 }
 
+/// Pipeline execution settings: parallelism, QA iteration limits, and gate configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineConfig {
     #[serde(default = "default_max_qa_iterations")]
@@ -259,6 +268,7 @@ impl PipelineConfig {
     }
 }
 
+/// Controls which pipeline phases require human approval before proceeding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateConfig {
     #[serde(default = "default_true")]
@@ -363,9 +373,14 @@ impl GateDecision {
     }
 }
 
+/// 10 iterations is enough for most QA fix cycles (plan → execute → review).
+/// Beyond 10, the issue is likely architectural, not fixable by iteration.
 fn default_max_qa_iterations() -> u32 {
     10
 }
+
+/// 3 parallel subtasks balances throughput vs. agent API rate limits.
+/// Most providers throttle at 3-5 concurrent sessions.
 fn default_max_parallel() -> usize {
     3
 }
@@ -522,12 +537,17 @@ impl Default for RetryPolicy {
     }
 }
 
+/// 3 retries with exponential backoff covers transient network issues
+/// without hammering a struggling API endpoint.
 fn default_max_retries() -> u32 {
     3
 }
+/// 1 second initial delay — long enough for rate limit windows to reset,
+/// short enough for good UX.
 fn default_initial_delay_ms() -> u64 {
     1000
 }
+/// 60 second cap prevents unreasonably long waits during extended outages.
 fn default_max_delay_ms() -> u64 {
     60000
 }
@@ -595,12 +615,18 @@ impl Default for ResilienceConfig {
     }
 }
 
+/// 120s connect timeout — agent processes (especially Claude Code) can take
+/// 30-60s to spawn + initialize ACP. 2x safety margin.
 fn default_connect_timeout_secs() -> u64 {
     120
 }
+/// 10s session timeout — ACP `new_session` is lightweight; >10s means something
+/// is fundamentally broken, not slow.
 fn default_session_timeout_secs() -> u64 {
     10
 }
+/// 5 minutes per prompt — complex coding tasks (large refactors) can take 2-3 min.
+/// 5 min covers worst case with margin.
 fn default_prompt_timeout_secs() -> u64 {
     300
 }
@@ -610,6 +636,8 @@ fn default_prompt_retries() -> u32 {
 fn default_shutdown_grace_secs() -> u64 {
     5
 }
+/// Trip circuit breaker after 5 consecutive failures — enough to filter transient
+/// errors but fast enough to stop cascading damage.
 fn default_circuit_breaker_threshold() -> u32 {
     5
 }
@@ -647,7 +675,7 @@ impl Default for SurgeConfig {
 
 impl SurgeConfig {
     /// Load config from a TOML file at the given path.
-    pub fn load(path: &PathBuf) -> Result<Self, crate::SurgeError> {
+    pub fn load(path: &Path) -> Result<Self, crate::SurgeError> {
         let content = std::fs::read_to_string(path).map_err(|e| {
             crate::SurgeError::Config(format!("Failed to read {}: {e}", path.display()))
         })?;
@@ -680,6 +708,23 @@ impl SurgeConfig {
 
         // Validate pipeline configuration
         self.pipeline.validate()?;
+
+        // Validate routing agent_preferences reference existing agents
+        if !self.agents.is_empty() {
+            for (complexity, agent_name) in &self.routing.agent_preferences {
+                if !self.agents.contains_key(agent_name) {
+                    return Err(crate::SurgeError::Config(format!(
+                        "routing.agent_preferences['{complexity}'] references unknown agent '{agent_name}'. \
+                         Available agents: {}",
+                        self.agents
+                            .keys()
+                            .map(|k| k.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        }
 
         // Validate log level
         const VALID_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
@@ -1048,6 +1093,31 @@ max_parallel = 2
         // Test 9: Empty agents map with default_agent is OK (default config scenario)
         let default_config = SurgeConfig::default();
         assert!(default_config.validate().is_ok());
+
+        // Test 10: routing.agent_preferences referencing unknown agent fails
+        let mut config_bad_routing = SurgeConfig {
+            default_agent: "claude".to_string(),
+            ..Default::default()
+        };
+        config_bad_routing.agents.insert(
+            "claude".to_string(),
+            AgentConfig {
+                command: "claude".to_string(),
+                args: vec![],
+                transport: Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        );
+        config_bad_routing
+            .routing
+            .agent_preferences
+            .insert("complex".to_string(), "nonexistent-agent".to_string());
+        let result = config_bad_routing.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("routing.agent_preferences['complex']"));
+        assert!(err_msg.contains("nonexistent-agent"));
     }
 
     #[test]
