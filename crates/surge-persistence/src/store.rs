@@ -106,6 +106,19 @@ const CREATE_CIRCUIT_BREAKER_TASK_INDEX: &str =
 const CREATE_CIRCUIT_BREAKER_TRIPPED_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS idx_circuit_breaker_tripped ON circuit_breaker(tripped_at)";
 
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/// Parse a string from a database row into a type that implements FromStr.
+/// Returns a rusqlite error if parsing fails, with the column index for debugging.
+fn parse_id<T: std::str::FromStr>(value: &str, col: usize) -> rusqlite::Result<T>
+where
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    value.parse().map_err(|e: T::Err| {
+        rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
 // ── Store ───────────────────────────────────────────────────────────
 
 /// SQLite-based storage for token usage data.
@@ -246,9 +259,9 @@ impl Store {
                     Ok(SessionUsage {
                         session_id: row.get(0)?,
                         agent_name: row.get(1)?,
-                        task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                        subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
-                        spec_id: row.get::<_, String>(4)?.parse().unwrap(),
+                        task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
+                        subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                        spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                         timestamp_ms: row.get::<_, i64>(5)? as u64,
                         input_tokens: row.get::<_, i64>(6)? as u64,
                         output_tokens: row.get::<_, i64>(7)? as u64,
@@ -273,9 +286,9 @@ impl Store {
             Ok(SessionUsage {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
-                task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
-                spec_id: row.get::<_, String>(4)?.parse().unwrap(),
+                task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
                 output_tokens: row.get::<_, i64>(7)? as u64,
@@ -300,9 +313,9 @@ impl Store {
             Ok(SessionUsage {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
-                task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
-                spec_id: row.get::<_, String>(4)?.parse().unwrap(),
+                task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
                 output_tokens: row.get::<_, i64>(7)? as u64,
@@ -369,9 +382,9 @@ impl Store {
             Ok(SessionUsage {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
-                task_id: row.get::<_, String>(2)?.parse().unwrap(),
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| s.parse().unwrap()),
-                spec_id: row.get::<_, String>(4)?.parse().unwrap(),
+                task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
+                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
                 output_tokens: row.get::<_, i64>(7)? as u64,
@@ -443,7 +456,7 @@ impl Store {
 
         let rows = stmt.query_map(params![start_ms as i64, end_ms as i64, n as i64], |row| {
             Ok((
-                row.get::<_, String>(0)?.parse().unwrap(),
+                parse_id(&row.get::<_, String>(0)?, 0)?,
                 row.get::<_, f64>(1)?,
             ))
         })?;
@@ -497,9 +510,9 @@ impl Store {
                 ],
                 |row| {
                     Ok(SubtaskUsage {
-                        subtask_id: row.get::<_, String>(0)?.parse().unwrap(),
-                        task_id: row.get::<_, String>(1)?.parse().unwrap(),
-                        spec_id: row.get::<_, String>(2)?.parse().unwrap(),
+                        subtask_id: parse_id(&row.get::<_, String>(0)?, 0)?,
+                        task_id: parse_id(&row.get::<_, String>(1)?, 1)?,
+                        spec_id: parse_id(&row.get::<_, String>(2)?, 2)?,
                         input_tokens: row.get::<_, i64>(3)? as u64,
                         output_tokens: row.get::<_, i64>(4)? as u64,
                         thought_tokens: row.get::<_, i64>(5)? as u64,
@@ -522,9 +535,9 @@ impl Store {
 
         let rows = stmt.query_map([spec_id.to_string()], |row| {
             Ok(SubtaskUsage {
-                subtask_id: row.get::<_, String>(0)?.parse().unwrap(),
-                task_id: row.get::<_, String>(1)?.parse().unwrap(),
-                spec_id: row.get::<_, String>(2)?.parse().unwrap(),
+                subtask_id: parse_id(&row.get::<_, String>(0)?, 0)?,
+                task_id: parse_id(&row.get::<_, String>(1)?, 1)?,
+                spec_id: parse_id(&row.get::<_, String>(2)?, 2)?,
                 input_tokens: row.get::<_, i64>(3)? as u64,
                 output_tokens: row.get::<_, i64>(4)? as u64,
                 thought_tokens: row.get::<_, i64>(5)? as u64,
@@ -574,7 +587,7 @@ impl Store {
                 [spec_id.to_string()],
                 |row| {
                     Ok(SpecUsage {
-                        spec_id: row.get::<_, String>(0)?.parse().unwrap(),
+                        spec_id: parse_id(&row.get::<_, String>(0)?, 0)?,
                         input_tokens: row.get::<_, i64>(1)? as u64,
                         output_tokens: row.get::<_, i64>(2)? as u64,
                         thought_tokens: row.get::<_, i64>(3)? as u64,
@@ -598,7 +611,7 @@ impl Store {
 
         let rows = stmt.query_map([], |row| {
             Ok(SpecUsage {
-                spec_id: row.get::<_, String>(0)?.parse().unwrap(),
+                spec_id: parse_id(&row.get::<_, String>(0)?, 0)?,
                 input_tokens: row.get::<_, i64>(1)? as u64,
                 output_tokens: row.get::<_, i64>(2)? as u64,
                 thought_tokens: row.get::<_, i64>(3)? as u64,
