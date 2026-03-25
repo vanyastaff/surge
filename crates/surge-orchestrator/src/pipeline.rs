@@ -240,6 +240,13 @@ impl Orchestrator {
                         reason,
                     };
                 }
+                GateAction::Timeout { elapsed } => {
+                    aggregator.unregister_session(&session.session_id).await;
+                    pool.shutdown().await;
+                    return PipelineResult::Failed {
+                        reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
+                    };
+                }
                 GateAction::HumanInput { .. } | GateAction::Continue => {}
             }
         }
@@ -267,6 +274,13 @@ impl Orchestrator {
                     return PipelineResult::Paused {
                         phase: Phase::Planning,
                         reason,
+                    };
+                }
+                GateAction::Timeout { elapsed } => {
+                    aggregator.unregister_session(&session.session_id).await;
+                    pool.shutdown().await;
+                    return PipelineResult::Failed {
+                        reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
                 }
                 GateAction::HumanInput { .. } | GateAction::Continue => {}
@@ -394,6 +408,12 @@ impl Orchestrator {
                     return PipelineResult::Paused {
                         phase: Phase::Executing,
                         reason,
+                    };
+                }
+                GateAction::Timeout { elapsed } => {
+                    pool.shutdown().await;
+                    return PipelineResult::Failed {
+                        reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
                 }
                 GateAction::HumanInput { content } => {
