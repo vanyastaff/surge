@@ -8,6 +8,123 @@ use surge_core::id::SpecId;
 use tracing::{debug, info};
 
 use crate::phases::Phase;
+use crate::qa::QaVerdict;
+
+/// Context data for gate reviews — provides rich summaries per phase.
+#[derive(Debug, Clone)]
+pub struct GateContext {
+    /// The pipeline phase this gate is for.
+    pub phase: Phase,
+    /// Plan diff summary (for Planning phase).
+    pub plan_diff: Option<String>,
+    /// Code changes summary (for Executing phase).
+    pub code_changes: Option<String>,
+    /// QA review results (for QaReview phase).
+    pub qa_results: Option<QaVerdict>,
+}
+
+impl GateContext {
+    /// Create a new gate context for a specific phase.
+    #[must_use]
+    pub fn new(phase: Phase) -> Self {
+        Self {
+            phase,
+            plan_diff: None,
+            code_changes: None,
+            qa_results: None,
+        }
+    }
+
+    /// Set the plan diff summary for the Planning phase.
+    #[must_use]
+    pub fn with_plan_diff(mut self, diff: String) -> Self {
+        self.plan_diff = Some(diff);
+        self
+    }
+
+    /// Set the code changes summary for the Executing phase.
+    #[must_use]
+    pub fn with_code_changes(mut self, changes: String) -> Self {
+        self.code_changes = Some(changes);
+        self
+    }
+
+    /// Set the QA results for the QaReview phase.
+    #[must_use]
+    pub fn with_qa_results(mut self, results: QaVerdict) -> Self {
+        self.qa_results = Some(results);
+        self
+    }
+
+    /// Generate a rich summary for human review at this gate.
+    ///
+    /// Returns a formatted markdown string with phase-specific details:
+    /// - Planning: plan diff and key decisions
+    /// - Executing: code changes and files modified
+    /// - QaReview: QA verdict and any issues found
+    #[must_use]
+    pub fn generate_summary(&self) -> String {
+        let mut summary = format!("# Gate Review: {}\n\n", self.phase);
+
+        match self.phase {
+            Phase::Planning => {
+                summary.push_str("## Plan Review\n\n");
+                if let Some(diff) = &self.plan_diff {
+                    summary.push_str("### Plan Changes\n");
+                    summary.push_str(diff);
+                    summary.push('\n');
+                } else {
+                    summary.push_str("*No plan diff available*\n");
+                }
+            }
+            Phase::Executing => {
+                summary.push_str("## Execution Review\n\n");
+                if let Some(changes) = &self.code_changes {
+                    summary.push_str("### Code Changes\n");
+                    summary.push_str(changes);
+                    summary.push('\n');
+                } else {
+                    summary.push_str("*No code changes available*\n");
+                }
+            }
+            Phase::QaReview => {
+                summary.push_str("## QA Review Results\n\n");
+                if let Some(qa) = &self.qa_results {
+                    match qa {
+                        QaVerdict::Approved => {
+                            summary.push_str("**Verdict:** ✅ Approved\n\n");
+                            summary.push_str("All acceptance criteria have been met.\n");
+                        }
+                        QaVerdict::Partial { met, unmet } => {
+                            summary.push_str("**Verdict:** ⚠️ Partial\n\n");
+                            summary.push_str("### Criteria Met\n");
+                            for criterion in met {
+                                summary.push_str(&format!("- ✅ {criterion}\n"));
+                            }
+                            summary.push_str("\n### Criteria Not Met\n");
+                            for criterion in unmet {
+                                summary.push_str(&format!("- ❌ {criterion}\n"));
+                            }
+                        }
+                        QaVerdict::NeedsFix { issues } => {
+                            summary.push_str("**Verdict:** ❌ Needs Fix\n\n");
+                            summary.push_str("### Issues Found\n");
+                            summary.push_str(issues);
+                            summary.push('\n');
+                        }
+                    }
+                } else {
+                    summary.push_str("*No QA results available*\n");
+                }
+            }
+            Phase::SpecCreation | Phase::QaFix | Phase::HumanReview | Phase::Merging => {
+                summary.push_str("*No specific context available for this phase*\n");
+            }
+        }
+
+        summary
+    }
+}
 
 /// Action determined by a gate check.
 #[derive(Debug, Clone)]
@@ -103,6 +220,7 @@ impl GateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::qa::QaVerdict;
 
     fn no_gates_config() -> GateConfig {
         GateConfig {
@@ -181,5 +299,76 @@ mod tests {
 
         // File should be consumed
         assert!(!input_path.exists());
+    }
+
+    #[test]
+    fn test_gate_context_planning() {
+        let context = GateContext::new(Phase::Planning)
+            .with_plan_diff("Added 3 subtasks for API implementation".to_string());
+
+        let summary = context.generate_summary();
+        assert!(summary.contains("Gate Review: Planning"));
+        assert!(summary.contains("Plan Changes"));
+        assert!(summary.contains("Added 3 subtasks"));
+    }
+
+    #[test]
+    fn test_gate_context_executing() {
+        let context = GateContext::new(Phase::Executing).with_code_changes(
+            "Modified: src/api.rs (+45, -12)\nModified: src/types.rs (+8, -3)".to_string(),
+        );
+
+        let summary = context.generate_summary();
+        assert!(summary.contains("Gate Review: Executing"));
+        assert!(summary.contains("Code Changes"));
+        assert!(summary.contains("src/api.rs"));
+    }
+
+    #[test]
+    fn test_gate_context_qa_approved() {
+        let context =
+            GateContext::new(Phase::QaReview).with_qa_results(QaVerdict::Approved);
+
+        let summary = context.generate_summary();
+        assert!(summary.contains("Gate Review: QA Review"));
+        assert!(summary.contains("Approved"));
+        assert!(summary.contains("acceptance criteria"));
+    }
+
+    #[test]
+    fn test_gate_context_qa_partial() {
+        let context = GateContext::new(Phase::QaReview).with_qa_results(QaVerdict::Partial {
+            met: vec!["API endpoint works".to_string()],
+            unmet: vec!["Error handling missing".to_string()],
+        });
+
+        let summary = context.generate_summary();
+        assert!(summary.contains("Partial"));
+        assert!(summary.contains("API endpoint works"));
+        assert!(summary.contains("Error handling missing"));
+    }
+
+    #[test]
+    fn test_gate_context_qa_needs_fix() {
+        let context = GateContext::new(Phase::QaReview).with_qa_results(QaVerdict::NeedsFix {
+            issues: "Test failures in api_test.rs".to_string(),
+        });
+
+        let summary = context.generate_summary();
+        assert!(summary.contains("Needs Fix"));
+        assert!(summary.contains("Test failures in api_test.rs"));
+    }
+
+    #[test]
+    fn test_gate_context_builder_pattern() {
+        let context = GateContext::new(Phase::Planning)
+            .with_plan_diff("Plan diff".to_string())
+            .with_code_changes("Code changes".to_string())
+            .with_qa_results(QaVerdict::Approved);
+
+        assert_eq!(context.phase, Phase::Planning);
+        assert!(context.plan_diff.is_some());
+        assert!(context.code_changes.is_some());
+        assert!(context.qa_results.is_some());
     }
 }
