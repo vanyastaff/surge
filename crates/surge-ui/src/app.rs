@@ -17,6 +17,7 @@ use crate::screens::agent_terminal::AgentTerminalScreen;
 use crate::screens::dashboard::DashboardScreen;
 use crate::screens::diff_viewer::DiffViewerScreen;
 use crate::screens::file_explorer::FileExplorerScreen;
+use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
 use crate::screens::kanban::{KanbanScreen, TaskClicked};
@@ -65,6 +66,7 @@ pub struct SurgeApp {
     github_prs: Option<Entity<GithubPrsScreen>>,
     insights: Option<Entity<InsightsScreen>>,
     settings: Option<Entity<SettingsScreen>>,
+    gate_approval: Option<Entity<GateApprovalScreen>>,
 }
 
 impl SurgeApp {
@@ -123,6 +125,7 @@ impl SurgeApp {
             github_prs: None,
             insights: None,
             settings: None,
+            gate_approval: None,
         }
     }
 
@@ -234,6 +237,7 @@ impl SurgeApp {
         self.github_prs = None;
         self.insights = None;
         self.settings = None;
+        self.gate_approval = None;
 
         self.mode = AppMode::Project {
             _path: path.to_path_buf(),
@@ -293,6 +297,54 @@ impl SurgeApp {
         self.command_palette = None;
         self.command_palette_open = false;
         cx.notify();
+    }
+
+    fn handle_gate_decision(&mut self, decision: GateDecision, cx: &mut Context<Self>) {
+        let task_id = decision.task_id.clone();
+        let approved = decision.approved;
+
+        // Get project path from AppMode
+        let project_path = match &self.mode {
+            AppMode::Project { _path, .. } => _path.clone(),
+            _ => return,
+        };
+
+        // Write gate decision file
+        let gate_dir = project_path.join(".surge").join("gates");
+        let decision_file = gate_dir.join(format!("{}.json", task_id));
+
+        // Spawn async task to write decision
+        cx.spawn(async move |_this, _cx| {
+            if let Err(e) = std::fs::create_dir_all(&gate_dir) {
+                eprintln!("Failed to create gates directory: {}", e);
+                return;
+            }
+
+            let decision_data = format!(
+                r#"{{"task_id":"{}","approved":{},"timestamp":"{}"}}"#,
+                task_id,
+                approved,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            );
+
+            if let Err(e) = std::fs::write(&decision_file, decision_data) {
+                eprintln!("Failed to write gate decision: {}", e);
+                return;
+            }
+
+            println!(
+                "Gate decision written: {} {}",
+                task_id,
+                if approved { "approved" } else { "rejected" }
+            );
+        })
+        .detach();
+
+        // Navigate back to dashboard after decision
+        self.navigate(Screen::Dashboard, cx);
     }
 
     pub fn bind_actions(cx: &mut App) {
@@ -412,6 +464,19 @@ impl SurgeApp {
                     .settings
                     .get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
+            }
+            Screen::GateApproval => {
+                // Use task_detail_id or default demo task
+                let task_id = self.task_detail_id.as_deref().unwrap_or("task-001");
+                let gate_approval = self.gate_approval.get_or_insert_with(|| {
+                    let ga = cx.new(|cx| GateApprovalScreen::new(task_id, cx));
+                    cx.subscribe(&ga, |this: &mut Self, _ga, event: &GateDecision, cx| {
+                        this.handle_gate_decision(event.clone(), cx);
+                    })
+                    .detach();
+                    ga
+                });
+                gate_approval.clone().into_any_element()
             }
             _ => {
                 // Placeholder for screens not yet implemented.
@@ -786,8 +851,20 @@ impl Render for SurgeApp {
                     .on_action(cx.listener(|this, _: &OpenDiffViewer, _w, cx| {
                         this.navigate(Screen::DiffViewer, cx)
                     }))
-                    .on_action(cx.listener(|_this, _: &ApproveGate, _w, _cx| {
-                        // TODO: approve current gate in orchestrator
+                    .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
+                        // If on gate approval screen, approve the current gate
+                        if this.active_screen == Screen::GateApproval {
+                            if let Some(gate_approval) = &this.gate_approval {
+                                gate_approval.update(cx, |ga, cx| {
+                                    // Trigger approve button click programmatically
+                                    cx.emit(GateDecision {
+                                        task_id: ga.task_id.clone(),
+                                        approved: true,
+                                    });
+                                    cx.notify();
+                                });
+                            }
+                        }
                     }))
                     .child(
                         div()

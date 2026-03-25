@@ -13,6 +13,13 @@ enum ApprovalDecision {
     Rejected,
 }
 
+/// Event emitted when a gate decision is made.
+#[derive(Debug, Clone)]
+pub struct GateDecision {
+    pub task_id: String,
+    pub approved: bool,
+}
+
 /// Context panels in the gate approval view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContextPanel {
@@ -62,7 +69,7 @@ struct QaCheckResult {
 
 /// Gate Approval Screen content.
 pub struct GateApprovalScreen {
-    task_id: String,
+    pub task_id: String,
     title: String,
     gate_type: String,
     description: String,
@@ -533,6 +540,8 @@ impl GateApprovalScreen {
     }
 }
 
+impl EventEmitter<GateDecision> for GateApprovalScreen {}
+
 impl Render for GateApprovalScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -579,6 +588,10 @@ impl Render for GateApprovalScreen {
                                     .label("Reject")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.current_decision = ApprovalDecision::Rejected;
+                                        cx.emit(GateDecision {
+                                            task_id: this.task_id.clone(),
+                                            approved: false,
+                                        });
                                         cx.notify();
                                     })),
                             )
@@ -588,6 +601,10 @@ impl Render for GateApprovalScreen {
                                     .label("Approve")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.current_decision = ApprovalDecision::Approved;
+                                        cx.emit(GateDecision {
+                                            task_id: this.task_id.clone(),
+                                            approved: true,
+                                        });
                                         cx.notify();
                                     })),
                             ),
