@@ -135,13 +135,14 @@ impl ProjectExecutor {
                 // Forward orchestrator events to project-level channel.
                 let mut orch_rx = orchestrator.subscribe();
                 let project_tx = self.event_tx.clone();
-                tokio::spawn(async move {
+                let event_forwarder = tokio::spawn(async move {
                     while let Ok(event) = orch_rx.recv().await {
                         let _ = project_tx.send(event);
                     }
                 });
 
                 let pipeline_result = orchestrator.execute(&mut spec_file).await;
+                event_forwarder.abort();
 
                 match pipeline_result {
                     PipelineResult::Completed => {

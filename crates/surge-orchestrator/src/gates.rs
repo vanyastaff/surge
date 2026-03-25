@@ -9,6 +9,16 @@ use surge_core::config::{GateConfig, GateDecision};
 use surge_core::id::SpecId;
 use tracing::{debug, info, warn};
 
+/// Get current Unix timestamp in seconds. Logs a warning if system clock
+/// is before the Unix epoch (NTP adjustment, VM snapshot restore, etc.).
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .inspect_err(|e| warn!("system clock before Unix epoch: {e}"))
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 use crate::phases::Phase;
 use crate::qa::QaVerdict;
 
@@ -255,10 +265,7 @@ impl GateManager {
     /// The decision is saved to DECISION.json in the spec directory and the
     /// gate state is updated to record the decision timestamp.
     pub fn record_decision(&self, spec_id: SpecId, phase: Phase, decision: GateDecision) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         // Load or create gate state
         let mut state = self.load_gate_state(spec_id).unwrap_or(GateState {
@@ -322,10 +329,7 @@ impl GateManager {
     /// This should be called when a gate is first encountered to record when
     /// the gate was triggered for timeout tracking.
     pub fn trigger_gate(&self, spec_id: SpecId, phase: Phase) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         let state = GateState {
             phase,
@@ -350,10 +354,7 @@ impl GateManager {
             return None;
         }
 
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         let elapsed = now.saturating_sub(state.triggered_at);
 

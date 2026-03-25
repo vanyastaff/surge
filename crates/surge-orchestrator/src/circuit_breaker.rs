@@ -116,8 +116,9 @@ impl CircuitBreaker {
         if should_trip {
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+                .inspect_err(|e| warn!("system clock before Unix epoch: {e}"))
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
 
             self.state.trip(now_ms);
 

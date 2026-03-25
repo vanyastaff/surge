@@ -45,11 +45,13 @@ pub struct ParallelExecutor {
 impl ParallelExecutor {
     /// Create a new parallel executor.
     ///
-    /// `max_parallel` is clamped to a minimum of 1.
+    /// `max_parallel` is clamped to the range `[1, 64]`.
+    /// Most agent API providers throttle at 3-5 concurrent sessions;
+    /// 64 is a generous upper bound for multi-agent setups.
     #[must_use]
     pub fn new(max_parallel: usize, executor_config: ExecutorConfig) -> Self {
         Self {
-            max_parallel: max_parallel.max(1),
+            max_parallel: max_parallel.clamp(1, 64),
             executor_config,
         }
     }
@@ -96,7 +98,14 @@ impl ParallelExecutor {
         let mut failures = Vec::new();
 
         for (i, subtask) in subtasks.iter().enumerate() {
-            let _permit = semaphore.acquire().await.expect("semaphore closed");
+            let _permit = match semaphore.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::error!("concurrency semaphore closed unexpectedly");
+                    failures.push((subtask.id, "semaphore closed".to_string()));
+                    continue;
+                }
+            };
 
             // Human input only goes to the first subtask in the batch.
             let input = if i == 0 { human_input } else { None };
