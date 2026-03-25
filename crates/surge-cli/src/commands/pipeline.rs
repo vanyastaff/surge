@@ -1,7 +1,8 @@
-use std::io::Write as _;
+use std::io::{self, BufRead, Write as _};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use surge_core::config::GateDecision;
 use surge_core::state::TaskState;
 use surge_core::{SurgeConfig, SurgeEvent};
 
@@ -191,6 +192,54 @@ pub async fn run(
                         t.total_cost
                     );
                     let _ = std::io::stdout().flush();
+                }
+                SurgeEvent::GateAwaitingApproval {
+                    gate_name, reason, ..
+                } => {
+                    // Clear the token counter line before showing gate prompt
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
+
+                    // Note: The actual gate approval handling will be done synchronously
+                    // in the orchestrator. This event is just for display purposes.
+                    println!("  🚦 Gate awaiting approval: {}", gate_name);
+                    if let Some(r) = &reason {
+                        println!("     Reason: {}", r);
+                    }
+                }
+                SurgeEvent::GateApproved {
+                    gate_name,
+                    approved_by,
+                    ..
+                } => {
+                    // Clear the token counter line before showing gate result
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
+
+                    print!("  ✅ Gate approved: {}", gate_name);
+                    if let Some(by) = approved_by {
+                        print!(" (by {})", by);
+                    }
+                    println!();
+                }
+                SurgeEvent::GateRejected {
+                    gate_name,
+                    rejected_by,
+                    reason,
+                    ..
+                } => {
+                    // Clear the token counter line before showing gate result
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
+
+                    print!("  ❌ Gate rejected: {}", gate_name);
+                    if let Some(by) = rejected_by {
+                        print!(" (by {})", by);
+                    }
+                    if let Some(r) = reason {
+                        print!(" - {}", r);
+                    }
+                    println!();
                 }
                 _ => {}
             }
@@ -549,6 +598,111 @@ pub async fn resume(task_id: String) -> Result<()> {
 
     // Resume by calling run with resume flag set
     run(task_id, None, None, None, true).await
+}
+
+/// Prompt the user for gate approval decision.
+///
+/// Displays an interactive prompt asking the user to approve, reject, or abort
+/// the pipeline at a gate. Returns the user's decision or an error if input fails.
+///
+/// # Arguments
+///
+/// * `gate_name` - Name of the gate requiring approval
+/// * `reason` - Optional reason why approval is needed
+///
+/// # Returns
+///
+/// A `GateDecision` representing the user's choice:
+/// - `Approved` - Continue to next phase (optionally with feedback)
+/// - `Rejected` - Re-run phase with structured feedback
+/// - `Aborted` - Terminate the task
+pub fn prompt_gate_approval(gate_name: &str, reason: Option<&str>) -> Result<GateDecision> {
+    // Clear the token counter line before displaying the prompt
+    print!("\r\x1b[K");
+    let _ = io::stdout().flush();
+
+    println!();
+    println!("🚦 Gate: {}", gate_name);
+    if let Some(r) = reason {
+        println!("   Reason: {}", r);
+    }
+    println!();
+    println!("   Choose an action:");
+    println!("   [a] Approve — continue to next phase");
+    println!("   [r] Reject — re-run phase with feedback");
+    println!("   [x] Abort — terminate task");
+    println!();
+    print!("   Your choice (a/r/x): ");
+    io::stdout().flush()?;
+
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+
+    loop {
+        if let Some(line) = lines.next() {
+            let input = line?.trim().to_lowercase();
+
+            match input.as_str() {
+                "a" | "approve" => {
+                    print!("   Optional feedback (press Enter to skip): ");
+                    io::stdout().flush()?;
+
+                    let feedback = if let Some(line) = lines.next() {
+                        let text = line?.trim().to_string();
+                        if text.is_empty() {
+                            None
+                        } else {
+                            Some(text)
+                        }
+                    } else {
+                        None
+                    };
+
+                    return Ok(GateDecision::Approved { feedback });
+                }
+                "r" | "reject" => {
+                    print!("   Rejection reason: ");
+                    io::stdout().flush()?;
+
+                    let reason = if let Some(line) = lines.next() {
+                        line?.trim().to_string()
+                    } else {
+                        "No reason provided".to_string()
+                    };
+
+                    print!("   Feedback for next iteration: ");
+                    io::stdout().flush()?;
+
+                    let feedback = if let Some(line) = lines.next() {
+                        line?.trim().to_string()
+                    } else {
+                        "Please address the issues".to_string()
+                    };
+
+                    return Ok(GateDecision::Rejected { reason, feedback });
+                }
+                "x" | "abort" => {
+                    print!("   Abort reason: ");
+                    io::stdout().flush()?;
+
+                    let reason = if let Some(line) = lines.next() {
+                        line?.trim().to_string()
+                    } else {
+                        "Task aborted by user".to_string()
+                    };
+
+                    return Ok(GateDecision::Aborted { reason });
+                }
+                _ => {
+                    println!("   Invalid choice. Please enter 'a', 'r', or 'x'.");
+                    print!("   Your choice (a/r/x): ");
+                    io::stdout().flush()?;
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!("Failed to read user input"));
+        }
+    }
 }
 
 /// Format token count with thousands separator
