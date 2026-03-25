@@ -492,6 +492,19 @@ fn builtin_agents() -> Vec<RegistryEntry> {
 
 // ── Registry cache ───────────────────────────────────────────────────
 
+/// File-based registry cache TTL (24 hours).
+///
+/// The registry uses two caches with different lifetimes:
+///
+/// 1. **File cache** (24h) — `~/.surge/registry-cache.json` — avoids
+///    re-fetching the full registry from the remote server on every startup.
+/// 2. **In-memory discovery cache** (5 min, see [`DISCOVERY_CACHE_TTL`]) —
+///    avoids re-running `which`/PATH probing on every `detect_runnable` call
+///    within a session.
+///
+/// These TTLs are intentionally different: the registry list changes rarely
+/// (daily refresh is fine), but installed agents can appear/disappear
+/// frequently (e.g. `npm install -g` mid-session).
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Platform-appropriate path for the registry cache file.

@@ -142,9 +142,15 @@ impl SurgeClient {
     }
 
     /// Emit an event to subscribers.
+    ///
+    /// Events are best-effort: if no subscriber is listening the event is
+    /// silently dropped. This is intentional — event monitoring is optional
+    /// and the hot path must not block on a missing receiver.
     fn emit_event(&self, event: SurgeEvent) {
         if let Some(tx) = &self.event_tx {
-            let _ = tx.send(event);
+            if tx.send(event).is_err() {
+                tracing::trace!("no event subscribers — event dropped (this is normal)");
+            }
         }
     }
 
@@ -197,6 +203,21 @@ impl SurgeClient {
     /// This is defense-in-depth on top of the canonicalize-based sandbox check:
     /// an attacker planting a symlink inside the worktree pointing to `/etc`
     /// is caught here before `canonicalize` is ever called.
+    ///
+    /// # Security note (TOCTOU)
+    ///
+    /// A race window exists between this component-level check and the
+    /// subsequent `canonicalize()` + bounds check in [`resolve_path`].
+    /// An attacker who can create symlinks concurrently could exploit this
+    /// gap. However:
+    ///
+    /// 1. `resolve_path` always calls `canonicalize()` **after** this check,
+    ///    which catches any symlink that changed between checks.
+    /// 2. The worktree is typically owned by the surge process, limiting
+    ///    concurrent symlink creation to the agent itself — which is already
+    ///    sandboxed.
+    ///
+    /// This function provides defense-in-depth, not sole protection.
     fn check_symlink_safety(path: &Path, allowed_root: &Path) -> Result<(), String> {
         let mut current = PathBuf::new();
         for component in path.components() {
