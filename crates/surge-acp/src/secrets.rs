@@ -42,6 +42,14 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
             "mongodb-dsn",
             r"mongodb(?:\+srv)?://[^:@\s]{1,64}:[^@\s]{1,128}@",
         ),
+        // Slack bot/user tokens
+        ("slack-token", r"xox[bporas]-[A-Za-z0-9\-]{10,}"),
+        // Stripe secret keys
+        ("stripe-key", r"sk_(live|test)_[A-Za-z0-9]{20,}"),
+        // JWT tokens (three base64url-encoded segments)
+        ("jwt", r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}"),
+        // Generic env var patterns: FOO_API_KEY=<hex-or-alnum 32+>
+        ("generic-api-key", r"(?i)(api[_-]?key|api[_-]?secret|secret[_-]?key)\s*=\s*[A-Za-z0-9]{32,}"),
     ];
 
     raw.iter()
@@ -145,6 +153,38 @@ mod tests {
         let (out, redacted) = redact_secrets(input);
         assert!(redacted);
         assert!(out.contains("[REDACTED:mongodb-dsn]"));
+    }
+
+    #[test]
+    fn test_slack_token_redacted() {
+        let input = "SLACK_TOKEN=xoxb-not-a-real-token-placeholder-value";
+        let (out, redacted) = redact_secrets(input);
+        assert!(redacted);
+        assert!(out.contains("[REDACTED:slack-token]"));
+    }
+
+    #[test]
+    fn test_stripe_key_redacted() {
+        let input = "STRIPE_SECRET_KEY=sk_test_FAKEFAKEFAKEFAKEFAKE00";
+        let (out, redacted) = redact_secrets(input);
+        assert!(redacted);
+        assert!(out.contains("[REDACTED:stripe-key]"));
+    }
+
+    #[test]
+    fn test_jwt_redacted() {
+        let input = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let (out, redacted) = redact_secrets(input);
+        assert!(redacted);
+        assert!(out.contains("[REDACTED:jwt]"));
+    }
+
+    #[test]
+    fn test_generic_api_key_env_redacted() {
+        let input = "API_KEY=abcdef1234567890abcdef1234567890";
+        let (out, redacted) = redact_secrets(input);
+        assert!(redacted);
+        assert!(out.contains("[REDACTED:generic-api-key]"));
     }
 
     #[test]
