@@ -61,7 +61,6 @@ impl OrphanScanner {
 
         // Scan for orphaned worktrees
         let worktree_infos = self.git_manager.list_worktrees()?;
-        let mut active_specs = Vec::new();
 
         for wt in &worktree_infos {
             if !wt.exists_on_disk {
@@ -71,9 +70,6 @@ impl OrphanScanner {
                     expected_path: wt.path.clone(),
                     reason: "directory missing".to_string(),
                 });
-            } else {
-                // Track active worktrees for orphaned branch detection
-                active_specs.push(wt.spec_id.clone());
             }
         }
 

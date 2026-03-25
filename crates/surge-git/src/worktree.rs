@@ -66,7 +66,24 @@ impl From<GitError> for surge_core::SurgeError {
             GitError::BranchNotFound(s) => surge_core::SurgeError::NotFound(format!("branch: {s}")),
             GitError::Io(e) => surge_core::SurgeError::Io(e),
             GitError::Git2(e) => surge_core::SurgeError::git_source(e.message().to_string(), e),
-            e => surge_core::SurgeError::git(e.to_string()),
+            GitError::WorktreeAlreadyExists(s) => {
+                surge_core::SurgeError::git(format!("worktree already exists: {s}"))
+            }
+            GitError::EmptyRepository => {
+                surge_core::SurgeError::git("repository has no commits".to_string())
+            }
+            GitError::MergeConflict { conflicting_files } => {
+                surge_core::SurgeError::git(format!(
+                    "merge conflict in {} file(s)",
+                    conflicting_files.len()
+                ))
+            }
+            GitError::NothingToCommit(s) => {
+                surge_core::SurgeError::git(format!("nothing to commit for spec '{s}'"))
+            }
+            GitError::SameBranch(s) => {
+                surge_core::SurgeError::git(format!("source and target are the same branch: {s}"))
+            }
         }
     }
 }
@@ -112,9 +129,15 @@ impl GitManager {
         Ok(Repository::open(&self.repo_path)?)
     }
 
+    /// Get a commit signature from git config, falling back to a hardcoded
+    /// default when the user has no `user.name` / `user.email` configured.
     fn signature(repo: &Repository) -> Signature<'_> {
-        repo.signature()
-            .unwrap_or_else(|_| Signature::now("Surge", "surge@localhost").unwrap())
+        repo.signature().unwrap_or_else(|_| {
+            // Signature::now only fails if the name/email contain interior NUL
+            // bytes, which cannot happen with these literals.
+            Signature::now("Surge", "surge@localhost")
+                .expect("hardcoded signature literals are valid")
+        })
     }
 
     fn branch_name(spec_id: &str) -> String {
