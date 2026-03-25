@@ -186,9 +186,9 @@ pub async fn run(
                     // Display live counter on the same line
                     print!(
                         "\r💰 Tokens: {} in / {} out / {} total | Cost: ${:.4}",
-                        format_tokens(t.input_tokens),
-                        format_tokens(t.output_tokens),
-                        format_tokens(total),
+                        super::format::format_number(t.input_tokens),
+                        super::format::format_number(t.output_tokens),
+                        super::format::format_number(total),
                         t.total_cost
                     );
                     let _ = std::io::stdout().flush();
@@ -336,21 +336,21 @@ pub async fn run(
         println!("💰 Token Usage Summary:");
         println!(
             "   Input tokens:   {}",
-            format_tokens(final_totals.input_tokens)
+            super::format::format_number(final_totals.input_tokens)
         );
         println!(
             "   Output tokens:  {}",
-            format_tokens(final_totals.output_tokens)
+            super::format::format_number(final_totals.output_tokens)
         );
         if final_totals.thought_tokens > 0 {
             println!(
                 "   Thought tokens: {}",
-                format_tokens(final_totals.thought_tokens)
+                super::format::format_number(final_totals.thought_tokens)
             );
         }
         let total_tokens =
             final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
-        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Total tokens:   {}", super::format::format_number(total_tokens));
         println!("   Estimated cost: ${:.4}", final_totals.total_cost);
     }
 
@@ -417,33 +417,33 @@ pub fn status(spec_id: String) -> Result<()> {
         println!("   Sessions:       {}", spec_usage.session_count);
         println!(
             "   Input tokens:   {}",
-            format_tokens(spec_usage.input_tokens)
+            super::format::format_number(spec_usage.input_tokens)
         );
         println!(
             "   Output tokens:  {}",
-            format_tokens(spec_usage.output_tokens)
+            super::format::format_number(spec_usage.output_tokens)
         );
         if spec_usage.thought_tokens > 0 {
             println!(
                 "   Thought tokens: {}",
-                format_tokens(spec_usage.thought_tokens)
+                super::format::format_number(spec_usage.thought_tokens)
             );
         }
         if spec_usage.cached_read_tokens > 0 {
             println!(
                 "   Cached read:    {}",
-                format_tokens(spec_usage.cached_read_tokens)
+                super::format::format_number(spec_usage.cached_read_tokens)
             );
         }
         if spec_usage.cached_write_tokens > 0 {
             println!(
                 "   Cached write:   {}",
-                format_tokens(spec_usage.cached_write_tokens)
+                super::format::format_number(spec_usage.cached_write_tokens)
             );
         }
         let total_tokens =
             spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
-        println!("   Total tokens:   {}", format_tokens(total_tokens));
+        println!("   Total tokens:   {}", super::format::format_number(total_tokens));
         println!("   Estimated cost: ${:.4}", spec_usage.estimated_cost_usd);
     }
 
@@ -905,20 +905,3 @@ pub fn prompt_gate_approval(
     }
 }
 
-/// Format token count with thousands separator
-fn format_tokens(tokens: u64) -> String {
-    let s = tokens.to_string();
-    let mut result = String::new();
-    let mut count = 0;
-
-    for c in s.chars().rev() {
-        if count == 3 {
-            result.push(',');
-            count = 0;
-        }
-        result.push(c);
-        count += 1;
-    }
-
-    result.chars().rev().collect()
-}

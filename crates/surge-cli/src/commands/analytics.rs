@@ -425,26 +425,26 @@ fn show_summary(
             println!("💰 Total Cost This Week: ${:.4}", summary.total_cost_usd);
             println!();
             println!("Token Usage:");
-            println!("  Input:        {:>12}", format_number(summary.input_tokens));
+            println!("  Input:        {:>12}", super::format::format_number(summary.input_tokens));
             println!(
                 "  Output:       {:>12}",
-                format_number(summary.output_tokens)
+                super::format::format_number(summary.output_tokens)
             );
             println!(
                 "  Thought:      {:>12}",
-                format_number(summary.thought_tokens)
+                super::format::format_number(summary.thought_tokens)
             );
             println!(
                 "  Cached Read:  {:>12}",
-                format_number(summary.cached_read_tokens)
+                super::format::format_number(summary.cached_read_tokens)
             );
             println!(
                 "  Cached Write: {:>12}",
-                format_number(summary.cached_write_tokens)
+                super::format::format_number(summary.cached_write_tokens)
             );
             println!(
                 "  Total:        {:>12}",
-                format_number(summary.total_tokens)
+                super::format::format_number(summary.total_tokens)
             );
 
             // Display top 3 tasks
@@ -455,7 +455,7 @@ fn show_summary(
                     println!();
                     println!("   {}. {}", i + 1, task.spec_id);
                     println!("      Sessions: {}", task.session_count);
-                    println!("      Tokens:   {}", format_number(task.total_tokens));
+                    println!("      Tokens:   {}", super::format::format_number(task.total_tokens));
                     println!("      Cost:     ${:.4}", task.total_cost_usd);
                 }
             }
@@ -468,7 +468,7 @@ fn show_summary(
                     println!();
                     println!("   Agent: {}", agent.agent_name);
                     println!("      Sessions: {}", agent.session_count);
-                    println!("      Tokens:   {}", format_number(agent.total_tokens));
+                    println!("      Tokens:   {}", super::format::format_number(agent.total_tokens));
                     println!("      Cost:     ${:.4}", agent.total_cost_usd);
                 }
             }
@@ -609,7 +609,7 @@ fn export_sessions(
                 }
                 println!("  Agent:     {}", session.agent_name);
                 println!("  Timestamp: {}", session.timestamp_ms);
-                println!("  Tokens:    {}", format_number(session.total_tokens));
+                println!("  Tokens:    {}", super::format::format_number(session.total_tokens));
                 println!("  Cost:      ${:.4}", session.estimated_cost_usd);
                 println!();
             }
@@ -857,19 +857,4 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Format a number with thousands separators
-fn format_number(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-
-    for (count, c) in s.chars().rev().enumerate() {
-        if count > 0 && count % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-
-    result.chars().rev().collect()
 }

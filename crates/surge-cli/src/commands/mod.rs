@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod analytics;
 pub mod config;
+pub mod format;
 pub mod git;
 pub mod insights;
 pub mod memory;

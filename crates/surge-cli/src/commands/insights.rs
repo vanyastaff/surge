@@ -500,14 +500,14 @@ fn output_text(data: &OutputData) {
 
             println!("\n   Subtask: {}", subtask_id);
             println!("      Sessions: {}", sessions.len());
-            println!("      Input tokens: {}", format_tokens(input));
-            println!("      Output tokens: {}", format_tokens(output));
+            println!("      Input tokens: {}", super::format::format_number(input));
+            println!("      Output tokens: {}", super::format::format_number(output));
             if thought > 0 {
-                println!("      Thought tokens: {}", format_tokens(thought));
+                println!("      Thought tokens: {}", super::format::format_number(thought));
             }
             println!(
                 "      Total tokens: {}",
-                format_tokens(input + output + thought)
+                super::format::format_number(input + output + thought)
             );
             println!("      Estimated cost: ${:.4}", cost);
         }
@@ -538,14 +538,14 @@ fn output_text(data: &OutputData) {
             .sum();
 
         println!("   Sessions: {}", data.sessions_without_subtask.len());
-        println!("   Input tokens: {}", format_tokens(input));
-        println!("   Output tokens: {}", format_tokens(output));
+        println!("   Input tokens: {}", super::format::format_number(input));
+        println!("   Output tokens: {}", super::format::format_number(output));
         if thought > 0 {
-            println!("   Thought tokens: {}", format_tokens(thought));
+            println!("   Thought tokens: {}", super::format::format_number(thought));
         }
         println!(
             "   Total tokens: {}",
-            format_tokens(input + output + thought)
+            super::format::format_number(input + output + thought)
         );
         println!("   Estimated cost: ${:.4}", cost);
     }
@@ -553,44 +553,26 @@ fn output_text(data: &OutputData) {
     // Overall summary
     println!("\n📈 Summary:");
     println!("   Total sessions: {}", data.filtered_sessions.len());
-    println!("   Input tokens: {}", format_tokens(data.total_input));
-    println!("   Output tokens: {}", format_tokens(data.total_output));
+    println!("   Input tokens: {}", super::format::format_number(data.total_input));
+    println!("   Output tokens: {}", super::format::format_number(data.total_output));
     if data.total_thought > 0 {
-        println!("   Thought tokens: {}", format_tokens(data.total_thought));
+        println!("   Thought tokens: {}", super::format::format_number(data.total_thought));
     }
     if data.total_cached_read > 0 {
         println!(
             "   Cached read tokens: {}",
-            format_tokens(data.total_cached_read)
+            super::format::format_number(data.total_cached_read)
         );
     }
     if data.total_cached_write > 0 {
         println!(
             "   Cached write tokens: {}",
-            format_tokens(data.total_cached_write)
+            super::format::format_number(data.total_cached_write)
         );
     }
     println!(
         "   Total tokens: {}",
-        format_tokens(data.total_input + data.total_output + data.total_thought)
+        super::format::format_number(data.total_input + data.total_output + data.total_thought)
     );
     println!("   Total cost: ${:.4}", data.total_cost);
-}
-
-/// Format token count with thousands separator
-fn format_tokens(tokens: u64) -> String {
-    let s = tokens.to_string();
-    let mut result = String::new();
-    let mut count = 0;
-
-    for c in s.chars().rev() {
-        if count == 3 {
-            result.push(',');
-            count = 0;
-        }
-        result.push(c);
-        count += 1;
-    }
-
-    result.chars().rev().collect()
 }
