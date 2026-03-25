@@ -276,7 +276,10 @@ impl SurgeClient {
             PermissionPolicy::AutoApprove => true,
 
             PermissionPolicy::Interactive => {
-                todo!("Interactive permission policy: prompt the user and return their choice")
+                // Interactive permission UI not yet implemented.
+                // Deny by default — fail closed.
+                tracing::warn!("Interactive permission policy not yet implemented; denying request");
+                false
             }
 
             PermissionPolicy::Smart {
@@ -957,6 +960,19 @@ mod tests {
                 "expected traversal '{attempt}' to be rejected, got Ok"
             );
         }
+    }
+
+    #[test]
+    fn test_interactive_policy_returns_none() {
+        let client = SurgeClient::new(
+            PathBuf::from("/tmp/worktree"),
+            PermissionPolicy::Interactive,
+        );
+        let request = make_perm_request("Read file", None);
+        // Interactive should deny (return None) until UI channel is implemented,
+        // NOT panic via todo!()
+        let result = client.evaluate_permission(&request);
+        assert!(result.is_none());
     }
 
     /// `SurgeClient::new` must not panic when the worktree root does not yet
