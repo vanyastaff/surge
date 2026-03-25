@@ -2,6 +2,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonVariants};
+use std::fs;
+use std::path::PathBuf;
 
 use crate::theme;
 
@@ -78,6 +80,8 @@ pub struct GateApprovalScreen {
     plan_diffs: Vec<PlanDiffItem>,
     changed_files: Vec<ChangedFile>,
     qa_checks: Vec<QaCheckResult>,
+    rejection_feedback: SharedString,
+    show_rejection_input: bool,
 }
 
 impl GateApprovalScreen {
@@ -90,6 +94,8 @@ impl GateApprovalScreen {
             description: "Task has completed execution and requires quality assurance review before proceeding to merge.".to_string(),
             current_decision: ApprovalDecision::Pending,
             active_panel: ContextPanel::PlanDiff,
+            rejection_feedback: SharedString::from(""),
+            show_rejection_input: false,
             plan_diffs: vec![
                 PlanDiffItem {
                     category: "Complexity".into(),
@@ -161,6 +167,29 @@ impl GateApprovalScreen {
                 },
             ],
         }
+    }
+
+    /// Write rejection feedback to HUMAN_INPUT.md file.
+    fn write_human_input(&self, feedback: &str) -> anyhow::Result<()> {
+        // Determine the task worktree path - typically in .auto-claude/worktrees/tasks/{task_id}/
+        let human_input_path = PathBuf::from("HUMAN_INPUT.md");
+
+        let content = format!(
+            "# Human Review Feedback\n\n\
+             Task ID: {}\n\
+             Decision: Rejected\n\
+             Date: {}\n\n\
+             ## Feedback\n\n\
+             {}\n\n\
+             ## Instructions for Agent\n\n\
+             Please address the feedback above and re-run the task.\n",
+            self.task_id,
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            feedback
+        );
+
+        fs::write(&human_input_path, content)?;
+        Ok(())
     }
 
     fn render_header(&self) -> Div {
@@ -538,6 +567,73 @@ impl GateApprovalScreen {
             })
             .child(div().v_flex().children(items))
     }
+
+    fn render_rejection_feedback(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .gap_2()
+            .pt_4()
+            .pb_2()
+            .border_t_1()
+            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::TEXT_PRIMARY)
+                    .child("Rejection Feedback".to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::TEXT_MUTED)
+                    .child("This feedback will be written to HUMAN_INPUT.md for the agent to review.".to_string()),
+            )
+            .child(
+                div()
+                    .id("rejection-feedback-input")
+                    .w_full()
+                    .min_h(px(100.0))
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(theme::SURFACE)
+                    .border_1()
+                    .border_color(theme::TEXT_MUTED.opacity(0.2))
+                    .text_sm()
+                    .text_color(theme::TEXT_PRIMARY)
+                    .cursor_text()
+                    .child(
+                        if self.rejection_feedback.is_empty() {
+                            div()
+                                .text_color(theme::TEXT_MUTED)
+                                .child("Enter your feedback here (e.g., \"Tests are failing\", \"Code needs refactoring\")...".to_string())
+                        } else {
+                            div().child(self.rejection_feedback.to_string())
+                        }
+                    )
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                        // Handle text input
+                        let key = &event.keystroke.key;
+                        let mut feedback = this.rejection_feedback.to_string();
+
+                        if key == "backspace" {
+                            feedback.pop();
+                        } else if key == "enter" {
+                            feedback.push('\n');
+                        } else if key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.alt {
+                            feedback.push_str(key);
+                        }
+
+                        this.rejection_feedback = SharedString::from(feedback);
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(|_this, _event, window, _cx| {
+                        // Focus the window to receive keyboard events
+                        window.activate_window();
+                    })),
+            )
+    }
 }
 
 impl EventEmitter<GateDecision> for GateApprovalScreen {}
@@ -566,6 +662,10 @@ impl Render for GateApprovalScreen {
                     .overflow_hidden()
                     .child(self.render_panel_content()),
             )
+            // Rejection feedback input (shown when user clicks reject)
+            .when(self.show_rejection_input, |el: Div| {
+                el.child(self.render_rejection_feedback(cx))
+            })
             // Actions
             .child(
                 div()
@@ -582,32 +682,62 @@ impl Render for GateApprovalScreen {
                             .h_flex()
                             .gap_2()
                             .justify_end()
-                            .child(
-                                Button::new("ga-reject")
-                                    .ghost()
-                                    .label("Reject")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.current_decision = ApprovalDecision::Rejected;
-                                        cx.emit(GateDecision {
-                                            task_id: this.task_id.clone(),
-                                            approved: false,
-                                        });
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("ga-approve")
-                                    .primary()
-                                    .label("Approve")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.current_decision = ApprovalDecision::Approved;
-                                        cx.emit(GateDecision {
-                                            task_id: this.task_id.clone(),
-                                            approved: true,
-                                        });
-                                        cx.notify();
-                                    })),
-                            ),
+                            .when(!self.show_rejection_input, |el: Div| {
+                                el.child(
+                                    Button::new("ga-reject")
+                                        .ghost()
+                                        .label("Reject")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.show_rejection_input = true;
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .when(self.show_rejection_input, |el: Div| {
+                                el.child(
+                                    Button::new("ga-cancel-reject")
+                                        .ghost()
+                                        .label("Cancel")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.show_rejection_input = false;
+                                            this.rejection_feedback = SharedString::from("");
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("ga-confirm-reject")
+                                        .primary()
+                                        .label("Confirm Rejection")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            // Write feedback to HUMAN_INPUT.md
+                                            if let Err(e) = this.write_human_input(&this.rejection_feedback) {
+                                                eprintln!("Failed to write HUMAN_INPUT.md: {}", e);
+                                            }
+
+                                            this.current_decision = ApprovalDecision::Rejected;
+                                            cx.emit(GateDecision {
+                                                task_id: this.task_id.clone(),
+                                                approved: false,
+                                            });
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .when(!self.show_rejection_input, |el: Div| {
+                                el.child(
+                                    Button::new("ga-approve")
+                                        .primary()
+                                        .label("Approve")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.current_decision = ApprovalDecision::Approved;
+                                            cx.emit(GateDecision {
+                                                task_id: this.task_id.clone(),
+                                                approved: true,
+                                            });
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
                     ),
             )
     }
