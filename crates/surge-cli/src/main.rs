@@ -191,10 +191,20 @@ enum Commands {
 async fn setup_signal_handler() {
     #[cfg(unix)]
     {
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("failed to install SIGINT handler");
+        let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("failed to install SIGTERM handler: {e}");
+                return;
+            }
+        };
+        let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("failed to install SIGINT handler: {e}");
+                return;
+            }
+        };
 
         tokio::select! {
             _ = sigterm.recv() => {
@@ -208,9 +218,10 @@ async fn setup_signal_handler() {
 
     #[cfg(not(unix))]
     {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::error!("failed to install Ctrl+C handler: {e}");
+            return;
+        }
         eprintln!("\n⚡ Received Ctrl+C. Shutting down gracefully...");
     }
 }
