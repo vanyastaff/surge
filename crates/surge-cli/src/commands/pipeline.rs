@@ -256,7 +256,59 @@ pub async fn run(
         }
     });
 
-    let result = orchestrator.execute(&mut spec_file).await;
+    // Run the pipeline, handling gate pauses with interactive prompts
+    let result = loop {
+        let result = orchestrator.execute(&mut spec_file).await;
+
+        match result {
+            surge_orchestrator::PipelineResult::Paused { phase, reason } => {
+                // Clear the token counter line before showing gate prompt
+                print!("\r\x1b[K");
+                let _ = std::io::stdout().flush();
+
+                // Determine gate name from reason
+                let gate_name = if reason.contains("after_spec") {
+                    "after_spec"
+                } else if reason.contains("after_plan") {
+                    "after_plan"
+                } else if reason.contains("after_each_subtask") {
+                    "after_each_subtask"
+                } else if reason.contains("after_qa") {
+                    "after_qa"
+                } else {
+                    "unknown_gate"
+                };
+
+                // Get user decision via interactive prompt
+                match prompt_gate_approval(gate_name, Some(&reason), spec_file.spec.id, phase) {
+                    Ok(decision) => {
+                        // Persist the decision to DECISION.json
+                        let specs_dir = surge_spec::SpecFile::specs_dir()?;
+                        let gate_config = surge_core::config::GateConfig::default();
+                        let gate_manager = surge_orchestrator::gates::GateManager::new(
+                            gate_config,
+                            specs_dir,
+                        );
+                        gate_manager.record_decision(spec_file.spec.id, phase, decision.clone());
+
+                        // Check if user aborted
+                        if matches!(decision, GateDecision::Aborted { .. }) {
+                            println!("🛑 Pipeline aborted by user");
+                            std::process::exit(4);
+                        }
+
+                        // Continue to next iteration to resume pipeline
+                        println!("▶️  Resuming pipeline...\n");
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to get gate approval: {e}");
+                        std::process::exit(4);
+                    }
+                }
+            }
+            other => break other,
+        }
+    };
 
     // Clear the token counter line before printing final result
     print!("\r\x1b[K");
@@ -267,6 +319,7 @@ pub async fn run(
             println!("✅ Pipeline completed successfully!");
         }
         surge_orchestrator::PipelineResult::Paused { phase, reason } => {
+            // This shouldn't happen anymore since we handle pauses in the loop
             println!("⏸️  Pipeline paused at {phase}: {reason}");
             std::process::exit(3);
         }
@@ -722,11 +775,15 @@ fn format_qa_verdict(verdict: Option<&str>, reasoning: Option<&str>) -> Option<S
 ///
 /// Displays an interactive prompt asking the user to approve, reject, or abort
 /// the pipeline at a gate. Returns the user's decision or an error if input fails.
+/// The decision is NOT persisted by this function - the caller is responsible for
+/// persisting it via `GateManager::record_decision`.
 ///
 /// # Arguments
 ///
 /// * `gate_name` - Name of the gate requiring approval
 /// * `reason` - Optional reason why approval is needed
+/// * `spec_id` - The spec ID for context (used for logging/display)
+/// * `phase` - The pipeline phase for context (used for logging/display)
 ///
 /// # Returns
 ///
@@ -735,7 +792,12 @@ fn format_qa_verdict(verdict: Option<&str>, reasoning: Option<&str>) -> Option<S
 /// - `Rejected` - Re-run phase with structured feedback
 /// - `Aborted` - Terminate the task
 #[allow(dead_code)] // Public API called by orchestrator
-pub fn prompt_gate_approval(gate_name: &str, reason: Option<&str>) -> Result<GateDecision> {
+pub fn prompt_gate_approval(
+    gate_name: &str,
+    reason: Option<&str>,
+    _spec_id: surge_core::id::SpecId,
+    _phase: surge_orchestrator::phases::Phase,
+) -> Result<GateDecision> {
     // Clear the token counter line before displaying the prompt
     print!("\r\x1b[K");
     let _ = io::stdout().flush();
