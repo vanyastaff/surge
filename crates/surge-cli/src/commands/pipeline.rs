@@ -699,19 +699,31 @@ fn format_plan_preview(gate_name: &str) -> Option<String> {
 fn format_diff_summary() -> Option<String> {
     use std::process::Command;
 
-    // Get diff statistics using git
-    let output = Command::new("git")
+    let output = match Command::new("git")
         .args(["diff", "--stat", "HEAD"])
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::debug!("git diff --stat failed to execute: {e}");
+            return None;
+        }
+    };
 
-    if !output.status.success() || output.stdout.is_empty() {
+    if !output.status.success() {
+        tracing::debug!(
+            "git diff --stat exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    if output.stdout.is_empty() {
         return None;
     }
 
     let diff_stat = String::from_utf8_lossy(&output.stdout);
-
-    // Parse the summary line (e.g., "3 files changed, 45 insertions(+), 12 deletions(-)")
     let summary_line = diff_stat.lines().last()?;
 
     if summary_line.trim().is_empty() {
@@ -791,7 +803,6 @@ fn format_qa_verdict(verdict: Option<&str>, reasoning: Option<&str>) -> Option<S
 /// - `Approved` - Continue to next phase (optionally with feedback)
 /// - `Rejected` - Re-run phase with structured feedback
 /// - `Aborted` - Terminate the task
-#[allow(dead_code)] // Public API called by orchestrator
 pub fn prompt_gate_approval(
     gate_name: &str,
     reason: Option<&str>,
