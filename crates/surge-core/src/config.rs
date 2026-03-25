@@ -282,6 +282,87 @@ impl Default for GateConfig {
     }
 }
 
+/// Decision made at a pipeline gate.
+///
+/// When the pipeline reaches a configured gate, execution pauses and waits for
+/// a human decision. The decision determines whether the pipeline continues,
+/// retries with feedback, or aborts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GateDecision {
+    /// Gate approved — continue to next phase.
+    Approved {
+        /// Optional feedback from the reviewer.
+        feedback: Option<String>,
+    },
+    /// Gate rejected — re-run the phase with structured feedback.
+    Rejected {
+        /// Reason for rejection.
+        reason: String,
+        /// Structured feedback to inject into agent's next prompt.
+        feedback: String,
+    },
+    /// Gate timed out — no human response within configured timeout.
+    Timeout {
+        /// Optional context about the timeout.
+        context: Option<String>,
+    },
+    /// Gate explicitly aborted — transition task to Failed state.
+    Aborted {
+        /// Reason for abort.
+        reason: String,
+    },
+}
+
+impl GateDecision {
+    /// Returns `true` if the decision allows the pipeline to proceed.
+    #[must_use]
+    pub fn is_approved(&self) -> bool {
+        matches!(self, Self::Approved { .. })
+    }
+
+    /// Returns `true` if the decision requires re-running the phase.
+    #[must_use]
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, Self::Rejected { .. })
+    }
+
+    /// Returns `true` if the decision was a timeout.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout { .. })
+    }
+
+    /// Returns `true` if the decision should abort the task.
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        matches!(self, Self::Aborted { .. })
+    }
+
+    /// Returns `true` if the decision terminates the task (abort or timeout).
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Aborted { .. } | Self::Timeout { .. })
+    }
+
+    /// Returns the structured feedback for rejected gates, if any.
+    #[must_use]
+    pub fn rejection_feedback(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { feedback, .. } => Some(feedback.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns the reason for abort or rejection, if any.
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { reason, .. } | Self::Aborted { reason } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+}
+
 fn default_max_qa_iterations() -> u32 {
     10
 }
@@ -1691,5 +1772,113 @@ default_agent = "test"
         assert!(config.analytics.budget_usd.is_none());
         assert!(config.analytics.budget_tokens.is_none());
         assert_eq!(config.analytics.budget_warn_threshold, 80);
+    }
+
+    #[test]
+    fn test_gate_decision_approved() {
+        let decision = GateDecision::Approved {
+            feedback: Some("Looks good".to_string()),
+        };
+        assert!(decision.is_approved());
+        assert!(!decision.is_rejected());
+        assert!(!decision.is_timeout());
+        assert!(!decision.is_aborted());
+        assert!(!decision.is_terminal());
+        assert!(decision.rejection_feedback().is_none());
+    }
+
+    #[test]
+    fn test_gate_decision_rejected() {
+        let decision = GateDecision::Rejected {
+            reason: "Wrong approach".to_string(),
+            feedback: "Use async instead".to_string(),
+        };
+        assert!(!decision.is_approved());
+        assert!(decision.is_rejected());
+        assert!(!decision.is_timeout());
+        assert!(!decision.is_aborted());
+        assert!(!decision.is_terminal());
+        assert_eq!(decision.rejection_feedback(), Some("Use async instead"));
+        assert_eq!(decision.reason(), Some("Wrong approach"));
+    }
+
+    #[test]
+    fn test_gate_decision_timeout() {
+        let decision = GateDecision::Timeout {
+            context: Some("No response after 2 hours".to_string()),
+        };
+        assert!(!decision.is_approved());
+        assert!(!decision.is_rejected());
+        assert!(decision.is_timeout());
+        assert!(!decision.is_aborted());
+        assert!(decision.is_terminal());
+        assert!(decision.rejection_feedback().is_none());
+    }
+
+    #[test]
+    fn test_gate_decision_aborted() {
+        let decision = GateDecision::Aborted {
+            reason: "User cancelled".to_string(),
+        };
+        assert!(!decision.is_approved());
+        assert!(!decision.is_rejected());
+        assert!(!decision.is_timeout());
+        assert!(decision.is_aborted());
+        assert!(decision.is_terminal());
+        assert!(decision.rejection_feedback().is_none());
+        assert_eq!(decision.reason(), Some("User cancelled"));
+    }
+
+    #[test]
+    fn test_gate_decision_mutually_exclusive() {
+        // Each decision type should match exactly one category
+        let decisions = vec![
+            GateDecision::Approved { feedback: None },
+            GateDecision::Rejected {
+                reason: "test".to_string(),
+                feedback: "fix".to_string(),
+            },
+            GateDecision::Timeout { context: None },
+            GateDecision::Aborted {
+                reason: "test".to_string(),
+            },
+        ];
+
+        for decision in decisions {
+            let flags = [
+                decision.is_approved(),
+                decision.is_rejected(),
+                decision.is_timeout(),
+                decision.is_aborted(),
+            ];
+            let true_count = flags.iter().filter(|&&b| b).count();
+            assert_eq!(
+                true_count, 1,
+                "Decision {:?} matched {} categories",
+                decision, true_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_gate_decision_terminal_states() {
+        // Terminal states: timeout and abort
+        assert!(GateDecision::Timeout { context: None }.is_terminal());
+        assert!(
+            GateDecision::Aborted {
+                reason: "test".into()
+            }
+            .is_terminal()
+        );
+
+        // Non-terminal states: approved and rejected
+        assert!(!GateDecision::Approved { feedback: None }.is_terminal());
+        assert!(
+            !GateDecision::Rejected {
+                reason: "test".into(),
+                feedback: "fix".into()
+            }
+            .is_terminal()
+        );
     }
 }
