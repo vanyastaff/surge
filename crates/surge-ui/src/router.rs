@@ -6,6 +6,7 @@ pub enum Screen {
     Dashboard,
     Kanban,
     TaskDetail,
+    GateApproval,
     SpecExplorer,
     SpecWizard,
     AgentHub,
@@ -29,6 +30,7 @@ impl Screen {
             Self::Dashboard => "Dashboard",
             Self::Kanban => "Kanban",
             Self::TaskDetail => "Task Detail",
+            Self::GateApproval => "Gate Approval",
             Self::SpecExplorer => "Specs",
             Self::SpecWizard => "New Spec",
             Self::AgentHub => "Agents",
@@ -52,6 +54,7 @@ impl Screen {
             Self::Dashboard => IconName::LayoutDashboard,
             Self::Kanban => IconName::Frame, // columns layout
             Self::TaskDetail => IconName::File,
+            Self::GateApproval => IconName::Check, // gate/approval
             Self::SpecExplorer => IconName::Search,
             Self::SpecWizard => IconName::Plus,
             Self::AgentHub => IconName::Bot,

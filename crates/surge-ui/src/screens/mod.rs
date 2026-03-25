@@ -3,6 +3,7 @@ pub mod agent_terminal;
 pub mod dashboard;
 pub mod diff_viewer;
 pub mod file_explorer;
+pub mod gate_approval;
 pub mod github_prs;
 pub mod init_wizard;
 pub mod insights;
