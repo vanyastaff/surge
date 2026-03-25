@@ -978,7 +978,7 @@ mod tests {
     fn test_upsert_and_get_subtask() {
         let mut store = Store::in_memory().unwrap();
         let session = sample_session();
-        let subtask = SubtaskUsage::from_session(&session);
+        let subtask = SubtaskUsage::from_session(&session).unwrap();
 
         store.upsert_subtask(&subtask).unwrap();
         let retrieved = store
@@ -996,7 +996,7 @@ mod tests {
     fn test_upsert_subtask_updates_existing() {
         let mut store = Store::in_memory().unwrap();
         let session = sample_session();
-        let mut subtask = SubtaskUsage::from_session(&session);
+        let mut subtask = SubtaskUsage::from_session(&session).unwrap();
 
         store.upsert_subtask(&subtask).unwrap();
 
@@ -1028,8 +1028,8 @@ mod tests {
         session2.spec_id = spec_id;
         session2.subtask_id = Some(SubtaskId::new());
 
-        let subtask1 = SubtaskUsage::from_session(&session1);
-        let subtask2 = SubtaskUsage::from_session(&session2);
+        let subtask1 = SubtaskUsage::from_session(&session1).unwrap();
+        let subtask2 = SubtaskUsage::from_session(&session2).unwrap();
 
         store.upsert_subtask(&subtask1).unwrap();
         store.upsert_subtask(&subtask2).unwrap();

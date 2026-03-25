@@ -196,10 +196,13 @@ impl SubtaskUsage {
     }
 
     /// Create a new `SubtaskUsage` from a single `SessionUsage`.
+    ///
+    /// Returns `None` if the session has no `subtask_id` (e.g. top-level spec usage).
     #[must_use]
-    pub fn from_session(session: &SessionUsage) -> Self {
-        Self {
-            subtask_id: session.subtask_id.expect("session must have subtask_id"),
+    pub fn from_session(session: &SessionUsage) -> Option<Self> {
+        let subtask_id = session.subtask_id?;
+        Some(Self {
+            subtask_id,
             task_id: session.task_id,
             spec_id: session.spec_id,
             input_tokens: session.input_tokens,
@@ -209,7 +212,7 @@ impl SubtaskUsage {
             cached_write_tokens: session.cached_write_tokens.unwrap_or(0),
             estimated_cost_usd: session.estimated_cost_usd.unwrap_or(0.0),
             session_count: 1,
-        }
+        })
     }
 
     /// Aggregate another session's usage into this subtask.
@@ -358,7 +361,7 @@ mod tests {
     #[test]
     fn test_subtask_usage_from_session() {
         let session = sample_session();
-        let subtask = SubtaskUsage::from_session(&session);
+        let subtask = SubtaskUsage::from_session(&session).unwrap();
 
         assert_eq!(subtask.subtask_id, session.subtask_id.unwrap());
         assert_eq!(subtask.task_id, session.task_id);
@@ -375,7 +378,7 @@ mod tests {
     #[test]
     fn test_subtask_usage_add_session() {
         let session1 = sample_session();
-        let mut subtask = SubtaskUsage::from_session(&session1);
+        let mut subtask = SubtaskUsage::from_session(&session1).unwrap();
 
         let mut session2 = sample_session();
         session2.session_id = "sess-2".to_string();
@@ -392,7 +395,7 @@ mod tests {
     #[test]
     fn test_subtask_usage_total_tokens() {
         let session = sample_session();
-        let subtask = SubtaskUsage::from_session(&session);
+        let subtask = SubtaskUsage::from_session(&session).unwrap();
         assert_eq!(subtask.total_tokens(), 1700); // 1000 + 500 + 200
     }
 
@@ -413,7 +416,7 @@ mod tests {
     #[test]
     fn test_spec_usage_from_subtask() {
         let session = sample_session();
-        let subtask = SubtaskUsage::from_session(&session);
+        let subtask = SubtaskUsage::from_session(&session).unwrap();
         let spec = SpecUsage::from_subtask(&subtask);
 
         assert_eq!(spec.spec_id, subtask.spec_id);
@@ -443,14 +446,14 @@ mod tests {
     #[test]
     fn test_spec_usage_add_subtask() {
         let session1 = sample_session();
-        let subtask1 = SubtaskUsage::from_session(&session1);
+        let subtask1 = SubtaskUsage::from_session(&session1).unwrap();
         let mut spec = SpecUsage::from_subtask(&subtask1);
 
         let mut session2 = sample_session();
         session2.subtask_id = Some(SubtaskId::new()); // Different subtask
         session2.input_tokens = 600;
         session2.output_tokens = 300;
-        let subtask2 = SubtaskUsage::from_session(&session2);
+        let subtask2 = SubtaskUsage::from_session(&session2).unwrap();
 
         spec.add_subtask(&subtask2);
 
@@ -474,7 +477,7 @@ mod tests {
         let deserialized: SessionUsage = serde_json::from_str(&json).unwrap();
         assert_eq!(session, deserialized);
 
-        let subtask = SubtaskUsage::from_session(&session);
+        let subtask = SubtaskUsage::from_session(&session).unwrap();
         let json = serde_json::to_string(&subtask).unwrap();
         let deserialized: SubtaskUsage = serde_json::from_str(&json).unwrap();
         assert_eq!(subtask, deserialized);

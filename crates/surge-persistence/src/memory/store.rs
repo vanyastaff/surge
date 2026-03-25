@@ -362,6 +362,9 @@ impl MemoryStore {
         let discoveries = stmt
             .query_map(rusqlite::params![query, limit], |row| {
                 let tags_json: String = row.get(6)?;
+                // Note: unwrap_or_default is intentional here — we're inside a
+                // rusqlite row callback that can only return rusqlite::Error, not
+                // our PersistenceError. Corrupted JSON gracefully degrades to [].
                 let tags: Vec<String> = serde_json::from_str(&tags_json)
                     .unwrap_or_default();
 

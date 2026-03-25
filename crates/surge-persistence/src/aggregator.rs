@@ -249,12 +249,14 @@ impl UsageAggregator {
 
             let subtask = if let Some(mut existing) = existing {
                 existing.add_session(&session);
-                existing
+                Some(existing)
             } else {
                 SubtaskUsage::from_session(&session)
             };
 
-            store.upsert_subtask(&subtask)?;
+            if let Some(subtask) = subtask {
+                store.upsert_subtask(&subtask)?;
+            }
         }
 
         // Aggregate into spec usage
