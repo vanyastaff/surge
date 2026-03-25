@@ -13,6 +13,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tracing::debug;
 
+/// Default output byte limit: 10 MiB. Prevents unbounded memory growth
+/// for long-running agent sessions.
+const DEFAULT_OUTPUT_BYTE_LIMIT: u64 = 10 * 1024 * 1024;
+
 /// Managed terminal process.
 pub(crate) struct Terminal {
     /// Child process handle.
@@ -20,7 +24,6 @@ pub(crate) struct Terminal {
     /// Accumulated output.
     output: Arc<Mutex<String>>,
     /// Maximum output bytes to retain.
-    #[allow(dead_code)]
     output_byte_limit: Option<u64>,
     /// Whether output was truncated due to byte limit.
     was_truncated: Arc<Mutex<bool>>,
@@ -127,28 +130,28 @@ impl Terminals {
         let output = Arc::new(Mutex::new(String::new()));
         let was_truncated = Arc::new(Mutex::new(false));
 
+        let effective_limit = Some(output_byte_limit.unwrap_or(DEFAULT_OUTPUT_BYTE_LIMIT));
+
         // Spawn background tasks to collect stdout and stderr
         if let Some(stdout) = child.stdout.take() {
             let out = Arc::clone(&output);
             let trunc = Arc::clone(&was_truncated);
-            let limit = output_byte_limit;
             tokio::spawn(async move {
-                collect_output(stdout, out, limit, trunc).await;
+                collect_output(stdout, out, effective_limit, trunc).await;
             });
         }
         if let Some(stderr) = child.stderr.take() {
             let out = Arc::clone(&output);
             let trunc = Arc::clone(&was_truncated);
-            let limit = output_byte_limit;
             tokio::spawn(async move {
-                collect_output(stderr, out, limit, trunc).await;
+                collect_output(stderr, out, effective_limit, trunc).await;
             });
         }
 
         let terminal = Terminal {
             child,
             output,
-            output_byte_limit,
+            output_byte_limit: effective_limit,
             was_truncated,
             exit_status: None,
         };
@@ -435,6 +438,29 @@ mod tests {
         assert!(terminal_get_output(&mgr, "nonexistent").await.is_err());
         assert!(terminal_kill(&mgr, "nonexistent").await.is_err());
         assert!(terminal_wait_for_exit(&mgr, "nonexistent").await.is_err());
+    }
+
+    #[test]
+    fn test_default_output_byte_limit() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let tmp = temp_dir();
+            let mut terms = Terminals::new(tmp);
+
+            #[cfg(windows)]
+            let (cmd, args) = ("cmd", vec!["/C".into(), "echo hello".into()]);
+            #[cfg(not(windows))]
+            let (cmd, args) = ("echo", vec!["hello".into()]);
+
+            // Spawn without explicit limit — should get default 10 MiB
+            let id = terms
+                .spawn(cmd, &args, &[], None, None)
+                .expect("spawn");
+
+            let term = terms.terminals.get(&id).unwrap();
+            let t = term.lock().await;
+            assert_eq!(t.output_byte_limit, Some(10 * 1024 * 1024));
+        });
     }
 
     #[tokio::test]
