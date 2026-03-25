@@ -206,6 +206,16 @@ pub async fn run(
                     if let Some(r) = &reason {
                         println!("     Reason: {}", r);
                     }
+
+                    // Show plan preview if available
+                    if let Some(preview) = format_plan_preview(&gate_name) {
+                        print!("  {}", preview);
+                    }
+
+                    // Show diff summary if available
+                    if let Some(diff) = format_diff_summary() {
+                        print!("  {}", diff);
+                    }
                 }
                 SurgeEvent::GateApproved {
                     gate_name,
@@ -296,12 +306,21 @@ pub async fn run(
     if final_qa.iterations > 0 {
         println!();
         println!("🔍 QA Review Summary:");
-        if let Some(verdict) = &final_qa.verdict {
-            println!("   Verdict:    {}", verdict);
+
+        // Use enhanced verdict formatter if available
+        if let Some(formatted_verdict) =
+            format_qa_verdict(final_qa.verdict.as_deref(), final_qa.reasoning.as_deref())
+        {
+            print!("{}", formatted_verdict);
+        } else {
+            if let Some(verdict) = &final_qa.verdict {
+                println!("   Verdict:    {}", verdict);
+            }
+            if let Some(reasoning) = &final_qa.reasoning {
+                println!("   Reasoning:  {}", reasoning);
+            }
         }
-        if let Some(reasoning) = &final_qa.reasoning {
-            println!("   Reasoning:  {}", reasoning);
-        }
+
         println!("   Iterations: {}", final_qa.iterations);
     }
 
@@ -600,6 +619,105 @@ pub async fn resume(task_id: String) -> Result<()> {
     run(task_id, None, None, None, true).await
 }
 
+/// Format a plan preview showing what comes next in the pipeline.
+///
+/// Returns a formatted string showing the next phase or stage information,
+/// or None if no preview is available.
+fn format_plan_preview(gate_name: &str) -> Option<String> {
+    // Map gate names to next phase descriptions
+    let next_phase = match gate_name {
+        "post_planning" => "Execution phase — agents will implement subtasks in parallel",
+        "post_execution" => "QA Review — automated quality checks and validation",
+        "post_qa" => "Human Review — final approval before merging",
+        "pre_merge" => "Merge phase — changes will be integrated into main branch",
+        _ => return None,
+    };
+
+    Some(format!(
+        "   📋 Next: {}\n",
+        next_phase
+    ))
+}
+
+/// Format a diff summary showing git changes statistics.
+///
+/// Returns a formatted string with files changed, insertions, and deletions,
+/// or None if git operations fail or there are no changes.
+fn format_diff_summary() -> Option<String> {
+    use std::process::Command;
+
+    // Get diff statistics using git
+    let output = Command::new("git")
+        .args(["diff", "--stat", "HEAD"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+
+    let diff_stat = String::from_utf8_lossy(&output.stdout);
+
+    // Parse the summary line (e.g., "3 files changed, 45 insertions(+), 12 deletions(-)")
+    let summary_line = diff_stat.lines().last()?;
+
+    if summary_line.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "   📊 Changes: {}\n",
+        summary_line.trim()
+    ))
+}
+
+/// Format QA verdict display with enhanced formatting.
+///
+/// Returns a formatted string showing QA verdict and reasoning,
+/// or None if no QA data is available.
+fn format_qa_verdict(verdict: Option<&str>, reasoning: Option<&str>) -> Option<String> {
+    let v = verdict?;
+
+    let verdict_icon = match v.to_lowercase().as_str() {
+        "pass" | "approved" | "success" => "✅",
+        "fail" | "rejected" | "failure" => "❌",
+        "warning" | "needs_work" => "⚠️",
+        _ => "🔍",
+    };
+
+    let mut output = format!("   {} QA Verdict: {}\n", verdict_icon, v);
+
+    if let Some(r) = reasoning {
+        // Simple word wrapping for reasoning text
+        let max_width = 70;
+        if r.len() <= max_width {
+            output.push_str(&format!("   Reasoning: {}\n", r));
+        } else {
+            output.push_str("   Reasoning:\n");
+            let words: Vec<&str> = r.split_whitespace().collect();
+            let mut current_line = String::new();
+
+            for word in words {
+                if current_line.len() + word.len() + 1 > max_width
+                    && !current_line.is_empty() {
+                        output.push_str(&format!("      {}\n", current_line));
+                        current_line.clear();
+                    }
+                if !current_line.is_empty() {
+                    current_line.push(' ');
+                }
+                current_line.push_str(word);
+            }
+
+            if !current_line.is_empty() {
+                output.push_str(&format!("      {}\n", current_line));
+            }
+        }
+    }
+
+    Some(output)
+}
+
 /// Prompt the user for gate approval decision.
 ///
 /// Displays an interactive prompt asking the user to approve, reject, or abort
@@ -616,6 +734,7 @@ pub async fn resume(task_id: String) -> Result<()> {
 /// - `Approved` - Continue to next phase (optionally with feedback)
 /// - `Rejected` - Re-run phase with structured feedback
 /// - `Aborted` - Terminate the task
+#[allow(dead_code)] // Public API called by orchestrator
 pub fn prompt_gate_approval(gate_name: &str, reason: Option<&str>) -> Result<GateDecision> {
     // Clear the token counter line before displaying the prompt
     print!("\r\x1b[K");
@@ -626,6 +745,25 @@ pub fn prompt_gate_approval(gate_name: &str, reason: Option<&str>) -> Result<Gat
     if let Some(r) = reason {
         println!("   Reason: {}", r);
     }
+    println!();
+
+    // Display plan preview if available
+    if let Some(preview) = format_plan_preview(gate_name) {
+        print!("{}", preview);
+    }
+
+    // Display diff summary if available
+    if let Some(diff) = format_diff_summary() {
+        print!("{}", diff);
+    }
+
+    // Display QA verdict if this is a post-QA gate
+    if gate_name.contains("qa") || gate_name.contains("post_qa") {
+        // Try to read QA verdict from current context
+        // For now, we'll skip this since we don't have access to the context here
+        // This could be enhanced by passing QA state to the prompt function
+    }
+
     println!();
     println!("   Choose an action:");
     println!("   [a] Approve — continue to next phase");
