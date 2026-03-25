@@ -200,6 +200,29 @@ pub enum SurgeEvent {
         issues: Option<String>,
     },
 
+    // --- Pipeline gate events ---
+    /// Pipeline gate is awaiting approval.
+    GateAwaitingApproval {
+        task_id: TaskId,
+        gate_name: String,
+        reason: Option<String>,
+    },
+
+    /// Pipeline gate was approved.
+    GateApproved {
+        task_id: TaskId,
+        gate_name: String,
+        approved_by: Option<String>,
+    },
+
+    /// Pipeline gate was rejected.
+    GateRejected {
+        task_id: TaskId,
+        gate_name: String,
+        rejected_by: Option<String>,
+        reason: Option<String>,
+    },
+
     // --- File events ---
     /// File operation performed by agent.
     FileOperation { operation: String, path: PathBuf },
