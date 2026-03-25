@@ -167,7 +167,7 @@ fn add_memory(
 
         MemoryCategory::Gotcha => {
             let title = title.unwrap_or_else(|| "Gotcha".to_string());
-            let mut gotcha = Gotcha::new(title, content.clone(), content.clone(), timestamp_ms);
+            let mut gotcha = Gotcha::new(title, content.clone(), String::new(), timestamp_ms);
 
             if let Some(sid) = spec_id {
                 gotcha = gotcha.with_spec_id(sid);
