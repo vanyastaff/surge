@@ -233,6 +233,13 @@ impl Orchestrator {
             // Gate: user reviews requirements before planning.
             match gate_manager.check_gate(Phase::SpecCreation, spec_id) {
                 GateAction::Pause { reason } => {
+                    // Trigger gate and emit awaiting approval event
+                    gate_manager.trigger_gate(spec_id, Phase::SpecCreation);
+                    let _ = self.event_tx.send(SurgeEvent::GateAwaitingApproval {
+                        task_id,
+                        gate_name: "after_spec".to_string(),
+                        reason: Some(reason.clone()),
+                    });
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     return PipelineResult::Paused {
@@ -247,7 +254,50 @@ impl Orchestrator {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
                 }
-                GateAction::HumanInput { .. } | GateAction::Continue => {}
+                GateAction::HumanInput { .. } => {
+                    // HumanInput not applicable for SpecCreation phase
+                }
+                GateAction::Continue => {
+                    // Check if a decision was loaded
+                    if let Some(decision) = gate_manager.load_decision(spec_id) {
+                        if decision.is_approved() {
+                            let _ = self.event_tx.send(SurgeEvent::GateApproved {
+                                task_id,
+                                gate_name: "after_spec".to_string(),
+                                approved_by: None,
+                            });
+                        } else if decision.is_rejected() {
+                            let _ = self.event_tx.send(SurgeEvent::GateRejected {
+                                task_id,
+                                gate_name: "after_spec".to_string(),
+                                rejected_by: None,
+                                reason: decision.reason().map(|s| s.to_string()),
+                            });
+                            // Rejection at SpecCreation requires manual intervention
+                            // Feedback is in decision.rejection_feedback()
+                            aggregator.unregister_session(&session.session_id).await;
+                            pool.shutdown().await;
+                            let _ = git.discard(&spec_id_str);
+                            return PipelineResult::Failed {
+                                reason: format!(
+                                    "Spec creation gate rejected: {}. Feedback: {}",
+                                    decision.reason().unwrap_or("no reason provided"),
+                                    decision.rejection_feedback().unwrap_or("none")
+                                ),
+                            };
+                        } else if decision.is_aborted() {
+                            aggregator.unregister_session(&session.session_id).await;
+                            pool.shutdown().await;
+                            let _ = git.discard(&spec_id_str);
+                            return PipelineResult::Failed {
+                                reason: format!(
+                                    "Spec creation gate aborted: {}",
+                                    decision.reason().unwrap_or("no reason provided")
+                                ),
+                            };
+                        }
+                    }
+                }
             }
         }
 
@@ -269,6 +319,13 @@ impl Orchestrator {
             // Gate: user reviews plan (architecture.md + stories) before execution.
             match gate_manager.check_gate(Phase::Planning, spec_id) {
                 GateAction::Pause { reason } => {
+                    // Trigger gate and emit awaiting approval event
+                    gate_manager.trigger_gate(spec_id, Phase::Planning);
+                    let _ = self.event_tx.send(SurgeEvent::GateAwaitingApproval {
+                        task_id,
+                        gate_name: "after_plan".to_string(),
+                        reason: Some(reason.clone()),
+                    });
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
                     return PipelineResult::Paused {
@@ -283,7 +340,50 @@ impl Orchestrator {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
                 }
-                GateAction::HumanInput { .. } | GateAction::Continue => {}
+                GateAction::HumanInput { .. } => {
+                    // HumanInput not applicable for Planning phase
+                }
+                GateAction::Continue => {
+                    // Check if a decision was loaded
+                    if let Some(decision) = gate_manager.load_decision(spec_id) {
+                        if decision.is_approved() {
+                            let _ = self.event_tx.send(SurgeEvent::GateApproved {
+                                task_id,
+                                gate_name: "after_plan".to_string(),
+                                approved_by: None,
+                            });
+                        } else if decision.is_rejected() {
+                            let _ = self.event_tx.send(SurgeEvent::GateRejected {
+                                task_id,
+                                gate_name: "after_plan".to_string(),
+                                rejected_by: None,
+                                reason: decision.reason().map(|s| s.to_string()),
+                            });
+                            // Rejection at Planning requires manual intervention
+                            // Feedback is in decision.rejection_feedback()
+                            aggregator.unregister_session(&session.session_id).await;
+                            pool.shutdown().await;
+                            let _ = git.discard(&spec_id_str);
+                            return PipelineResult::Failed {
+                                reason: format!(
+                                    "Planning gate rejected: {}. Feedback: {}",
+                                    decision.reason().unwrap_or("no reason provided"),
+                                    decision.rejection_feedback().unwrap_or("none")
+                                ),
+                            };
+                        } else if decision.is_aborted() {
+                            aggregator.unregister_session(&session.session_id).await;
+                            pool.shutdown().await;
+                            let _ = git.discard(&spec_id_str);
+                            return PipelineResult::Failed {
+                                reason: format!(
+                                    "Planning gate aborted: {}",
+                                    decision.reason().unwrap_or("no reason provided")
+                                ),
+                            };
+                        }
+                    }
+                }
             }
         }
 
@@ -404,6 +504,13 @@ impl Orchestrator {
 
             match gate_manager.check_gate(Phase::Executing, spec_id) {
                 GateAction::Pause { reason } => {
+                    // Trigger gate and emit awaiting approval event
+                    gate_manager.trigger_gate(spec_id, Phase::Executing);
+                    let _ = self.event_tx.send(SurgeEvent::GateAwaitingApproval {
+                        task_id,
+                        gate_name: "after_each_subtask".to_string(),
+                        reason: Some(reason.clone()),
+                    });
                     pool.shutdown().await;
                     return PipelineResult::Paused {
                         phase: Phase::Executing,
@@ -420,7 +527,42 @@ impl Orchestrator {
                     info!("human input received, will inject into next batch");
                     pending_human_input = Some(content);
                 }
-                GateAction::Continue => {}
+                GateAction::Continue => {
+                    // Check if a decision was loaded
+                    if let Some(decision) = gate_manager.load_decision(spec_id) {
+                        if decision.is_approved() {
+                            let _ = self.event_tx.send(SurgeEvent::GateApproved {
+                                task_id,
+                                gate_name: "after_each_subtask".to_string(),
+                                approved_by: None,
+                            });
+                            // Check for approval feedback to inject
+                            if let Some(feedback) = decision.rejection_feedback() {
+                                pending_human_input = Some(feedback.to_string());
+                            }
+                        } else if decision.is_rejected() {
+                            let _ = self.event_tx.send(SurgeEvent::GateRejected {
+                                task_id,
+                                gate_name: "after_each_subtask".to_string(),
+                                rejected_by: None,
+                                reason: decision.reason().map(|s| s.to_string()),
+                            });
+                            // Inject rejection feedback into next batch
+                            if let Some(feedback) = decision.rejection_feedback() {
+                                info!("gate rejected with feedback, will inject into next batch");
+                                pending_human_input = Some(feedback.to_string());
+                            }
+                        } else if decision.is_aborted() {
+                            pool.shutdown().await;
+                            return PipelineResult::Failed {
+                                reason: format!(
+                                    "Execution gate aborted: {}",
+                                    decision.reason().unwrap_or("no reason provided")
+                                ),
+                            };
+                        }
+                    }
+                }
             }
 
             info!(batch_index = i, batch_size = batch.len(), "executing batch");
@@ -508,6 +650,75 @@ impl Orchestrator {
             verdict = ?qa_result.verdict,
             "QA review complete"
         );
+
+        // Gate: user reviews QA results before merge.
+        match gate_manager.check_gate(Phase::QaReview, spec_id) {
+            GateAction::Pause { reason } => {
+                // Trigger gate and emit awaiting approval event
+                gate_manager.trigger_gate(spec_id, Phase::QaReview);
+                let _ = self.event_tx.send(SurgeEvent::GateAwaitingApproval {
+                    task_id,
+                    gate_name: "after_qa".to_string(),
+                    reason: Some(reason.clone()),
+                });
+                aggregator.unregister_session(&session.session_id).await;
+                pool.shutdown().await;
+                return PipelineResult::Paused {
+                    phase: Phase::QaReview,
+                    reason,
+                };
+            }
+            GateAction::Timeout { elapsed } => {
+                aggregator.unregister_session(&session.session_id).await;
+                pool.shutdown().await;
+                return PipelineResult::Failed {
+                    reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
+                };
+            }
+            GateAction::HumanInput { .. } => {
+                // HumanInput not applicable after QA phase
+            }
+            GateAction::Continue => {
+                // Check if a decision was loaded
+                if let Some(decision) = gate_manager.load_decision(spec_id) {
+                    if decision.is_approved() {
+                        let _ = self.event_tx.send(SurgeEvent::GateApproved {
+                            task_id,
+                            gate_name: "after_qa".to_string(),
+                            approved_by: None,
+                        });
+                    } else if decision.is_rejected() {
+                        let _ = self.event_tx.send(SurgeEvent::GateRejected {
+                            task_id,
+                            gate_name: "after_qa".to_string(),
+                            rejected_by: None,
+                            reason: decision.reason().map(|s| s.to_string()),
+                        });
+                        // For rejected QA gate, return Failed to stop the pipeline
+                        // (re-running QA would require re-executing subtasks)
+                        aggregator.unregister_session(&session.session_id).await;
+                        pool.shutdown().await;
+                        let _ = git.discard(&spec_id_str);
+                        return PipelineResult::Failed {
+                            reason: format!(
+                                "QA gate rejected: {}",
+                                decision.reason().unwrap_or("no reason provided")
+                            ),
+                        };
+                    } else if decision.is_aborted() {
+                        aggregator.unregister_session(&session.session_id).await;
+                        pool.shutdown().await;
+                        let _ = git.discard(&spec_id_str);
+                        return PipelineResult::Failed {
+                            reason: format!(
+                                "QA gate aborted: {}",
+                                decision.reason().unwrap_or("no reason provided")
+                            ),
+                        };
+                    }
+                }
+            }
+        }
 
         match qa_result.verdict {
             QaVerdict::Approved => {

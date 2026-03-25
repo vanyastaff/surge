@@ -229,11 +229,11 @@ impl GateManager {
         let path = self.gate_state_path(spec_id);
 
         // Ensure spec directory exists
-        if let Some(parent) = path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                warn!(error = %e, "failed to create spec directory");
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            warn!(error = %e, "failed to create spec directory");
+            return;
         }
 
         match serde_json::to_string_pretty(state) {
@@ -261,7 +261,7 @@ impl GateManager {
             .as_secs();
 
         // Load or create gate state
-        let mut state = self.load_gate_state(spec_id).unwrap_or_else(|| GateState {
+        let mut state = self.load_gate_state(spec_id).unwrap_or(GateState {
             phase,
             triggered_at: now,
             decision: None,
