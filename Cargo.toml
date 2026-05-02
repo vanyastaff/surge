@@ -47,6 +47,27 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Stable string keys
+domain-key = "0.4"
+
+# Edit-aware TOML writes
+toml_edit = "0.22"
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# Binary serialization
+bincode = "1.3"
+
+# Versioning
+semver = { version = "1", features = ["serde"] }
+
+# Testing / dev
+proptest = "1"
+insta = "1"
+criterion = "0.5"
+
 # Graph
 petgraph = "0.7"
 
