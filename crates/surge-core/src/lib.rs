@@ -19,6 +19,7 @@ pub mod roadmap;
 pub mod sandbox;
 pub mod spec;
 pub mod state;
+pub mod terminal_config;
 
 pub use config::SurgeConfig;
 pub use error::SurgeError;
