@@ -257,6 +257,20 @@ Trade-off: the root `Graph` is no longer fully self-contained-by-position (you c
 
 A 3-level nesting fixture (`tests/fixtures/graphs/nested-3-levels.toml`) is part of M1 acceptance to validate the format works in practice.
 
+#### 4.4.2 `NodeKey` scope: globally unique across `Graph` + all `Subgraph`s
+
+`NodeKey` is a single namespace spanning the entire graph file. The same `NodeKey` value may not appear in `Graph::nodes` and any `Subgraph::nodes`, nor in two different subgraphs. Validation enforces this (rule 17 in §4.17).
+
+Why global, not per-subgraph:
+
+- **Event log unambiguity**: `EventPayload::StageEntered { node: NodeKey }` carries no enclosing-subgraph context, and the engine doesn't have to pair every event with "which subgraph is active right now". A `NodeKey` in an event is a complete address.
+- **Routing simplicity**: edges within a subgraph reference target nodes by `NodeKey` only (no qualified path). Folding/replay treats keys uniformly without a context stack.
+- **TOML tooling**: a project-wide grep for `id = "implementer_inner"` always returns at most one definition. With per-subgraph namespacing it could match dozens of unrelated copies, all of which serve different purposes.
+
+Cost: users must invent unique node IDs across the whole pipeline. For declarative TOML this is normal — the same constraint exists in HCL, Terraform, GitHub Actions workflow files, etc. Convention encouraged in tooling: prefix or suffix the subgraph's own role (e.g., `task_loop_implement`, `milestone_review`, `final_pr_compose`) — the editor's lint can suggest fixes when a collision is detected.
+
+`SubgraphKey` is a separate namespace from `NodeKey` (different `domain-key` domain), so there's no conflict between e.g. a node named `"foo"` and a subgraph named `"foo"`. They live in disjoint maps.
+
 ### 4.5 `node.rs`
 
 ```rust
@@ -786,6 +800,26 @@ pub enum ValidationErrorKind {
     KeyFormatViolation { key: String },
     SubgraphRefMissing { subgraph: SubgraphKey },
     SubgraphReferenceCycle { cycle: Vec<SubgraphKey> },
+    NodeKeyCollision { key: NodeKey, locations: Vec<NodeKeyOrigin> },
+    OrphanSubgraph { key: SubgraphKey },    // warning, not error
+}
+
+/// Where a colliding `NodeKey` was found.
+pub enum NodeKeyOrigin {
+    Root,
+    Subgraph(SubgraphKey),
+}
+
+/// Severity classification — caller decides how to surface.
+pub enum Severity { Error, Warning }
+
+impl ValidationErrorKind {
+    pub fn severity(&self) -> Severity {
+        match self {
+            Self::EscalateTargetNotHumanOrNotify | Self::OrphanSubgraph { .. } => Severity::Warning,
+            _ => Severity::Error,
+        }
+    }
 }
 ```
 
@@ -804,14 +838,20 @@ pub enum ValidationErrorKind {
 11. `Loop` nodes have a valid `iterates_over` source.
 11b. `Loop.body` and `Subgraph.inner` reference an existing `SubgraphKey` in `Graph::subgraphs`.
 12. Every subgraph has a `start` node that exists in its own `nodes`.
-13. Each `Subgraph` in `Graph::subgraphs` itself passes the same structural rules (recursive validation, but flat — no further nested `subgraphs` field).
+13. Each `Subgraph` in `Graph::subgraphs` itself passes the same structural rules (rules 1–6, 8–11, 14–15 applied with the subgraph as the local graph; rules concerning `subgraphs` field are skipped since `Subgraph` has none).
 14. If outcome `is_terminal: true`, no edge from that outcome (terminal outcomes have no successors).
 15. `Backtrack` edges form valid cycles (target reachable from source via forward edges).
+16. Subgraph reference graph is acyclic: no `Subgraph` A's `Loop`/`Subgraph` nodes reach a chain that points back into A. Walk via Tarjan or simple DFS with seen-set; report the cycle as a `Vec<SubgraphKey>`.
+17. `NodeKey` global uniqueness: every node ID in `Graph::nodes` ∪ `Graph::subgraphs[*].nodes` must be unique across the whole file (per §4.4.2).
+
+Plus warnings (non-error):
+- Rule W1: `Escalate` edges should target `HumanGate` or `Notify` nodes.
+- Rule W2: orphan subgraphs — entries in `Graph::subgraphs` that no `Loop.body` or `Subgraph.inner` references. Defined-but-unused subgraphs are likely user mistakes (typo in reference, or leftover after deletion). Report as `ValidationErrorKind::OrphanSubgraph { key }` with severity `Warning` so editor highlights but doesn't block save.
 
 Plus warning (rule 16, non-error):
 - `Escalate` edges should target `HumanGate` or `Notify` nodes.
 
-**Strategy**: validation is **non-fail-fast** — all errors collected into `Vec<ValidationError>`, so the editor can highlight every problem at once. Only abort early on rules that prevent further analysis (e.g., `start` missing makes reachability undefined — collect that and skip reachability checks).
+**Strategy**: validation is **non-fail-fast** — all errors collected into `Vec<ValidationError>`, so the editor can highlight every problem at once. Only abort early on rules that prevent further analysis (e.g., `start` missing makes reachability undefined — collect that and skip reachability checks). Warnings are returned in the same vector with `Severity::Warning`; callers (CLI vs editor) decide whether to fail-on-warning or just display them.
 
 **Subgraph traversal**: validation iterates flat — each `Subgraph` in `Graph::subgraphs` is checked once for structural rules, then a separate cycle detector walks the subgraph reference graph (`Loop.body` / `Subgraph.inner` → next subgraph), reporting `SubgraphReferenceCycle` if a cycle exists. `ErrorLocation::Subgraph.path` lists the chain of subgraph references that led to an error inside a deep subgraph. No stack-recursive walks; depth is bounded by the (acyclic) subgraph graph.
 
@@ -1355,7 +1395,7 @@ The milestone is complete when **all** of the following pass:
 8. **Behavioral smoke test**: `surge run` against a fixture project produces the same artifacts and final state before and after M1 (legacy code path unaffected). This is a required test, not aspirational.
 9. TOML round-trip for `Graph`: serialize → parse → semantic equality for all 8 fixture graphs (including 3-level nested and the imported real-world fixture).
 10. Bincode round-trip for `EventPayload`: every variant survives a round-trip.
-11. Validation: each of the 15 rules has at least one failing fixture and one passing fixture, both verified by tests. Subgraph reference cycle detection has its own dedicated fixture.
+11. Validation: each of the 17 structural rules + 2 warnings has at least one failing fixture and one passing fixture, both verified by tests. Subgraph reference cycle detection, NodeKey collision detection, and orphan-subgraph warning each have a dedicated fixture.
 12. Fold function: handcrafted event sequence of 50+ events folds to the expected `RunState`; this is captured in a snapshot test.
 13. Property test: 1000 generated valid graphs all pass validation; 1000 generated invalid graphs all fail with at least one `ValidationError`.
 14. `Profile.extends` field round-trips through TOML; an explicit test confirms it is **not** resolved (no registry lookup, no transitive merging) — locking the M1 boundary.
