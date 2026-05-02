@@ -22,3 +22,19 @@ proptest   = { workspace = true }
 insta      = { workspace = true }
 criterion  = { workspace = true }
 serde_json = { workspace = true }
+
+[[bench]]
+name    = "fold_events"
+harness = false
+
+[[bench]]
+name    = "validate_graphs"
+harness = false
+
+[[bench]]
+name    = "toml_roundtrip"
+harness = false
+
+[[bench]]
+name    = "bincode_roundtrip"
+harness = false
