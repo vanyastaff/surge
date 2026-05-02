@@ -1,0 +1,400 @@
+//! Run state machine — derived purely by folding events.
+
+use crate::content_hash::ContentHash;
+use crate::graph::Graph;
+use crate::id::SessionId;
+use crate::keys::{NodeKey, OutcomeKey};
+use crate::run_event::{BootstrapDecision, BootstrapStage, EventPayload, RunEvent};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunState {
+    NotStarted,
+    Bootstrapping {
+        stage: BootstrapStage,
+        substate: BootstrapSubstate,
+    },
+    Pipeline {
+        /// `Arc<Graph>` because the graph is frozen post-PipelineMaterialized.
+        /// Each fold step shares the same graph; cloning is one atomic increment.
+        graph: Arc<Graph>,
+        cursor: Cursor,
+        memory: RunMemory,
+    },
+    Terminal {
+        kind: TerminalReason,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BootstrapSubstate {
+    AgentRunning {
+        session: SessionId,
+        started_seq: u64,
+    },
+    AwaitingApproval {
+        artifact: ContentHash,
+        requested_seq: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cursor {
+    pub node: NodeKey,
+    pub attempt: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalReason {
+    Completed,
+    Failed,
+    Aborted,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunMemory {
+    pub artifacts: BTreeMap<String, ArtifactRef>,
+    pub artifacts_by_node: BTreeMap<NodeKey, Vec<ArtifactRef>>,
+    pub outcomes: BTreeMap<NodeKey, Vec<OutcomeRecord>>,
+    pub costs: CostSummary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArtifactRef {
+    pub hash: ContentHash,
+    pub path: PathBuf,
+    pub name: String,
+    pub produced_by: NodeKey,
+    pub produced_at_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutcomeRecord {
+    pub outcome: OutcomeKey,
+    pub summary: String,
+    pub seq: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CostSummary {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cache_hits: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum FoldError {
+    #[error("invalid transition: state={from}, event={event}")]
+    InvalidTransition { from: &'static str, event: &'static str },
+    #[error("event sequence corrupted: expected seq {expected_seq}, got {got_seq}")]
+    CorruptedSequence { expected_seq: u64, got_seq: u64 },
+    #[error("event references unknown node: {node}")]
+    UnknownNode { node: NodeKey },
+}
+
+/// Fold a sequence of events into a final state. Returns FoldError if any
+/// transition is invalid or sequence numbers are corrupted.
+pub fn fold(events: &[RunEvent]) -> Result<RunState, FoldError> {
+    let mut state = RunState::NotStarted;
+    for (expected_seq, event) in (1u64..).zip(events.iter()) {
+        if event.seq != expected_seq {
+            return Err(FoldError::CorruptedSequence {
+                expected_seq,
+                got_seq: event.seq,
+            });
+        }
+        state = apply(state, event)?;
+    }
+    Ok(state)
+}
+
+/// Apply a single event to the current state. Pure function, no I/O.
+pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
+    match (state, &event.payload) {
+        (RunState::NotStarted, EventPayload::RunStarted { .. }) => {
+            Ok(RunState::Bootstrapping {
+                stage: BootstrapStage::Description,
+                substate: BootstrapSubstate::AgentRunning {
+                    session: SessionId::new(),
+                    started_seq: event.seq,
+                },
+            })
+        }
+        (
+            RunState::Bootstrapping { stage: _, .. },
+            EventPayload::BootstrapApprovalDecided {
+                stage,
+                decision: BootstrapDecision::Approve,
+                ..
+            },
+        ) => Ok(advance_bootstrap_stage(*stage, event.seq)),
+        (RunState::Bootstrapping { .. }, EventPayload::PipelineMaterialized { .. }) => {
+            // The engine in M5 will pass the materialized Graph alongside this
+            // event; M1 fold cannot synthesize one. Documented in spec §4.20.
+            Err(FoldError::InvalidTransition {
+                from: "Bootstrapping",
+                event: "PipelineMaterialized (graph not in fold input)",
+            })
+        }
+        (state @ RunState::Pipeline { .. }, EventPayload::StageEntered { node, attempt }) => {
+            if let RunState::Pipeline { graph, memory, .. } = state {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor: Cursor { node: node.clone(), attempt: *attempt },
+                    memory,
+                })
+            } else {
+                unreachable!()
+            }
+        }
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::ArtifactProduced { node, artifact, path, name },
+        ) => {
+            if let RunState::Pipeline { graph, cursor, mut memory } = state {
+                let aref = ArtifactRef {
+                    hash: *artifact,
+                    path: path.clone(),
+                    name: name.clone(),
+                    produced_by: node.clone(),
+                    produced_at_seq: event.seq,
+                };
+                memory.artifacts.insert(name.clone(), aref.clone());
+                memory.artifacts_by_node.entry(node.clone()).or_default().push(aref);
+                Ok(RunState::Pipeline { graph, cursor, memory })
+            } else {
+                unreachable!()
+            }
+        }
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::OutcomeReported { node, outcome, summary },
+        ) => {
+            if let RunState::Pipeline { graph, cursor, mut memory } = state {
+                memory.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
+                    outcome: outcome.clone(),
+                    summary: summary.clone(),
+                    seq: event.seq,
+                });
+                Ok(RunState::Pipeline { graph, cursor, memory })
+            } else {
+                unreachable!()
+            }
+        }
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TokensConsumed {
+                prompt_tokens,
+                output_tokens,
+                cache_hits,
+                cost_usd,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline { graph, cursor, mut memory } = state {
+                memory.costs.tokens_in += u64::from(*prompt_tokens);
+                memory.costs.tokens_out += u64::from(*output_tokens);
+                memory.costs.cache_hits += u64::from(*cache_hits);
+                memory.costs.cost_usd += cost_usd.unwrap_or(0.0);
+                Ok(RunState::Pipeline { graph, cursor, memory })
+            } else {
+                unreachable!()
+            }
+        }
+        (
+            RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
+            EventPayload::RunCompleted { .. },
+        ) => Ok(RunState::Terminal {
+            kind: TerminalReason::Completed,
+            reason: String::new(),
+        }),
+        (
+            RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
+            EventPayload::RunFailed { error },
+        ) => Ok(RunState::Terminal {
+            kind: TerminalReason::Failed,
+            reason: error.clone(),
+        }),
+        (
+            RunState::Pipeline { .. } | RunState::Bootstrapping { .. },
+            EventPayload::RunAborted { reason },
+        ) => Ok(RunState::Terminal {
+            kind: TerminalReason::Aborted,
+            reason: reason.clone(),
+        }),
+        // Many (state, event) pairs are pass-through — events like ToolCalled,
+        // EdgeTraversed, SandboxElevation*, HookExecuted, ApprovalRequested/Decided,
+        // BootstrapStageStarted etc. are recorded for replay but do not drive
+        // the M1 state machine. Engine in M5 may extend behavior.
+        (state, _) => Ok(state),
+    }
+}
+
+fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
+    match stage {
+        BootstrapStage::Description => RunState::Bootstrapping {
+            stage: BootstrapStage::Roadmap,
+            substate: BootstrapSubstate::AgentRunning {
+                session: SessionId::new(),
+                started_seq: seq,
+            },
+        },
+        BootstrapStage::Roadmap => RunState::Bootstrapping {
+            stage: BootstrapStage::Flow,
+            substate: BootstrapSubstate::AgentRunning {
+                session: SessionId::new(),
+                started_seq: seq,
+            },
+        },
+        BootstrapStage::Flow => RunState::Bootstrapping {
+            stage: BootstrapStage::Flow,
+            substate: BootstrapSubstate::AwaitingApproval {
+                artifact: ContentHash::compute(b"placeholder-flow-toml"),
+                requested_seq: seq,
+            },
+        },
+    }
+}
+
+impl RunMemory {
+    /// Apply an event to the memory accumulator only. Used independently of
+    /// the full state machine for "what's the cost so far" queries.
+    pub fn apply_event(&mut self, event: &RunEvent) {
+        match &event.payload {
+            EventPayload::ArtifactProduced { node, artifact, path, name } => {
+                let aref = ArtifactRef {
+                    hash: *artifact,
+                    path: path.clone(),
+                    name: name.clone(),
+                    produced_by: node.clone(),
+                    produced_at_seq: event.seq,
+                };
+                self.artifacts.insert(name.clone(), aref.clone());
+                self.artifacts_by_node.entry(node.clone()).or_default().push(aref);
+            }
+            EventPayload::OutcomeReported { node, outcome, summary } => {
+                self.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
+                    outcome: outcome.clone(),
+                    summary: summary.clone(),
+                    seq: event.seq,
+                });
+            }
+            EventPayload::TokensConsumed { prompt_tokens, output_tokens, cache_hits, cost_usd, .. } => {
+                self.costs.tokens_in += u64::from(*prompt_tokens);
+                self.costs.tokens_out += u64::from(*output_tokens);
+                self.costs.cache_hits += u64::from(*cache_hits);
+                self.costs.cost_usd += cost_usd.unwrap_or(0.0);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approvals::ApprovalPolicy;
+    use crate::id::RunId;
+    use crate::run_event::RunConfig;
+    use crate::sandbox::SandboxMode;
+    use chrono::Utc;
+    use std::path::PathBuf;
+
+    fn make_event(seq: u64, payload: EventPayload) -> RunEvent {
+        RunEvent {
+            run_id: RunId::new(),
+            seq,
+            timestamp: Utc::now(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn not_started_is_default_initial() {
+        let s = RunState::NotStarted;
+        assert!(matches!(s, RunState::NotStarted));
+    }
+
+    #[test]
+    fn empty_event_log_folds_to_not_started() {
+        let state = fold(&[]).unwrap();
+        assert!(matches!(state, RunState::NotStarted));
+    }
+
+    #[test]
+    fn run_started_transitions_to_bootstrapping() {
+        let events = vec![make_event(1, EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: PathBuf::from("/tmp"),
+            initial_prompt: "test".into(),
+            config: RunConfig {
+                sandbox_default: SandboxMode::WorkspaceWrite,
+                approval_default: ApprovalPolicy::OnRequest,
+                auto_pr: false,
+            },
+        })];
+        let state = fold(&events).unwrap();
+        assert!(matches!(state, RunState::Bootstrapping { stage: BootstrapStage::Description, .. }));
+    }
+
+    #[test]
+    fn corrupted_sequence_returns_error() {
+        let events = vec![
+            make_event(1, EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: PathBuf::from("/tmp"),
+                initial_prompt: "test".into(),
+                config: RunConfig {
+                    sandbox_default: SandboxMode::WorkspaceWrite,
+                    approval_default: ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                },
+            }),
+            make_event(99, EventPayload::RunCompleted { terminal_node: NodeKey::try_from("end").unwrap() }),
+        ];
+        let result = fold(&events);
+        assert!(matches!(result, Err(FoldError::CorruptedSequence { .. })));
+    }
+
+    #[test]
+    fn run_failed_transitions_to_terminal() {
+        let events = vec![
+            make_event(1, EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: PathBuf::from("/tmp"),
+                initial_prompt: "test".into(),
+                config: RunConfig {
+                    sandbox_default: SandboxMode::WorkspaceWrite,
+                    approval_default: ApprovalPolicy::OnRequest,
+                    auto_pr: false,
+                },
+            }),
+            make_event(2, EventPayload::RunFailed { error: "boom".into() }),
+        ];
+        let state = fold(&events).unwrap();
+        assert!(matches!(
+            state,
+            RunState::Terminal { kind: TerminalReason::Failed, .. }
+        ));
+    }
+
+    #[test]
+    fn run_memory_default_is_empty() {
+        let m = RunMemory::default();
+        assert!(m.artifacts.is_empty());
+        assert_eq!(m.costs.tokens_in, 0);
+    }
+
+    #[test]
+    fn cursor_clones_cheaply() {
+        let c = Cursor {
+            node: NodeKey::try_from("n").unwrap(),
+            attempt: 1,
+        };
+        let _c2 = c.clone();
+    }
+}
