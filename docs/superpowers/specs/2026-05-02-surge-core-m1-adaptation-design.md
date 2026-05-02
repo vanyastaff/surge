@@ -31,11 +31,11 @@ Decisions locked in during brainstorming:
 
 | Class | Examples | Implementation |
 |---|---|---|
-| Stable user-typed strings | `NodeKey`, `EdgeKey`, `OutcomeKey`, `ProfileKey`, `TemplateKey` | [`domain-key`](https://docs.rs/domain-key) crate (new workspace dep). One marker domain per key. |
+| Stable user-typed strings | `NodeKey`, `EdgeKey`, `OutcomeKey`, `SubgraphKey`, `ProfileKey`, `TemplateKey` | Hand-rolled `define_key!` macro in `keys.rs` generating string-newtype with custom serde, Display, FromStr, TryFrom, and char-set/length validation. No external crate dep. |
 | Auto-generated runtime IDs | `RunId`, `SessionId` | Existing `define_id!` macro in `id.rs` (ULID + textual prefix), consistent with `SpecId`/`TaskId`/`SubtaskId`. |
 | Content-addressed | `ContentHash` | Dedicated `ContentHash([u8; 32])` newtype with `sha256:hex` display. |
 
-Rationale: `domain-key` stores `SmartString` internally — natural fit for human-typed identifiers in `flow.toml` (`"impl_2"`, `"done"`, `"implementer@1.0"`), but wasteful for binary 128-bit ULIDs. The split keeps each tool used where it shines.
+Rationale: `domain-key 0.4.2` was originally specified for the user-typed keys (it stores `SmartString` internally — natural fit), but two blockers surfaced during implementation: (a) its default char-validator rejects `@`, which breaks the `"implementer@1.0"` ProfileKey format; (b) its `Deserialize` impl requires `&'de str` (zero-copy borrowed), which the TOML deserializer cannot supply, so every struct using a key as a TOML field fails to parse. Hand-rolling gives full control over the char set, accepts owned strings on deserialize (works uniformly across TOML/JSON/bincode), and keeps the same compile-time type-distinctness property at lower complexity than wrapping `domain-key` in a custom-serde adapter.
 
 `SpecId` / `TaskId` / `SubtaskId` stay as they are — they belong to the legacy task-FSM model; they will not be replaced by the new keys, they will simply become unused once the relevant subsystems migrate (later milestones).
 
@@ -86,43 +86,46 @@ Field-by-field specs follow. Each section corresponds to one file. All types der
 
 ### 4.1 `keys.rs`
 
-```rust
-use domain_key::{define_domain, key_type, KeyDomain};
-
-define_domain!(NodeDomain, "node", 32);
-define_domain!(EdgeDomain, "edge", 32);
-define_domain!(OutcomeDomain, "outcome", 32);
-define_domain!(SubgraphDomain, "subgraph", 32);
-define_domain!(ProfileDomain, "profile", 64);    // includes "@version" suffix
-define_domain!(TemplateDomain, "template", 64);
-
-key_type!(NodeKey, NodeDomain);
-key_type!(EdgeKey, EdgeDomain);
-key_type!(OutcomeKey, OutcomeDomain);
-key_type!(SubgraphKey, SubgraphDomain);
-key_type!(ProfileKey, ProfileDomain);
-key_type!(TemplateKey, TemplateDomain);
-```
-
-Validation rules for keys:
-- `NodeKey`/`EdgeKey`/`OutcomeKey`/`SubgraphKey`: alphanumeric + underscore, must start with letter, max 32 chars.
-- `ProfileKey`/`TemplateKey`: alphanumeric + `-` + `_` + `.` + `@`, max 64 chars (e.g. `"implementer@1.0"`).
-
-`domain-key`'s `MAX_LENGTH` constant covers length enforcement. Character-set validation is implemented as a thin wrapper module:
+A `define_key!` macro generates each string-newtype with a uniform interface:
 
 ```rust
-pub fn parse_node_key(s: &str) -> Result<NodeKey, KeyParseError> {
-    validate_charset_strict(s)?;     // alphanumeric + underscore, leading letter
-    NodeKey::try_from(s).map_err(KeyParseError::from)
+pub fn validate_key_chars(
+    s: &str,
+    max_len: usize,
+    extras: &[u8],
+) -> Result<(), KeyParseError> {
+    // - empty → KeyParseError::Empty
+    // - len > max_len → KeyParseError::TooLong
+    // - first char !is_ascii_alphabetic → KeyParseError::InvalidStart
+    // - any other char not (alphanumeric ∪ extras) → KeyParseError::InvalidChar
 }
 
-pub fn parse_profile_key(s: &str) -> Result<ProfileKey, KeyParseError> {
-    validate_charset_extended(s)?;   // also -, ., @
-    ProfileKey::try_from(s).map_err(KeyParseError::from)
+macro_rules! define_key {
+    ($name:ident, max_len = $max:expr, extras = $extras:expr) => {
+        // Generates:
+        // - pub struct $name(String) with Clone, Hash, PartialEq, Eq
+        // - $name::try_new(impl Into<String>) -> Result<Self, KeyParseError>
+        // - $name::as_str(&self) -> &str
+        // - AsRef<str>, Display, Debug, FromStr, TryFrom<&str>, TryFrom<String>
+        // - Custom Serialize (via serialize_str) and Deserialize (via String::deserialize)
+        //   The custom deserialize is the critical bit: it asks for an OWNED String,
+        //   which works uniformly with TOML/JSON/bincode deserializers.
+    };
 }
+
+define_key!(NodeKey,     max_len = 32, extras = b"_");
+define_key!(EdgeKey,     max_len = 32, extras = b"_");
+define_key!(OutcomeKey,  max_len = 32, extras = b"_");
+define_key!(SubgraphKey, max_len = 32, extras = b"_");
+define_key!(ProfileKey,  max_len = 64, extras = b"_-.@");
+define_key!(TemplateKey, max_len = 64, extras = b"_-.@");
 ```
 
-Custom serde `Deserialize` impls on each key route through these parsers so invalid keys in `flow.toml` produce structured errors at parse time, not at validation time.
+Validation rules for keys (enforced both at construction time and at deserialize time):
+- `NodeKey`/`EdgeKey`/`OutcomeKey`/`SubgraphKey`: ASCII alphanumeric + underscore, must start with letter, max 32 chars.
+- `ProfileKey`/`TemplateKey`: ASCII alphanumeric + `_`, `-`, `.`, `@`, must start with letter, max 64 chars (e.g., `"implementer@1.0"`, `"rust-crate-tdd@1.2.3"`).
+
+Each key remains a distinct Rust newtype, so cross-type assignment is a compile error. The macro keeps the boilerplate in one place — a new key category is one line: `define_key!(NewKey, max_len = N, extras = b"...");`.
 
 ### 4.2 `content_hash.rs`
 
@@ -269,7 +272,7 @@ Why global, not per-subgraph:
 
 Cost: users must invent unique node IDs across the whole pipeline. For declarative TOML this is normal — the same constraint exists in HCL, Terraform, GitHub Actions workflow files, etc. Convention encouraged in tooling: prefix or suffix the subgraph's own role (e.g., `task_loop_implement`, `milestone_review`, `final_pr_compose`) — the editor's lint can suggest fixes when a collision is detected.
 
-`SubgraphKey` is a separate namespace from `NodeKey` (different `domain-key` domain), so there's no conflict between e.g. a node named `"foo"` and a subgraph named `"foo"`. They live in disjoint maps.
+`SubgraphKey` is a separate Rust newtype from `NodeKey`, so there's no conflict between e.g. a node named `"foo"` and a subgraph named `"foo"`. They live in disjoint maps.
 
 ### 4.5 `node.rs`
 
@@ -1302,7 +1305,7 @@ tests/fixtures/
 │   ├── nested-3-levels.toml            # 3 levels: milestone-loop → task-loop → impl-step. Validates flat-subgraph design holds for deepest realistic case.
 │   ├── bug-fix-flow.toml               # bug-fix archetype
 │   ├── refactor-flow.toml              # refactor archetype
-│   └── domain-key-real-roadmap.toml    # imported from a real project's roadmap (e.g., domain-key crate's planning doc) — catches issues that synthetic graphs miss
+│   └── real-world-roadmap.toml         # imported from a real project's roadmap — catches issues that synthetic graphs miss
 ├── profiles/
 │   ├── implementer.toml
 │   ├── reviewer.toml
@@ -1334,7 +1337,6 @@ Added to `Cargo.toml` `[workspace.dependencies]`:
 
 ```toml
 chrono     = { version = "0.4", features = ["serde"] }
-domain-key = "..."                               # latest published
 toml_edit  = "0.22"
 sha2       = "0.10"
 hex        = "0.4"
@@ -1354,7 +1356,6 @@ toml       = { workspace = true }
 ulid       = { workspace = true }
 thiserror  = { workspace = true }
 chrono     = { workspace = true }
-domain-key = { workspace = true }
 toml_edit  = { workspace = true }
 sha2       = { workspace = true }
 hex        = { workspace = true }
@@ -1417,13 +1418,13 @@ Explicitly **not** part of M1:
 
 The new vision's `ROADMAP.md` budgets M1 at 2 weeks. With 19 new files, 30+ event variants, 15 validation rules, property tests, snapshot tests, criterion benchmarks, plus verification across 4 dependent crates and the smoke-test acceptance, **realistic estimate is 3–4 weeks of solo evening/weekend work** (the original ROADMAP voice). Calendar planning should use the upper bound; under-estimating cascades into the rest of the milestone chain.
 
-If the implementer hits one of these unknowns hard (subgraph reference cycle detector turns out tricky; `toml_edit` integration is messier than expected; `domain-key` published version doesn't quite match the API used here) — that's another half-week per surprise. Build buffer in.
+If the implementer hits one of these unknowns hard (subgraph reference cycle detector turns out tricky; `toml_edit` integration is messier than expected; an external dep's API doesn't match assumptions, as happened with the originally planned `domain-key` crate which had to be replaced with hand-rolled newtypes during T2) — that's another half-week per surprise. Build buffer in.
 
 ## 12. Open questions for implementation phase
 
 These will surface during writing-plans / actual implementation; not blockers for design approval:
 
-- **`domain-key` exact published version.** Author maintains the crate; pin to whatever is current at implementation time. If the published API differs from what this spec assumes (e.g., macro signatures), reconcile during M1.T1.1 and amend this spec.
+- ~~**`domain-key` exact published version.**~~ **Resolved during T2:** `domain-key 0.4.2` rejects `@` in keys (breaks `"implementer@1.0"` ProfileKey) AND its Deserialize impl requires borrowed `&'de str` (incompatible with TOML deserializer). Replaced with hand-rolled `define_key!` macro generating string-newtype with full control over char set and owned-string deserialize. See §4.1 for current design.
 - **`bincode` 1.x vs 2.x.** `surge-persistence` does not currently use `bincode` (it serializes via `rusqlite` directly), so there is no existing pin to match. M1 adopts `1.3` for API stability and ecosystem familiarity. When the new event log table lands in M2, evaluate whether 2.x's API improvements justify a workspace-wide upgrade then; switching is cheaper before consumers proliferate.
 - **`toml_edit` serialize integration.** Per §5.1, `merge_into_toml` may initially delegate to `to_toml`. Real comment-preservation logic is M9 territory.
 - **`InspectorUiField.kind` extensibility.** May need more variants (e.g., `Path`, `Color`) as we build the editor in M9. Closed enum for now; add variants when needed without breaking changes.

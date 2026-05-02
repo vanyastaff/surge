@@ -108,7 +108,17 @@ Part of M1."
 
 These six tasks have no internal `surge-core` dependencies between them — they can each be implemented in any order. The order below minimizes risk: simplest first.
 
-### Task 2: `keys.rs` — domain-key based stable identifiers
+### Task 2: `keys.rs` — string-newtype domain identifiers
+
+> **Implemented in commit `a415530` with a redesign from the original plan.**
+> The original draft proposed using the `domain-key` crate; during execution we
+> discovered two structural blockers: (a) `domain-key 0.4.2`'s default char
+> validator rejects `@`, breaking `"implementer@1.0"` ProfileKey format; (b) its
+> `Deserialize` impl requires `&'de str` (zero-copy borrowed), incompatible with
+> the TOML deserializer. Replaced with a hand-rolled `define_key!` macro
+> generating string-newtype with custom serde, validation, and full TOML round-trip.
+> See spec §4.1 for the current design and the commit's keys.rs for the actual code.
+> The pseudocode below preserves the original instruction shape for historical record.
 
 **Files:**
 - Create: `crates/surge-core/src/keys.rs`
