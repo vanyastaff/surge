@@ -64,6 +64,13 @@ pub enum StorageError {
     #[error("writer task died unexpectedly")]
     WriterTaskDied,
 
+    /// Operation refused because a live writer holds the run.
+    #[error("writer still active for run {run_id}")]
+    WriterStillActive {
+        /// The run whose writer slot is still held.
+        run_id: RunId,
+    },
+
     /// Connection pool error.
     #[error("pool error: {0}")]
     Pool(String),

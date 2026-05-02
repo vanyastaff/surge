@@ -111,19 +111,7 @@ impl Storage {
     ) -> Result<RunWriter, OpenError> {
         let project_path = project_path.as_ref().to_path_buf();
 
-        let summary = RunSummary {
-            id: run_id.clone(),
-            project_path,
-            pipeline_template,
-            status: RunStatus::Bootstrapping,
-            started_at_ms: self.clock.now_ms(),
-            ended_at_ms: None,
-            daemon_pid: Some(std::process::id() as i32),
-        };
-        registry::insert_run(&self.registry_pool, &summary)
-            .map_err(|e| OpenError::MigrationFailed(format!("registry insert failed: {e}")))?;
-
-        // Create per-run dir + apply per-run migrations.
+        // Per-run dirs + migrations FIRST (no registry commit until ready).
         let run_dir = self.run_dir(&run_id);
         std::fs::create_dir_all(&run_dir)?;
         std::fs::create_dir_all(self.artifacts_dir(&run_id))?;
@@ -139,6 +127,21 @@ impl Storage {
         .map_err(|e| OpenError::MigrationFailed(e.to_string()))?;
         drop(conn);
 
+        // Now commit to registry — past this point we have a usable per-run DB.
+        let summary = RunSummary {
+            id: run_id.clone(),
+            project_path,
+            pipeline_template,
+            status: RunStatus::Bootstrapping,
+            started_at_ms: self.clock.now_ms(),
+            ended_at_ms: None,
+            daemon_pid: Some(std::process::id() as i32),
+        };
+        registry::insert_run(&self.registry_pool, &summary)
+            .map_err(|e| OpenError::MigrationFailed(format!("registry insert failed: {e}")))?;
+
+        // Open writer. If this fails, the per-run DB exists but no writer is held —
+        // caller can retry open_run_writer or delete_run to clean up.
         self.open_run_writer(run_id).await
     }
 
@@ -212,7 +215,7 @@ impl Storage {
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
         let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
         for r in runs.iter_mut() {
-            if r.status == RunStatus::Running {
+            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping) {
                 if let Some(pid) = r.daemon_pid {
                     if !self.process_probe.is_alive(pid) {
                         r.status = RunStatus::Crashed;
@@ -239,7 +242,7 @@ impl Storage {
             Some(s) => s,
             None => return Ok(None),
         };
-        if summary.status == RunStatus::Running {
+        if matches!(summary.status, RunStatus::Running | RunStatus::Bootstrapping) {
             if let Some(pid) = summary.daemon_pid {
                 if !self.process_probe.is_alive(pid) {
                     summary.status = RunStatus::Crashed;
@@ -257,13 +260,22 @@ impl Storage {
     }
 
     /// Delete a run (registry row + per-run dir).
+    ///
     /// Refuses if a writer is currently held for this run.
+    ///
+    /// **Caller precondition**: ensure no `RunReader` is open for this run.
+    /// On Windows, open SQLite reader handles will block `remove_dir_all`,
+    /// leaving the registry row deleted but the per-run dir partially cleaned.
+    /// (M2 has no in-process reader registry analogous to ActiveWriters; M3+
+    /// may add one.)
     pub async fn delete_run(
         self: &Arc<Self>,
         run_id: &RunId,
     ) -> Result<(), crate::runs::error::StorageError> {
         if self.active_writers.is_held(run_id).await {
-            return Err(crate::runs::error::StorageError::WriterTaskDied);
+            return Err(crate::runs::error::StorageError::WriterStillActive {
+                run_id: run_id.clone(),
+            });
         }
         registry::delete_run(&self.registry_pool, run_id)?;
         let dir = self.run_dir(run_id);
