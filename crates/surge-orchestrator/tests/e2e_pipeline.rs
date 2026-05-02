@@ -65,6 +65,7 @@ fn init_git_repo(dir: &std::path::Path) {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_simple_spec() {
     // Check if any agent is available
     if !has_any_agent() {
@@ -141,6 +142,7 @@ async fn test_e2e_simple_spec() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_dependency_order() {
     use surge_core::event::SurgeEvent;
     use surge_core::id::SubtaskId;
@@ -315,6 +317,7 @@ async fn test_e2e_dependency_order() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_streaming_events() {
     use surge_core::event::SurgeEvent;
 
@@ -469,6 +472,7 @@ async fn test_e2e_streaming_events() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_git_commits() {
     use std::process::Command;
     use surge_git::GitManager;
