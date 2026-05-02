@@ -53,6 +53,25 @@ pub enum SurgeError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// Graph validation produced one or more errors.
+    #[error("Graph validation failed with {count} errors", count = .0.len())]
+    GraphValidation(Vec<crate::validation::ValidationError>),
+
+    /// Folding events into RunState failed.
+    #[error("Event fold failed: {0}")]
+    EventFold(#[from] crate::run_state::FoldError),
+
+    /// Profile TOML could not be parsed.
+    #[error("Profile parse error: {0}")]
+    ProfileParse(String),
+
+    /// Stored content hash didn't match recomputed hash.
+    #[error("Content hash mismatch: expected {expected}, got {actual}")]
+    ContentHashMismatch {
+        expected: crate::content_hash::ContentHash,
+        actual: crate::content_hash::ContentHash,
+    },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -120,5 +139,20 @@ mod tests {
         assert!(err.to_string().contains("failed to open repo"));
         use std::error::Error;
         assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn graph_validation_error_displays_count() {
+        let err = SurgeError::GraphValidation(vec![]);
+        assert!(err.to_string().contains("0 errors"));
+    }
+
+    #[test]
+    fn content_hash_mismatch_shows_both_hashes() {
+        let a = crate::content_hash::ContentHash::compute(b"a");
+        let b = crate::content_hash::ContentHash::compute(b"b");
+        let err = SurgeError::ContentHashMismatch { expected: a, actual: b };
+        let msg = err.to_string();
+        assert!(msg.contains("sha256:"));
     }
 }
