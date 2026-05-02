@@ -80,23 +80,9 @@ semver     = { workspace = true }
 proptest   = { workspace = true }
 insta      = { workspace = true }
 criterion  = { workspace = true }
-
-[[bench]]
-name    = "fold_events"
-harness = false
-
-[[bench]]
-name    = "validate_graphs"
-harness = false
-
-[[bench]]
-name    = "toml_roundtrip"
-harness = false
-
-[[bench]]
-name    = "bincode_roundtrip"
-harness = false
 ```
+
+`[[bench]]` entries are added in Task 32 alongside the actual bench files — declaring them here would break `cargo check` (cargo would expect `benches/*.rs` to exist).
 
 - [ ] **Step 4: Run cargo check to verify deps resolve**
 
@@ -5047,10 +5033,33 @@ Part of M1.
 ### Task 32: Criterion benchmarks
 
 **Files:**
+- Modify: `crates/surge-core/Cargo.toml` (add `[[bench]]` entries)
 - Create: `crates/surge-core/benches/fold_events.rs`
 - Create: `crates/surge-core/benches/validate_graphs.rs`
 - Create: `crates/surge-core/benches/toml_roundtrip.rs`
 - Create: `crates/surge-core/benches/bincode_roundtrip.rs`
+
+- [ ] **Step 0: Register benches in Cargo.toml**
+
+Append to `crates/surge-core/Cargo.toml`:
+
+```toml
+[[bench]]
+name    = "fold_events"
+harness = false
+
+[[bench]]
+name    = "validate_graphs"
+harness = false
+
+[[bench]]
+name    = "toml_roundtrip"
+harness = false
+
+[[bench]]
+name    = "bincode_roundtrip"
+harness = false
+```
 
 - [ ] **Step 1: Write `fold_events.rs`**
 
