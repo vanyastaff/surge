@@ -22,7 +22,7 @@ pub use event::{
     PlanEntry, PlanPriority, PlanStatus, SurgeEvent, ToolCallStatus, ToolDiff, ToolKind,
     ToolLocation, VersionedEvent,
 };
-pub use id::{SpecId, SubtaskId, TaskId};
+pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{Priority, RoadmapItem, RoadmapStatus, Timeline, TimelineBatch};
 pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, SubtaskState};
 pub use state::TaskState;
