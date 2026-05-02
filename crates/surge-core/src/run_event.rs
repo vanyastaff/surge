@@ -2,6 +2,7 @@
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
 use crate::content_hash::ContentHash;
+use crate::graph::Graph;
 use crate::hooks::HookFailureMode;
 use crate::id::{RunId, SessionId};
 use crate::keys::{EdgeKey, NodeKey, OutcomeKey, TemplateKey};
@@ -79,7 +80,14 @@ pub enum EventPayload {
     },
 
     // Pipeline construction
+    /// Frozen graph for the run. The `graph` payload is the source of truth —
+    /// it lets `fold` reconstruct `RunState::Pipeline` purely from the event
+    /// log without an out-of-band channel. `graph_hash` is the hash of the
+    /// canonical serialized form for integrity checks during replay.
+    /// Boxed because `Graph` is large and would dominate the
+    /// `EventPayload` enum size for every variant otherwise.
     PipelineMaterialized {
+        graph: Box<Graph>,
         graph_hash: ContentHash,
     },
 
@@ -298,6 +306,50 @@ mod tests {
         let bytes = serde_json::to_vec(&v).unwrap();
         let parsed: VersionedEventPayload = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v, parsed);
+    }
+
+    #[test]
+    fn pipeline_materialized_carries_graph() {
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let end = NodeKey::try_from("end").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            end.clone(),
+            Node {
+                id: end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "minimal".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: end,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+        let payload = EventPayload::PipelineMaterialized {
+            graph: Box::new(graph),
+            graph_hash: ContentHash::compute(b"placeholder"),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
     }
 
     // Stage execution + routing variants

@@ -1,0 +1,95 @@
+# Surge clippy configuration.
+#
+# Stable-compatible subset of the parent `nebula/clippy.toml` so that lint
+# behaviour is consistent whether `cargo clippy` is invoked from inside the
+# nebula monorepo (e.g. via a worktree) or against a standalone checkout
+# of just the surge crate (which is what CI does — see .github/workflows/ci.yml).
+
+msrv = "1.85"
+
+# ── Test ergonomics ────────────────────────────────────────────────────────
+# Tests may panic / unwrap / dbg / print liberally — production code may not.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-useless-vec-in-tests = true
+
+# ── Const-context ergonomics ───────────────────────────────────────────────
+allow-expect-in-consts = true
+allow-unwrap-in-consts = true
+
+# ── Identifier / naming heuristics ─────────────────────────────────────────
+min-ident-chars-threshold = 3
+single-char-binding-names-threshold = 4
+allowed-idents-below-min-chars = [
+  "..",
+  "_",
+  "a",
+  "b",
+  "c",
+  "x",
+  "y",
+  "z",
+  "i",
+  "j",
+  "k",
+  "n",
+  "m",
+  "id",
+  "db",
+  "tx",
+  "rx",
+  "fs",
+  "io",
+  "to",
+  "up",
+  "ok",
+  "fn",
+]
+allowed-prefixes = ["to", "from", "as", "into", "is", "has", "with"]
+struct-field-name-threshold = 3
+enum-variant-name-threshold = 3
+upper-case-acronyms-aggressive = false
+
+# ── Complexity thresholds ──────────────────────────────────────────────────
+cognitive-complexity-threshold = 25
+excessive-nesting-threshold = 5
+type-complexity-threshold = 250
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 100
+
+# ── Data-shape / memory-footprint heuristics ───────────────────────────────
+enum-variant-size-threshold = 200
+array-size-threshold = 512000
+vec-box-size-threshold = 4096
+max-trait-bounds = 3
+max-struct-bools = 3
+max-fn-params-bools = 3
+trivial-copy-size-limit = 8
+pass-by-value-size-limit = 256
+too-large-for-stack = 200
+future-size-threshold = 16384
+
+# ── Misc strictness ────────────────────────────────────────────────────────
+semicolon-inside-block-ignore-singleline = true
+semicolon-outside-block-ignore-multiline = true
+matches-for-let-else = "WellKnownTypes"
+enforce-iter-loop-reborrow = true
+
+# ── Doc / acronym recognition ──────────────────────────────────────────────
+doc-valid-idents = [
+  "GitHub",
+  "OAuth2",
+  "JSON",
+  "YAML",
+  "TOML",
+  "UUID",
+  "ULID",
+  "WebSocket",
+  "PostgreSQL",
+  "gRPC",
+  "GraphQL",
+]

@@ -402,9 +402,17 @@ mod tests {
     fn test_is_running_invalid_pid() {
         let (_tmp, tracker) = setup();
 
-        // PID 0 and very high PIDs are unlikely to exist
-        assert!(!tracker.is_pid_alive(0));
+        // Very high PIDs are unlikely to exist on any platform.
         assert!(!tracker.is_pid_alive(u32::MAX));
+
+        // PID 0 has platform-specific semantics:
+        // - Linux: `kill(0, sig)` targets the caller's process group (not "is PID 0 alive")
+        // - macOS: PID 0 is `kernel_task`, which IS alive
+        // - Windows: PID 0 is the System Idle Process, also "alive"
+        // Only Linux's quirk leaves PID 0 reliably "not running" via the typical
+        // `kill(pid, 0)` probe; skip the assertion on macOS/Windows.
+        #[cfg(target_os = "linux")]
+        assert!(!tracker.is_pid_alive(0));
     }
 
     #[test]

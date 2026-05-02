@@ -133,12 +133,19 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 ..
             },
         ) => Ok(advance_bootstrap_stage(*stage, event.seq)),
-        (RunState::Bootstrapping { .. }, EventPayload::PipelineMaterialized { .. }) => {
-            // The engine in M5 will pass the materialized Graph alongside this
-            // event; M1 fold cannot synthesize one. Documented in spec §4.20.
-            Err(FoldError::InvalidTransition {
-                from: "Bootstrapping",
-                event: "PipelineMaterialized (graph not in fold input)",
+        (RunState::Bootstrapping { .. }, EventPayload::PipelineMaterialized { graph, .. }) => {
+            // The graph is part of the event payload, so fold can fully
+            // reconstruct `Pipeline` state from the event log alone. The
+            // first cursor lands on `graph.start` with attempt 1 — actual
+            // node execution then drives subsequent `StageEntered` events.
+            let start = graph.start.clone();
+            Ok(RunState::Pipeline {
+                graph: Arc::new(graph.as_ref().clone()),
+                cursor: Cursor {
+                    node: start,
+                    attempt: 1,
+                },
+                memory: RunMemory::default(),
             })
         },
         (state @ RunState::Pipeline { .. }, EventPayload::StageEntered { node, attempt }) => {
@@ -484,6 +491,77 @@ mod tests {
         let m = RunMemory::default();
         assert!(m.artifacts.is_empty());
         assert_eq!(m.costs.tokens_in, 0);
+    }
+
+    #[test]
+    fn pipeline_materialized_transitions_to_pipeline() {
+        // Acceptance test for the fold→Pipeline path. The graph is part of
+        // the PipelineMaterialized payload, so fold reconstructs Pipeline
+        // state from the event log alone (no out-of-band channel needed).
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let end = NodeKey::try_from("end").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            end.clone(),
+            Node {
+                id: end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "minimal".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: end.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "test".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"hash-placeholder"),
+                },
+            ),
+        ];
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline { cursor, .. } => {
+                assert_eq!(cursor.node, end);
+                assert_eq!(cursor.attempt, 1);
+            },
+            other => panic!("expected Pipeline state, got {other:?}"),
+        }
     }
 
     #[test]
