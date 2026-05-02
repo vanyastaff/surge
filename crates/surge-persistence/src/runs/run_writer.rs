@@ -60,11 +60,17 @@ use crate::runs::macros::delegate_to_reader;
 impl RunWriter {
     delegate_to_reader! {
         async {
+            /// Highest-assigned event seq for this run. Forwarded to the embedded `RunReader`.
             pub current_seq() -> Result<EventSeq, StorageError>;
+            /// All rows of the `stage_executions` materialized view. Forwarded to the embedded `RunReader`.
             pub stage_executions() -> Result<Vec<StageExecution>, StorageError>;
+            /// All rows of the `artifacts` materialized view. Forwarded to the embedded `RunReader`.
             pub artifacts() -> Result<Vec<ArtifactRecord>, StorageError>;
+            /// All rows of the `pending_approvals` materialized view. Forwarded to the embedded `RunReader`.
             pub pending_approvals() -> Result<Vec<PendingApproval>, StorageError>;
+            /// Aggregate cost / token / cache-hit totals for this run. Forwarded to the embedded `RunReader`.
             pub cost_summary() -> Result<CostSummary, StorageError>;
+            /// All snapshot seqs recorded for this run, ascending. Forwarded to the embedded `RunReader`.
             pub list_snapshots() -> Result<Vec<EventSeq>, StorageError>;
         }
     }
