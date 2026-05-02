@@ -82,6 +82,24 @@ impl ApprovalChannel {
     }
 }
 
+impl ApprovalChannelKind {
+    /// Stable, lowercase string identifier for this channel kind.
+    ///
+    /// Matches the `serde(rename_all = "snake_case")` representation. Used
+    /// by storage code that needs a TEXT representation (e.g., the
+    /// `pending_approvals.channel` column) without going through full
+    /// serde serialization. Stable across releases — append-only.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Telegram => "telegram",
+            Self::Desktop => "desktop",
+            Self::Email => "email",
+            Self::Webhook => "webhook",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +117,14 @@ mod tests {
             chat_id_ref: "$DEFAULT".into(),
         };
         assert_eq!(ch.kind(), ApprovalChannelKind::Telegram);
+    }
+
+    #[test]
+    fn channel_kind_as_str_matches_serde_repr() {
+        assert_eq!(ApprovalChannelKind::Telegram.as_str(), "telegram");
+        assert_eq!(ApprovalChannelKind::Desktop.as_str(), "desktop");
+        assert_eq!(ApprovalChannelKind::Email.as_str(), "email");
+        assert_eq!(ApprovalChannelKind::Webhook.as_str(), "webhook");
     }
 
     #[test]
