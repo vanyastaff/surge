@@ -1424,6 +1424,6 @@ If the implementer hits one of these unknowns hard (subgraph reference cycle det
 These will surface during writing-plans / actual implementation; not blockers for design approval:
 
 - **`domain-key` exact published version.** Author maintains the crate; pin to whatever is current at implementation time. If the published API differs from what this spec assumes (e.g., macro signatures), reconcile during M1.T1.1 and amend this spec.
-- **`bincode` 1.x vs 2.x.** Pin to whatever `surge-persistence` already uses to share one version of the dep tree.
+- **`bincode` 1.x vs 2.x.** `surge-persistence` does not currently use `bincode` (it serializes via `rusqlite` directly), so there is no existing pin to match. M1 adopts `1.3` for API stability and ecosystem familiarity. When the new event log table lands in M2, evaluate whether 2.x's API improvements justify a workspace-wide upgrade then; switching is cheaper before consumers proliferate.
 - **`toml_edit` serialize integration.** Per §5.1, `merge_into_toml` may initially delegate to `to_toml`. Real comment-preservation logic is M9 territory.
 - **`InspectorUiField.kind` extensibility.** May need more variants (e.g., `Path`, `Color`) as we build the editor in M9. Closed enum for now; add variants when needed without breaking changes.
