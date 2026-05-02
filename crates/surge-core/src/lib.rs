@@ -13,6 +13,7 @@ pub mod config;
 pub mod content_hash;
 pub mod edge;
 pub mod error;
+pub mod graph;
 pub mod event;
 pub mod hooks;
 pub mod human_gate_config;

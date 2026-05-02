@@ -57,7 +57,7 @@ pub fn validate_key_chars(s: &str, max_len: usize, extras: &[u8]) -> Result<(), 
 macro_rules! define_key {
     ($name:ident, max_len = $max:expr, extras = $extras:expr $(,)?) => {
         #[doc = concat!("Stable string identifier (max ", stringify!($max), " chars).")]
-        #[derive(Clone, PartialEq, Eq, Hash)]
+        #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
 
         impl $name {
