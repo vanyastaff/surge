@@ -28,6 +28,7 @@ pub mod spec;
 pub mod state;
 pub mod subgraph_config;
 pub mod terminal_config;
+pub mod validation;
 
 pub use config::SurgeConfig;
 pub use error::SurgeError;
