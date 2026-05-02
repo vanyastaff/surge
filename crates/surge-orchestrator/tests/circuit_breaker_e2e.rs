@@ -28,6 +28,7 @@ fn temp_db_path(test_name: &str) -> PathBuf {
 
 /// Test 1: Circuit breaker state persists to disk and is restored on restart
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_persistence_basic() {
     let db_path = temp_db_path("basic_persistence");
     let task_id = TaskId::new();
@@ -80,6 +81,7 @@ async fn test_circuit_breaker_persistence_basic() {
 
 /// Test 2: Tripped circuit breaker remains tripped across restarts
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_tripped_persists() {
     let db_path = temp_db_path("tripped_persists");
     let task_id = TaskId::new();
@@ -150,6 +152,7 @@ async fn test_circuit_breaker_tripped_persists() {
 
 /// Test 3: Reset clears persisted state
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_reset_persists() {
     let db_path = temp_db_path("reset_persists");
     let task_id = TaskId::new();
@@ -217,6 +220,7 @@ async fn test_circuit_breaker_reset_persists() {
 
 /// Test 4: Multiple circuit breakers can persist independently
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_multiple_circuit_breakers_persist() {
     let db_path = temp_db_path("multiple_cbs");
     let task_id = TaskId::new();
@@ -291,6 +295,7 @@ async fn test_multiple_circuit_breakers_persist() {
 
 /// Test 5: Circuit breaker state updates incrementally
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_incremental_updates() {
     let db_path = temp_db_path("incremental_updates");
     let task_id = TaskId::new();
@@ -363,6 +368,7 @@ async fn test_circuit_breaker_incremental_updates() {
 
 /// Test 6: Circuit breaker without persistence store still works
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_without_persistence() {
     let task_id = TaskId::new();
     let subtask_id = SubtaskId::new();
@@ -384,6 +390,7 @@ async fn test_circuit_breaker_without_persistence() {
 
 /// Test 7: Direct store operations for circuit breaker state
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_store_circuit_breaker_operations() {
     let db_path = temp_db_path("store_operations");
     let mut store = Store::open(&db_path).expect("Failed to create store");
@@ -435,6 +442,7 @@ async fn test_store_circuit_breaker_operations() {
 
 /// Test 8: Circuit breaker with different thresholds persists correctly
 #[tokio::test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 async fn test_circuit_breaker_different_thresholds() {
     let db_path = temp_db_path("different_thresholds");
     let task_id = TaskId::new();

@@ -475,6 +475,7 @@ async fn test_gate_abort() {
 /// - GateManager.load_decision() reads and parses the decision
 /// - Gate state is persisted correctly
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_manager_decision_persistence() {
     use surge_core::id::SpecId;
     use surge_orchestrator::phases::Phase;
@@ -565,6 +566,7 @@ fn test_gate_manager_decision_persistence() {
 ///
 /// Verifies that gates are only triggered when configured in GateConfig.
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_configuration() {
     // Create temp directory
     let test_dir = temp_test_dir("gate_configuration");

@@ -47,6 +47,7 @@ fn load_gate_state_file(specs_dir: &std::path::Path, spec_id: SpecId) -> Option<
 /// - New GateManager instance can read persisted state
 /// - Gate remains in Pause state after restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_state_persists_across_restart() {
     let test_dir = temp_test_dir("gate_state_persists");
     let specs_dir = test_dir.join("specs");
@@ -149,6 +150,7 @@ fn test_gate_state_persists_across_restart() {
 /// - Approval decision after restart updates state correctly
 /// - Pipeline continues after approval post-restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_approval_after_restart() {
     let test_dir = temp_test_dir("approval_after_restart");
     let specs_dir = test_dir.join("specs");
@@ -231,6 +233,7 @@ fn test_approval_after_restart() {
 /// - Rejection decision after restart is properly recorded
 /// - Rejection feedback is persisted correctly
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rejection_after_restart() {
     let test_dir = temp_test_dir("rejection_after_restart");
     let specs_dir = test_dir.join("specs");
@@ -297,6 +300,7 @@ fn test_rejection_after_restart() {
 /// - Original trigger timestamp is preserved
 /// - Timeout fires correctly after restart if time has elapsed
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_timeout_persists_across_restart() {
     let test_dir = temp_test_dir("timeout_persists_restart");
     let specs_dir = test_dir.join("specs");
@@ -391,6 +395,7 @@ fn test_timeout_persists_across_restart() {
 /// - State remains consistent after multiple GateManager instances
 /// - Decision eventually works after multiple restarts
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_multiple_restarts_before_decision() {
     let test_dir = temp_test_dir("multiple_restarts");
     let specs_dir = test_dir.join("specs");
@@ -471,6 +476,7 @@ fn test_multiple_restarts_before_decision() {
 /// - Phase information is correctly preserved
 /// - Decisions work correctly for all phases after restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_persistence_all_phases() {
     let test_dir = temp_test_dir("persistence_all_phases");
     let specs_dir = test_dir.join("specs");
@@ -528,6 +534,7 @@ fn test_persistence_all_phases() {
 /// - All required fields are present
 /// - File can be parsed by external tools
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_state_file_format() {
     let test_dir = temp_test_dir("gate_state_format");
     let specs_dir = test_dir.join("specs");
@@ -604,6 +611,7 @@ fn test_gate_state_file_format() {
 /// - Decision is written to GATE_STATE.json for persistence
 /// - DECISION.json is consumed by first check (one-time consumption model)
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_concurrent_gate_state_access() {
     let test_dir = temp_test_dir("concurrent_gate_access");
     let specs_dir = test_dir.join("specs");

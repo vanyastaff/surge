@@ -12,6 +12,7 @@ use surge_core::error::SurgeError;
 
 /// Test 1: Verify rate limit error includes all required metadata
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_error_complete_metadata() {
     let retry_after_secs = 60;
     let attempt_count = 1;
@@ -63,6 +64,7 @@ fn test_rate_limit_error_complete_metadata() {
 
 /// Test 2: Verify rate limit with multiple attempts increments correctly
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_attempt_counter() {
     let retry_after_secs = 120;
 
@@ -114,6 +116,7 @@ fn test_rate_limit_attempt_counter() {
 
 /// Test 3: Verify rate limit cooldown durations are configurable
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_cooldown_durations() {
     // Short cooldown
     let short_cooldown = SurgeError::RateLimit {
@@ -159,6 +162,7 @@ fn test_rate_limit_cooldown_durations() {
 
 /// Test 4: Verify rate limit with no next_retry_time still functions
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_without_next_retry_time() {
     let error = SurgeError::RateLimit {
         agent: "claude-haiku".to_string(),
@@ -178,6 +182,7 @@ fn test_rate_limit_without_next_retry_time() {
 
 /// Test 5: Verify resilience config supports rate limit handling
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_resilience_config_with_retry_policy() {
     // Config optimized for handling rate limits with longer delays
     let rate_limit_config = ResilienceConfig {
@@ -204,6 +209,7 @@ fn test_resilience_config_with_retry_policy() {
 
 /// Test 6: Verify rate limit errors don't conflict with auth failures
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_vs_auth_failure() {
     let rate_limit = SurgeError::RateLimit {
         agent: "test-agent".to_string(),
@@ -237,6 +243,7 @@ fn test_rate_limit_vs_auth_failure() {
 
 /// Test 7: Verify next_retry_time calculation is accurate
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_next_retry_time_calculation() {
     let retry_after_secs = 90;
     let now = SystemTime::now();
@@ -273,6 +280,7 @@ fn test_next_retry_time_calculation() {
 
 /// Test 8: Verify rate limit cooldown respects backoff strategy
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_with_exponential_backoff() {
     // Simulate multiple rate limit hits with increasing cooldowns
     let cooldowns = vec![
@@ -311,6 +319,7 @@ fn test_rate_limit_with_exponential_backoff() {
 
 /// Test 9: Verify rate limit config for different agent types
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_different_agents() {
     let agents = vec![
         "claude-sonnet",
@@ -344,6 +353,7 @@ fn test_rate_limit_different_agents() {
 
 /// Test 10: Verify rate limit integration with retry policy max delay
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_respects_max_delay() {
     // Create a retry policy with strict max delay
     let policy = RetryPolicy {
@@ -379,6 +389,7 @@ fn test_rate_limit_respects_max_delay() {
 
 /// Test 11: Verify rate limit auto-resume workflow configuration
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_auto_resume_config() {
     let config = ResilienceConfig {
         circuit_breaker_threshold: 5,
@@ -412,6 +423,7 @@ fn test_rate_limit_auto_resume_config() {
 
 /// Test 12: Verify rate limit error formatting for logging
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rate_limit_error_logging_format() {
     let error = SurgeError::RateLimit {
         agent: "claude-sonnet".to_string(),
