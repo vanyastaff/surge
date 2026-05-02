@@ -9,6 +9,7 @@
 pub mod approvals;
 pub mod config;
 pub mod content_hash;
+pub mod edge;
 pub mod error;
 pub mod event;
 pub mod hooks;
