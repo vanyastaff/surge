@@ -240,3 +240,17 @@ impl RunReader {
         .map_err(|e| StorageError::Pool(e.to_string()))?
     }
 }
+
+impl RunReader {
+    /// Polling-based event subscription stream.
+    ///
+    /// Yields events with `seq > last_seq` every ~100 ms. Per-tick batch is
+    /// capped at `SUBSCRIBE_BATCH_MAX` (256) to bound memory if the consumer
+    /// lags behind the writer. Cancel-safe — dropping the stream releases the
+    /// background polling task.
+    pub fn subscribe_events(
+        &self,
+    ) -> impl futures_core::Stream<Item = Result<ReadEvent, StorageError>> + Send + 'static {
+        crate::runs::subscribe::subscribe(self.pool.clone(), self.artifacts_dir.clone())
+    }
+}

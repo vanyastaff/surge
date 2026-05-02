@@ -305,3 +305,12 @@ impl Drop for RunWriter {
         );
     }
 }
+
+impl RunWriter {
+    /// Polling-based event subscription stream (delegates to embedded `RunReader`).
+    pub fn subscribe_events(
+        &self,
+    ) -> impl futures_core::Stream<Item = Result<ReadEvent, StorageError>> + Send + 'static {
+        self.reader.subscribe_events()
+    }
+}
