@@ -24,6 +24,7 @@ pub mod node;
 pub mod notify_config;
 pub mod profile;
 pub mod roadmap;
+pub mod run_event;
 pub mod sandbox;
 pub mod spec;
 pub mod state;
