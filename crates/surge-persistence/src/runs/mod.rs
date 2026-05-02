@@ -9,6 +9,7 @@
 
 pub mod clock;
 pub mod error;
+pub(crate) mod file_lock;
 pub mod migrations;
 pub mod pragmas;
 pub mod process;
@@ -23,6 +24,7 @@ pub(crate) mod writer_slot;
 
 pub use clock::{Clock, MockClock, SystemClock};
 pub use error::{CloseError, OpenError, StorageError, WriterError};
+pub(crate) use file_lock::FileLock;
 pub use reader::{ReadEvent, RunReader};
 pub use registry::{RunFilter, RunSummary};
 pub use seq::EventSeq;
