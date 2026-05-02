@@ -12,7 +12,11 @@ use std::path::PathBuf;
 /// Test helper to simulate UI gate decision writing.
 ///
 /// This mimics what happens when the user clicks approve/reject in the UI.
-fn write_ui_gate_decision(project_path: &PathBuf, task_id: &str, approved: bool) -> Result<(), std::io::Error> {
+fn write_ui_gate_decision(
+    project_path: &PathBuf,
+    task_id: &str,
+    approved: bool,
+) -> Result<(), std::io::Error> {
     let gate_dir = project_path.join(".surge").join("gates");
     fs::create_dir_all(&gate_dir)?;
 
@@ -32,8 +36,15 @@ fn write_ui_gate_decision(project_path: &PathBuf, task_id: &str, approved: bool)
 }
 
 /// Test helper to verify UI decision file exists and contains correct data.
-fn verify_ui_decision_file(project_path: &PathBuf, task_id: &str, expected_approved: bool) -> Result<(), String> {
-    let decision_file = project_path.join(".surge").join("gates").join(format!("{}.json", task_id));
+fn verify_ui_decision_file(
+    project_path: &PathBuf,
+    task_id: &str,
+    expected_approved: bool,
+) -> Result<(), String> {
+    let decision_file = project_path
+        .join(".surge")
+        .join("gates")
+        .join(format!("{}.json", task_id));
 
     if !decision_file.exists() {
         return Err(format!("Decision file not found: {:?}", decision_file));
@@ -47,25 +58,34 @@ fn verify_ui_decision_file(project_path: &PathBuf, task_id: &str, expected_appro
         .map_err(|e| format!("Failed to parse decision JSON: {}", e))?;
 
     // Verify task_id
-    let task_id_field = parsed.get("task_id")
+    let task_id_field = parsed
+        .get("task_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing or invalid task_id field".to_string())?;
 
     if task_id_field != task_id {
-        return Err(format!("Task ID mismatch: expected {}, got {}", task_id, task_id_field));
+        return Err(format!(
+            "Task ID mismatch: expected {}, got {}",
+            task_id, task_id_field
+        ));
     }
 
     // Verify approved
-    let approved_field = parsed.get("approved")
+    let approved_field = parsed
+        .get("approved")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "Missing or invalid approved field".to_string())?;
 
     if approved_field != expected_approved {
-        return Err(format!("Approved mismatch: expected {}, got {}", expected_approved, approved_field));
+        return Err(format!(
+            "Approved mismatch: expected {}, got {}",
+            expected_approved, approved_field
+        ));
     }
 
     // Verify timestamp exists
-    let _timestamp = parsed.get("timestamp")
+    let _timestamp = parsed
+        .get("timestamp")
         .ok_or_else(|| "Missing timestamp field".to_string())?;
 
     Ok(())
@@ -80,12 +100,10 @@ fn test_ui_gate_decision_approval_write() {
 
     // Simulate UI approval decision
     let task_id = "test-task-001";
-    write_ui_gate_decision(&temp_dir, task_id, true)
-        .expect("Failed to write approval decision");
+    write_ui_gate_decision(&temp_dir, task_id, true).expect("Failed to write approval decision");
 
     // Verify decision file was written correctly
-    verify_ui_decision_file(&temp_dir, task_id, true)
-        .expect("Decision verification failed");
+    verify_ui_decision_file(&temp_dir, task_id, true).expect("Decision verification failed");
 
     // Clean up
     fs::remove_dir_all(&temp_dir).ok();
@@ -100,12 +118,10 @@ fn test_ui_gate_decision_rejection_write() {
 
     // Simulate UI rejection decision
     let task_id = "test-task-002";
-    write_ui_gate_decision(&temp_dir, task_id, false)
-        .expect("Failed to write rejection decision");
+    write_ui_gate_decision(&temp_dir, task_id, false).expect("Failed to write rejection decision");
 
     // Verify decision file was written correctly
-    verify_ui_decision_file(&temp_dir, task_id, false)
-        .expect("Decision verification failed");
+    verify_ui_decision_file(&temp_dir, task_id, false).expect("Decision verification failed");
 
     // Clean up
     fs::remove_dir_all(&temp_dir).ok();
@@ -120,11 +136,13 @@ fn test_ui_gate_decision_file_format() {
 
     // Write decision
     let task_id = "test-task-003";
-    write_ui_gate_decision(&temp_dir, task_id, true)
-        .expect("Failed to write decision");
+    write_ui_gate_decision(&temp_dir, task_id, true).expect("Failed to write decision");
 
     // Read and parse decision file
-    let decision_file = temp_dir.join(".surge").join("gates").join(format!("{}.json", task_id));
+    let decision_file = temp_dir
+        .join(".surge")
+        .join("gates")
+        .join(format!("{}.json", task_id));
     let content = fs::read_to_string(&decision_file).expect("Failed to read decision file");
     let parsed: serde_json::Value = serde_json::from_str(&content).expect("Failed to parse JSON");
 
@@ -135,8 +153,14 @@ fn test_ui_gate_decision_file_format() {
 
     // Verify types
     assert!(parsed["task_id"].is_string(), "task_id should be string");
-    assert!(parsed["approved"].is_boolean(), "approved should be boolean");
-    assert!(parsed["timestamp"].is_string() || parsed["timestamp"].is_number(), "timestamp should be string or number");
+    assert!(
+        parsed["approved"].is_boolean(),
+        "approved should be boolean"
+    );
+    assert!(
+        parsed["timestamp"].is_string() || parsed["timestamp"].is_number(),
+        "timestamp should be string or number"
+    );
 
     // Clean up
     fs::remove_dir_all(&temp_dir).ok();
@@ -171,9 +195,16 @@ fn test_ui_rejection_feedback_file() {
 
     // Verify file exists and contains feedback
     assert!(human_input_path.exists(), "HUMAN_INPUT.md should exist");
-    let read_content = fs::read_to_string(&human_input_path).expect("Failed to read HUMAN_INPUT.md");
-    assert!(read_content.contains(task_id), "HUMAN_INPUT.md should contain task_id");
-    assert!(read_content.contains(feedback), "HUMAN_INPUT.md should contain feedback");
+    let read_content =
+        fs::read_to_string(&human_input_path).expect("Failed to read HUMAN_INPUT.md");
+    assert!(
+        read_content.contains(task_id),
+        "HUMAN_INPUT.md should contain task_id"
+    );
+    assert!(
+        read_content.contains(feedback),
+        "HUMAN_INPUT.md should contain feedback"
+    );
 
     // Clean up
     fs::remove_dir_all(&temp_dir).ok();
@@ -219,11 +250,13 @@ fn test_ui_decision_orchestrator_compatibility() {
 
     // Write UI decision
     let task_id = "test-task-006";
-    write_ui_gate_decision(&temp_dir, task_id, true)
-        .expect("Failed to write decision");
+    write_ui_gate_decision(&temp_dir, task_id, true).expect("Failed to write decision");
 
     // Read decision file as if we're the orchestrator
-    let decision_file = temp_dir.join(".surge").join("gates").join(format!("{}.json", task_id));
+    let decision_file = temp_dir
+        .join(".surge")
+        .join("gates")
+        .join(format!("{}.json", task_id));
     let content = fs::read_to_string(&decision_file).expect("Failed to read decision file");
 
     // Parse as generic JSON (orchestrator uses this approach)
@@ -231,9 +264,11 @@ fn test_ui_decision_orchestrator_compatibility() {
         .expect("Orchestrator should be able to parse UI decision JSON");
 
     // Verify orchestrator can extract fields
-    let _task_id_val = parsed["task_id"].as_str()
+    let _task_id_val = parsed["task_id"]
+        .as_str()
         .expect("Orchestrator should be able to read task_id");
-    let _approved_val = parsed["approved"].as_bool()
+    let _approved_val = parsed["approved"]
+        .as_bool()
         .expect("Orchestrator should be able to read approved");
     let _timestamp_val = &parsed["timestamp"]; // Can be string or number
 

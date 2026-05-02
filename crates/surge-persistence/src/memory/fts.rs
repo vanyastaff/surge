@@ -39,10 +39,7 @@ impl SearchResults {
     /// Get total number of results across all categories.
     #[must_use]
     pub fn total_count(&self) -> usize {
-        self.discoveries.len()
-            + self.patterns.len()
-            + self.gotchas.len()
-            + self.file_contexts.len()
+        self.discoveries.len() + self.patterns.len() + self.gotchas.len() + self.file_contexts.len()
     }
 
     /// Check if there are any results.

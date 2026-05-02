@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 use surge_acp::client::PermissionPolicy;
 use surge_acp::pool::AgentPool;
-use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig, Transport};
 use surge_core::SurgeEvent;
-use tokio::time::{timeout, Instant};
+use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig, Transport};
+use tokio::time::{Instant, timeout};
 
 /// Helper to create a test ResilienceConfig with fast reconnect for testing.
 fn test_resilience_config() -> ResilienceConfig {
@@ -28,8 +28,8 @@ fn test_resilience_config() -> ResilienceConfig {
         auth_failure_immediate_fail: true,
         heartbeat_interval_active_secs: 1,
         heartbeat_interval_idle_secs: 2,
-        reconnect_max_attempts: 4,           // 4 attempts to test 1s, 2s, 4s, 8s
-        reconnect_initial_delay_ms: 100,     // 100ms for faster testing (scaled down from 1s)
+        reconnect_max_attempts: 4, // 4 attempts to test 1s, 2s, 4s, 8s
+        reconnect_initial_delay_ms: 100, // 100ms for faster testing (scaled down from 1s)
     }
 }
 
@@ -104,8 +104,8 @@ async fn test_reconnect_events_emitted_on_connection_loss() {
                     if attempt >= 2 {
                         break;
                     }
-                }
-                _ => {} // Ignore other events
+                },
+                _ => {}, // Ignore other events
             },
             Ok(Err(_)) => break, // Channel closed
             Err(_) => {
@@ -113,7 +113,7 @@ async fn test_reconnect_events_emitted_on_connection_loss() {
                 if reconnecting_events.len() >= 2 {
                     break;
                 }
-            }
+            },
         }
     }
 
@@ -126,7 +126,11 @@ async fn test_reconnect_events_emitted_on_connection_loss() {
 
     // Verify attempt numbers increment correctly
     for (idx, (attempt, max_attempts)) in reconnecting_events.iter().enumerate() {
-        assert_eq!(*attempt, (idx + 1) as u32, "Attempt number should increment");
+        assert_eq!(
+            *attempt,
+            (idx + 1) as u32,
+            "Attempt number should increment"
+        );
         assert_eq!(*max_attempts, 4, "Max attempts should be 4");
     }
 
@@ -179,14 +183,14 @@ async fn test_exponential_backoff_delays() {
                 if attempt >= 4 {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {} // Ignore other events
+            },
+            Ok(Ok(_)) => {}, // Ignore other events
             Ok(Err(_)) => break,
             Err(_) => {
                 if last_attempt >= 4 {
                     break;
                 }
-            }
+            },
         }
     }
 
@@ -263,15 +267,15 @@ async fn test_reconnect_respects_max_attempts() {
             })) => {
                 assert_eq!(max_attempts, 3, "Max attempts should be 3");
                 max_attempt_seen = max_attempt_seen.max(attempt);
-            }
-            Ok(Ok(_)) => {} // Ignore other events
+            },
+            Ok(Ok(_)) => {}, // Ignore other events
             Ok(Err(_)) => break,
             Err(_) => {
                 // Timeout - check if we've seen all attempts
                 if max_attempt_seen >= 3 {
                     break;
                 }
-            }
+            },
         }
     }
 
@@ -335,23 +339,20 @@ async fn test_backoff_strategy_exponential() {
                 if attempt >= 3 {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {}
+            },
+            Ok(Ok(_)) => {},
             Ok(Err(_)) => break,
             Err(_) => {
                 if attempts_seen >= 3 {
                     break;
                 }
-            }
+            },
         }
     }
 
     let elapsed = start.elapsed();
 
-    assert!(
-        attempts_seen >= 3,
-        "Should see at least 3 attempts"
-    );
+    assert!(attempts_seen >= 3, "Should see at least 3 attempts");
 
     // With 200ms initial delay and exponential backoff for 3 attempts:
     // Attempt 1: 0ms delay
@@ -413,8 +414,8 @@ async fn test_reconnect_prevents_duplicate_attempts() {
                 if attempt >= 2 {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {}
+            },
+            Ok(Ok(_)) => {},
             Ok(Err(_)) => break,
             Err(_) => break,
         }
@@ -476,14 +477,14 @@ async fn test_realistic_reconnect_delays() {
                 if attempt >= 4 {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {}
+            },
+            Ok(Ok(_)) => {},
             Ok(Err(_)) => break,
             Err(_) => {
                 if last_attempt >= 4 {
                     break;
                 }
-            }
+            },
         }
     }
 

@@ -60,7 +60,9 @@ pub async fn run(command: AgentCommands) -> Result<()> {
 
                     // Show capabilities if available
                     if !detected.entry.capabilities.is_empty() {
-                        let caps: Vec<String> = detected.entry.capabilities
+                        let caps: Vec<String> = detected
+                            .entry
+                            .capabilities
                             .iter()
                             .map(|c| c.to_string())
                             .collect();
@@ -106,13 +108,13 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                     match &agent_config.transport {
                         surge_core::config::Transport::Stdio => {
                             println!("       transport: stdio");
-                        }
+                        },
                         surge_core::config::Transport::Tcp { host, port } => {
                             println!("       transport: tcp ({}:{})", host, port);
-                        }
+                        },
                         surge_core::config::Transport::WebSocket { url } => {
                             println!("       transport: ws ({})", url);
-                        }
+                        },
                     }
                 }
             }
@@ -148,7 +150,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             println!("  * = default agent");
             println!("  ✓ = available");
             println!("  ✗ = missing");
-        }
+        },
         AgentCommands::Test { name } => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
@@ -180,13 +182,13 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             match result {
                 Ok(()) => {
                     println!("✅ Agent '{name}' — connection OK");
-                }
+                },
                 Err(e) => {
                     println!("❌ Agent '{name}' — failed: {e}");
                     std::process::exit(2);
-                }
+                },
             }
-        }
+        },
         AgentCommands::Status => {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
@@ -244,11 +246,11 @@ pub async fn run(command: AgentCommands) -> Result<()> {
                         surge_acp::HealthStatus::Degraded => {
                             any_offline = true;
                             ("⚠️ ", "degraded")
-                        }
+                        },
                         surge_acp::HealthStatus::Offline => {
                             any_offline = true;
                             ("❌", "offline")
-                        }
+                        },
                     }
                 } else if ping_result.is_ok() {
                     ("✅", "online")
@@ -341,12 +343,12 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             if any_offline {
                 std::process::exit(2);
             }
-        }
+        },
         AgentCommands::Refresh => {
             println!("⚡ Refreshing agent discovery cache...");
             Registry::refresh_discovery();
             println!("✅ Agent discovery cache cleared. Next 'surge agent list' will re-scan.");
-        }
+        },
         AgentCommands::Add {
             name,
             command,
@@ -384,7 +386,7 @@ pub async fn run(command: AgentCommands) -> Result<()> {
 
             std::fs::write(&config_path, doc.to_string())?;
             println!("✅ Added agent '{}' to surge.toml", name);
-        }
+        },
     }
     Ok(())
 }

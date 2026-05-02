@@ -12,8 +12,8 @@ mod helpers;
 
 use helpers::{cleanup_dir, has_any_agent, temp_test_dir, test_surge_config};
 use std::fs;
-use surge_acp::discovery::AgentDiscovery;
 use surge_acp::Registry;
+use surge_acp::discovery::AgentDiscovery;
 use surge_core::config::{GateConfig, GateDecision};
 use surge_core::event::SurgeEvent;
 use surge_orchestrator::gates::GateManager;
@@ -41,8 +41,7 @@ fn init_git_repo(dir: &std::path::Path) {
         .output()
         .expect("Failed to set git user.email");
 
-    std::fs::write(dir.join("README.md"), "# Test Project\n")
-        .expect("Failed to create README.md");
+    std::fs::write(dir.join("README.md"), "# Test Project\n").expect("Failed to create README.md");
 
     Command::new("git")
         .args(["add", "README.md"])
@@ -127,7 +126,9 @@ async fn test_gate_approval_after_plan() {
     let event_listener = tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
             match &event {
-                SurgeEvent::GateAwaitingApproval { task_id, gate_name, .. } => {
+                SurgeEvent::GateAwaitingApproval {
+                    task_id, gate_name, ..
+                } => {
                     eprintln!("Gate awaiting approval: {} at {}", task_id, gate_name);
                     *gate_paused_clone.lock().await = true;
 
@@ -149,11 +150,18 @@ async fn test_gate_approval_after_plan() {
                     fs::write(&decision_path, json).expect("Failed to write DECISION.json");
 
                     eprintln!("✓ Simulated CLI approval via DECISION.json");
-                }
-                SurgeEvent::GateApproved { task_id, gate_name, approved_by } => {
-                    eprintln!("Gate approved: {} at {} by {:?}", task_id, gate_name, approved_by);
-                }
-                _ => {}
+                },
+                SurgeEvent::GateApproved {
+                    task_id,
+                    gate_name,
+                    approved_by,
+                } => {
+                    eprintln!(
+                        "Gate approved: {} at {} by {:?}",
+                        task_id, gate_name, approved_by
+                    );
+                },
+                _ => {},
             }
         }
     });
@@ -173,13 +181,13 @@ async fn test_gate_approval_after_plan() {
     match result {
         PipelineResult::Completed => {
             eprintln!("✓ Pipeline completed after gate approval");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("✓ Pipeline paused at {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Failed { reason } => {
             eprintln!("Pipeline failed: {} (may be expected in E2E test)", reason);
-        }
+        },
     }
 
     eprintln!("✓ Gate approval flow tested successfully");
@@ -256,14 +264,17 @@ async fn test_gate_rejection_with_feedback() {
     let event_listener = tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
             match &event {
-                SurgeEvent::GateAwaitingApproval { task_id, gate_name, .. } => {
+                SurgeEvent::GateAwaitingApproval {
+                    task_id, gate_name, ..
+                } => {
                     eprintln!("Gate awaiting approval: {} at {}", task_id, gate_name);
 
                     // Simulate CLI rejection with feedback
                     let decision = GateDecision::Rejected {
                         reason: "Incorrect approach".to_string(),
-                        feedback: "The plan approach is incorrect. Please use a different strategy."
-                            .to_string(),
+                        feedback:
+                            "The plan approach is incorrect. Please use a different strategy."
+                                .to_string(),
                     };
 
                     let decision_path = specs_dir_clone
@@ -279,15 +290,20 @@ async fn test_gate_rejection_with_feedback() {
                     fs::write(&decision_path, json).expect("Failed to write DECISION.json");
 
                     eprintln!("✓ Simulated CLI rejection with feedback");
-                }
-                SurgeEvent::GateRejected { task_id, gate_name, rejected_by, reason } => {
+                },
+                SurgeEvent::GateRejected {
+                    task_id,
+                    gate_name,
+                    rejected_by,
+                    reason,
+                } => {
                     eprintln!(
                         "Gate rejected: {} at {} by {:?} - reason: {:?}",
                         task_id, gate_name, rejected_by, reason
                     );
                     *gate_rejected_clone.lock().await = true;
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     });
@@ -314,13 +330,13 @@ async fn test_gate_rejection_with_feedback() {
     match result {
         PipelineResult::Failed { reason } => {
             eprintln!("✓ Pipeline failed after rejection: {}", reason);
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("✓ Pipeline paused at {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Completed => {
             eprintln!("⚠ Pipeline completed despite rejection (may be timing issue)");
-        }
+        },
     }
 
     eprintln!("✓ Gate rejection flow tested");
@@ -392,7 +408,10 @@ async fn test_gate_abort() {
     // Spawn event listener to abort on gate
     let event_listener = tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
-            if let SurgeEvent::GateAwaitingApproval { task_id, gate_name, .. } = &event {
+            if let SurgeEvent::GateAwaitingApproval {
+                task_id, gate_name, ..
+            } = &event
+            {
                 eprintln!("Gate awaiting approval: {} at {}", task_id, gate_name);
 
                 // Simulate CLI abort
@@ -407,8 +426,8 @@ async fn test_gate_abort() {
                 fs::create_dir_all(decision_path.parent().unwrap())
                     .expect("Failed to create spec dir");
 
-                let json = serde_json::to_string_pretty(&decision)
-                    .expect("Failed to serialize decision");
+                let json =
+                    serde_json::to_string_pretty(&decision).expect("Failed to serialize decision");
 
                 fs::write(&decision_path, json).expect("Failed to write DECISION.json");
 
@@ -432,13 +451,13 @@ async fn test_gate_abort() {
                 reason.contains("abort") || reason.contains("cancelled"),
                 "Abort reason should mention abort or cancellation"
             );
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("✓ Pipeline paused at {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Completed => {
             eprintln!("⚠ Pipeline completed despite abort (may be timing issue)");
-        }
+        },
     }
 
     eprintln!("✓ Gate abort flow tested");
@@ -544,9 +563,6 @@ fn test_gate_manager_decision_persistence() {
 /// Verifies that gates are only triggered when configured in GateConfig.
 #[test]
 fn test_gate_configuration() {
-    
-    
-
     // Create temp directory
     let test_dir = temp_test_dir("gate_configuration");
     let specs_dir = test_dir.join(".auto-claude").join("specs");
@@ -562,7 +578,10 @@ fn test_gate_configuration() {
 
     assert!(all_enabled.after_spec, "after_spec should be enabled");
     assert!(all_enabled.after_plan, "after_plan should be enabled");
-    assert!(all_enabled.after_each_subtask, "after_each_subtask should be enabled");
+    assert!(
+        all_enabled.after_each_subtask,
+        "after_each_subtask should be enabled"
+    );
     assert!(all_enabled.after_qa, "after_qa should be enabled");
 
     eprintln!("✓ All gates configuration verified");
@@ -577,7 +596,10 @@ fn test_gate_configuration() {
 
     assert!(!only_plan.after_spec, "after_spec should be disabled");
     assert!(only_plan.after_plan, "after_plan should be enabled");
-    assert!(!only_plan.after_each_subtask, "after_each_subtask should be disabled");
+    assert!(
+        !only_plan.after_each_subtask,
+        "after_each_subtask should be disabled"
+    );
     assert!(!only_plan.after_qa, "after_qa should be disabled");
 
     eprintln!("✓ Selective gate configuration verified");
@@ -592,7 +614,10 @@ fn test_gate_configuration() {
 
     assert!(!none_enabled.after_spec, "after_spec should be disabled");
     assert!(!none_enabled.after_plan, "after_plan should be disabled");
-    assert!(!none_enabled.after_each_subtask, "after_each_subtask should be disabled");
+    assert!(
+        !none_enabled.after_each_subtask,
+        "after_each_subtask should be disabled"
+    );
     assert!(!none_enabled.after_qa, "after_qa should be disabled");
 
     eprintln!("✓ No gates configuration verified");

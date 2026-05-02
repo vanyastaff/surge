@@ -37,16 +37,14 @@ pub fn calculate_delay(policy: &RetryPolicy, attempt: u32) -> Duration {
     let base_delay_ms = match policy.backoff_strategy {
         BackoffStrategy::Linear => {
             // Linear: delay = initial_delay * (attempt + 1)
-            policy
-                .initial_delay_ms
-                .saturating_mul((attempt + 1) as u64)
-        }
+            policy.initial_delay_ms.saturating_mul((attempt + 1) as u64)
+        },
         BackoffStrategy::Exponential | BackoffStrategy::ExponentialWithJitter => {
             // Exponential: delay = initial_delay * 2^attempt
             policy
                 .initial_delay_ms
                 .saturating_mul(2_u64.saturating_pow(attempt))
-        }
+        },
     };
 
     // Cap at max_delay_ms
@@ -212,13 +210,21 @@ mod tests {
         for _ in 0..10 {
             let delay = calculate_delay(&policy, 0).as_millis();
             // With 25% jitter, should be between 750 and 1250
-            assert!(delay >= 750 && delay <= 1250, "delay {} out of range", delay);
+            assert!(
+                delay >= 750 && delay <= 1250,
+                "delay {} out of range",
+                delay
+            );
         }
 
         for _ in 0..10 {
             let delay = calculate_delay(&policy, 1).as_millis();
             // attempt 1: 2000 ± 25% = 1500 to 2500
-            assert!(delay >= 1500 && delay <= 2500, "delay {} out of range", delay);
+            assert!(
+                delay >= 1500 && delay <= 2500,
+                "delay {} out of range",
+                delay
+            );
         }
     }
 

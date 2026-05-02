@@ -380,11 +380,7 @@ impl Registry {
                             AgentCapability::Chat,
                         ]
                     } else {
-                        config
-                            .capabilities
-                            .iter()
-                            .map(convert_capability)
-                            .collect()
+                        config.capabilities.iter().map(convert_capability).collect()
                     },
                     models: vec![],
                     long_description: String::new(),
@@ -486,8 +482,7 @@ pub struct DetectedAgent {
 const BUILTIN_REGISTRY_JSON: &str = include_str!("../builtin_registry.json");
 
 fn builtin_agents() -> Vec<RegistryEntry> {
-    serde_json::from_str(BUILTIN_REGISTRY_JSON)
-        .expect("builtin_registry.json should be valid JSON")
+    serde_json::from_str(BUILTIN_REGISTRY_JSON).expect("builtin_registry.json should be valid JSON")
 }
 
 // ── Registry cache ───────────────────────────────────────────────────
@@ -550,7 +545,7 @@ fn save_registry_cache(entries: &[RegistryEntry]) {
             if let Err(e) = std::fs::write(&path, json) {
                 warn!("failed to write registry cache to {}: {e}", path.display());
             }
-        }
+        },
         Err(e) => warn!("failed to serialize registry cache: {e}"),
     }
 }
@@ -1006,12 +1001,16 @@ mod tests {
         let reg_with_caps = Registry::from_config(agents_with_caps);
         let entry_with_caps = reg_with_caps.find("test-agent").unwrap();
         assert_eq!(entry_with_caps.capabilities.len(), 2);
-        assert!(entry_with_caps
-            .capabilities
-            .contains(&AgentCapability::Code));
-        assert!(entry_with_caps
-            .capabilities
-            .contains(&AgentCapability::Test));
+        assert!(
+            entry_with_caps
+                .capabilities
+                .contains(&AgentCapability::Code)
+        );
+        assert!(
+            entry_with_caps
+                .capabilities
+                .contains(&AgentCapability::Test)
+        );
 
         // Test 4: Multiple agents
         let mut multi_agents = HashMap::new();
@@ -1098,12 +1097,15 @@ capabilities = ["code", "plan", "review"]
         assert_eq!(another_agent.capabilities.len(), 3);
         assert!(another_agent.capabilities.contains(&AgentCapability::Code));
         assert!(another_agent.capabilities.contains(&AgentCapability::Plan));
-        assert!(another_agent
-            .capabilities
-            .contains(&AgentCapability::Review));
+        assert!(
+            another_agent
+                .capabilities
+                .contains(&AgentCapability::Review)
+        );
 
         // Test 2: When no surge.toml exists, it should return empty registry
-        let no_config_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml_no_config");
+        let no_config_dir =
+            std::env::temp_dir().join("surge_test_registry_load_from_toml_no_config");
         let _ = fs::remove_dir_all(&no_config_dir);
         fs::create_dir_all(&no_config_dir).unwrap();
         std::env::set_current_dir(&no_config_dir).unwrap();
@@ -1113,7 +1115,8 @@ capabilities = ["code", "plan", "review"]
         assert!(empty_registry.is_empty());
 
         // Test 3: When surge.toml exists but has no agents, return empty registry
-        let empty_agents_dir = std::env::temp_dir().join("surge_test_registry_load_from_toml_empty_agents");
+        let empty_agents_dir =
+            std::env::temp_dir().join("surge_test_registry_load_from_toml_empty_agents");
         let _ = fs::remove_dir_all(&empty_agents_dir);
         fs::create_dir_all(&empty_agents_dir).unwrap();
         let empty_config_path = empty_agents_dir.join("surge.toml");
@@ -1195,9 +1198,7 @@ max_qa_iterations = 5
 
         assert_eq!(code_entry.capabilities.len(), 1);
         assert!(code_entry.capabilities.contains(&AgentCapability::Code));
-        assert!(!code_entry
-            .capabilities
-            .contains(&AgentCapability::Plan));
+        assert!(!code_entry.capabilities.contains(&AgentCapability::Plan));
 
         // Test 3: Verify capability filtering works
         let reg_with_multiple = Registry {

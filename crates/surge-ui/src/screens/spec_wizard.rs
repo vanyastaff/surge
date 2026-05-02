@@ -275,7 +275,7 @@ impl SpecWizardScreen {
                             .child("Drag to reorder. Edit subtasks as needed.".to_string()),
                     )
                     .child(div().v_flex().children(subtasks))
-            }
+            },
 
             WizardStep::Criteria => {
                 let items: Vec<Div> = self
@@ -313,7 +313,7 @@ impl SpecWizardScreen {
                             .child("Acceptance Criteria".to_string()),
                     )
                     .child(div().v_flex().gap_1().children(items))
-            }
+            },
 
             WizardStep::Confirm => div()
                 .v_flex()

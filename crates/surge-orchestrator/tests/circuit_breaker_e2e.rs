@@ -40,14 +40,8 @@ async fn test_circuit_breaker_persistence_basic() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store.clone()),
-            event_tx,
-        )
-        .await;
+        let mut cb =
+            CircuitBreaker::new(task_id, subtask_id, 3, Some(store.clone()), event_tx).await;
 
         // Record two failures (not yet tripped)
         cb.record_failure("error 1".to_string(), None).await;
@@ -64,14 +58,7 @@ async fn test_circuit_breaker_persistence_basic() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let cb = CircuitBreaker::new(task_id, subtask_id, 3, Some(store), event_tx).await;
 
         // Verify state was restored
         assert_eq!(
@@ -79,10 +66,7 @@ async fn test_circuit_breaker_persistence_basic() {
             2,
             "Consecutive failures should be restored from persistence"
         );
-        assert!(
-            !cb.is_tripped(),
-            "Circuit should not be tripped yet"
-        );
+        assert!(!cb.is_tripped(), "Circuit should not be tripped yet");
         assert_eq!(
             cb.last_error(),
             Some("error 2"),
@@ -108,14 +92,7 @@ async fn test_circuit_breaker_tripped_persists() {
         ));
         let (event_tx, mut rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 3, Some(store), event_tx).await;
 
         // Record failures to trip the circuit
         cb.record_failure("error 1".to_string(), None).await;
@@ -143,14 +120,7 @@ async fn test_circuit_breaker_tripped_persists() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let cb = CircuitBreaker::new(task_id, subtask_id, 3, Some(store), event_tx).await;
 
         // Verify tripped state was restored
         assert_eq!(
@@ -192,14 +162,7 @@ async fn test_circuit_breaker_reset_persists() {
         ));
         let (event_tx, mut rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 3, Some(store), event_tx).await;
 
         // Record failures
         cb.record_failure("error 1".to_string(), None).await;
@@ -229,14 +192,7 @@ async fn test_circuit_breaker_reset_persists() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let cb = CircuitBreaker::new(task_id, subtask_id, 3, Some(store), event_tx).await;
 
         // Verify reset state was restored
         assert_eq!(
@@ -276,38 +232,19 @@ async fn test_multiple_circuit_breakers_persist() {
         let (event_tx, _rx) = broadcast::channel(10);
 
         // CB1: One failure
-        let mut cb1 = CircuitBreaker::new(
-            task_id,
-            subtask1,
-            3,
-            Some(store.clone()),
-            event_tx.clone(),
-        )
-        .await;
+        let mut cb1 =
+            CircuitBreaker::new(task_id, subtask1, 3, Some(store.clone()), event_tx.clone()).await;
         cb1.record_failure("cb1 error".to_string(), None).await;
 
         // CB2: Tripped
-        let mut cb2 = CircuitBreaker::new(
-            task_id,
-            subtask2,
-            2,
-            Some(store.clone()),
-            event_tx.clone(),
-        )
-        .await;
+        let mut cb2 =
+            CircuitBreaker::new(task_id, subtask2, 2, Some(store.clone()), event_tx.clone()).await;
         cb2.record_failure("cb2 error 1".to_string(), None).await;
         cb2.record_failure("cb2 error 2".to_string(), Some(1_800_000_000_000))
             .await;
 
         // CB3: Clean state (no failures)
-        let _cb3 = CircuitBreaker::new(
-            task_id,
-            subtask3,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let _cb3 = CircuitBreaker::new(task_id, subtask3, 3, Some(store), event_tx).await;
 
         assert_eq!(cb1.consecutive_failures(), 1);
         assert!(!cb1.is_tripped());
@@ -323,58 +260,27 @@ async fn test_multiple_circuit_breakers_persist() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let cb1 = CircuitBreaker::new(
-            task_id,
-            subtask1,
-            3,
-            Some(store.clone()),
-            event_tx.clone(),
-        )
-        .await;
+        let cb1 =
+            CircuitBreaker::new(task_id, subtask1, 3, Some(store.clone()), event_tx.clone()).await;
 
-        let cb2 = CircuitBreaker::new(
-            task_id,
-            subtask2,
-            2,
-            Some(store.clone()),
-            event_tx.clone(),
-        )
-        .await;
+        let cb2 =
+            CircuitBreaker::new(task_id, subtask2, 2, Some(store.clone()), event_tx.clone()).await;
 
-        let cb3 = CircuitBreaker::new(
-            task_id,
-            subtask3,
-            3,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let cb3 = CircuitBreaker::new(task_id, subtask3, 3, Some(store), event_tx).await;
 
         // Verify CB1 state
-        assert_eq!(
-            cb1.consecutive_failures(),
-            1,
-            "CB1 should have 1 failure"
-        );
+        assert_eq!(cb1.consecutive_failures(), 1, "CB1 should have 1 failure");
         assert!(!cb1.is_tripped(), "CB1 should not be tripped");
         assert_eq!(cb1.last_error(), Some("cb1 error"));
 
         // Verify CB2 state
-        assert_eq!(
-            cb2.consecutive_failures(),
-            2,
-            "CB2 should have 2 failures"
-        );
+        assert_eq!(cb2.consecutive_failures(), 2, "CB2 should have 2 failures");
         assert!(cb2.is_tripped(), "CB2 should be tripped");
         assert_eq!(cb2.last_error(), Some("cb2 error 2"));
         assert_eq!(cb2.next_retry_time(), Some(1_800_000_000_000));
 
         // Verify CB3 state
-        assert_eq!(
-            cb3.consecutive_failures(),
-            0,
-            "CB3 should have 0 failures"
-        );
+        assert_eq!(cb3.consecutive_failures(), 0, "CB3 should have 0 failures");
         assert!(!cb3.is_tripped(), "CB3 should not be tripped");
         assert_eq!(cb3.last_error(), None);
     }
@@ -397,14 +303,7 @@ async fn test_circuit_breaker_incremental_updates() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            5,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 5, Some(store), event_tx).await;
 
         cb.record_failure("error 1".to_string(), None).await;
         assert_eq!(cb.consecutive_failures(), 1);
@@ -417,14 +316,7 @@ async fn test_circuit_breaker_incremental_updates() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            5,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 5, Some(store), event_tx).await;
 
         assert_eq!(cb.consecutive_failures(), 1);
 
@@ -439,14 +331,7 @@ async fn test_circuit_breaker_incremental_updates() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            5,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 5, Some(store), event_tx).await;
 
         assert_eq!(cb.consecutive_failures(), 2);
 
@@ -465,14 +350,7 @@ async fn test_circuit_breaker_incremental_updates() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            5,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let cb = CircuitBreaker::new(task_id, subtask_id, 5, Some(store), event_tx).await;
 
         assert_eq!(cb.consecutive_failures(), 5);
         assert!(cb.is_tripped());
@@ -589,14 +467,7 @@ async fn test_circuit_breaker_different_thresholds() {
         ));
         let (event_tx, _rx) = broadcast::channel(10);
 
-        let mut cb = CircuitBreaker::new(
-            task_id,
-            subtask_id,
-            2,
-            Some(store),
-            event_tx,
-        )
-        .await;
+        let mut cb = CircuitBreaker::new(task_id, subtask_id, 2, Some(store), event_tx).await;
 
         assert_eq!(cb.consecutive_failures(), 1);
 

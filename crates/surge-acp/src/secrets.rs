@@ -47,9 +47,15 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
         // Stripe secret keys
         ("stripe-key", r"sk_(live|test)_[A-Za-z0-9]{20,}"),
         // JWT tokens (three base64url-encoded segments)
-        ("jwt", r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}"),
+        (
+            "jwt",
+            r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}",
+        ),
         // Generic env var patterns: FOO_API_KEY=<hex-or-alnum 32+>
-        ("generic-api-key", r"(?i)(api[_-]?key|api[_-]?secret|secret[_-]?key)\s*=\s*[A-Za-z0-9]{32,}"),
+        (
+            "generic-api-key",
+            r"(?i)(api[_-]?key|api[_-]?secret|secret[_-]?key)\s*=\s*[A-Za-z0-9]{32,}",
+        ),
     ];
 
     raw.iter()

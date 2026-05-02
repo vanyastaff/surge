@@ -1,11 +1,13 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::collections::BTreeMap;
 use surge_core::{
     edge::{Edge, EdgeKind, EdgePolicy, PortRef},
-    graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION},
+    graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph},
     keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey},
     node::{Node, NodeConfig, OutcomeDecl, Position},
-    notify_config::{NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate},
+    notify_config::{
+        NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate,
+    },
     terminal_config::{TerminalConfig, TerminalKind},
     validate,
 };
@@ -59,7 +61,10 @@ fn build_n_node_graph(n: usize) -> Graph {
             let next = NodeKey::try_from(format!("n{}", i + 1).as_str()).unwrap();
             edges.push(Edge {
                 id: EdgeKey::try_from(format!("e{i}").as_str()).unwrap(),
-                from: PortRef { node: key, outcome: done.clone() },
+                from: PortRef {
+                    node: key,
+                    outcome: done.clone(),
+                },
                 to: next,
                 kind: EdgeKind::Forward,
                 policy: EdgePolicy::default(),
@@ -97,21 +102,27 @@ fn validate_100_nodes_with_subgraphs(c: &mut Criterion) {
         let sk = SubgraphKey::try_from(format!("s{s}").as_str()).unwrap();
         let mut sub_nodes = BTreeMap::new();
         let start = NodeKey::try_from(format!("sn{s}_0").as_str()).unwrap();
-        sub_nodes.insert(start.clone(), Node {
-            id: start.clone(),
-            position: Position::default(),
-            declared_outcomes: vec![],
-            config: NodeConfig::Terminal(TerminalConfig {
-                kind: TerminalKind::Success,
-                message: None,
-            }),
-        });
+        sub_nodes.insert(
+            start.clone(),
+            Node {
+                id: start.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
         let _ = &done; // suppress unused warning
-        g.subgraphs.insert(sk, Subgraph {
-            start,
-            nodes: sub_nodes,
-            edges: vec![],
-        });
+        g.subgraphs.insert(
+            sk,
+            Subgraph {
+                start,
+                nodes: sub_nodes,
+                edges: vec![],
+            },
+        );
     }
     c.bench_function("validate_pathological_100_nodes_5_subgraphs", |b| {
         b.iter(|| {
@@ -120,5 +131,9 @@ fn validate_100_nodes_with_subgraphs(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, validate_50_nodes, validate_100_nodes_with_subgraphs);
+criterion_group!(
+    benches,
+    validate_50_nodes,
+    validate_100_nodes_with_subgraphs
+);
 criterion_main!(benches);

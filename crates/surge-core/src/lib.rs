@@ -52,7 +52,7 @@ pub use state::TaskState;
 // ── New re-exports (vibe-flow data model) ──
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
-pub use graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use profile::{Profile, Role, RoleCategory};
@@ -61,4 +61,4 @@ pub use run_event::{
     SessionDisposition, VersionedEventPayload,
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
-pub use validation::{validate, Severity, ValidationError, ValidationErrorKind};
+pub use validation::{Severity, ValidationError, ValidationErrorKind, validate};

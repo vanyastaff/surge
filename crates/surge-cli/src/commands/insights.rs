@@ -130,19 +130,19 @@ fn show_cost(
                     },
                 };
                 println!("{}", serde_json::to_string_pretty(&empty_insights)?);
-            }
+            },
             OutputFormat::Csv => {
                 // CSV header only
                 println!(
                     "subtask_id,session_count,input_tokens,output_tokens,thought_tokens,total_tokens,estimated_cost_usd"
                 );
-            }
+            },
             OutputFormat::Text => {
                 println!("⚠️  No cost data available yet.");
                 println!(
                     "   Cost tracking will be recorded after running specs with the orchestrator."
                 );
-            }
+            },
         }
         return Ok(());
     }
@@ -226,16 +226,16 @@ fn show_cost(
                     },
                 };
                 println!("{}", serde_json::to_string_pretty(&empty_insights)?);
-            }
+            },
             OutputFormat::Csv => {
                 // CSV header only
                 println!(
                     "subtask_id,session_count,input_tokens,output_tokens,thought_tokens,total_tokens,estimated_cost_usd"
                 );
-            }
+            },
             OutputFormat::Text => {
                 println!("\n⚠️  No sessions found matching the specified filters.");
-            }
+            },
         }
         return Ok(());
     }
@@ -324,13 +324,13 @@ fn show_cost(
     match format {
         OutputFormat::Json => {
             output_json(&output_data)?;
-        }
+        },
         OutputFormat::Csv => {
             output_csv(&subtask_entries, &sessions_without_subtask)?;
-        }
+        },
         OutputFormat::Text => {
             output_text(&output_data);
-        }
+        },
     }
 
     Ok(())
@@ -500,10 +500,19 @@ fn output_text(data: &OutputData) {
 
             println!("\n   Subtask: {}", subtask_id);
             println!("      Sessions: {}", sessions.len());
-            println!("      Input tokens: {}", super::format::format_number(input));
-            println!("      Output tokens: {}", super::format::format_number(output));
+            println!(
+                "      Input tokens: {}",
+                super::format::format_number(input)
+            );
+            println!(
+                "      Output tokens: {}",
+                super::format::format_number(output)
+            );
             if thought > 0 {
-                println!("      Thought tokens: {}", super::format::format_number(thought));
+                println!(
+                    "      Thought tokens: {}",
+                    super::format::format_number(thought)
+                );
             }
             println!(
                 "      Total tokens: {}",
@@ -541,7 +550,10 @@ fn output_text(data: &OutputData) {
         println!("   Input tokens: {}", super::format::format_number(input));
         println!("   Output tokens: {}", super::format::format_number(output));
         if thought > 0 {
-            println!("   Thought tokens: {}", super::format::format_number(thought));
+            println!(
+                "   Thought tokens: {}",
+                super::format::format_number(thought)
+            );
         }
         println!(
             "   Total tokens: {}",
@@ -553,10 +565,19 @@ fn output_text(data: &OutputData) {
     // Overall summary
     println!("\n📈 Summary:");
     println!("   Total sessions: {}", data.filtered_sessions.len());
-    println!("   Input tokens: {}", super::format::format_number(data.total_input));
-    println!("   Output tokens: {}", super::format::format_number(data.total_output));
+    println!(
+        "   Input tokens: {}",
+        super::format::format_number(data.total_input)
+    );
+    println!(
+        "   Output tokens: {}",
+        super::format::format_number(data.total_output)
+    );
     if data.total_thought > 0 {
-        println!("   Thought tokens: {}", super::format::format_number(data.total_thought));
+        println!(
+            "   Thought tokens: {}",
+            super::format::format_number(data.total_thought)
+        );
     }
     if data.total_cached_read > 0 {
         println!(

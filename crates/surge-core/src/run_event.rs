@@ -28,7 +28,10 @@ pub struct VersionedEventPayload {
 impl VersionedEventPayload {
     #[must_use]
     pub fn new(payload: EventPayload) -> Self {
-        Self { schema_version: 1, payload }
+        Self {
+            schema_version: 1,
+            payload,
+        }
     }
 }
 
@@ -42,12 +45,20 @@ pub enum EventPayload {
         initial_prompt: String,
         config: RunConfig,
     },
-    RunCompleted { terminal_node: NodeKey },
-    RunFailed { error: String },
-    RunAborted { reason: String },
+    RunCompleted {
+        terminal_node: NodeKey,
+    },
+    RunFailed {
+        error: String,
+    },
+    RunAborted {
+        reason: String,
+    },
 
     // Bootstrap
-    BootstrapStageStarted { stage: BootstrapStage },
+    BootstrapStageStarted {
+        stage: BootstrapStage,
+    },
     BootstrapArtifactProduced {
         stage: BootstrapStage,
         artifact: ContentHash,
@@ -62,35 +73,81 @@ pub enum EventPayload {
         decision: BootstrapDecision,
         comment: Option<String>,
     },
-    BootstrapEditRequested { stage: BootstrapStage, feedback: String },
+    BootstrapEditRequested {
+        stage: BootstrapStage,
+        feedback: String,
+    },
 
     // Pipeline construction
-    PipelineMaterialized { graph_hash: ContentHash },
+    PipelineMaterialized {
+        graph_hash: ContentHash,
+    },
 
     // Stage execution
-    StageEntered { node: NodeKey, attempt: u32 },
+    StageEntered {
+        node: NodeKey,
+        attempt: u32,
+    },
     StageInputsResolved {
         node: NodeKey,
         bindings: BTreeMap<String, ContentHash>,
     },
-    SessionOpened { node: NodeKey, session: SessionId, agent: String },
-    ToolCalled { session: SessionId, tool: String, args_redacted: ContentHash },
-    ToolResultReceived { session: SessionId, success: bool, result: ContentHash },
+    SessionOpened {
+        node: NodeKey,
+        session: SessionId,
+        agent: String,
+    },
+    ToolCalled {
+        session: SessionId,
+        tool: String,
+        args_redacted: ContentHash,
+    },
+    ToolResultReceived {
+        session: SessionId,
+        success: bool,
+        result: ContentHash,
+    },
     ArtifactProduced {
         node: NodeKey,
         artifact: ContentHash,
         path: PathBuf,
         name: String,
     },
-    OutcomeReported { node: NodeKey, outcome: OutcomeKey, summary: String },
-    StageCompleted { node: NodeKey, outcome: OutcomeKey },
-    StageFailed { node: NodeKey, reason: String, retry_available: bool },
-    SessionClosed { session: SessionId, disposition: SessionDisposition },
+    OutcomeReported {
+        node: NodeKey,
+        outcome: OutcomeKey,
+        summary: String,
+    },
+    StageCompleted {
+        node: NodeKey,
+        outcome: OutcomeKey,
+    },
+    StageFailed {
+        node: NodeKey,
+        reason: String,
+        retry_available: bool,
+    },
+    SessionClosed {
+        session: SessionId,
+        disposition: SessionDisposition,
+    },
 
     // Routing
-    EdgeTraversed { edge: EdgeKey, from: NodeKey, to: NodeKey },
-    LoopIterationStarted { loop_id: NodeKey, item: toml::Value, index: u32 },
-    LoopIterationCompleted { loop_id: NodeKey, index: u32, outcome: OutcomeKey },
+    EdgeTraversed {
+        edge: EdgeKey,
+        from: NodeKey,
+        to: NodeKey,
+    },
+    LoopIterationStarted {
+        loop_id: NodeKey,
+        item: toml::Value,
+        index: u32,
+    },
+    LoopIterationCompleted {
+        loop_id: NodeKey,
+        index: u32,
+        outcome: OutcomeKey,
+    },
     LoopCompleted {
         loop_id: NodeKey,
         completed_iterations: u32,
@@ -109,7 +166,10 @@ pub enum EventPayload {
         channel_used: ApprovalChannelKind,
         comment: Option<String>,
     },
-    SandboxElevationRequested { node: NodeKey, capability: String },
+    SandboxElevationRequested {
+        node: NodeKey,
+        capability: String,
+    },
     SandboxElevationDecided {
         node: NodeKey,
         decision: ElevationDecision,
@@ -133,7 +193,10 @@ pub enum EventPayload {
         model: String,
         cost_usd: Option<f64>,
     },
-    ForkCreated { new_run: RunId, fork_at_seq: u64 },
+    ForkCreated {
+        new_run: RunId,
+        fork_at_seq: u64,
+    },
 }
 
 impl EventPayload {
@@ -324,7 +387,9 @@ mod tests {
     fn approval_request_and_decision_roundtrip() {
         let req = EventPayload::ApprovalRequested {
             gate: NodeKey::try_from("gate_main").unwrap(),
-            channel: ApprovalChannel::Telegram { chat_id_ref: "$DEFAULT".into() },
+            channel: ApprovalChannel::Telegram {
+                chat_id_ref: "$DEFAULT".into(),
+            },
             payload_hash: ContentHash::compute(b"summary"),
         };
         let dec = EventPayload::ApprovalDecided {

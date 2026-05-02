@@ -330,11 +330,11 @@ async fn collect_output<R: tokio::io::AsyncRead + Unpin>(
                 } else {
                     out.push_str(&chunk);
                 }
-            }
+            },
             Err(e) => {
                 debug!("terminal output reader error: {e}");
                 break;
-            }
+            },
         }
     }
 }
@@ -453,9 +453,7 @@ mod tests {
             let (cmd, args) = ("echo", vec!["hello".into()]);
 
             // Spawn without explicit limit — should get default 10 MiB
-            let id = terms
-                .spawn(cmd, &args, &[], None, None)
-                .expect("spawn");
+            let id = terms.spawn(cmd, &args, &[], None, None).expect("spawn");
 
             let term = terms.terminals.get(&id).unwrap();
             let t = term.lock().await;

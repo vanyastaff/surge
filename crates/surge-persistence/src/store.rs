@@ -206,7 +206,8 @@ impl Store {
             self.conn.execute(CREATE_SUBTASK_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_TASK_STATE_SPEC_INDEX, [])?;
             self.conn.execute(CREATE_CIRCUIT_BREAKER_TASK_INDEX, [])?;
-            self.conn.execute(CREATE_CIRCUIT_BREAKER_TRIPPED_INDEX, [])?;
+            self.conn
+                .execute(CREATE_CIRCUIT_BREAKER_TRIPPED_INDEX, [])?;
 
             self.conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?1)",
@@ -260,7 +261,10 @@ impl Store {
                         session_id: row.get(0)?,
                         agent_name: row.get(1)?,
                         task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
-                        subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                        subtask_id: row
+                            .get::<_, Option<String>>(3)?
+                            .map(|s| parse_id(&s, 3))
+                            .transpose()?,
                         spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                         timestamp_ms: row.get::<_, i64>(5)? as u64,
                         input_tokens: row.get::<_, i64>(6)? as u64,
@@ -287,7 +291,10 @@ impl Store {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
                 task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                subtask_id: row
+                    .get::<_, Option<String>>(3)?
+                    .map(|s| parse_id(&s, 3))
+                    .transpose()?,
                 spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
@@ -314,7 +321,10 @@ impl Store {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
                 task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                subtask_id: row
+                    .get::<_, Option<String>>(3)?
+                    .map(|s| parse_id(&s, 3))
+                    .transpose()?,
                 spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
@@ -345,17 +355,15 @@ impl Store {
     /// Total cost in USD for all sessions in the time range. Returns 0.0 if no
     /// sessions are found or if all sessions have `estimated_cost_usd` as NULL.
     pub fn get_cost_in_time_range(&self, start_ms: u64, end_ms: u64) -> Result<f64> {
-        let cost: f64 = self
-            .conn
-            .query_row(
-                r#"
+        let cost: f64 = self.conn.query_row(
+            r#"
                 SELECT COALESCE(SUM(estimated_cost_usd), 0.0)
                 FROM session_usage
                 WHERE timestamp_ms >= ?1 AND timestamp_ms < ?2
                 "#,
-                params![start_ms as i64, end_ms as i64],
-                |row| row.get(0),
-            )?;
+            params![start_ms as i64, end_ms as i64],
+            |row| row.get(0),
+        )?;
 
         Ok(cost)
     }
@@ -369,7 +377,11 @@ impl Store {
     ///
     /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
     /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
-    pub fn get_sessions_by_time_range(&self, start_ms: u64, end_ms: u64) -> Result<Vec<SessionUsage>> {
+    pub fn get_sessions_by_time_range(
+        &self,
+        start_ms: u64,
+        end_ms: u64,
+    ) -> Result<Vec<SessionUsage>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT * FROM session_usage
@@ -383,7 +395,10 @@ impl Store {
                 session_id: row.get(0)?,
                 agent_name: row.get(1)?,
                 task_id: parse_id(&row.get::<_, String>(2)?, 2)?,
-                subtask_id: row.get::<_, Option<String>>(3)?.map(|s| parse_id(&s, 3)).transpose()?,
+                subtask_id: row
+                    .get::<_, Option<String>>(3)?
+                    .map(|s| parse_id(&s, 3))
+                    .transpose()?,
                 spec_id: parse_id(&row.get::<_, String>(4)?, 4)?,
                 timestamp_ms: row.get::<_, i64>(5)? as u64,
                 input_tokens: row.get::<_, i64>(6)? as u64,
@@ -408,7 +423,11 @@ impl Store {
     ///
     /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
     /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
-    pub fn get_cost_by_agent_in_range(&self, start_ms: u64, end_ms: u64) -> Result<std::collections::HashMap<String, f64>> {
+    pub fn get_cost_by_agent_in_range(
+        &self,
+        start_ms: u64,
+        end_ms: u64,
+    ) -> Result<std::collections::HashMap<String, f64>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT agent_name, COALESCE(SUM(estimated_cost_usd), 0.0) as total_cost
@@ -442,7 +461,12 @@ impl Store {
     /// * `n` - Number of top specs to return
     /// * `start_ms` - Start of time range (Unix timestamp in milliseconds, inclusive)
     /// * `end_ms` - End of time range (Unix timestamp in milliseconds, exclusive)
-    pub fn get_top_n_specs_by_cost(&self, n: usize, start_ms: u64, end_ms: u64) -> Result<Vec<(SpecId, f64)>> {
+    pub fn get_top_n_specs_by_cost(
+        &self,
+        n: usize,
+        start_ms: u64,
+        end_ms: u64,
+    ) -> Result<Vec<(SpecId, f64)>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT spec_id, COALESCE(SUM(estimated_cost_usd), 0.0) as total_cost
@@ -1380,10 +1404,12 @@ mod tests {
         store.save_circuit_breaker_state(&state).unwrap();
 
         // Verify it exists
-        assert!(store
-            .load_circuit_breaker_state(task_id, subtask_id)
-            .unwrap()
-            .is_some());
+        assert!(
+            store
+                .load_circuit_breaker_state(task_id, subtask_id)
+                .unwrap()
+                .is_some()
+        );
 
         // Delete it
         store
@@ -1391,10 +1417,12 @@ mod tests {
             .unwrap();
 
         // Verify it's gone
-        assert!(store
-            .load_circuit_breaker_state(task_id, subtask_id)
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .load_circuit_breaker_state(task_id, subtask_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1489,7 +1517,9 @@ mod tests {
         store.insert_session(&session3).unwrap();
 
         // Query for sessions between 1.5M and 3.5M (should get session2 and session3)
-        let sessions = store.get_sessions_by_time_range(1_500_000, 3_500_000).unwrap();
+        let sessions = store
+            .get_sessions_by_time_range(1_500_000, 3_500_000)
+            .unwrap();
         assert_eq!(sessions.len(), 2);
         // Results should be ordered by timestamp descending
         assert_eq!(sessions[0].session_id, "sess-3");
@@ -1539,7 +1569,9 @@ mod tests {
         store.insert_session(&session4).unwrap();
 
         // Query for costs between 1.5M and 3M (should get session2 and session3)
-        let costs = store.get_cost_by_agent_in_range(1_500_000, 3_000_000).unwrap();
+        let costs = store
+            .get_cost_by_agent_in_range(1_500_000, 3_000_000)
+            .unwrap();
         assert_eq!(costs.len(), 2);
         assert!((costs["claude"] - 0.02).abs() < f64::EPSILON);
         assert!((costs["gpt4"] - 0.05).abs() < f64::EPSILON);
@@ -1589,7 +1621,9 @@ mod tests {
         store.insert_session(&session4).unwrap();
 
         // Get top 2 specs in range 1.5M to 3.5M (should get spec2, spec3)
-        let top = store.get_top_n_specs_by_cost(2, 1_500_000, 3_500_000).unwrap();
+        let top = store
+            .get_top_n_specs_by_cost(2, 1_500_000, 3_500_000)
+            .unwrap();
         assert_eq!(top.len(), 2);
         // Should be ordered by cost descending
         assert_eq!(top[0].0, spec2);
@@ -1649,7 +1683,9 @@ mod tests {
         assert!((cost - 0.06).abs() < f64::EPSILON);
 
         // Query for range with no sessions
-        let cost = store.get_cost_in_time_range(10_000_000, 20_000_000).unwrap();
+        let cost = store
+            .get_cost_in_time_range(10_000_000, 20_000_000)
+            .unwrap();
         assert!((cost - 0.0).abs() < f64::EPSILON);
     }
 }

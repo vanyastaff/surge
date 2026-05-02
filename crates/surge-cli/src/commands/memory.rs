@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
-use surge_persistence::memory::{models::*, MemoryStore};
+use surge_persistence::memory::{MemoryStore, models::*};
 
 use super::load_spec_by_id;
 
@@ -142,7 +142,7 @@ fn add_memory(
             if !tags_vec.is_empty() {
                 println!("   Tags: {}", tags_vec.join(", "));
             }
-        }
+        },
 
         MemoryCategory::Pattern => {
             let name = name.unwrap_or_else(|| "Pattern".to_string());
@@ -163,7 +163,7 @@ fn add_memory(
             if !tags_vec.is_empty() {
                 println!("   Tags: {}", tags_vec.join(", "));
             }
-        }
+        },
 
         MemoryCategory::Gotcha => {
             let title = title.unwrap_or_else(|| "Gotcha".to_string());
@@ -184,14 +184,15 @@ fn add_memory(
             if !tags_vec.is_empty() {
                 println!("   Tags: {}", tags_vec.join(", "));
             }
-        }
+        },
 
         MemoryCategory::File => {
             let file_path = file_path.ok_or_else(|| {
                 anyhow::anyhow!("--file-path is required for file category entries")
             })?;
 
-            let mut file_context = FileContext::new(file_path.clone(), content.clone(), timestamp_ms);
+            let mut file_context =
+                FileContext::new(file_path.clone(), content.clone(), timestamp_ms);
 
             if let Some(sid) = spec_id {
                 file_context = file_context.with_spec_id(sid);
@@ -208,7 +209,7 @@ fn add_memory(
             if !tags_vec.is_empty() {
                 println!("   Tags: {}", tags_vec.join(", "));
             }
-        }
+        },
     }
 
     Ok(())
@@ -258,33 +259,39 @@ fn search_memory(
                     eprintln!("⚠️  Search error: {}", e);
                     eprintln!("   Try quoting your search query or using simpler terms.");
                     return Err(e.into());
-                }
+                },
             }
-        }
+        },
     };
 
     // Apply spec_id filter if provided
     if let Some(sid) = spec_id {
-        results.discoveries.retain(|d| d.spec_id.as_ref() == Some(&sid));
-        results.patterns.retain(|p| p.spec_id.as_ref() == Some(&sid));
+        results
+            .discoveries
+            .retain(|d| d.spec_id.as_ref() == Some(&sid));
+        results
+            .patterns
+            .retain(|p| p.spec_id.as_ref() == Some(&sid));
         results.gotchas.retain(|g| g.spec_id.as_ref() == Some(&sid));
-        results.file_contexts.retain(|f| f.spec_id.as_ref() == Some(&sid));
+        results
+            .file_contexts
+            .retain(|f| f.spec_id.as_ref() == Some(&sid));
     }
 
     // Apply tags filter if provided
     if !tags_filter.is_empty() {
-        results.discoveries.retain(|d| {
-            tags_filter.iter().any(|tag| d.tags.contains(tag))
-        });
-        results.patterns.retain(|p| {
-            tags_filter.iter().any(|tag| p.tags.contains(tag))
-        });
-        results.gotchas.retain(|g| {
-            tags_filter.iter().any(|tag| g.tags.contains(tag))
-        });
-        results.file_contexts.retain(|f| {
-            tags_filter.iter().any(|tag| f.tags.contains(tag))
-        });
+        results
+            .discoveries
+            .retain(|d| tags_filter.iter().any(|tag| d.tags.contains(tag)));
+        results
+            .patterns
+            .retain(|p| tags_filter.iter().any(|tag| p.tags.contains(tag)));
+        results
+            .gotchas
+            .retain(|g| tags_filter.iter().any(|tag| g.tags.contains(tag)));
+        results
+            .file_contexts
+            .retain(|f| tags_filter.iter().any(|tag| f.tags.contains(tag)));
     }
 
     // Display results

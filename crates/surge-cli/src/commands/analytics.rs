@@ -190,16 +190,18 @@ fn show_summary(
                     agent_breakdown: None,
                 };
                 println!("{}", serde_json::to_string_pretty(&empty_summary)?);
-            }
+            },
             OutputFormat::Csv => {
-                println!("spec_id,total_sessions,total_cost_usd,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens");
-            }
+                println!(
+                    "spec_id,total_sessions,total_cost_usd,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens"
+                );
+            },
             OutputFormat::Text => {
                 println!("⚠️  No analytics data available yet.");
                 println!(
                     "   Analytics tracking will be recorded after running specs with the orchestrator."
                 );
-            }
+            },
         }
         return Ok(());
     }
@@ -425,7 +427,10 @@ fn show_summary(
             println!("💰 Total Cost This Week: ${:.4}", summary.total_cost_usd);
             println!();
             println!("Token Usage:");
-            println!("  Input:        {:>12}", super::format::format_number(summary.input_tokens));
+            println!(
+                "  Input:        {:>12}",
+                super::format::format_number(summary.input_tokens)
+            );
             println!(
                 "  Output:       {:>12}",
                 super::format::format_number(summary.output_tokens)
@@ -448,37 +453,49 @@ fn show_summary(
             );
 
             // Display top 3 tasks
-            if let Some(ref top_tasks) = summary.top_tasks && !top_tasks.is_empty() {
+            if let Some(ref top_tasks) = summary.top_tasks
+                && !top_tasks.is_empty()
+            {
                 println!();
                 println!("🏆 Top 3 Costliest Tasks:");
                 for (i, task) in top_tasks.iter().enumerate() {
                     println!();
                     println!("   {}. {}", i + 1, task.spec_id);
                     println!("      Sessions: {}", task.session_count);
-                    println!("      Tokens:   {}", super::format::format_number(task.total_tokens));
+                    println!(
+                        "      Tokens:   {}",
+                        super::format::format_number(task.total_tokens)
+                    );
                     println!("      Cost:     ${:.4}", task.total_cost_usd);
                 }
             }
 
             // Display per-agent breakdown
-            if let Some(ref agents) = summary.agent_breakdown && !agents.is_empty() {
+            if let Some(ref agents) = summary.agent_breakdown
+                && !agents.is_empty()
+            {
                 println!();
                 println!("🤖 Per-Agent Breakdown:");
                 for agent in agents {
                     println!();
                     println!("   Agent: {}", agent.agent_name);
                     println!("      Sessions: {}", agent.session_count);
-                    println!("      Tokens:   {}", super::format::format_number(agent.total_tokens));
+                    println!(
+                        "      Tokens:   {}",
+                        super::format::format_number(agent.total_tokens)
+                    );
                     println!("      Cost:     ${:.4}", agent.total_cost_usd);
                 }
             }
-        }
+        },
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&summary)?);
-        }
+        },
         OutputFormat::Csv => {
             // Header
-            println!("spec_id,total_sessions,total_cost_usd,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens");
+            println!(
+                "spec_id,total_sessions,total_cost_usd,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens"
+            );
             // Data
             println!(
                 "{},{},{},{},{},{},{},{},{}",
@@ -492,7 +509,7 @@ fn show_summary(
                 summary.cached_write_tokens,
                 summary.total_tokens
             );
-        }
+        },
     }
 
     Ok(())
@@ -513,13 +530,15 @@ fn export_sessions(
         match format {
             OutputFormat::Json => {
                 println!("[]");
-            }
+            },
             OutputFormat::Csv => {
-                println!("session_id,spec_id,subtask_id,agent_name,timestamp_ms,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens,estimated_cost_usd");
-            }
+                println!(
+                    "session_id,spec_id,subtask_id,agent_name,timestamp_ms,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens,estimated_cost_usd"
+                );
+            },
             OutputFormat::Text => {
                 println!("⚠️  No session data available yet.");
-            }
+            },
         }
         return Ok(());
     }
@@ -609,17 +628,22 @@ fn export_sessions(
                 }
                 println!("  Agent:     {}", session.agent_name);
                 println!("  Timestamp: {}", session.timestamp_ms);
-                println!("  Tokens:    {}", super::format::format_number(session.total_tokens));
+                println!(
+                    "  Tokens:    {}",
+                    super::format::format_number(session.total_tokens)
+                );
                 println!("  Cost:      ${:.4}", session.estimated_cost_usd);
                 println!();
             }
-        }
+        },
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&export_data)?);
-        }
+        },
         OutputFormat::Csv => {
             // Header
-            println!("session_id,spec_id,subtask_id,agent_name,timestamp_ms,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens,estimated_cost_usd");
+            println!(
+                "session_id,spec_id,subtask_id,agent_name,timestamp_ms,input_tokens,output_tokens,thought_tokens,cached_read_tokens,cached_write_tokens,total_tokens,estimated_cost_usd"
+            );
             // Data
             for session in &export_data {
                 println!(
@@ -638,7 +662,7 @@ fn export_sessions(
                     session.estimated_cost_usd
                 );
             }
-        }
+        },
     }
 
     Ok(())
@@ -670,15 +694,19 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                     weekly_remaining_usd: 0.0,
                 };
                 println!("{}", serde_json::to_string_pretty(&export)?);
-            }
+            },
             OutputFormat::Csv => {
-                println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
-            }
+                println!(
+                    "period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd"
+                );
+            },
             OutputFormat::Text => {
                 println!("💰 Budget Status\n");
                 println!("⚠️  No budget configured.");
-                println!("   Set budget_usd in [analytics] section of surge.toml to enable budget tracking.");
-            }
+                println!(
+                    "   Set budget_usd in [analytics] section of surge.toml to enable budget tracking."
+                );
+            },
         }
         return Ok(());
     }
@@ -702,21 +730,25 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                     weekly_remaining_usd: weekly_budget_usd.unwrap_or(0.0),
                 };
                 println!("{}", serde_json::to_string_pretty(&export)?);
-            }
+            },
             OutputFormat::Csv => {
-                println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
+                println!(
+                    "period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd"
+                );
                 if let Some(daily) = daily_budget_usd {
                     println!("daily,{},0.0,0.0,ok,{}", daily, daily);
                 }
                 if let Some(weekly) = weekly_budget_usd {
                     println!("weekly,{},0.0,0.0,ok,{}", weekly, weekly);
                 }
-            }
+            },
             OutputFormat::Text => {
                 println!("💰 Budget Status\n");
                 println!("⚠️  No analytics data available yet.");
-                println!("   Budget tracking will begin after running specs with the orchestrator.");
-            }
+                println!(
+                    "   Budget tracking will begin after running specs with the orchestrator."
+                );
+            },
         }
         return Ok(());
     }
@@ -756,7 +788,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                     surge_persistence::budget::BudgetWarningLevel::Warning => {
                         println!(
                             "⚠️  Warning: ${:.2}/${:.2} daily budget used ({:.1}%)",
@@ -764,7 +796,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                     surge_persistence::budget::BudgetWarningLevel::Critical => {
                         println!(
                             "🚨 Critical: ${:.2}/${:.2} daily budget used ({:.1}%)",
@@ -772,7 +804,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                 }
                 println!("  Remaining: ${:.2}", status.remaining_usd());
                 println!();
@@ -789,7 +821,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                     surge_persistence::budget::BudgetWarningLevel::Warning => {
                         println!(
                             "⚠️  Warning: ${:.2}/${:.2} weekly budget used ({:.1}%)",
@@ -797,7 +829,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                     surge_persistence::budget::BudgetWarningLevel::Critical => {
                         println!(
                             "🚨 Critical: ${:.2}/${:.2} weekly budget used ({:.1}%)",
@@ -805,32 +837,50 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                             status.budget_limit_usd,
                             status.usage_percentage
                         );
-                    }
+                    },
                 }
                 println!("  Remaining: ${:.2}", status.remaining_usd());
             }
-        }
+        },
         OutputFormat::Json => {
             let export = BudgetStatusExport {
                 daily_budget_usd,
-                daily_spending_usd: daily_status.as_ref().map(|s| s.actual_spending_usd).unwrap_or(0.0),
-                daily_usage_percentage: daily_status.as_ref().map(|s| s.usage_percentage).unwrap_or(0.0),
+                daily_spending_usd: daily_status
+                    .as_ref()
+                    .map(|s| s.actual_spending_usd)
+                    .unwrap_or(0.0),
+                daily_usage_percentage: daily_status
+                    .as_ref()
+                    .map(|s| s.usage_percentage)
+                    .unwrap_or(0.0),
                 daily_warning_level: daily_status
                     .as_ref()
                     .map(|s| format!("{:?}", s.warning_level).to_lowercase())
                     .unwrap_or_else(|| "none".to_string()),
-                daily_remaining_usd: daily_status.as_ref().map(|s| s.remaining_usd()).unwrap_or(0.0),
+                daily_remaining_usd: daily_status
+                    .as_ref()
+                    .map(|s| s.remaining_usd())
+                    .unwrap_or(0.0),
                 weekly_budget_usd,
-                weekly_spending_usd: weekly_status.as_ref().map(|s| s.actual_spending_usd).unwrap_or(0.0),
-                weekly_usage_percentage: weekly_status.as_ref().map(|s| s.usage_percentage).unwrap_or(0.0),
+                weekly_spending_usd: weekly_status
+                    .as_ref()
+                    .map(|s| s.actual_spending_usd)
+                    .unwrap_or(0.0),
+                weekly_usage_percentage: weekly_status
+                    .as_ref()
+                    .map(|s| s.usage_percentage)
+                    .unwrap_or(0.0),
                 weekly_warning_level: weekly_status
                     .as_ref()
                     .map(|s| format!("{:?}", s.warning_level).to_lowercase())
                     .unwrap_or_else(|| "none".to_string()),
-                weekly_remaining_usd: weekly_status.as_ref().map(|s| s.remaining_usd()).unwrap_or(0.0),
+                weekly_remaining_usd: weekly_status
+                    .as_ref()
+                    .map(|s| s.remaining_usd())
+                    .unwrap_or(0.0),
             };
             println!("{}", serde_json::to_string_pretty(&export)?);
-        }
+        },
         OutputFormat::Csv => {
             println!("period,budget_usd,spending_usd,usage_percentage,warning_level,remaining_usd");
             if let Some(ref status) = daily_status {
@@ -853,7 +903,7 @@ fn show_budget_status(format: OutputFormat) -> Result<()> {
                     status.remaining_usd()
                 );
             }
-        }
+        },
     }
 
     Ok(())

@@ -62,28 +62,26 @@ impl From<GitError> for surge_core::SurgeError {
         match e {
             GitError::WorktreeNotFound(s) => {
                 surge_core::SurgeError::NotFound(format!("worktree: {s}"))
-            }
+            },
             GitError::BranchNotFound(s) => surge_core::SurgeError::NotFound(format!("branch: {s}")),
             GitError::Io(e) => surge_core::SurgeError::Io(e),
             GitError::Git2(e) => surge_core::SurgeError::git_source(e.message().to_string(), e),
             GitError::WorktreeAlreadyExists(s) => {
                 surge_core::SurgeError::git(format!("worktree already exists: {s}"))
-            }
+            },
             GitError::EmptyRepository => {
                 surge_core::SurgeError::git("repository has no commits".to_string())
-            }
-            GitError::MergeConflict { conflicting_files } => {
-                surge_core::SurgeError::git(format!(
-                    "merge conflict in {} file(s)",
-                    conflicting_files.len()
-                ))
-            }
+            },
+            GitError::MergeConflict { conflicting_files } => surge_core::SurgeError::git(format!(
+                "merge conflict in {} file(s)",
+                conflicting_files.len()
+            )),
             GitError::NothingToCommit(s) => {
                 surge_core::SurgeError::git(format!("nothing to commit for spec '{s}'"))
-            }
+            },
             GitError::SameBranch(s) => {
                 surge_core::SurgeError::git(format!("source and target are the same branch: {s}"))
-            }
+            },
         }
     }
 }
@@ -348,7 +346,7 @@ impl GitManager {
                 if let Err(e) = wt.prune(Some(&mut prune_opts)) {
                     warn!(spec_id, %e, "worktree prune failed, continuing cleanup");
                 }
-            }
+            },
             Err(e) => debug!(spec_id, %e, "worktree not found in git, continuing cleanup"),
         }
 
@@ -361,7 +359,7 @@ impl GitManager {
             Ok(mut branch) => {
                 branch.delete()?;
                 info!(spec_id, branch_name, "deleted branch");
-            }
+            },
             Err(e) => debug!(spec_id, %e, "branch not found, skipping delete"),
         }
 

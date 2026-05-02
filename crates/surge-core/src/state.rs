@@ -502,7 +502,7 @@ impl std::fmt::Display for TaskState {
                     write!(f, ": {r}")?;
                 }
                 Ok(())
-            }
+            },
             Self::QaFix {
                 iteration,
                 verdict,
@@ -516,7 +516,7 @@ impl std::fmt::Display for TaskState {
                     write!(f, ": {r}")?;
                 }
                 Ok(())
-            }
+            },
             Self::HumanReview => write!(f, "Human Review"),
             Self::Merging => write!(f, "Merging"),
             Self::Completed => write!(f, "Completed"),

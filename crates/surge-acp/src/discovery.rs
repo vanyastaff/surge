@@ -80,14 +80,14 @@ impl Platform {
                     paths.push(h.join(".local/bin"));
                 }
                 paths
-            }
+            },
             Self::Linux => {
                 let mut paths = vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")];
                 if let Some(h) = home {
                     paths.push(h.join(".local/bin"));
                 }
                 paths
-            }
+            },
             Self::Windows => {
                 let mut paths = vec![
                     PathBuf::from("C:\\Program Files"),
@@ -97,7 +97,7 @@ impl Platform {
                     paths.push(h.join("AppData\\Local"));
                 }
                 paths
-            }
+            },
         }
     }
 }
@@ -423,7 +423,7 @@ mod tests {
                         path
                     );
                 }
-            }
+            },
             Platform::Windows => {
                 // Windows paths should contain :\ or start with appropriate prefix
                 for path in &paths {
@@ -434,7 +434,7 @@ mod tests {
                         path
                     );
                 }
-            }
+            },
         }
 
         // Test from_standard_paths with a real registry entry
@@ -448,10 +448,10 @@ mod tests {
                     // If found, verify it's a valid path
                     assert!(path.exists(), "Found path should exist: {:?}", path);
                     assert!(path.is_file(), "Found path should be a file: {:?}", path);
-                }
+                },
                 None => {
                     // Not found, which is fine for testing
-                }
+                },
             }
         }
     }
@@ -501,7 +501,9 @@ mod tests {
 
         let discovery = AgentDiscovery::new();
         let registry = Registry::builtin();
-        let claude_entry = registry.find("claude-acp").expect("Claude should be in builtin registry");
+        let claude_entry = registry
+            .find("claude-acp")
+            .expect("Claude should be in builtin registry");
         let copilot_entry = registry
             .find("github-copilot-cli")
             .expect("Copilot should be in builtin registry");

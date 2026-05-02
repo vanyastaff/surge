@@ -48,7 +48,7 @@ impl CircuitBreaker {
                         "loaded circuit breaker state from persistence"
                     );
                     loaded_state
-                }
+                },
                 Ok(None) => {
                     info!(
                         task_id = %task_id,
@@ -56,7 +56,7 @@ impl CircuitBreaker {
                         "no existing circuit breaker state, creating new"
                     );
                     CircuitBreakerState::new(task_id, subtask_id)
-                }
+                },
                 Err(e) => {
                     warn!(
                         task_id = %task_id,
@@ -65,7 +65,7 @@ impl CircuitBreaker {
                         "failed to load circuit breaker state, creating new"
                     );
                     CircuitBreakerState::new(task_id, subtask_id)
-                }
+                },
             }
         } else {
             CircuitBreakerState::new(task_id, subtask_id)
@@ -108,10 +108,11 @@ impl CircuitBreaker {
     /// Increments the consecutive failure count, saves state, and trips the
     /// circuit if threshold is exceeded. Emits appropriate events.
     pub async fn record_failure(&mut self, error_msg: String, next_retry_time_ms: Option<u64>) {
-        self.state.record_failure(error_msg.clone(), next_retry_time_ms);
+        self.state
+            .record_failure(error_msg.clone(), next_retry_time_ms);
 
-        let should_trip = self.state.consecutive_failures >= self.threshold
-            && !self.state.is_tripped();
+        let should_trip =
+            self.state.consecutive_failures >= self.threshold && !self.state.is_tripped();
 
         if should_trip {
             let now_ms = std::time::SystemTime::now()

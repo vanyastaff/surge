@@ -10,10 +10,10 @@
 
 use std::path::PathBuf;
 use surge_core::id::{SpecId, SubtaskId, TaskId};
+use surge_persistence::budget::{BudgetTracker, BudgetWarningLevel};
 use surge_persistence::models::SessionUsage;
 use surge_persistence::pricing::{claude_sonnet_35_pricing, gpt4_turbo_pricing};
 use surge_persistence::store::Store;
-use surge_persistence::budget::{BudgetTracker, BudgetWarningLevel};
 use tempfile::TempDir;
 
 /// Create a test database with sample session usage data.
@@ -56,7 +56,13 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
         thought_tokens: Some(2_500),
         cached_read_tokens: Some(150_000),
         cached_write_tokens: Some(8_000),
-        estimated_cost_usd: Some(claude_pricing.calculate_cost(50_000, 12_000, Some(2_500), Some(150_000), Some(8_000))),
+        estimated_cost_usd: Some(claude_pricing.calculate_cost(
+            50_000,
+            12_000,
+            Some(2_500),
+            Some(150_000),
+            Some(8_000),
+        )),
         timestamp_ms: now - (2 * 24 * 60 * 60 * 1000), // 2 days ago
     };
 
@@ -72,7 +78,13 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
         thought_tokens: Some(3_200),
         cached_read_tokens: Some(200_000),
         cached_write_tokens: Some(12_000),
-        estimated_cost_usd: Some(claude_pricing.calculate_cost(75_000, 18_000, Some(3_200), Some(200_000), Some(12_000))),
+        estimated_cost_usd: Some(claude_pricing.calculate_cost(
+            75_000,
+            18_000,
+            Some(3_200),
+            Some(200_000),
+            Some(12_000),
+        )),
         timestamp_ms: now - (1 * 24 * 60 * 60 * 1000), // 1 day ago
     };
 
@@ -88,7 +100,13 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
         thought_tokens: Some(1_500),
         cached_read_tokens: Some(100_000),
         cached_write_tokens: Some(5_000),
-        estimated_cost_usd: Some(claude_pricing.calculate_cost(30_000, 8_000, Some(1_500), Some(100_000), Some(5_000))),
+        estimated_cost_usd: Some(claude_pricing.calculate_cost(
+            30_000,
+            8_000,
+            Some(1_500),
+            Some(100_000),
+            Some(5_000),
+        )),
         timestamp_ms: now,
     };
 
@@ -111,10 +129,18 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
     };
 
     // Store all sessions (renamed from store_session to insert_session based on grep results)
-    store.insert_session(&session_1).expect("Failed to store session 1");
-    store.insert_session(&session_2).expect("Failed to store session 2");
-    store.insert_session(&session_3).expect("Failed to store session 3");
-    store.insert_session(&session_4).expect("Failed to store session 4");
+    store
+        .insert_session(&session_1)
+        .expect("Failed to store session 1");
+    store
+        .insert_session(&session_2)
+        .expect("Failed to store session 2");
+    store
+        .insert_session(&session_3)
+        .expect("Failed to store session 3");
+    store
+        .insert_session(&session_4)
+        .expect("Failed to store session 4");
 
     (temp_dir, db_path, store)
 }
@@ -172,11 +198,15 @@ fn test_analytics_export_json_contains_cost_data() {
     assert!(!sessions.is_empty(), "Should have test sessions");
 
     // Verify JSON serialization of session data
-    let json_output = serde_json::to_string_pretty(&sessions)
-        .expect("Failed to serialize sessions to JSON");
+    let json_output =
+        serde_json::to_string_pretty(&sessions).expect("Failed to serialize sessions to JSON");
 
     let preview_len = 500.min(json_output.len());
-    eprintln!("JSON export sample (first {} chars):\n{}", preview_len, &json_output[..preview_len]);
+    eprintln!(
+        "JSON export sample (first {} chars):\n{}",
+        preview_len,
+        &json_output[..preview_len]
+    );
 
     // Verify JSON contains cost fields
     assert!(
@@ -258,7 +288,9 @@ fn test_budget_warnings_at_thresholds() {
     );
     eprintln!(
         "✓ Budget Warning: ${:.4}/${:.4} used ({:.1}%)",
-        status_warning.actual_spending_usd, status_warning.budget_limit_usd, status_warning.usage_percentage
+        status_warning.actual_spending_usd,
+        status_warning.budget_limit_usd,
+        status_warning.usage_percentage
     );
 
     // Test 3: Budget Critical (budget at 96% usage)
@@ -275,7 +307,9 @@ fn test_budget_warnings_at_thresholds() {
     );
     eprintln!(
         "✓ Budget Critical: ${:.4}/${:.4} used ({:.1}%)",
-        status_critical.actual_spending_usd, status_critical.budget_limit_usd, status_critical.usage_percentage
+        status_critical.actual_spending_usd,
+        status_critical.budget_limit_usd,
+        status_critical.usage_percentage
     );
 
     // Test 4: Budget Exceeded (spending > budget)
@@ -320,10 +354,7 @@ fn test_time_range_queries_for_summary() {
         !week_sessions.is_empty(),
         "Should have sessions in the last 7 days"
     );
-    eprintln!(
-        "✓ Found {} sessions in last 7 days",
-        week_sessions.len()
-    );
+    eprintln!("✓ Found {} sessions in last 7 days", week_sessions.len());
 
     // Test 2: Get cost by agent for this week
     let cost_by_agent = store
@@ -345,10 +376,7 @@ fn test_time_range_queries_for_summary() {
         .get_top_n_specs_by_cost(3, seven_days_ago, now + 1000)
         .expect("Failed to get top specs");
 
-    assert!(
-        !top_specs.is_empty(),
-        "Should have top specs data"
-    );
+    assert!(!top_specs.is_empty(), "Should have top specs data");
     eprintln!("✓ Top {} costliest specs:", top_specs.len());
     for (i, (spec_id, cost)) in top_specs.iter().enumerate() {
         eprintln!("  {}. Spec {}: ${:.4}", i + 1, spec_id, cost);
@@ -493,8 +521,7 @@ fn test_end_to_end_analytics_pipeline() {
     );
 
     // Step 7: Verify JSON export works
-    let json = serde_json::to_string(&all_sessions)
-        .expect("Failed to serialize to JSON");
+    let json = serde_json::to_string(&all_sessions).expect("Failed to serialize to JSON");
     assert!(json.contains("estimated_cost_usd"));
     eprintln!("✓ Step 7: JSON export validated");
 

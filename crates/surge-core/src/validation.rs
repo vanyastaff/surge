@@ -41,11 +41,22 @@ pub enum ValidationErrorKind {
     BacktrackTargetUnreachable,
     EscalateTargetNotHumanOrNotify,
     SchemaVersionMismatch,
-    KeyFormatViolation { key: String },
-    SubgraphRefMissing { subgraph: SubgraphKey },
-    SubgraphReferenceCycle { cycle: Vec<SubgraphKey> },
-    NodeKeyCollision { key: NodeKey, locations: Vec<NodeKeyOrigin> },
-    OrphanSubgraph { key: SubgraphKey },
+    KeyFormatViolation {
+        key: String,
+    },
+    SubgraphRefMissing {
+        subgraph: SubgraphKey,
+    },
+    SubgraphReferenceCycle {
+        cycle: Vec<SubgraphKey>,
+    },
+    NodeKeyCollision {
+        key: NodeKey,
+        locations: Vec<NodeKeyOrigin>,
+    },
+    OrphanSubgraph {
+        key: SubgraphKey,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,8 +102,14 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w1_escalate_target(graph, &mut findings);
     warning_w2_orphan_subgraphs(graph, &mut findings);
 
-    let has_error = findings.iter().any(|f| f.kind.severity() == Severity::Error);
-    if has_error { Err(findings) } else { Ok(findings) }
+    let has_error = findings
+        .iter()
+        .any(|f| f.kind.severity() == Severity::Error);
+    if has_error {
+        Err(findings)
+    } else {
+        Ok(findings)
+    }
 }
 
 // ── Rule helpers ─────────────────────────────────────────────────
@@ -102,7 +119,10 @@ fn rule_1_start_exists(graph: &Graph, out: &mut Vec<ValidationError>) {
         out.push(ValidationError {
             kind: ValidationErrorKind::StartNodeMissing,
             location: ErrorLocation::Graph,
-            message: format!("start node `{}` not found in nodes map", graph.start.as_str()),
+            message: format!(
+                "start node `{}` not found in nodes map",
+                graph.start.as_str()
+            ),
         });
     }
 }
@@ -112,7 +132,9 @@ fn rules_2_3_4_edge_endpoints(graph: &Graph, out: &mut Vec<ValidationError>) {
         if !graph.nodes.contains_key(&edge.from.node) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::EdgeFromUnknownNode,
-                location: ErrorLocation::Edge { id: edge.id.clone() },
+                location: ErrorLocation::Edge {
+                    id: edge.id.clone(),
+                },
                 message: format!(
                     "edge `{}` references missing source node `{}`",
                     edge.id.as_str(),
@@ -123,7 +145,9 @@ fn rules_2_3_4_edge_endpoints(graph: &Graph, out: &mut Vec<ValidationError>) {
         if !graph.nodes.contains_key(&edge.to) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::EdgeToUnknownNode,
-                location: ErrorLocation::Edge { id: edge.id.clone() },
+                location: ErrorLocation::Edge {
+                    id: edge.id.clone(),
+                },
                 message: format!(
                     "edge `{}` references missing target node `{}`",
                     edge.id.as_str(),
@@ -132,11 +156,16 @@ fn rules_2_3_4_edge_endpoints(graph: &Graph, out: &mut Vec<ValidationError>) {
             });
         }
         if let Some(node) = graph.nodes.get(&edge.from.node) {
-            let declared = node.declared_outcomes.iter().any(|o| o.id == edge.from.outcome);
+            let declared = node
+                .declared_outcomes
+                .iter()
+                .any(|o| o.id == edge.from.outcome);
             if !declared {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::EdgeFromUndeclaredOutcome,
-                    location: ErrorLocation::Edge { id: edge.id.clone() },
+                    location: ErrorLocation::Edge {
+                        id: edge.id.clone(),
+                    },
                     message: format!(
                         "edge `{}` from undeclared outcome `{}` on node `{}`",
                         edge.id.as_str(),
@@ -162,7 +191,10 @@ fn rule_5_one_edge_per_outcome(graph: &Graph, out: &mut Vec<ValidationError>) {
         if edges.len() > 1 {
             out.push(ValidationError {
                 kind: ValidationErrorKind::DuplicateEdgeFromSamePort,
-                location: ErrorLocation::Outcome { node: node.clone(), outcome: outcome.clone() },
+                location: ErrorLocation::Outcome {
+                    node: node.clone(),
+                    outcome: outcome.clone(),
+                },
                 message: format!(
                     "outcome `{}` on `{}` has {} outgoing edges (must be 0 or 1)",
                     outcome.as_str(),
@@ -250,27 +282,24 @@ fn rules_8_9_10_node_specific(graph: &Graph, out: &mut Vec<ValidationError>) {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::InvalidProfileRef,
                     location: ErrorLocation::Node { id: id.clone() },
-                    message: format!(
-                        "agent node `{}` has empty profile reference",
-                        id.as_str()
-                    ),
+                    message: format!("agent node `{}` has empty profile reference", id.as_str()),
                 });
-            }
+            },
             NodeConfig::HumanGate(cfg) if cfg.options.is_empty() => {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::HumanGateWithoutOptions,
                     location: ErrorLocation::Node { id: id.clone() },
                     message: format!("human-gate node `{}` has no options", id.as_str()),
                 });
-            }
+            },
             NodeConfig::Branch(cfg) if cfg.predicates.is_empty() => {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::BranchWithoutArms,
                     location: ErrorLocation::Node { id: id.clone() },
                     message: format!("branch node `{}` has no predicates", id.as_str()),
                 });
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }
@@ -306,7 +335,9 @@ fn rule_11b_subgraph_refs_exist(graph: &Graph, out: &mut Vec<ValidationError>) {
             && !graph.subgraphs.contains_key(sk)
         {
             out.push(ValidationError {
-                kind: ValidationErrorKind::SubgraphRefMissing { subgraph: sk.clone() },
+                kind: ValidationErrorKind::SubgraphRefMissing {
+                    subgraph: sk.clone(),
+                },
                 location: ErrorLocation::Node { id: id.clone() },
                 message: format!(
                     "node `{}` references missing subgraph `{}`",
@@ -323,7 +354,9 @@ fn rules_12_13_subgraphs_well_formed(graph: &Graph, out: &mut Vec<ValidationErro
         if !sub.nodes.contains_key(&sub.start) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::LoopBodyMissingStart,
-                location: ErrorLocation::Subgraph { path: vec![sk.clone()] },
+                location: ErrorLocation::Subgraph {
+                    path: vec![sk.clone()],
+                },
                 message: format!(
                     "subgraph `{}` start `{}` not in its nodes",
                     sk.as_str(),
@@ -340,7 +373,9 @@ fn validate_subgraph_structure(sk: &SubgraphKey, sub: &Subgraph, out: &mut Vec<V
         if !sub.nodes.contains_key(&edge.from.node) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::EdgeFromUnknownNode,
-                location: ErrorLocation::Subgraph { path: vec![sk.clone()] },
+                location: ErrorLocation::Subgraph {
+                    path: vec![sk.clone()],
+                },
                 message: format!(
                     "subgraph `{}`: edge `{}` from missing node `{}`",
                     sk.as_str(),
@@ -352,7 +387,9 @@ fn validate_subgraph_structure(sk: &SubgraphKey, sub: &Subgraph, out: &mut Vec<V
         if !sub.nodes.contains_key(&edge.to) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::EdgeToUnknownNode,
-                location: ErrorLocation::Subgraph { path: vec![sk.clone()] },
+                location: ErrorLocation::Subgraph {
+                    path: vec![sk.clone()],
+                },
                 message: format!(
                     "subgraph `{}`: edge `{}` to missing node `{}`",
                     sk.as_str(),
@@ -405,7 +442,7 @@ fn rule_16_subgraph_cycle(graph: &Graph, out: &mut Vec<ValidationError>) {
             match &n.config {
                 NodeConfig::Loop(cfg) => targets.push(cfg.body.clone()),
                 NodeConfig::Subgraph(cfg) => targets.push(cfg.inner.clone()),
-                _ => {}
+                _ => {},
             }
         }
         edges.insert(sk.clone(), targets);
@@ -415,7 +452,7 @@ fn rule_16_subgraph_cycle(graph: &Graph, out: &mut Vec<ValidationError>) {
         match &n.config {
             NodeConfig::Loop(cfg) => root_targets.push(cfg.body.clone()),
             NodeConfig::Subgraph(cfg) => root_targets.push(cfg.inner.clone()),
-            _ => {}
+            _ => {},
         }
     }
 
@@ -453,8 +490,12 @@ fn rule_16_subgraph_cycle(graph: &Graph, out: &mut Vec<ValidationError>) {
             canonical.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             if reported.insert(canonical) {
                 out.push(ValidationError {
-                    kind: ValidationErrorKind::SubgraphReferenceCycle { cycle: cycle.clone() },
-                    location: ErrorLocation::Subgraph { path: cycle.clone() },
+                    kind: ValidationErrorKind::SubgraphReferenceCycle {
+                        cycle: cycle.clone(),
+                    },
+                    location: ErrorLocation::Subgraph {
+                        path: cycle.clone(),
+                    },
                     message: format!(
                         "subgraph reference cycle: {}",
                         cycle
@@ -530,11 +571,11 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
         match &n.config {
             NodeConfig::Loop(cfg) => {
                 referenced.insert(cfg.body.clone());
-            }
+            },
             NodeConfig::Subgraph(cfg) => {
                 referenced.insert(cfg.inner.clone());
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     for sub in graph.subgraphs.values() {
@@ -542,11 +583,11 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
             match &n.config {
                 NodeConfig::Loop(cfg) => {
                     referenced.insert(cfg.body.clone());
-                }
+                },
                 NodeConfig::Subgraph(cfg) => {
                     referenced.insert(cfg.inner.clone());
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
@@ -554,7 +595,9 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
         if !referenced.contains(sk) {
             out.push(ValidationError {
                 kind: ValidationErrorKind::OrphanSubgraph { key: sk.clone() },
-                location: ErrorLocation::Subgraph { path: vec![sk.clone()] },
+                location: ErrorLocation::Subgraph {
+                    path: vec![sk.clone()],
+                },
                 message: format!("subgraph `{}` is defined but never referenced", sk.as_str()),
             });
         }
@@ -614,9 +657,10 @@ mod tests {
         g.start = NodeKey::try_from("nonexistent").unwrap();
         let result = validate(&g);
         let errs = result.unwrap_err();
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidationErrorKind::StartNodeMissing)));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::StartNodeMissing))
+        );
     }
 
     #[test]
@@ -634,9 +678,10 @@ mod tests {
         });
         let result = validate(&g);
         let errs = result.unwrap_err();
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidationErrorKind::EdgeToUnknownNode)));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::EdgeToUnknownNode))
+        );
     }
 
     #[test]
@@ -659,9 +704,10 @@ mod tests {
         g.start = bn;
         let result = validate(&g);
         let errs = result.unwrap_err();
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidationErrorKind::NoTerminalReachable)));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::NoTerminalReachable))
+        );
     }
 
     #[test]
@@ -691,9 +737,10 @@ mod tests {
         );
         let result = validate(&g);
         let errs = result.unwrap_err();
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidationErrorKind::SubgraphRefMissing { .. })));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::SubgraphRefMissing { .. }))
+        );
     }
 
     #[test]
@@ -760,9 +807,10 @@ mod tests {
 
         let result = validate(&g);
         let errs = result.unwrap_err();
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidationErrorKind::NodeKeyCollision { .. })));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, ValidationErrorKind::NodeKeyCollision { .. }))
+        );
     }
 
     #[test]
@@ -792,12 +840,16 @@ mod tests {
         );
         let result = validate(&g);
         let warnings = result.expect("expected ok-with-warnings");
-        assert!(warnings
-            .iter()
-            .any(|w| matches!(w.kind, ValidationErrorKind::OrphanSubgraph { .. })));
-        assert!(warnings
-            .iter()
-            .all(|w| w.kind.severity() == Severity::Warning));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| matches!(w.kind, ValidationErrorKind::OrphanSubgraph { .. }))
+        );
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind.severity() == Severity::Warning)
+        );
     }
 
     #[test]
@@ -809,6 +861,9 @@ mod tests {
             .severity(),
             Severity::Warning,
         );
-        assert_eq!(ValidationErrorKind::StartNodeMissing.severity(), Severity::Error);
+        assert_eq!(
+            ValidationErrorKind::StartNodeMissing.severity(),
+            Severity::Error
+        );
     }
 }

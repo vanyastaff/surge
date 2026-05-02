@@ -21,7 +21,11 @@ pub struct LoopConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IterableSource {
-    Artifact { node: NodeKey, name: String, jsonpath: String },
+    Artifact {
+        node: NodeKey,
+        name: String,
+        jsonpath: String,
+    },
     Static(Vec<toml::Value>),
 }
 
@@ -29,8 +33,13 @@ pub enum IterableSource {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExitCondition {
     AllItems,
-    UntilOutcome { from_node: NodeKey, outcome: OutcomeKey },
-    MaxIterations { n: u32 },
+    UntilOutcome {
+        from_node: NodeKey,
+        outcome: OutcomeKey,
+    },
+    MaxIterations {
+        n: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -39,7 +48,9 @@ pub enum FailurePolicy {
     #[default]
     Abort,
     Skip,
-    Retry { max: u32 },
+    Retry {
+        max: u32,
+    },
     Replan,
 }
 

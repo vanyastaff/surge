@@ -546,7 +546,7 @@ async fn test_qa_verdict_approved() {
             assert!(met_criteria.contains(&"Documentation complete".to_string()));
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -595,7 +595,7 @@ async fn test_qa_verdict_approved_minimal() {
             assert_eq!(met_criteria.len(), 0);
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -655,7 +655,7 @@ async fn test_qa_verdict_approved_after_iterations() {
             assert_eq!(met_criteria.len(), 4);
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -719,7 +719,7 @@ async fn test_qa_verdict_needs_fix_loop() {
             assert!(unmet_criteria.contains(&"Documentation complete".to_string()));
             assert!(issues.is_some());
             assert!(issues.unwrap().contains("Unit tests are failing"));
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event with NEEDS_FIX"),
     }
 
@@ -771,7 +771,7 @@ async fn test_qa_verdict_needs_fix_loop() {
             assert!(met_criteria.contains(&"Documentation complete".to_string()));
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event with APPROVED"),
     }
 }
@@ -839,7 +839,7 @@ async fn test_qa_verdict_needs_fix_with_issues() {
             assert!(issues_text.contains("unwrap() on line 45"));
             assert!(issues_text.contains("Error path in handle_request()"));
             assert!(issues_text.contains("Performance regression"));
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -989,7 +989,7 @@ async fn test_qa_verdict_partial() {
             let issues_text = issues.unwrap();
             assert!(issues_text.contains("Unit tests are missing"));
             assert!(issues_text.contains("Performance benchmarks"));
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -1038,7 +1038,7 @@ async fn test_qa_verdict_partial_minimal() {
             assert_eq!(met_criteria.len(), 0);
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event"),
     }
 }
@@ -1108,7 +1108,7 @@ async fn test_qa_verdict_partial_fix_loop() {
 
             assert!(issues.is_some());
             assert!(issues.unwrap().contains("Missing unit tests"));
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event with PARTIAL"),
     }
 
@@ -1166,7 +1166,7 @@ async fn test_qa_verdict_partial_fix_loop() {
             assert!(met_criteria.contains(&"Performance optimization".to_string()));
             assert_eq!(unmet_criteria.len(), 0);
             assert!(issues.is_none());
-        }
+        },
         _ => panic!("Expected QaVerdictReceived event with APPROVED"),
     }
 }

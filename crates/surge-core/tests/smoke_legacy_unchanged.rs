@@ -4,8 +4,7 @@
 //! must be unaffected.
 
 use surge_core::{
-    Spec, Subtask, SubtaskState, SurgeConfig, SurgeError, SurgeEvent, TaskState,
-    VersionedEvent,
+    Spec, Subtask, SubtaskState, SurgeConfig, SurgeError, SurgeEvent, TaskState, VersionedEvent,
 };
 
 #[test]
@@ -20,13 +19,21 @@ fn task_state_terminal_classification_unchanged() {
 #[test]
 fn task_state_active_classification_unchanged() {
     assert!(TaskState::Planning.is_active());
-    assert!(TaskState::Executing { completed: 1, total: 3 }.is_active());
+    assert!(
+        TaskState::Executing {
+            completed: 1,
+            total: 3
+        }
+        .is_active()
+    );
     assert!(!TaskState::Draft.is_active());
 }
 
 #[test]
 fn surge_event_versioned_event_constructible() {
-    let e = SurgeEvent::AgentConnected { agent_name: "claude".into() };
+    let e = SurgeEvent::AgentConnected {
+        agent_name: "claude".into(),
+    };
     let v = VersionedEvent::new(e, 0);
     assert_eq!(v.version, 1);
 }

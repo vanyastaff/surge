@@ -151,7 +151,10 @@ mod tests {
     fn content_hash_mismatch_shows_both_hashes() {
         let a = crate::content_hash::ContentHash::compute(b"a");
         let b = crate::content_hash::ContentHash::compute(b"b");
-        let err = SurgeError::ContentHashMismatch { expected: a, actual: b };
+        let err = SurgeError::ContentHashMismatch {
+            expected: a,
+            actual: b,
+        };
         let msg = err.to_string();
         assert!(msg.contains("sha256:"));
     }

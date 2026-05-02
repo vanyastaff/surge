@@ -168,11 +168,11 @@ impl AppState {
                 if let Some(task) = self.tasks.iter_mut().find(|t| &t.id == task_id) {
                     task.state = new_state.clone();
                 }
-            }
+            },
             SurgeEvent::AgentConnected { agent_name } => {
                 self.health.register(agent_name);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 

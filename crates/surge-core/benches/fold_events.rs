@@ -1,5 +1,5 @@
 use chrono::Utc;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::path::PathBuf;
 use surge_core::{
     approvals::ApprovalPolicy,
@@ -21,26 +21,32 @@ fn make_event(seq: u64, payload: EventPayload) -> RunEvent {
 
 fn build_typical_event_log(n: usize) -> Vec<RunEvent> {
     let mut events = Vec::with_capacity(n);
-    events.push(make_event(1, EventPayload::RunStarted {
-        pipeline_template: None,
-        project_path: PathBuf::from("/work"),
-        initial_prompt: "test".into(),
-        config: RunConfig {
-            sandbox_default: SandboxMode::WorkspaceWrite,
-            approval_default: ApprovalPolicy::OnRequest,
-            auto_pr: false,
+    events.push(make_event(
+        1,
+        EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: PathBuf::from("/work"),
+            initial_prompt: "test".into(),
+            config: RunConfig {
+                sandbox_default: SandboxMode::WorkspaceWrite,
+                approval_default: ApprovalPolicy::OnRequest,
+                auto_pr: false,
+            },
         },
-    }));
+    ));
     let _node = NodeKey::try_from("impl_1").unwrap();
     for i in 1..n {
-        events.push(make_event((i + 1) as u64, EventPayload::TokensConsumed {
-            session: SessionId::new(),
-            prompt_tokens: 1000,
-            output_tokens: 500,
-            cache_hits: 100,
-            model: "claude-opus-4-7".into(),
-            cost_usd: Some(0.03),
-        }));
+        events.push(make_event(
+            (i + 1) as u64,
+            EventPayload::TokensConsumed {
+                session: SessionId::new(),
+                prompt_tokens: 1000,
+                output_tokens: 500,
+                cache_hits: 100,
+                model: "claude-opus-4-7".into(),
+                cost_usd: Some(0.03),
+            },
+        ));
     }
     events
 }

@@ -201,11 +201,11 @@ impl MarkdownRenderer {
                     strikethrough: false,
                     code: true,
                 });
-            }
+            },
             Event::SoftBreak => self.push_text(" "),
             Event::HardBreak => {
                 self.flush_paragraph();
-            }
+            },
             Event::Rule => {
                 self.flush_paragraph();
                 self.root.push(
@@ -216,51 +216,51 @@ impl MarkdownRenderer {
                         .my(px(12.0))
                         .into_any_element(),
                 );
-            }
+            },
             Event::TaskListMarker(checked) => {
                 let marker = if checked { "☑ " } else { "☐ " };
                 self.push_text(marker);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
     fn start_tag(&mut self, tag: Tag) {
         match tag {
-            Tag::Paragraph => {}
+            Tag::Paragraph => {},
             Tag::Heading { level, .. } => {
                 self.flush_paragraph();
                 // heading level will be handled in end_tag
                 let _ = level;
-            }
+            },
             Tag::Strong => self.format_stack.push(FormatTag::Bold),
             Tag::Emphasis => self.format_stack.push(FormatTag::Italic),
             Tag::Strikethrough => self.format_stack.push(FormatTag::Strikethrough),
             Tag::Link { dest_url, .. } => {
                 self.format_stack
                     .push(FormatTag::Link(dest_url.to_string()));
-            }
+            },
             Tag::CodeBlock(kind) => {
                 self.flush_paragraph();
                 let lang = match kind {
                     CodeBlockKind::Fenced(lang) => {
                         let l = lang.to_string();
                         if l.is_empty() { None } else { Some(l) }
-                    }
+                    },
                     CodeBlockKind::Indented => None,
                 };
                 self.code_buf = Some(CodeBlock {
                     lang,
                     content: String::new(),
                 });
-            }
+            },
             Tag::List(start) => {
                 self.flush_paragraph();
                 match start {
                     Some(n) => self.list_stack.push(ListKind::Ordered(n)),
                     None => self.list_stack.push(ListKind::Unordered),
                 }
-            }
+            },
             Tag::Item => {
                 // Add bullet/number prefix
                 let prefix = match self.list_stack.last_mut() {
@@ -269,17 +269,17 @@ impl MarkdownRenderer {
                         let s = format!("{}. ", n);
                         *n += 1;
                         s
-                    }
+                    },
                     None => "• ".to_string(),
                 };
                 let indent = self.list_stack.len().saturating_sub(1);
                 let padding = "  ".repeat(indent);
                 self.push_text(&format!("{padding}{prefix}"));
-            }
+            },
             Tag::BlockQuote(_) => {
                 self.flush_paragraph();
                 self.in_blockquote = true;
-            }
+            },
             Tag::Table(_) => {
                 self.flush_paragraph();
                 self.table = Some(TableState {
@@ -289,23 +289,23 @@ impl MarkdownRenderer {
                     current_cell: String::new(),
                     in_head: false,
                 });
-            }
+            },
             Tag::TableHead => {
                 if let Some(t) = &mut self.table {
                     t.in_head = true;
                 }
-            }
+            },
             Tag::TableRow => {
                 if let Some(t) = &mut self.table {
                     t.current_row.clear();
                 }
-            }
+            },
             Tag::TableCell => {
                 if let Some(t) = &mut self.table {
                     t.current_cell.clear();
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -313,7 +313,7 @@ impl MarkdownRenderer {
         match tag {
             TagEnd::Paragraph => {
                 self.flush_paragraph();
-            }
+            },
             TagEnd::Heading(level) => {
                 let spans: Vec<_> = self.inline_buf.drain(..).collect();
                 let text: String = spans.iter().map(|s| s.text.as_str()).collect();
@@ -336,22 +336,22 @@ impl MarkdownRenderer {
                         .child(text)
                         .into_any_element(),
                 );
-            }
+            },
             TagEnd::Strong => {
                 self.format_stack.retain(|f| !matches!(f, FormatTag::Bold));
-            }
+            },
             TagEnd::Emphasis => {
                 self.format_stack
                     .retain(|f| !matches!(f, FormatTag::Italic));
-            }
+            },
             TagEnd::Strikethrough => {
                 self.format_stack
                     .retain(|f| !matches!(f, FormatTag::Strikethrough));
-            }
+            },
             TagEnd::Link => {
                 self.format_stack
                     .retain(|f| !matches!(f, FormatTag::Link(_)));
-            }
+            },
             TagEnd::CodeBlock => {
                 if let Some(code) = self.code_buf.take() {
                     let content = code.content.trim_end().to_string();
@@ -393,44 +393,44 @@ impl MarkdownRenderer {
 
                     self.root.push(block.into_any_element());
                 }
-            }
+            },
             TagEnd::List(_) => {
                 self.list_stack.pop();
                 if self.list_stack.is_empty() {
                     self.root.push(div().mb(px(8.0)).into_any_element());
                 }
-            }
+            },
             TagEnd::Item => {
                 self.flush_paragraph();
-            }
+            },
             TagEnd::BlockQuote(_) => {
                 self.flush_paragraph();
                 self.in_blockquote = false;
-            }
+            },
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
                     self.root.push(render_table(table).into_any_element());
                 }
-            }
+            },
             TagEnd::TableHead => {
                 if let Some(t) = &mut self.table {
                     t.in_head = false;
                     t.headers = t.current_row.clone();
                 }
-            }
+            },
             TagEnd::TableRow => {
                 if let Some(t) = &mut self.table {
                     if !t.in_head {
                         t.rows.push(t.current_row.clone());
                     }
                 }
-            }
+            },
             TagEnd::TableCell => {
                 if let Some(t) = &mut self.table {
                     t.current_row.push(t.current_cell.clone());
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 

@@ -54,7 +54,9 @@ mod tests {
     #[test]
     fn notify_with_slack_channel_roundtrips() {
         let cfg = NotifyConfig {
-            channel: NotifyChannel::Slack { channel_ref: "#deploys".into() },
+            channel: NotifyChannel::Slack {
+                channel_ref: "#deploys".into(),
+            },
             template: NotifyTemplate {
                 severity: NotifySeverity::Success,
                 title: "Run complete".into(),

@@ -61,10 +61,10 @@ fn test_gate_timeout_basic() {
     match action {
         GateAction::Pause { reason } => {
             eprintln!("✓ Gate paused as expected: {}", reason);
-        }
+        },
         other => {
             panic!("Expected Pause, got {:?}", other);
-        }
+        },
     }
 
     // Wait for timeout
@@ -80,10 +80,10 @@ fn test_gate_timeout_basic() {
                 elapsed.as_secs() >= 1,
                 "Timeout elapsed time should be at least 1 second"
             );
-        }
+        },
         other => {
             panic!("Expected Timeout, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -129,10 +129,10 @@ fn test_gate_decision_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -185,10 +185,10 @@ fn test_gate_timeout_different_phases() {
                     gate_name,
                     elapsed.as_secs()
                 );
-            }
+            },
             other => {
                 panic!("Expected Timeout for {} gate, got {:?}", gate_name, other);
-            }
+            },
         }
     }
 
@@ -280,10 +280,7 @@ fn test_gate_timeout_state_persistence() {
     let state: serde_json::Value =
         serde_json::from_str(&state_content).expect("Failed to parse GATE_STATE.json");
 
-    assert!(
-        state.get("phase").is_some(),
-        "State should include phase"
-    );
+    assert!(state.get("phase").is_some(), "State should include phase");
     assert!(
         state.get("triggered_at").is_some(),
         "State should include triggered_at timestamp"
@@ -338,13 +335,13 @@ fn test_gate_without_timeout() {
     match action {
         GateAction::Pause { .. } => {
             eprintln!("✓ Gate still paused after 2 seconds (no timeout configured)");
-        }
+        },
         other => {
             panic!(
                 "Expected Pause (no timeout), got {:?}. Gates without timeout should not timeout.",
                 other
             );
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -389,10 +386,10 @@ fn test_gate_rejection_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (rejection decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -436,10 +433,10 @@ fn test_gate_abort_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (abort decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);

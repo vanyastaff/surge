@@ -62,7 +62,9 @@ mod tests {
     #[test]
     fn human_gate_toml_roundtrip() {
         let cfg = HumanGateConfig {
-            delivery_channels: vec![ApprovalChannel::Telegram { chat_id_ref: "$DEFAULT".into() }],
+            delivery_channels: vec![ApprovalChannel::Telegram {
+                chat_id_ref: "$DEFAULT".into(),
+            }],
             timeout_seconds: Some(3600),
             on_timeout: TimeoutAction::Escalate,
             summary: SummaryTemplate {

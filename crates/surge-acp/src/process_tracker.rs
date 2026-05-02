@@ -88,11 +88,11 @@ impl ProcessTracker {
                     pid_file.display()
                 );
                 Ok(())
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Already removed or never existed — not an error
                 Ok(())
-            }
+            },
             Err(e) => {
                 warn!(
                     agent = agent_name,
@@ -102,7 +102,7 @@ impl ProcessTracker {
                 );
                 // Don't propagate error — best effort cleanup
                 Ok(())
-            }
+            },
         }
     }
 
@@ -133,7 +133,7 @@ impl ProcessTracker {
             Err(e) => {
                 warn!("Failed to read PID directory: {}", e);
                 return tracked;
-            }
+            },
         };
 
         for entry in entries.flatten() {

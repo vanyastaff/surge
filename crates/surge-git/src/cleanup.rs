@@ -73,7 +73,7 @@ pub fn remove_dir_with_retry(path: &Path) -> Result<(), GitError> {
 
                     std::thread::sleep(delay);
                     last_error = Some(e);
-                }
+                },
             }
         }
 

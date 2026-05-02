@@ -4,18 +4,16 @@
 //! Accept new snapshots: `cargo insta accept`
 
 use std::path::Path;
-use surge_core::{validate, Graph};
+use surge_core::{Graph, validate};
 
 fn load_fixture(name: &str) -> Graph {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/graphs")
         .join(name);
-    let toml_s = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("failed to read fixture {}: {}", path.display(), e)
-    });
-    toml::from_str(&toml_s).unwrap_or_else(|e| {
-        panic!("failed to parse fixture {}: {}", path.display(), e)
-    })
+    let toml_s = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read fixture {}: {}", path.display(), e));
+    toml::from_str(&toml_s)
+        .unwrap_or_else(|e| panic!("failed to parse fixture {}: {}", path.display(), e))
 }
 
 // ── T30: six handcrafted fixtures ────────────────────────────────────────────
@@ -24,7 +22,11 @@ fn load_fixture(name: &str) -> Graph {
 fn linear_trivial_validates_and_snapshots() {
     let g = load_fixture("linear-trivial.toml");
     let result = validate(&g);
-    assert!(result.is_ok(), "linear-trivial validate failed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "linear-trivial validate failed: {:?}",
+        result
+    );
     insta::assert_debug_snapshot!(g);
 }
 
@@ -38,14 +40,22 @@ fn linear_with_review_validates() {
 fn single_milestone_loop_validates() {
     let g = load_fixture("single-milestone-loop.toml");
     let result = validate(&g);
-    assert!(result.is_ok(), "single-milestone-loop validate failed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "single-milestone-loop validate failed: {:?}",
+        result
+    );
 }
 
 #[test]
 fn nested_3_levels_validates_and_snapshots() {
     let g = load_fixture("nested-3-levels.toml");
     let result = validate(&g);
-    assert!(result.is_ok(), "nested-3-levels failed to validate: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "nested-3-levels failed to validate: {:?}",
+        result
+    );
     insta::assert_debug_snapshot!(g);
 }
 

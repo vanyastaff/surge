@@ -75,17 +75,23 @@ fn build_linear_graph(keys: Vec<NodeKey>) -> Graph {
                 is_terminal: false,
             }]
         };
-        nodes.insert(k.clone(), Node {
-            id: k.clone(),
-            position: Position::default(),
-            declared_outcomes: outcomes,
-            config,
-        });
+        nodes.insert(
+            k.clone(),
+            Node {
+                id: k.clone(),
+                position: Position::default(),
+                declared_outcomes: outcomes,
+                config,
+            },
+        );
         if !is_last {
             let next = &keys[i + 1];
             edges.push(Edge {
                 id: EdgeKey::try_from(format!("e_{i}").as_str()).unwrap(),
-                from: PortRef { node: k.clone(), outcome: done_outcome.clone() },
+                from: PortRef {
+                    node: k.clone(),
+                    outcome: done_outcome.clone(),
+                },
                 to: next.clone(),
                 kind: EdgeKind::Forward,
                 policy: EdgePolicy::default(),

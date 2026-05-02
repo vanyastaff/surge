@@ -195,7 +195,7 @@ fn setup_mcp_env(agent_name: &str, servers: &[McpServerConfig], cmd: &mut tokio:
                 "MCP servers configured but no known env var for this agent type — skipping"
             );
             return;
-        }
+        },
     };
 
     match write_mcp_config_file(agent_name, servers) {
@@ -208,7 +208,7 @@ fn setup_mcp_env(agent_name: &str, servers: &[McpServerConfig], cmd: &mut tokio:
                 "setting MCP config env var"
             );
             cmd.env(env_var, path);
-        }
+        },
         Err(e) => warn!(agent = agent_name, "failed to write MCP config: {e}"),
     }
 }

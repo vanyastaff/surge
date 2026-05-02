@@ -123,7 +123,7 @@ impl ProjectExecutor {
                         timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Skipped;
                         result.skipped += 1;
                         continue;
-                    }
+                    },
                 };
 
                 let orch_config = OrchestratorConfig {
@@ -150,18 +150,18 @@ impl ProjectExecutor {
                         timeline.batches[batch_idx].items[item_idx].status =
                             RoadmapStatus::Completed;
                         result.completed += 1;
-                    }
+                    },
                     PipelineResult::Paused { phase, reason } => {
                         info!(spec_id = %spec_id, %phase, %reason, "spec paused");
                         timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Paused;
                         result.paused += 1;
-                    }
+                    },
                     PipelineResult::Failed { reason } => {
                         warn!(spec_id = %spec_id, %reason, "spec failed");
                         timeline.batches[batch_idx].items[item_idx].status = RoadmapStatus::Failed;
                         result.failed += 1;
                         batch_had_failure = true;
-                    }
+                    },
                 }
             }
 

@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
+use surge_core::SurgeError;
 use surge_core::event::SurgeEvent;
 use surge_core::id::{SubtaskId, TaskId};
 use surge_core::spec::{Spec, Subtask};
 use surge_core::state::TaskState;
-use surge_core::SurgeError;
 use surge_git::worktree::GitManager;
 use surge_persistence::store::Store;
 use tokio::sync::{Mutex, broadcast};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 use crate::circuit_breaker::CircuitBreaker;
@@ -209,7 +209,7 @@ impl SubtaskExecutor {
                                 success: true,
                             });
                             return SubtaskResult::Success { subtask_id };
-                        }
+                        },
                         Err(e) => {
                             warn!(
                                 subtask_id = %subtask_id,
@@ -220,9 +220,9 @@ impl SubtaskExecutor {
                                 "commit failed after agent prompt"
                             );
                             last_error = format!("commit failed: {e}");
-                        }
+                        },
                     }
-                }
+                },
                 Err(e) => {
                     // Check if this is a rate limit error
                     if let SurgeError::RateLimit {
@@ -253,7 +253,8 @@ impl SubtaskExecutor {
                         );
                         sleep(cooldown).await;
 
-                        last_error = format!("rate limit exceeded, retried after {retry_after_secs}s");
+                        last_error =
+                            format!("rate limit exceeded, retried after {retry_after_secs}s");
 
                         // Continue to next retry attempt without failing
                         continue;
@@ -269,7 +270,7 @@ impl SubtaskExecutor {
                         "agent prompt failed"
                     );
                     last_error = format!("agent prompt failed: {e}");
-                }
+                },
             }
         }
 
@@ -282,7 +283,9 @@ impl SubtaskExecutor {
         );
 
         // Record failure in circuit breaker
-        circuit_breaker.record_failure(last_error.clone(), None).await;
+        circuit_breaker
+            .record_failure(last_error.clone(), None)
+            .await;
 
         let _ = event_tx.send(SurgeEvent::SubtaskCompleted {
             task_id,

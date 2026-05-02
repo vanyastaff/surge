@@ -66,8 +66,12 @@ pub struct RuntimeCfg {
     pub load_rules_lazily: Option<bool>,
 }
 
-fn default_temperature() -> f32 { 0.2 }
-fn default_max_tokens_profile() -> u32 { 200_000 }
+fn default_temperature() -> f32 {
+    0.2
+}
+fn default_max_tokens_profile() -> u32 {
+    200_000
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ToolsCfg {
@@ -148,7 +152,9 @@ pub enum InspectorFieldKind {
         max: Option<f64>,
     },
     Toggle,
-    Select { options: Vec<String> },
+    Select {
+        options: Vec<String>,
+    },
     Text {
         #[serde(default)]
         multiline: bool,
@@ -226,7 +232,10 @@ mod tests {
             system = "Rust expert."
         "#;
         let p: Profile = toml::from_str(p_text).unwrap();
-        assert_eq!(p.role.extends.as_ref().unwrap().as_str(), "generic-implementer@1.0");
+        assert_eq!(
+            p.role.extends.as_ref().unwrap().as_str(),
+            "generic-implementer@1.0"
+        );
     }
 
     #[test]

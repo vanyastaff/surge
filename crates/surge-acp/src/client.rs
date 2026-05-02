@@ -299,9 +299,11 @@ impl SurgeClient {
             PermissionPolicy::Interactive => {
                 // Interactive permission UI not yet implemented.
                 // Deny by default — fail closed.
-                tracing::warn!("Interactive permission policy not yet implemented; denying request");
+                tracing::warn!(
+                    "Interactive permission policy not yet implemented; denying request"
+                );
                 false
-            }
+            },
 
             PermissionPolicy::Smart {
                 allow_read,
@@ -364,7 +366,7 @@ impl SurgeClient {
                     // Unknown operation type: fail closed
                     false
                 }
-            }
+            },
         };
 
         if should_approve {
@@ -513,7 +515,7 @@ impl Client for SurgeClient {
                         text: text.text.clone(),
                     });
                 }
-            }
+            },
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 if let ContentBlock::Text(text) = &chunk.content {
                     self.emit_event(SurgeEvent::AgentThoughtChunk {
@@ -521,7 +523,7 @@ impl Client for SurgeClient {
                         text: text.text.clone(),
                     });
                 }
-            }
+            },
             SessionUpdate::ToolCall(tool_call) => {
                 debug!(
                     session_id = session_id.as_str(),
@@ -541,7 +543,7 @@ impl Client for SurgeClient {
                     locations: convert_locations(&tool_call.locations),
                     raw_input,
                 });
-            }
+            },
             SessionUpdate::ToolCallUpdate(update) => {
                 debug!(
                     session_id = session_id.as_str(),
@@ -575,7 +577,7 @@ impl Client for SurgeClient {
                     locations,
                     raw_output,
                 });
-            }
+            },
             SessionUpdate::Plan(plan) => {
                 debug!(
                     session_id = session_id.as_str(),
@@ -595,18 +597,18 @@ impl Client for SurgeClient {
                     session_id,
                     entries,
                 });
-            }
-            SessionUpdate::UserMessageChunk(_) => {}
+            },
+            SessionUpdate::UserMessageChunk(_) => {},
             SessionUpdate::AvailableCommandsUpdate(_) => {
                 debug!(session_id = session_id.as_str(), "commands update received");
-            }
+            },
             SessionUpdate::CurrentModeUpdate(mode) => {
                 debug!(
                     session_id = session_id.as_str(),
                     mode = ?mode,
                     "session mode changed"
                 );
-            }
+            },
             // non_exhaustive — future ACP variants will trigger this
             #[allow(unreachable_patterns)]
             other => {
@@ -615,7 +617,7 @@ impl Client for SurgeClient {
                     update = ?other,
                     "unhandled session update variant"
                 );
-            }
+            },
         }
         Ok(())
     }
@@ -893,9 +895,7 @@ mod tests {
         // Safe commands still pass
         assert!(!SurgeClient::is_dangerous_bash_command("ls -la"));
         assert!(!SurgeClient::is_dangerous_bash_command("cargo build"));
-        assert!(!SurgeClient::is_dangerous_bash_command(
-            "grep -r pattern ."
-        ));
+        assert!(!SurgeClient::is_dangerous_bash_command("grep -r pattern ."));
         assert!(!SurgeClient::is_dangerous_bash_command("cat README.md"));
 
         // Known false positive: rm inside quotes. Acceptable — fail-closed.
