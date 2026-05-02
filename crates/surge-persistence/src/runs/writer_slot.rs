@@ -39,7 +39,7 @@ impl ActiveWriters {
     /// Returns true if a live writer currently holds the slot for `run_id`.
     pub async fn is_held(&self, run_id: &RunId) -> bool {
         let g = self.inner.lock().await;
-        g.get(run_id).map(|w| w.strong_count() > 0).unwrap_or(false)
+        g.get(run_id).is_some_and(|w| w.strong_count() > 0)
     }
 }
 

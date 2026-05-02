@@ -164,7 +164,7 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(n, 1, "table {} missing", table);
+            assert_eq!(n, 1, "table {table} missing");
         }
     }
 

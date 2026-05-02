@@ -40,16 +40,19 @@ pub struct RunWriter {
 
 impl RunWriter {
     /// Run id this writer is bound to.
+    #[must_use] 
     pub fn run_id(&self) -> &RunId {
         self.reader.run_id()
     }
 
     /// Worktree path for this run.
+    #[must_use] 
     pub fn worktree_path(&self) -> &Path {
         self.reader.worktree_path()
     }
 
     /// Returns true if `close()` has been called.
+    #[must_use] 
     pub fn is_closed(&self) -> bool {
         self.closed
     }

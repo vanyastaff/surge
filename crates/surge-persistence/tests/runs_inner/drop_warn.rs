@@ -55,7 +55,7 @@ async fn drop_without_close_emits_tracing_warning() {
     let t = setup().await;
     let writer = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
 

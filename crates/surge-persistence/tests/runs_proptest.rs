@@ -43,7 +43,7 @@ proptest! {
             let clock = MockClock::new(1_700_000_000_000);
             let storage = Storage::open_with(tmp.path(), Arc::new(clock)).await.unwrap();
             let run_id = RunId::new();
-            let writer = storage.create_run(run_id.clone(), "/tmp", None).await.unwrap();
+            let writer = storage.create_run(run_id, "/tmp", None).await.unwrap();
 
             let mut expected_seqs = Vec::new();
             for p in &payloads {
@@ -87,7 +87,7 @@ proptest! {
             let clock = MockClock::new(1_700_000_000_000);
             let storage = Storage::open_with(tmp.path(), Arc::new(clock)).await.unwrap();
             let run_id = RunId::new();
-            let writer = storage.create_run(run_id.clone(), "/tmp", None).await.unwrap();
+            let writer = storage.create_run(run_id, "/tmp", None).await.unwrap();
 
             for p in &payloads { writer.append_event(p.clone()).await.unwrap(); }
             writer.flush().await.unwrap();

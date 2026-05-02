@@ -47,6 +47,7 @@ struct ConfigFile {
 }
 
 /// Load `~/.surge/config.toml` from `home`, returning defaults if absent or unparseable.
+#[must_use] 
 pub fn load_or_default(home: &Path) -> StorageConfig {
     let path = home.join("config.toml");
     let Ok(s) = std::fs::read_to_string(&path) else {

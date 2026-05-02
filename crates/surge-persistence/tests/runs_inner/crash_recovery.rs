@@ -10,7 +10,7 @@ async fn dropped_writer_can_be_reopened_with_intact_log() {
     {
         let writer = t
             .storage
-            .create_run(t.run_id.clone(), "/tmp/proj", None)
+            .create_run(t.run_id, "/tmp/proj", None)
             .await
             .expect("create_run");
 
@@ -34,7 +34,7 @@ async fn dropped_writer_can_be_reopened_with_intact_log() {
     // file lock).
     let mut writer2 = None;
     for _ in 0..200 {
-        match t.storage.open_run_writer(t.run_id.clone()).await {
+        match t.storage.open_run_writer(t.run_id).await {
             Ok(w) => {
                 writer2 = Some(w);
                 break;

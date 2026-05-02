@@ -27,7 +27,7 @@ pub fn maintain(
     timestamp_ms: i64,
     payload: &EventPayload,
 ) -> Result<(), WriterError> {
-    use EventPayload::*;
+    use EventPayload::{StageEntered, StageCompleted, StageFailed, ArtifactProduced, TokensConsumed, ApprovalRequested, ApprovalDecided, RunStarted, RunCompleted, RunFailed, RunAborted, BootstrapStageStarted, BootstrapArtifactProduced, BootstrapApprovalRequested, BootstrapApprovalDecided, BootstrapEditRequested, PipelineMaterialized, StageInputsResolved, SessionOpened, ToolCalled, ToolResultReceived, OutcomeReported, SessionClosed, EdgeTraversed, LoopIterationStarted, LoopIterationCompleted, LoopCompleted, SandboxElevationRequested, SandboxElevationDecided, HookExecuted, OutcomeRejectedByHook, ForkCreated};
     match payload {
         StageEntered { node, attempt } => {
             tx.execute(

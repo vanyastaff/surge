@@ -214,7 +214,7 @@ impl Storage {
         filter: RunFilter,
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
         let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
-        for r in runs.iter_mut() {
+        for r in &mut runs {
             if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping) {
                 if let Some(pid) = r.daemon_pid {
                     if !self.process_probe.is_alive(pid) {
@@ -238,9 +238,8 @@ impl Storage {
         &self,
         run_id: &RunId,
     ) -> Result<Option<RunSummary>, crate::runs::error::StorageError> {
-        let mut summary = match registry::get_run(&self.registry_pool, run_id)? {
-            Some(s) => s,
-            None => return Ok(None),
+        let Some(mut summary) = registry::get_run(&self.registry_pool, run_id)? else {
+            return Ok(None);
         };
         if matches!(summary.status, RunStatus::Running | RunStatus::Bootstrapping) {
             if let Some(pid) = summary.daemon_pid {

@@ -10,11 +10,11 @@ async fn second_in_process_writer_fails_with_writer_already_held() {
     let t = setup().await;
     let writer1 = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
 
-    let result = t.storage.open_run_writer(t.run_id.clone()).await;
+    let result = t.storage.open_run_writer(t.run_id).await;
     match result {
         Ok(_) => panic!("second writer must fail while first is alive"),
         Err(OpenError::WriterAlreadyHeld { ref run_id }) => {
@@ -28,7 +28,7 @@ async fn second_in_process_writer_fails_with_writer_already_held() {
     // After the first writer closes, a new one can be opened.
     let writer2 = t
         .storage
-        .open_run_writer(t.run_id.clone())
+        .open_run_writer(t.run_id)
         .await
         .expect("re-open after close");
     writer2.close().await.expect("close 2");

@@ -139,7 +139,7 @@ pub fn list_runs(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+    let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(std::convert::AsRef::as_ref).collect();
     let rows = stmt
         .query_map(rusqlite::params_from_iter(bind_refs), row_to_summary)?
         .collect::<rusqlite::Result<Vec<_>>>()?;

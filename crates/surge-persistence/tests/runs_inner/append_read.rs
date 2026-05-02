@@ -8,7 +8,7 @@ async fn append_read_1000_events_correct_ordered_atomic() {
     let t = setup().await;
     let writer = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
 

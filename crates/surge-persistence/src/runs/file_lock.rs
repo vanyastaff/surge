@@ -29,6 +29,7 @@ impl FileLock {
         }
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(lock_path)?;
@@ -42,7 +43,7 @@ impl FileLock {
         // order, _guard drops before _lock. We use a raw pointer to bypass
         // the borrow checker for that one extension.
         let lock_ref: &'static mut fd_lock::RwLock<File> = unsafe {
-            &mut *(Box::as_mut(&mut lock) as *mut _)
+            &mut *std::ptr::from_mut(Box::as_mut(&mut lock))
         };
         let guard = lock_ref
             .try_write()

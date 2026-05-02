@@ -12,7 +12,7 @@ async fn subscriber_yields_events_appended_after_subscription() {
     let t = setup().await;
     let writer = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
 
@@ -65,7 +65,7 @@ async fn subscribe_outlives_storage_handle() {
     let t = setup().await;
     let writer = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
 

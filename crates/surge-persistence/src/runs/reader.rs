@@ -42,11 +42,13 @@ pub struct ReadEvent {
 
 impl RunReader {
     /// Run id this reader is bound to.
+    #[must_use] 
     pub fn run_id(&self) -> &RunId {
         &self.run_id
     }
 
     /// Worktree directory for this run.
+    #[must_use] 
     pub fn worktree_path(&self) -> &Path {
         &self.worktree_path
     }

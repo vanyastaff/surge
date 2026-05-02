@@ -36,7 +36,7 @@ impl ProcessProbe {
         Self {
             inner: Mutex::new(Inner {
                 sys,
-                last_refresh: Instant::now() - ttl - Duration::from_secs(1),
+                last_refresh: Instant::now().checked_sub(ttl).unwrap().checked_sub(Duration::from_secs(1)).unwrap(),
             }),
             ttl,
         }

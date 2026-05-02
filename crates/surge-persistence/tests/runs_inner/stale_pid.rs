@@ -9,7 +9,7 @@ async fn list_runs_marks_dead_pid_as_crashed() {
     let t = setup().await;
     let writer = t
         .storage
-        .create_run(t.run_id.clone(), "/tmp/proj", None)
+        .create_run(t.run_id, "/tmp/proj", None)
         .await
         .expect("create_run");
     writer.close().await.expect("close");
