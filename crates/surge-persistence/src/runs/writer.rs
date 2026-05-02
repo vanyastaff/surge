@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use surge_core::{NodeKey, RunId, VersionedEventPayload};
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,6 +16,7 @@ use crate::runs::clock::Clock;
 use crate::runs::error::WriterError;
 use crate::runs::seq::EventSeq;
 use crate::runs::types::ArtifactRecord;
+use crate::runs::views;
 
 /// Bounded channel size for writer commands. Default 64.
 pub const DEFAULT_CHANNEL_CAPACITY: usize = 64;
@@ -154,19 +155,67 @@ async fn writer_loop(
 }
 
 async fn handle_command(
-    _conn: &mut Connection,
-    _cfg: &WriterConfig,
+    conn: &mut Connection,
+    cfg: &WriterConfig,
     cmd: WriterCommand,
 ) -> bool {
     match cmd {
+        WriterCommand::AppendEvent { payload, reply } => {
+            let result = (|| -> Result<EventSeq, WriterError> {
+                let blob = serde_json::to_vec(&payload)?;
+                let kind = payload.payload().discriminant_str();
+                let ts = cfg.clock.now_ms();
+                let schema_version = i64::from(payload.schema_version());
+
+                let tx = conn.transaction()?;
+                let seq: i64 = tx.query_row(
+                    "INSERT INTO events (timestamp, kind, payload, schema_version)
+                     VALUES (?, ?, ?, ?) RETURNING seq",
+                    params![ts, kind, blob, schema_version],
+                    |row| row.get(0),
+                )?;
+                let seq = EventSeq(seq as u64);
+                views::maintain(&tx, seq, ts, payload.payload())?;
+                tx.commit()?;
+                Ok(seq)
+            })();
+            let _ = reply.send(result);
+        }
+        WriterCommand::AppendBatch { payloads, reply } => {
+            let result = (|| -> Result<Vec<EventSeq>, WriterError> {
+                let mut seqs = Vec::with_capacity(payloads.len());
+                let tx = conn.transaction()?;
+                for payload in &payloads {
+                    let blob = serde_json::to_vec(payload)?;
+                    let kind = payload.payload().discriminant_str();
+                    let ts = cfg.clock.now_ms();
+                    let schema_version = i64::from(payload.schema_version());
+                    let seq: i64 = tx.query_row(
+                        "INSERT INTO events (timestamp, kind, payload, schema_version)
+                         VALUES (?, ?, ?, ?) RETURNING seq",
+                        params![ts, kind, blob, schema_version],
+                        |row| row.get(0),
+                    )?;
+                    let seq = EventSeq(seq as u64);
+                    views::maintain(&tx, seq, ts, payload.payload())?;
+                    seqs.push(seq);
+                }
+                tx.commit()?;
+                Ok(seqs)
+            })();
+            let _ = reply.send(result);
+        }
+        WriterCommand::Flush { reply } => {
+            // Strict-ordering ack: by the time the writer dequeues this command,
+            // every previously enqueued command has been processed and committed.
+            let _ = reply.send(Ok(()));
+        }
         WriterCommand::Shutdown { reply } => {
             let _ = reply.send(());
             return false;
         }
-        // AppendEvent / AppendBatch — Task 5.2
         // StoreArtifact — Task 5.3
         // WriteSnapshot / RebuildViews — Task 5.4
-        // Flush — Task 5.2
         cmd => {
             // Stub: tell caller the command is not yet wired in this skeleton commit.
             stub_reject(cmd);
@@ -179,12 +228,6 @@ fn stub_reject(cmd: WriterCommand) {
     use WriterCommand::*;
     let err = || WriterError::Internal("command not yet implemented in skeleton".into());
     match cmd {
-        AppendEvent { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
-        AppendBatch { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
         StoreArtifact { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
@@ -194,9 +237,8 @@ fn stub_reject(cmd: WriterCommand) {
         RebuildViews { reply } => {
             let _ = reply.send(Err(err()));
         }
-        Flush { reply } => {
-            let _ = reply.send(Err(err()));
+        AppendEvent { .. } | AppendBatch { .. } | Flush { .. } | Shutdown { .. } => {
+            unreachable!("handled in handle_command")
         }
-        Shutdown { .. } => unreachable!(),
     }
 }

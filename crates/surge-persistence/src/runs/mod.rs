@@ -17,6 +17,7 @@ mod reader_views;
 pub mod registry;
 pub mod seq;
 pub mod types;
+pub mod views;
 pub mod writer;
 
 pub use clock::{Clock, MockClock, SystemClock};
