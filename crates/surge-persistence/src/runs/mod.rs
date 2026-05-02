@@ -19,6 +19,7 @@ pub mod seq;
 pub mod types;
 pub mod views;
 pub mod writer;
+pub(crate) mod writer_slot;
 
 pub use clock::{Clock, MockClock, SystemClock};
 pub use error::{CloseError, OpenError, StorageError, WriterError};
@@ -27,3 +28,4 @@ pub use registry::{RunFilter, RunSummary};
 pub use seq::EventSeq;
 pub use types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
 pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig};
+pub(crate) use writer_slot::{ActiveWriters, WriterToken};
