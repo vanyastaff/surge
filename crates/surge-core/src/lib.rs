@@ -7,6 +7,7 @@
 #![allow(clippy::items_after_test_module)]
 
 pub mod config;
+pub mod content_hash;
 pub mod error;
 pub mod event;
 pub mod id;
