@@ -1,0 +1,8 @@
+---
+source: crates/surge-persistence/tests/runs_inner/snapshot.rs
+expression: cost
+---
+tokens_in: 100
+tokens_out: 50
+cache_hits: 5
+cost_usd: 0.01

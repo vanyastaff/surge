@@ -11,6 +11,7 @@ mod flush;
 mod legacy_unaffected;
 mod rebuild;
 mod single_writer;
+mod snapshot;
 mod stale_pid;
 mod subscribe;
 mod views;
