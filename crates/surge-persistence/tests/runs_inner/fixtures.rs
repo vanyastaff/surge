@@ -9,6 +9,12 @@ use tempfile::TempDir;
 
 /// Shared per-test scaffold: an isolated `~/.surge/` directory, a deterministic
 /// clock, an opened `Storage`, and a fresh `RunId` ready to be used.
+///
+/// Several fields are declared `#[allow(dead_code)]` because individual tests
+/// often need only a subset (e.g., a writer test ignores `home`, a stale-pid
+/// test ignores `clock`). Keeping the full set on `TestRun` lets `setup()`
+/// stay one-size-fits-all.
+#[allow(dead_code)]
 pub struct TestRun {
     /// TempDir kept alive for the test's lifetime — drop = cleanup.
     pub _tmp: TempDir,
