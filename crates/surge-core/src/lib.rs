@@ -7,6 +7,7 @@
 #![allow(clippy::items_after_test_module)]
 
 pub mod approvals;
+pub mod branch_config;
 pub mod config;
 pub mod content_hash;
 pub mod edge;
