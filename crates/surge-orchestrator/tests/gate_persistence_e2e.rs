@@ -29,9 +29,7 @@ fn all_gates_config() -> GateConfig {
 
 /// Helper to load and parse GATE_STATE.json for verification.
 fn load_gate_state_file(specs_dir: &std::path::Path, spec_id: SpecId) -> Option<GateState> {
-    let path = specs_dir
-        .join(spec_id.to_string())
-        .join("GATE_STATE.json");
+    let path = specs_dir.join(spec_id.to_string()).join("GATE_STATE.json");
 
     if !path.exists() {
         return None;
@@ -49,6 +47,7 @@ fn load_gate_state_file(specs_dir: &std::path::Path, spec_id: SpecId) -> Option<
 /// - New GateManager instance can read persisted state
 /// - Gate remains in Pause state after restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_state_persists_across_restart() {
     let test_dir = temp_test_dir("gate_state_persists");
     let specs_dir = test_dir.join("specs");
@@ -72,10 +71,23 @@ fn test_gate_state_persists_across_restart() {
     assert!(state_file.is_some(), "GATE_STATE.json should exist");
 
     let state = state_file.unwrap();
-    assert_eq!(state.phase, Phase::Planning, "State should record Planning phase");
-    assert!(state.triggered_at > 0, "State should have triggered timestamp");
-    assert!(state.decision.is_none(), "State should have no decision yet");
-    assert!(state.decided_at.is_none(), "State should have no decision timestamp");
+    assert_eq!(
+        state.phase,
+        Phase::Planning,
+        "State should record Planning phase"
+    );
+    assert!(
+        state.triggered_at > 0,
+        "State should have triggered timestamp"
+    );
+    assert!(
+        state.decision.is_none(),
+        "State should have no decision yet"
+    );
+    assert!(
+        state.decided_at.is_none(),
+        "State should have no decision timestamp"
+    );
     eprintln!("✓ GATE_STATE.json created with correct initial state");
 
     // Check gate - should pause
@@ -83,10 +95,10 @@ fn test_gate_state_persists_across_restart() {
     match action1 {
         GateAction::Pause { .. } => {
             eprintln!("✓ Gate paused as expected (before restart)");
-        }
+        },
         other => {
             panic!("Expected Pause before restart, got {:?}", other);
-        }
+        },
     }
 
     // Simulate process crash - drop manager1 without making decision
@@ -102,11 +114,17 @@ fn test_gate_state_persists_across_restart() {
 
     // Verify GATE_STATE.json still exists
     let state_after_restart = load_gate_state_file(&specs_dir, spec_id);
-    assert!(state_after_restart.is_some(), "GATE_STATE.json should persist after restart");
+    assert!(
+        state_after_restart.is_some(),
+        "GATE_STATE.json should persist after restart"
+    );
 
     let state2 = state_after_restart.unwrap();
     assert_eq!(state2.phase, Phase::Planning, "Phase should be preserved");
-    assert_eq!(state2.triggered_at, state.triggered_at, "Timestamp should be preserved");
+    assert_eq!(
+        state2.triggered_at, state.triggered_at,
+        "Timestamp should be preserved"
+    );
     assert!(state2.decision.is_none(), "Decision should still be None");
     eprintln!("✓ GATE_STATE.json persisted with same state");
 
@@ -115,10 +133,10 @@ fn test_gate_state_persists_across_restart() {
     match action2 {
         GateAction::Pause { reason } => {
             eprintln!("✓ Gate still paused after restart: {}", reason);
-        }
+        },
         other => {
             panic!("Expected Pause after restart, got {:?}", other);
-        }
+        },
     }
 
     eprintln!("\n✓ Test passed: Gate state persists across restart");
@@ -132,6 +150,7 @@ fn test_gate_state_persists_across_restart() {
 /// - Approval decision after restart updates state correctly
 /// - Pipeline continues after approval post-restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_approval_after_restart() {
     let test_dir = temp_test_dir("approval_after_restart");
     let specs_dir = test_dir.join("specs");
@@ -149,7 +168,10 @@ fn test_approval_after_restart() {
         .expect("State file should exist")
         .triggered_at;
 
-    eprintln!("✓ Gate triggered, original timestamp: {}", original_triggered_at);
+    eprintln!(
+        "✓ Gate triggered, original timestamp: {}",
+        original_triggered_at
+    );
 
     // Simulate restart
     drop(manager1);
@@ -166,13 +188,21 @@ fn test_approval_after_restart() {
     eprintln!("✓ Approval decision recorded after restart");
 
     // Verify state was updated
-    let state_after_approval = load_gate_state_file(&specs_dir, spec_id)
-        .expect("State file should still exist");
+    let state_after_approval =
+        load_gate_state_file(&specs_dir, spec_id).expect("State file should still exist");
 
-    assert_eq!(state_after_approval.triggered_at, original_triggered_at,
-        "Original trigger timestamp should be preserved");
-    assert!(state_after_approval.decision.is_some(), "Decision should be recorded");
-    assert!(state_after_approval.decided_at.is_some(), "Decision timestamp should be recorded");
+    assert_eq!(
+        state_after_approval.triggered_at, original_triggered_at,
+        "Original trigger timestamp should be preserved"
+    );
+    assert!(
+        state_after_approval.decision.is_some(),
+        "Decision should be recorded"
+    );
+    assert!(
+        state_after_approval.decided_at.is_some(),
+        "Decision timestamp should be recorded"
+    );
 
     if let Some(GateDecision::Approved { feedback }) = &state_after_approval.decision {
         assert_eq!(feedback.as_deref(), Some("Approved after restart"));
@@ -186,10 +216,10 @@ fn test_approval_after_restart() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continues after approval (post-restart)");
-        }
+        },
         other => {
             panic!("Expected Continue after approval, got {:?}", other);
-        }
+        },
     }
 
     eprintln!("\n✓ Test passed: Approval after restart works correctly");
@@ -203,6 +233,7 @@ fn test_approval_after_restart() {
 /// - Rejection decision after restart is properly recorded
 /// - Rejection feedback is persisted correctly
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_rejection_after_restart() {
     let test_dir = temp_test_dir("rejection_after_restart");
     let specs_dir = test_dir.join("specs");
@@ -232,14 +263,16 @@ fn test_rejection_after_restart() {
     eprintln!("✓ Rejection decision recorded after restart");
 
     // Verify state
-    let state = load_gate_state_file(&specs_dir, spec_id)
-        .expect("State file should exist");
+    let state = load_gate_state_file(&specs_dir, spec_id).expect("State file should exist");
 
     assert!(state.decision.is_some(), "Decision should be recorded");
 
     if let Some(GateDecision::Rejected { reason, feedback }) = &state.decision {
         assert_eq!(reason, "Quality issues");
-        assert_eq!(feedback, "Code quality issues detected after reviewing post-restart");
+        assert_eq!(
+            feedback,
+            "Code quality issues detected after reviewing post-restart"
+        );
         eprintln!("✓ Rejection feedback correctly persisted");
     } else {
         panic!("Expected Rejected decision in state");
@@ -250,10 +283,10 @@ fn test_rejection_after_restart() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continues after rejection (pipeline will re-run phase)");
-        }
+        },
         other => {
             panic!("Expected Continue after rejection, got {:?}", other);
-        }
+        },
     }
 
     eprintln!("\n✓ Test passed: Rejection after restart works correctly");
@@ -267,6 +300,7 @@ fn test_rejection_after_restart() {
 /// - Original trigger timestamp is preserved
 /// - Timeout fires correctly after restart if time has elapsed
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_timeout_persists_across_restart() {
     let test_dir = temp_test_dir("timeout_persists_restart");
     let specs_dir = test_dir.join("specs");
@@ -295,10 +329,10 @@ fn test_timeout_persists_across_restart() {
     match action1 {
         GateAction::Pause { .. } => {
             eprintln!("✓ Gate paused (timeout not reached yet)");
-        }
+        },
         other => {
             panic!("Expected Pause, got {:?}", other);
-        }
+        },
     }
 
     // Wait 1 second, then simulate restart
@@ -318,9 +352,14 @@ fn test_timeout_persists_across_restart() {
         .expect("State file should exist")
         .triggered_at;
 
-    assert_eq!(preserved_triggered_at, original_triggered_at,
-        "Trigger timestamp should be preserved across restart");
-    eprintln!("✓ Original trigger timestamp preserved: {}", preserved_triggered_at);
+    assert_eq!(
+        preserved_triggered_at, original_triggered_at,
+        "Trigger timestamp should be preserved across restart"
+    );
+    eprintln!(
+        "✓ Original trigger timestamp preserved: {}",
+        preserved_triggered_at
+    );
 
     // Wait additional 1.5 seconds (total 2.5 seconds > 2 second timeout)
     std::thread::sleep(Duration::from_millis(1500));
@@ -330,13 +369,19 @@ fn test_timeout_persists_across_restart() {
     let action2 = manager2.check_gate(Phase::Planning, spec_id);
     match action2 {
         GateAction::Timeout { elapsed } => {
-            eprintln!("✓ Gate timed out after restart: {} seconds elapsed", elapsed.as_secs());
-            assert!(elapsed.as_secs() >= 2,
-                "Timeout should be at least 2 seconds (was {})", elapsed.as_secs());
-        }
+            eprintln!(
+                "✓ Gate timed out after restart: {} seconds elapsed",
+                elapsed.as_secs()
+            );
+            assert!(
+                elapsed.as_secs() >= 2,
+                "Timeout should be at least 2 seconds (was {})",
+                elapsed.as_secs()
+            );
+        },
         other => {
             panic!("Expected Timeout after restart, got {:?}", other);
-        }
+        },
     }
 
     eprintln!("\n✓ Test passed: Timeout tracking persists across restart");
@@ -350,6 +395,7 @@ fn test_timeout_persists_across_restart() {
 /// - State remains consistent after multiple GateManager instances
 /// - Decision eventually works after multiple restarts
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_multiple_restarts_before_decision() {
     let test_dir = temp_test_dir("multiple_restarts");
     let specs_dir = test_dir.join("specs");
@@ -375,7 +421,10 @@ fn test_multiple_restarts_before_decision() {
     let manager2 = GateManager::new(all_gates_config(), specs_dir.clone());
 
     let action = manager2.check_gate(Phase::QaReview, spec_id);
-    assert!(matches!(action, GateAction::Pause { .. }), "Should still pause after restart 1");
+    assert!(
+        matches!(action, GateAction::Pause { .. }),
+        "Should still pause after restart 1"
+    );
     eprintln!("✓ Still paused after restart 1");
 
     // Restart 2
@@ -384,14 +433,18 @@ fn test_multiple_restarts_before_decision() {
     let manager3 = GateManager::new(all_gates_config(), specs_dir.clone());
 
     let action = manager3.check_gate(Phase::QaReview, spec_id);
-    assert!(matches!(action, GateAction::Pause { .. }), "Should still pause after restart 2");
+    assert!(
+        matches!(action, GateAction::Pause { .. }),
+        "Should still pause after restart 2"
+    );
     eprintln!("✓ Still paused after restart 2");
 
     // Verify timestamp still preserved
-    let state = load_gate_state_file(&specs_dir, spec_id)
-        .expect("State file should exist");
-    assert_eq!(state.triggered_at, original_triggered_at,
-        "Timestamp should be preserved across multiple restarts");
+    let state = load_gate_state_file(&specs_dir, spec_id).expect("State file should exist");
+    assert_eq!(
+        state.triggered_at, original_triggered_at,
+        "Timestamp should be preserved across multiple restarts"
+    );
     eprintln!("✓ Original timestamp preserved across {} restarts", 2);
 
     // Restart 3 - finally make decision
@@ -406,7 +459,10 @@ fn test_multiple_restarts_before_decision() {
     eprintln!("✓ Decision recorded after 3 restarts");
 
     let action = manager4.check_gate(Phase::QaReview, spec_id);
-    assert!(matches!(action, GateAction::Continue), "Should continue after decision");
+    assert!(
+        matches!(action, GateAction::Continue),
+        "Should continue after decision"
+    );
     eprintln!("✓ Pipeline continues after decision (post-multiple-restarts)");
 
     eprintln!("\n✓ Test passed: Multiple restarts handled correctly");
@@ -420,6 +476,7 @@ fn test_multiple_restarts_before_decision() {
 /// - Phase information is correctly preserved
 /// - Decisions work correctly for all phases after restart
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_persistence_all_phases() {
     let test_dir = temp_test_dir("persistence_all_phases");
     let specs_dir = test_dir.join("specs");
@@ -439,8 +496,7 @@ fn test_persistence_all_phases() {
         eprintln!("✓ Gate triggered at {:?}", phase);
 
         // Verify state file
-        let state = load_gate_state_file(&specs_dir, spec_id)
-            .expect("State file should exist");
+        let state = load_gate_state_file(&specs_dir, spec_id).expect("State file should exist");
         assert_eq!(state.phase, phase, "Phase should match");
 
         // Simulate restart
@@ -452,12 +508,18 @@ fn test_persistence_all_phases() {
         let state_after = load_gate_state_file(&specs_dir, spec_id)
             .expect("State file should exist after restart");
         assert_eq!(state_after.phase, phase, "Phase should be preserved");
-        assert_eq!(state_after.triggered_at, state.triggered_at, "Timestamp should be preserved");
+        assert_eq!(
+            state_after.triggered_at, state.triggered_at,
+            "Timestamp should be preserved"
+        );
 
         // Should still pause
         let action = manager2.check_gate(phase, spec_id);
-        assert!(matches!(action, GateAction::Pause { .. }),
-            "Should pause after restart for phase {:?}", phase);
+        assert!(
+            matches!(action, GateAction::Pause { .. }),
+            "Should pause after restart for phase {:?}",
+            phase
+        );
         eprintln!("✓ Gate still paused after restart for {:?}", phase);
     }
 
@@ -472,6 +534,7 @@ fn test_persistence_all_phases() {
 /// - All required fields are present
 /// - File can be parsed by external tools
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_state_file_format() {
     let test_dir = temp_test_dir("gate_state_format");
     let specs_dir = test_dir.join("specs");
@@ -489,31 +552,51 @@ fn test_gate_state_file_format() {
     let state_path = spec_dir.join("GATE_STATE.json");
     assert!(state_path.exists(), "GATE_STATE.json should exist");
 
-    let json_content = fs::read_to_string(&state_path)
-        .expect("Should be able to read GATE_STATE.json");
+    let json_content =
+        fs::read_to_string(&state_path).expect("Should be able to read GATE_STATE.json");
     eprintln!("GATE_STATE.json content:\n{}", json_content);
 
     // Parse as generic JSON
-    let json: serde_json::Value = serde_json::from_str(&json_content)
-        .expect("Should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&json_content).expect("Should be valid JSON");
 
     // Verify required fields
     assert!(json.get("phase").is_some(), "Should have 'phase' field");
-    assert!(json.get("triggered_at").is_some(), "Should have 'triggered_at' field");
-    assert!(json.get("decision").is_some(), "Should have 'decision' field");
-    assert!(json.get("decided_at").is_some(), "Should have 'decided_at' field");
+    assert!(
+        json.get("triggered_at").is_some(),
+        "Should have 'triggered_at' field"
+    );
+    assert!(
+        json.get("decision").is_some(),
+        "Should have 'decision' field"
+    );
+    assert!(
+        json.get("decided_at").is_some(),
+        "Should have 'decided_at' field"
+    );
     eprintln!("✓ All required fields present");
 
     // Verify types
-    assert!(json["triggered_at"].is_number(), "'triggered_at' should be a number");
-    assert!(json["decision"].is_null(), "'decision' should be null initially");
-    assert!(json["decided_at"].is_null(), "'decided_at' should be null initially");
+    assert!(
+        json["triggered_at"].is_number(),
+        "'triggered_at' should be a number"
+    );
+    assert!(
+        json["decision"].is_null(),
+        "'decision' should be null initially"
+    );
+    assert!(
+        json["decided_at"].is_null(),
+        "'decided_at' should be null initially"
+    );
     eprintln!("✓ Field types correct");
 
     // Verify phase format
     let phase_str = json["phase"].as_str().expect("phase should be a string");
-    assert!(["Planning", "Executing", "QaReview", "SpecCreation"].contains(&phase_str),
-        "phase should be a valid phase name");
+    assert!(
+        ["Planning", "Executing", "QaReview", "SpecCreation"].contains(&phase_str),
+        "phase should be a valid phase name"
+    );
     eprintln!("✓ Phase format valid");
 
     eprintln!("\n✓ Test passed: GATE_STATE.json format is correct");
@@ -528,6 +611,7 @@ fn test_gate_state_file_format() {
 /// - Decision is written to GATE_STATE.json for persistence
 /// - DECISION.json is consumed by first check (one-time consumption model)
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_concurrent_gate_state_access() {
     let test_dir = temp_test_dir("concurrent_gate_access");
     let specs_dir = test_dir.join("specs");
@@ -552,9 +636,18 @@ fn test_concurrent_gate_state_access() {
     let action2 = manager2.check_gate(Phase::Planning, spec_id);
     let action3 = manager3.check_gate(Phase::Planning, spec_id);
 
-    assert!(matches!(action1, GateAction::Pause { .. }), "Manager 1 should see Pause");
-    assert!(matches!(action2, GateAction::Pause { .. }), "Manager 2 should see Pause");
-    assert!(matches!(action3, GateAction::Pause { .. }), "Manager 3 should see Pause");
+    assert!(
+        matches!(action1, GateAction::Pause { .. }),
+        "Manager 1 should see Pause"
+    );
+    assert!(
+        matches!(action2, GateAction::Pause { .. }),
+        "Manager 2 should see Pause"
+    );
+    assert!(
+        matches!(action3, GateAction::Pause { .. }),
+        "Manager 3 should see Pause"
+    );
     eprintln!("✓ All managers see consistent paused state");
 
     // One manager records decision
@@ -566,15 +659,23 @@ fn test_concurrent_gate_state_access() {
 
     // First check consumes the DECISION.json file (load_decision removes it)
     let action1_after = manager1.check_gate(Phase::Planning, spec_id);
-    assert!(matches!(action1_after, GateAction::Continue), "Manager 1 should see Continue (consumed decision)");
+    assert!(
+        matches!(action1_after, GateAction::Continue),
+        "Manager 1 should see Continue (consumed decision)"
+    );
     eprintln!("✓ Manager 1 consumed decision and continues");
 
     // Subsequent checks won't see decision file (it was consumed), but gate state shows decision was made
     // Verify decision is recorded in GATE_STATE.json
-    let final_state = load_gate_state_file(&specs_dir, spec_id)
-        .expect("State file should exist");
-    assert!(final_state.decision.is_some(), "Decision should be recorded in gate state");
-    assert!(final_state.decided_at.is_some(), "Decision timestamp should be recorded");
+    let final_state = load_gate_state_file(&specs_dir, spec_id).expect("State file should exist");
+    assert!(
+        final_state.decision.is_some(),
+        "Decision should be recorded in gate state"
+    );
+    assert!(
+        final_state.decided_at.is_some(),
+        "Decision timestamp should be recorded"
+    );
     eprintln!("✓ Decision persisted in GATE_STATE.json for other managers to see");
 
     eprintln!("\n✓ Test passed: Concurrent access handled correctly");

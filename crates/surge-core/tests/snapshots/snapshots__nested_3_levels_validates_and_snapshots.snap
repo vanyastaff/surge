@@ -1,0 +1,339 @@
+---
+source: crates/surge-core/tests/snapshots.rs
+expression: g
+---
+Graph {
+    schema_version: 1,
+    metadata: GraphMetadata {
+        name: "nested-3-levels",
+        description: Some(
+            "3 levels of loops: root -> milestone_body -> task_body -> step_body",
+        ),
+        template_origin: None,
+        created_at: 2026-05-02T00:00:00Z,
+        author: None,
+    },
+    start: NodeKey("roadmap_agent"),
+    nodes: {
+        NodeKey("end"): Node {
+            id: NodeKey("end"),
+            position: Position {
+                x: 400.0,
+                y: 0.0,
+            },
+            declared_outcomes: [],
+            config: Terminal(
+                TerminalConfig {
+                    kind: Success,
+                    message: None,
+                },
+            ),
+        },
+        NodeKey("milestone_loop"): Node {
+            id: NodeKey("milestone_loop"),
+            position: Position {
+                x: 200.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "All milestones processed",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Loop(
+                LoopConfig {
+                    iterates_over: Artifact {
+                        node: NodeKey("roadmap_agent"),
+                        name: "milestones.json",
+                        jsonpath: "$.milestones[*]",
+                    },
+                    body: SubgraphKey("milestone_body"),
+                    iteration_var_name: "milestone",
+                    exit_condition: AllItems,
+                    on_iteration_failure: Abort,
+                    parallelism: Sequential,
+                    gate_after_each: false,
+                },
+            ),
+        },
+        NodeKey("roadmap_agent"): Node {
+            id: NodeKey("roadmap_agent"),
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "Roadmap produced",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Agent(
+                AgentConfig {
+                    profile: ProfileKey("planner@1.0"),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: [],
+                    rules_overrides: None,
+                    limits: NodeLimits {
+                        timeout_seconds: 600,
+                        max_retries: 2,
+                        circuit_breaker: None,
+                        max_tokens: 100000,
+                    },
+                    hooks: [],
+                    custom_fields: {},
+                },
+            ),
+        },
+    },
+    edges: [
+        Edge {
+            id: EdgeKey("e_roadmap_to_loop"),
+            from: PortRef {
+                node: NodeKey("roadmap_agent"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("milestone_loop"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+        Edge {
+            id: EdgeKey("e_loop_to_end"),
+            from: PortRef {
+                node: NodeKey("milestone_loop"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("end"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+    ],
+    subgraphs: {
+        SubgraphKey("milestone_body"): Subgraph {
+            start: NodeKey("task_planner"),
+            nodes: {
+                NodeKey("task_loop"): Node {
+                    id: NodeKey("task_loop"),
+                    position: Position {
+                        x: 200.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "All tasks processed",
+                            edge_kind_hint: Forward,
+                            is_terminal: true,
+                        },
+                    ],
+                    config: Loop(
+                        LoopConfig {
+                            iterates_over: Artifact {
+                                node: NodeKey("task_planner"),
+                                name: "tasks.json",
+                                jsonpath: "$.tasks[*]",
+                            },
+                            body: SubgraphKey("task_body"),
+                            iteration_var_name: "task",
+                            exit_condition: AllItems,
+                            on_iteration_failure: Abort,
+                            parallelism: Sequential,
+                            gate_after_each: false,
+                        },
+                    ),
+                },
+                NodeKey("task_planner"): Node {
+                    id: NodeKey("task_planner"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Tasks planned",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("planner@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 600,
+                                max_retries: 2,
+                                circuit_breaker: None,
+                                max_tokens: 100000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+            },
+            edges: [
+                Edge {
+                    id: EdgeKey("e_mb_plan_to_loop"),
+                    from: PortRef {
+                        node: NodeKey("task_planner"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("task_loop"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+            ],
+        },
+        SubgraphKey("step_body"): Subgraph {
+            start: NodeKey("step_impl"),
+            nodes: {
+                NodeKey("step_impl"): Node {
+                    id: NodeKey("step_impl"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Step implemented",
+                            edge_kind_hint: Forward,
+                            is_terminal: true,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("implementer@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 900,
+                                max_retries: 3,
+                                circuit_breaker: None,
+                                max_tokens: 200000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+            },
+            edges: [],
+        },
+        SubgraphKey("task_body"): Subgraph {
+            start: NodeKey("step_planner"),
+            nodes: {
+                NodeKey("step_loop"): Node {
+                    id: NodeKey("step_loop"),
+                    position: Position {
+                        x: 200.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "All steps done",
+                            edge_kind_hint: Forward,
+                            is_terminal: true,
+                        },
+                    ],
+                    config: Loop(
+                        LoopConfig {
+                            iterates_over: Artifact {
+                                node: NodeKey("step_planner"),
+                                name: "steps.json",
+                                jsonpath: "$.steps[*]",
+                            },
+                            body: SubgraphKey("step_body"),
+                            iteration_var_name: "step",
+                            exit_condition: AllItems,
+                            on_iteration_failure: Abort,
+                            parallelism: Sequential,
+                            gate_after_each: false,
+                        },
+                    ),
+                },
+                NodeKey("step_planner"): Node {
+                    id: NodeKey("step_planner"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Steps planned",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("planner@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 300,
+                                max_retries: 2,
+                                circuit_breaker: None,
+                                max_tokens: 50000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+            },
+            edges: [
+                Edge {
+                    id: EdgeKey("e_tb_plan_to_loop"),
+                    from: PortRef {
+                        node: NodeKey("step_planner"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("step_loop"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+            ],
+        },
+    },
+}

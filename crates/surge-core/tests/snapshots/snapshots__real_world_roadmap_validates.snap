@@ -1,0 +1,445 @@
+---
+source: crates/surge-core/tests/snapshots.rs
+expression: g
+---
+Graph {
+    schema_version: 1,
+    metadata: GraphMetadata {
+        name: "real-world-roadmap",
+        description: Some(
+            "Surge project roadmap: v0.1.0 through v1.0.0, expressed as a Milestone Loop with inner Task Loops",
+        ),
+        template_origin: None,
+        created_at: 2026-05-02T00:00:00Z,
+        author: None,
+    },
+    start: NodeKey("roadmap_planner"),
+    nodes: {
+        NodeKey("completion_notify"): Node {
+            id: NodeKey("completion_notify"),
+            position: Position {
+                x: 400.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "Notification sent",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Notify(
+                NotifyConfig {
+                    channel: Desktop,
+                    template: NotifyTemplate {
+                        severity: Success,
+                        title: "Surge v1.0.0 shipped",
+                        body: "All milestones complete. Surge is production-ready.",
+                        artifacts: [],
+                    },
+                    on_failure: Continue,
+                },
+            ),
+        },
+        NodeKey("end"): Node {
+            id: NodeKey("end"),
+            position: Position {
+                x: 600.0,
+                y: 0.0,
+            },
+            declared_outcomes: [],
+            config: Terminal(
+                TerminalConfig {
+                    kind: Success,
+                    message: None,
+                },
+            ),
+        },
+        NodeKey("milestone_loop"): Node {
+            id: NodeKey("milestone_loop"),
+            position: Position {
+                x: 200.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "All milestones implemented",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Loop(
+                LoopConfig {
+                    iterates_over: Artifact {
+                        node: NodeKey("roadmap_planner"),
+                        name: "milestones.json",
+                        jsonpath: "$.milestones[*]",
+                    },
+                    body: SubgraphKey("milestone_body"),
+                    iteration_var_name: "milestone",
+                    exit_condition: AllItems,
+                    on_iteration_failure: Abort,
+                    parallelism: Sequential,
+                    gate_after_each: true,
+                },
+            ),
+        },
+        NodeKey("roadmap_planner"): Node {
+            id: NodeKey("roadmap_planner"),
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "Milestones breakdown ready",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Agent(
+                AgentConfig {
+                    profile: ProfileKey("planner@1.0"),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: [],
+                    rules_overrides: None,
+                    limits: NodeLimits {
+                        timeout_seconds: 600,
+                        max_retries: 2,
+                        circuit_breaker: None,
+                        max_tokens: 100000,
+                    },
+                    hooks: [],
+                    custom_fields: {},
+                },
+            ),
+        },
+    },
+    edges: [
+        Edge {
+            id: EdgeKey("e_planner_to_loop"),
+            from: PortRef {
+                node: NodeKey("roadmap_planner"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("milestone_loop"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+        Edge {
+            id: EdgeKey("e_loop_to_notify"),
+            from: PortRef {
+                node: NodeKey("milestone_loop"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("completion_notify"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+        Edge {
+            id: EdgeKey("e_notify_to_end"),
+            from: PortRef {
+                node: NodeKey("completion_notify"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("end"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+    ],
+    subgraphs: {
+        SubgraphKey("milestone_body"): Subgraph {
+            start: NodeKey("phase_planner"),
+            nodes: {
+                NodeKey("milestone_gate"): Node {
+                    id: NodeKey("milestone_gate"),
+                    position: Position {
+                        x: 400.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("ship"),
+                            description: "Milestone approved for release",
+                            edge_kind_hint: Forward,
+                            is_terminal: true,
+                        },
+                    ],
+                    config: HumanGate(
+                        HumanGateConfig {
+                            delivery_channels: [
+                                Desktop {
+                                    duration: Persistent,
+                                },
+                            ],
+                            timeout_seconds: None,
+                            on_timeout: Reject,
+                            summary: SummaryTemplate {
+                                title: "Ship milestone?",
+                                body: "Review the milestone tasks and decide whether to ship this version.",
+                                show_artifacts: [],
+                            },
+                            options: [
+                                ApprovalOption {
+                                    outcome: OutcomeKey("ship"),
+                                    label: "Ship it",
+                                    style: Primary,
+                                },
+                            ],
+                            allow_freetext: true,
+                        },
+                    ),
+                },
+                NodeKey("phase_planner"): Node {
+                    id: NodeKey("phase_planner"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Phase tasks planned",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("planner@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 600,
+                                max_retries: 2,
+                                circuit_breaker: None,
+                                max_tokens: 100000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+                NodeKey("task_loop"): Node {
+                    id: NodeKey("task_loop"),
+                    position: Position {
+                        x: 200.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "All tasks in milestone done",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Loop(
+                        LoopConfig {
+                            iterates_over: Artifact {
+                                node: NodeKey("phase_planner"),
+                                name: "tasks.json",
+                                jsonpath: "$.tasks[*]",
+                            },
+                            body: SubgraphKey("task_body"),
+                            iteration_var_name: "task",
+                            exit_condition: AllItems,
+                            on_iteration_failure: Abort,
+                            parallelism: Sequential,
+                            gate_after_each: false,
+                        },
+                    ),
+                },
+            },
+            edges: [
+                Edge {
+                    id: EdgeKey("e_mb_plan_to_tasks"),
+                    from: PortRef {
+                        node: NodeKey("phase_planner"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("task_loop"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+                Edge {
+                    id: EdgeKey("e_mb_tasks_to_gate"),
+                    from: PortRef {
+                        node: NodeKey("task_loop"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("milestone_gate"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+            ],
+        },
+        SubgraphKey("task_body"): Subgraph {
+            start: NodeKey("task_spec"),
+            nodes: {
+                NodeKey("task_impl"): Node {
+                    id: NodeKey("task_impl"),
+                    position: Position {
+                        x: 200.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Task implemented",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("implementer@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 1800,
+                                max_retries: 3,
+                                circuit_breaker: None,
+                                max_tokens: 200000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+                NodeKey("task_qa"): Node {
+                    id: NodeKey("task_qa"),
+                    position: Position {
+                        x: 400.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "QA passed",
+                            edge_kind_hint: Forward,
+                            is_terminal: true,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("qa-agent@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 900,
+                                max_retries: 3,
+                                circuit_breaker: None,
+                                max_tokens: 150000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+                NodeKey("task_spec"): Node {
+                    id: NodeKey("task_spec"),
+                    position: Position {
+                        x: 0.0,
+                        y: 0.0,
+                    },
+                    declared_outcomes: [
+                        OutcomeDecl {
+                            id: OutcomeKey("done"),
+                            description: "Task spec written",
+                            edge_kind_hint: Forward,
+                            is_terminal: false,
+                        },
+                    ],
+                    config: Agent(
+                        AgentConfig {
+                            profile: ProfileKey("spec-writer@1.0"),
+                            prompt_overrides: None,
+                            tool_overrides: None,
+                            sandbox_override: None,
+                            approvals_override: None,
+                            bindings: [],
+                            rules_overrides: None,
+                            limits: NodeLimits {
+                                timeout_seconds: 600,
+                                max_retries: 2,
+                                circuit_breaker: None,
+                                max_tokens: 100000,
+                            },
+                            hooks: [],
+                            custom_fields: {},
+                        },
+                    ),
+                },
+            },
+            edges: [
+                Edge {
+                    id: EdgeKey("e_tb_spec_to_impl"),
+                    from: PortRef {
+                        node: NodeKey("task_spec"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("task_impl"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+                Edge {
+                    id: EdgeKey("e_tb_impl_to_qa"),
+                    from: PortRef {
+                        node: NodeKey("task_impl"),
+                        outcome: OutcomeKey("done"),
+                    },
+                    to: NodeKey("task_qa"),
+                    kind: Forward,
+                    policy: EdgePolicy {
+                        max_traversals: None,
+                        on_max_exceeded: Escalate,
+                        label: None,
+                    },
+                },
+            ],
+        },
+    },
+}

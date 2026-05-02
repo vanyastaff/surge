@@ -132,7 +132,7 @@ pub fn start_budget_listener(
                 match tracker.check() {
                     BudgetStatus::TokensExceeded { used, limit } => {
                         warn!(used, limit, "token budget exceeded");
-                    }
+                    },
                     BudgetStatus::CostExceeded {
                         used_micro_usd,
                         limit_micro_usd,
@@ -142,8 +142,8 @@ pub fn start_budget_listener(
                             limit_usd = limit_micro_usd as f64 / 1_000_000.0,
                             "cost budget exceeded"
                         );
-                    }
-                    BudgetStatus::Ok => {}
+                    },
+                    BudgetStatus::Ok => {},
                 }
             }
         }

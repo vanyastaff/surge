@@ -834,7 +834,7 @@ impl SurgeConfig {
                         "surge.toml not found in {} or any parent directory",
                         start_dir.display()
                     )));
-                }
+                },
             }
         }
     }
@@ -1801,8 +1801,18 @@ auto_open_worktree = true
     fn test_analytics_config_defaults() {
         let config = AnalyticsConfig::default();
         assert_eq!(config.default_pricing.currency, "USD");
-        assert!(config.default_pricing.input_cost_per_million_tokens.is_none());
-        assert!(config.default_pricing.output_cost_per_million_tokens.is_none());
+        assert!(
+            config
+                .default_pricing
+                .input_cost_per_million_tokens
+                .is_none()
+        );
+        assert!(
+            config
+                .default_pricing
+                .output_cost_per_million_tokens
+                .is_none()
+        );
         assert!(config.budget_usd.is_none());
         assert!(config.budget_tokens.is_none());
         assert_eq!(config.budget_warn_threshold, 80);
@@ -1821,12 +1831,25 @@ input_cost_per_million_tokens = 3.0
 output_cost_per_million_tokens = 15.0
 currency = "USD"
 "#;
-        let config: SurgeConfig = toml::from_str(&format!("default_agent = \"test\"\n{}", toml_str)).unwrap();
+        let config: SurgeConfig =
+            toml::from_str(&format!("default_agent = \"test\"\n{}", toml_str)).unwrap();
         assert_eq!(config.analytics.budget_usd, Some(100.0));
         assert_eq!(config.analytics.budget_tokens, Some(1000000));
         assert_eq!(config.analytics.budget_warn_threshold, 90);
-        assert_eq!(config.analytics.default_pricing.input_cost_per_million_tokens, Some(3.0));
-        assert_eq!(config.analytics.default_pricing.output_cost_per_million_tokens, Some(15.0));
+        assert_eq!(
+            config
+                .analytics
+                .default_pricing
+                .input_cost_per_million_tokens,
+            Some(3.0)
+        );
+        assert_eq!(
+            config
+                .analytics
+                .default_pricing
+                .output_cost_per_million_tokens,
+            Some(15.0)
+        );
         assert_eq!(config.analytics.default_pricing.currency, "USD");
     }
 

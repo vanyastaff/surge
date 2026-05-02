@@ -1,0 +1,82 @@
+---
+source: crates/surge-core/tests/snapshots.rs
+expression: g
+---
+Graph {
+    schema_version: 1,
+    metadata: GraphMetadata {
+        name: "linear-trivial",
+        description: None,
+        template_origin: None,
+        created_at: 2026-05-02T00:00:00Z,
+        author: None,
+    },
+    start: NodeKey("impl_1"),
+    nodes: {
+        NodeKey("end"): Node {
+            id: NodeKey("end"),
+            position: Position {
+                x: 200.0,
+                y: 0.0,
+            },
+            declared_outcomes: [],
+            config: Terminal(
+                TerminalConfig {
+                    kind: Success,
+                    message: None,
+                },
+            ),
+        },
+        NodeKey("impl_1"): Node {
+            id: NodeKey("impl_1"),
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+            },
+            declared_outcomes: [
+                OutcomeDecl {
+                    id: OutcomeKey("done"),
+                    description: "Implementation complete",
+                    edge_kind_hint: Forward,
+                    is_terminal: false,
+                },
+            ],
+            config: Agent(
+                AgentConfig {
+                    profile: ProfileKey("implementer@1.0"),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: [],
+                    rules_overrides: None,
+                    limits: NodeLimits {
+                        timeout_seconds: 900,
+                        max_retries: 3,
+                        circuit_breaker: None,
+                        max_tokens: 200000,
+                    },
+                    hooks: [],
+                    custom_fields: {},
+                },
+            ),
+        },
+    },
+    edges: [
+        Edge {
+            id: EdgeKey("e1"),
+            from: PortRef {
+                node: NodeKey("impl_1"),
+                outcome: OutcomeKey("done"),
+            },
+            to: NodeKey("end"),
+            kind: Forward,
+            policy: EdgePolicy {
+                max_traversals: None,
+                on_max_exceeded: Escalate,
+                label: None,
+            },
+        },
+    ],
+    subgraphs: {},
+}

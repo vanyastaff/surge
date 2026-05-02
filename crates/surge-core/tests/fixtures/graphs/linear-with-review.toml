@@ -1,0 +1,181 @@
+schema_version = 1
+start = "spec_1"
+
+[metadata]
+name = "linear-with-review"
+created_at = "2026-05-02T00:00:00Z"
+
+# Node: spec writer agent
+[nodes.spec_1]
+id = "spec_1"
+
+[nodes.spec_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.spec_1.declared_outcomes]]
+id = "done"
+description = "Spec written"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.spec_1.config]
+node_kind = "agent"
+profile = "spec-writer@1.0"
+bindings = []
+hooks = []
+
+[nodes.spec_1.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.spec_1.config.custom_fields]
+
+# Node: planner agent
+[nodes.plan_1]
+id = "plan_1"
+
+[nodes.plan_1.position]
+x = 200.0
+y = 0.0
+
+[[nodes.plan_1.declared_outcomes]]
+id = "done"
+description = "Plan ready"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.plan_1.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[nodes.plan_1.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.plan_1.config.custom_fields]
+
+# Node: implementer agent
+[nodes.impl_1]
+id = "impl_1"
+
+[nodes.impl_1.position]
+x = 400.0
+y = 0.0
+
+[[nodes.impl_1.declared_outcomes]]
+id = "done"
+description = "Implementation complete"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.impl_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.impl_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.impl_1.config.custom_fields]
+
+# Node: human review gate
+[nodes.review_gate]
+id = "review_gate"
+
+[nodes.review_gate.position]
+x = 600.0
+y = 0.0
+
+[[nodes.review_gate.declared_outcomes]]
+id = "approve"
+description = "Implementation approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.review_gate.config]
+node_kind = "human_gate"
+allow_freetext = true
+
+[[nodes.review_gate.config.delivery_channels]]
+type = "desktop"
+duration = "persistent"
+
+[nodes.review_gate.config.summary]
+title = "Review implementation"
+body = "Please review the implementation and approve or reject."
+
+[[nodes.review_gate.config.options]]
+outcome = "approve"
+label = "Approve"
+style = "primary"
+
+# Node: terminal success
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 800.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_spec_to_plan"
+to = "plan_1"
+kind = "forward"
+
+[edges.from]
+node = "spec_1"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_plan_to_impl"
+to = "impl_1"
+kind = "forward"
+
+[edges.from]
+node = "plan_1"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_to_review"
+to = "review_gate"
+kind = "forward"
+
+[edges.from]
+node = "impl_1"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "review_gate"
+outcome = "approve"
+
+[edges.policy]
+on_max_exceeded = "escalate"

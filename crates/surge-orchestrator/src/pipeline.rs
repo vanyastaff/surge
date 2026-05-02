@@ -91,7 +91,7 @@ impl Orchestrator {
             Err(e) => {
                 warn!(error = %e, "failed to create usage store, continuing without persistence");
                 Store::in_memory().unwrap()
-            }
+            },
         };
 
         // Build custom pricing from config if available
@@ -133,7 +133,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Failed to initialise git manager: {e}"),
                 };
-            }
+            },
         };
 
         let worktree_info = match git.create_worktree(&spec_id_str, None) {
@@ -142,7 +142,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Failed to create worktree: {e}"),
                 };
-            }
+            },
         };
         let worktree_path = worktree_info.path.clone();
         info!(path = %worktree_path.display(), "worktree created");
@@ -161,7 +161,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Failed to create agent pool: {e}"),
                 };
-            }
+            },
         };
 
         // Forward pool events to the orchestrator broadcast channel.
@@ -185,7 +185,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Failed to create ACP session: {e}"),
                 };
-            }
+            },
         };
         info!("ACP session created");
 
@@ -250,7 +250,7 @@ impl Orchestrator {
                         phase: Phase::SpecCreation,
                         reason,
                     };
-                }
+                },
                 GateAction::Timeout { elapsed } => {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
@@ -258,10 +258,10 @@ impl Orchestrator {
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
-                }
+                },
                 GateAction::HumanInput { .. } => {
                     // HumanInput not applicable for SpecCreation phase
-                }
+                },
                 GateAction::Continue => {
                     // Check if a decision was loaded
                     if let Some(decision) = gate_manager.load_decision(spec_id) {
@@ -304,7 +304,7 @@ impl Orchestrator {
                             };
                         }
                     }
-                }
+                },
             }
         }
 
@@ -341,7 +341,7 @@ impl Orchestrator {
                         phase: Phase::Planning,
                         reason,
                     };
-                }
+                },
                 GateAction::Timeout { elapsed } => {
                     aggregator.unregister_session(&session.session_id).await;
                     pool.shutdown().await;
@@ -349,10 +349,10 @@ impl Orchestrator {
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
-                }
+                },
                 GateAction::HumanInput { .. } => {
                     // HumanInput not applicable for Planning phase
-                }
+                },
                 GateAction::Continue => {
                     // Check if a decision was loaded
                     if let Some(decision) = gate_manager.load_decision(spec_id) {
@@ -395,7 +395,7 @@ impl Orchestrator {
                             };
                         }
                     }
-                }
+                },
             }
         }
 
@@ -427,7 +427,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Failed to build dependency graph: {e}"),
                 };
-            }
+            },
         };
 
         let batch_ids = match graph.topological_batches() {
@@ -439,7 +439,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("Topological batches failed: {e}"),
                 };
-            }
+            },
         };
 
         // Count already completed subtasks (for resume support)
@@ -497,7 +497,7 @@ impl Orchestrator {
                     return PipelineResult::Failed {
                         reason: format!("Token budget exceeded: {used} / {limit}"),
                     };
-                }
+                },
                 BudgetStatus::CostExceeded {
                     used_micro_usd,
                     limit_micro_usd,
@@ -515,8 +515,8 @@ impl Orchestrator {
                     return PipelineResult::Failed {
                         reason: format!("Cost budget exceeded: ${used_usd:.4} / ${limit_usd:.4}"),
                     };
-                }
-                BudgetStatus::Ok => {}
+                },
+                BudgetStatus::Ok => {},
             }
 
             match gate_manager.check_gate(Phase::Executing, spec_id) {
@@ -534,18 +534,18 @@ impl Orchestrator {
                         phase: Phase::Executing,
                         reason,
                     };
-                }
+                },
                 GateAction::Timeout { elapsed } => {
                     pool.shutdown().await;
                     event_forwarder.abort();
                     return PipelineResult::Failed {
                         reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                     };
-                }
+                },
                 GateAction::HumanInput { content } => {
                     info!("human input received, will inject into next batch");
                     pending_human_input = Some(content);
-                }
+                },
                 GateAction::Continue => {
                     // Check if a decision was loaded
                     if let Some(decision) = gate_manager.load_decision(spec_id) {
@@ -582,7 +582,7 @@ impl Orchestrator {
                             };
                         }
                     }
-                }
+                },
             }
 
             info!(batch_index = i, batch_size = batch.len(), "executing batch");
@@ -688,7 +688,7 @@ impl Orchestrator {
                     phase: Phase::QaReview,
                     reason,
                 };
-            }
+            },
             GateAction::Timeout { elapsed } => {
                 aggregator.unregister_session(&session.session_id).await;
                 pool.shutdown().await;
@@ -696,10 +696,10 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("gate timed out after {} seconds", elapsed.as_secs()),
                 };
-            }
+            },
             GateAction::HumanInput { .. } => {
                 // HumanInput not applicable after QA phase
-            }
+            },
             GateAction::Continue => {
                 // Check if a decision was loaded
                 if let Some(decision) = gate_manager.load_decision(spec_id) {
@@ -741,7 +741,7 @@ impl Orchestrator {
                         };
                     }
                 }
-            }
+            },
         }
 
         match qa_result.verdict {
@@ -765,7 +765,7 @@ impl Orchestrator {
                     };
                 }
                 info!("merged successfully");
-            }
+            },
             QaVerdict::Partial { met, unmet } => {
                 let verdict_str = format!("partial ({} met, {} unmet)", met.len(), unmet.len());
                 let reasoning_str = format!(
@@ -810,7 +810,7 @@ impl Orchestrator {
                         unmet.join(", ")
                     ),
                 };
-            }
+            },
             QaVerdict::NeedsFix { issues } => {
                 let _ = self.event_tx.send(SurgeEvent::TaskStateChanged {
                     task_id,
@@ -830,7 +830,7 @@ impl Orchestrator {
                 return PipelineResult::Failed {
                     reason: format!("QA review failed after max iterations: {issues}"),
                 };
-            }
+            },
         }
 
         // ── Cleanup ─────────────────────────────────────────────────────

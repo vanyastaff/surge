@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use surge_acp::client::PermissionPolicy;
 use surge_acp::pool::AgentPool;
-use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
 use surge_core::SurgeEvent;
+use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
 use tokio::time::timeout;
 
 /// Helper to create a test ResilienceConfig with short heartbeat intervals for testing.
@@ -27,7 +27,7 @@ fn test_resilience_config() -> ResilienceConfig {
         auth_failure_immediate_fail: true,
         // Use very short intervals for testing
         heartbeat_interval_active_secs: 1, // 1 second for fast testing
-        heartbeat_interval_idle_secs: 2,    // 2 seconds for idle
+        heartbeat_interval_idle_secs: 2,   // 2 seconds for idle
         reconnect_max_attempts: 3,
         reconnect_initial_delay_ms: 100,
     }
@@ -92,12 +92,12 @@ async fn test_heartbeat_detects_nonexistent_agent() {
                     if consecutive_failures >= 3 {
                         health_degraded_seen = true;
                     }
-                }
+                },
                 SurgeEvent::AgentHealthDegraded { agent_name, .. } => {
                     assert_eq!(agent_name, "nonexistent-agent");
                     health_degraded_seen = true;
-                }
-                _ => {} // Ignore other events
+                },
+                _ => {}, // Ignore other events
             },
             Ok(Err(_)) => break, // Channel closed
             Err(_) => {
@@ -105,7 +105,7 @@ async fn test_heartbeat_detects_nonexistent_agent() {
                 if heartbeat_failed_count >= 3 && health_degraded_seen {
                     break;
                 }
-            }
+            },
         }
     }
 
@@ -194,12 +194,12 @@ async fn test_heartbeat_detects_terminated_process() {
                     if consecutive_failures >= 3 {
                         health_degraded_seen = true;
                     }
-                }
+                },
                 SurgeEvent::AgentHealthDegraded { agent_name, .. } => {
                     assert_eq!(agent_name, "short-lived-agent");
                     health_degraded_seen = true;
-                }
-                _ => {} // Ignore other events
+                },
+                _ => {}, // Ignore other events
             },
             Ok(Err(_)) => break, // Channel closed
             Err(_) => {
@@ -207,7 +207,7 @@ async fn test_heartbeat_detects_terminated_process() {
                 if heartbeat_failed_count >= 3 && health_degraded_seen {
                     break;
                 }
-            }
+            },
         }
     }
 
@@ -283,8 +283,8 @@ async fn test_heartbeat_consecutive_failure_count() {
                 if consecutive_failures >= 3 {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {} // Ignore other events
+            },
+            Ok(Ok(_)) => {}, // Ignore other events
             Ok(Err(_)) => break,
             Err(_) => continue,
         }
@@ -362,22 +362,16 @@ async fn test_multiple_agents_heartbeat_monitoring() {
                 if agent1_failed && agent2_failed {
                     break;
                 }
-            }
-            Ok(Ok(_)) => {} // Ignore other events
+            },
+            Ok(Ok(_)) => {}, // Ignore other events
             Ok(Err(_)) => break,
             Err(_) => continue,
         }
     }
 
     // Verify both agents had heartbeat failures detected
-    assert!(
-        agent1_failed,
-        "Expected heartbeat failures for agent-1"
-    );
-    assert!(
-        agent2_failed,
-        "Expected heartbeat failures for agent-2"
-    );
+    assert!(agent1_failed, "Expected heartbeat failures for agent-1");
+    assert!(agent2_failed, "Expected heartbeat failures for agent-2");
 
     // Verify both agents are tracked in health tracker
     let health_tracker = pool.health().lock().await;

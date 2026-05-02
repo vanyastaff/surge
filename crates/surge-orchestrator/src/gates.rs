@@ -88,7 +88,7 @@ impl GateContext {
                 } else {
                     summary.push_str("*No plan diff available*\n");
                 }
-            }
+            },
             Phase::Executing => {
                 summary.push_str("## Execution Review\n\n");
                 if let Some(changes) = &self.code_changes {
@@ -98,7 +98,7 @@ impl GateContext {
                 } else {
                     summary.push_str("*No code changes available*\n");
                 }
-            }
+            },
             Phase::QaReview => {
                 summary.push_str("## QA Review Results\n\n");
                 if let Some(qa) = &self.qa_results {
@@ -106,7 +106,7 @@ impl GateContext {
                         QaVerdict::Approved => {
                             summary.push_str("**Verdict:** ✅ Approved\n\n");
                             summary.push_str("All acceptance criteria have been met.\n");
-                        }
+                        },
                         QaVerdict::Partial { met, unmet } => {
                             summary.push_str("**Verdict:** ⚠️ Partial\n\n");
                             summary.push_str("### Criteria Met\n");
@@ -117,21 +117,21 @@ impl GateContext {
                             for criterion in unmet {
                                 summary.push_str(&format!("- ❌ {criterion}\n"));
                             }
-                        }
+                        },
                         QaVerdict::NeedsFix { issues } => {
                             summary.push_str("**Verdict:** ❌ Needs Fix\n\n");
                             summary.push_str("### Issues Found\n");
                             summary.push_str(issues);
                             summary.push('\n');
-                        }
+                        },
                     }
                 } else {
                     summary.push_str("*No QA results available*\n");
                 }
-            }
+            },
             Phase::SpecCreation | Phase::QaFix | Phase::HumanReview | Phase::Merging => {
                 summary.push_str("*No specific context available for this phase*\n");
-            }
+            },
         }
 
         summary
@@ -225,12 +225,12 @@ impl GateManager {
                 Err(e) => {
                     debug!(error = %e, "failed to parse gate state");
                     None
-                }
+                },
             },
             Err(e) => {
                 debug!(error = %e, "failed to read gate state");
                 None
-            }
+            },
         }
     }
 
@@ -253,10 +253,10 @@ impl GateManager {
                 } else {
                     debug!(spec_id = %spec_id, "saved gate state");
                 }
-            }
+            },
             Err(e) => {
                 warn!(error = %e, "failed to serialize gate state");
-            }
+            },
         }
     }
 
@@ -311,16 +311,16 @@ impl GateManager {
                     }
                     info!(spec_id = %spec_id, "loaded gate decision");
                     Some(decision)
-                }
+                },
                 Err(e) => {
                     debug!(error = %e, "failed to parse gate decision");
                     None
-                }
+                },
             },
             Err(e) => {
                 debug!(error = %e, "failed to read gate decision");
                 None
-            }
+            },
         }
     }
 
@@ -412,10 +412,10 @@ impl GateManager {
                     }
                     info!(spec_id = %spec_id, "consumed HUMAN_INPUT.md");
                     return GateAction::HumanInput { content };
-                }
+                },
                 Err(e) => {
                     debug!(error = %e, "failed to read HUMAN_INPUT.md");
-                }
+                },
             }
         }
 
@@ -526,7 +526,7 @@ mod tests {
         match action {
             GateAction::HumanInput { content } => {
                 assert_eq!(content, "Please add error handling");
-            }
+            },
             other => panic!("expected HumanInput, got {other:?}"),
         }
 
@@ -559,8 +559,7 @@ mod tests {
 
     #[test]
     fn test_gate_context_qa_approved() {
-        let context =
-            GateContext::new(Phase::QaReview).with_qa_results(QaVerdict::Approved);
+        let context = GateContext::new(Phase::QaReview).with_qa_results(QaVerdict::Approved);
 
         let summary = context.generate_summary();
         assert!(summary.contains("Gate Review: QA Review"));

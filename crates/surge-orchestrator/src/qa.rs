@@ -133,7 +133,7 @@ impl QaReviewer {
                         iterations: iteration,
                         reasoning: None,
                     };
-                }
+                },
             };
 
             // Subscribe before prompt so we capture every AgentMessageChunk
@@ -143,7 +143,7 @@ impl QaReviewer {
             let content = vec![ContentBlock::Text(TextContent::new(qa_prompt))];
 
             match pool.prompt(session, content).await {
-                Ok(_) => {}
+                Ok(_) => {},
                 Err(e) => {
                     warn!(error = %e, "QA prompt failed, defaulting to approved");
                     return QaCycleResult {
@@ -151,7 +151,7 @@ impl QaReviewer {
                         iterations: iteration,
                         reasoning: None,
                     };
-                }
+                },
             }
 
             // Drain all AgentMessageChunk events buffered while the prompt ran
@@ -172,7 +172,7 @@ impl QaReviewer {
                         iterations: iteration,
                         reasoning: Some(response_text),
                     };
-                }
+                },
                 QaVerdict::Partial { met, unmet } => {
                     info!(
                         iteration,
@@ -200,7 +200,7 @@ impl QaReviewer {
                     if let Err(e) = git.commit(&spec_id_str, &commit_msg) {
                         warn!(error = %e, "commit after QA partial fix failed");
                     }
-                }
+                },
                 QaVerdict::NeedsFix { issues } => {
                     info!(iteration, issues = %issues, "QA needs fix");
 
@@ -221,7 +221,7 @@ impl QaReviewer {
                     if let Err(e) = git.commit(&spec_id_str, &commit_msg) {
                         warn!(error = %e, "commit after QA fix failed");
                     }
-                }
+                },
             }
         }
 
@@ -262,14 +262,14 @@ pub fn parse_qa_response(text: &str) -> QaVerdict {
         Ok(response) => {
             info!("parsed QA response using JSON strategy");
             response.into_verdict()
-        }
+        },
         Err(e) => {
             info!(
                 error = %e,
                 "failed to parse JSON response, falling back to text parsing"
             );
             parse_qa_text(text)
-        }
+        },
     }
 }
 
@@ -439,7 +439,7 @@ mod tests {
                 assert!(met.contains(&"documentation".to_string()));
                 assert!(unmet.contains(&"tests".to_string()));
                 assert!(unmet.contains(&"performance optimization".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -460,7 +460,7 @@ mod tests {
             QaVerdict::Partial { met, unmet } => {
                 assert!(met.is_empty());
                 assert!(unmet.is_empty());
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -474,7 +474,7 @@ mod tests {
             QaVerdict::Partial { met, unmet } => {
                 assert_eq!(met.len(), 2);
                 assert!(unmet.is_empty());
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -488,7 +488,7 @@ mod tests {
             QaVerdict::Partial { met, unmet } => {
                 assert!(met.is_empty());
                 assert_eq!(unmet.len(), 2);
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -578,7 +578,7 @@ mod tests {
                 assert_eq!(unmet.len(), 1);
                 assert!(met.contains(&"criterion 1".to_string()));
                 assert!(unmet.contains(&"criterion 2".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -596,7 +596,7 @@ mod tests {
         match verdict {
             QaVerdict::NeedsFix { issues } => {
                 assert_eq!(issues, "issues found");
-            }
+            },
             _ => panic!("expected NeedsFix verdict"),
         }
     }
@@ -614,7 +614,7 @@ mod tests {
         match verdict {
             QaVerdict::NeedsFix { issues } => {
                 assert_eq!(issues, "QA requested fixes (no details provided)");
-            }
+            },
             _ => panic!("expected NeedsFix verdict"),
         }
     }
@@ -668,7 +668,7 @@ All criteria met!"#;
                 assert_eq!(unmet.len(), 2);
                 assert!(met.contains(&"error handling".to_string()));
                 assert!(unmet.contains(&"tests".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict"),
         }
     }
@@ -684,7 +684,7 @@ All criteria met!"#;
         match verdict {
             QaVerdict::NeedsFix { issues } => {
                 assert_eq!(issues, "Missing error handling in main.rs");
-            }
+            },
             _ => panic!("expected NeedsFix verdict"),
         }
     }
@@ -697,7 +697,7 @@ All criteria met!"#;
         match verdict {
             QaVerdict::NeedsFix { issues } => {
                 assert_eq!(issues, "QA requested fixes (no details provided)");
-            }
+            },
             _ => panic!("expected NeedsFix verdict"),
         }
     }
@@ -792,7 +792,7 @@ All criteria met!"#;
                 assert!(met.contains(&"documentation added".to_string()));
                 assert!(unmet.contains(&"tests missing".to_string()));
                 assert!(unmet.contains(&"performance optimization needed".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict, got {:?}", verdict),
         }
     }
@@ -815,7 +815,7 @@ All criteria met!"#;
                 assert!(met.contains(&"documentation".to_string()));
                 assert!(unmet.contains(&"tests".to_string()));
                 assert!(unmet.contains(&"performance".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict from JSON, got {:?}", verdict),
         }
     }
@@ -842,7 +842,7 @@ Some criteria are met, others need work."#;
                 assert_eq!(unmet.len(), 1);
                 assert!(met.contains(&"criterion A".to_string()));
                 assert!(unmet.contains(&"criterion C".to_string()));
-            }
+            },
             _ => panic!("expected Partial verdict from markdown, got {:?}", verdict),
         }
     }
@@ -877,7 +877,7 @@ Some criteria are met, others need work."#;
                         "met criterion should not be in unmet list"
                     );
                 }
-            }
+            },
             _ => panic!("expected Partial verdict, got {:?}", verdict),
         }
     }

@@ -196,14 +196,14 @@ async fn setup_signal_handler() {
             Err(e) => {
                 tracing::error!("failed to install SIGTERM handler: {e}");
                 return;
-            }
+            },
         };
         let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("failed to install SIGINT handler: {e}");
                 return;
-            }
+            },
         };
 
         tokio::select! {
@@ -355,13 +355,13 @@ async fn run_command(command: Commands) -> Result<()> {
             match result {
                 Ok(()) => {
                     println!("✅ Agent '{agent_name}' is responsive");
-                }
+                },
                 Err(e) => {
                     println!("❌ Agent '{agent_name}' failed: {e}");
                     std::process::exit(2);
-                }
+                },
             }
-        }
+        },
 
         Commands::Prompt { message, agent } => {
             let mut config = SurgeConfig::load_or_default()?;
@@ -411,15 +411,15 @@ async fn run_command(command: Commands) -> Result<()> {
             let _ = tokio::time::timeout(std::time::Duration::from_millis(100), print_task).await;
 
             println!("\n\n✅ Done (stop_reason: {:?})", response.stop_reason);
-        }
+        },
 
         Commands::Agent { command } => {
             commands::agent::run(command).await?;
-        }
+        },
 
         Commands::Spec { command } => {
             commands::spec::run(command)?;
-        }
+        },
 
         Commands::Run {
             spec_id,
@@ -429,74 +429,74 @@ async fn run_command(command: Commands) -> Result<()> {
             resume,
         } => {
             commands::pipeline::run(spec_id, parallel, planner, coder, resume).await?;
-        }
+        },
 
         Commands::Status { spec_id } => {
             commands::pipeline::status(spec_id)?;
-        }
+        },
 
         Commands::Logs { spec_id, follow } => {
             commands::pipeline::logs(spec_id, follow)?;
-        }
+        },
 
         Commands::Plan { spec_id, agent } => {
             commands::pipeline::plan(spec_id, agent)?;
-        }
+        },
 
         Commands::Skip {
             spec_id,
             subtask_id,
         } => {
             commands::pipeline::skip(spec_id, subtask_id)?;
-        }
+        },
 
         Commands::Pause { task_id } => {
             commands::pipeline::pause(task_id)?;
-        }
+        },
 
         Commands::Resume { task_id } => {
             commands::pipeline::resume(task_id).await?;
-        }
+        },
 
         Commands::Diff { spec_id } => {
             commands::git::diff(spec_id)?;
-        }
+        },
 
         Commands::Merge { spec_id, yes } => {
             commands::git::merge(spec_id, yes)?;
-        }
+        },
 
         Commands::Discard { spec_id, yes } => {
             commands::git::discard(spec_id, yes)?;
-        }
+        },
 
         Commands::Clean { yes } => {
             commands::git::clean(yes)?;
-        }
+        },
 
         Commands::Worktrees => {
             commands::git::worktrees()?;
-        }
+        },
 
         Commands::Config { command } => {
             commands::config::run(command)?;
-        }
+        },
 
         Commands::Registry { command } => {
             commands::registry::run(command).await?;
-        }
+        },
 
         Commands::Insights { command } => {
             commands::insights::run(command)?;
-        }
+        },
 
         Commands::Memory { command } => {
             commands::memory::run(command)?;
-        }
+        },
 
         Commands::Analytics { command } => {
             commands::analytics::run(command)?;
-        }
+        },
 
         Commands::Init => {
             let config_path = std::env::current_dir()?.join("surge.toml");
@@ -529,7 +529,7 @@ after_qa = true
             std::fs::write(&config_path, default_toml)?;
             println!("⚡ Created surge.toml");
             println!("   Edit agents section to configure your coding agents.");
-        }
+        },
     }
 
     Ok(())

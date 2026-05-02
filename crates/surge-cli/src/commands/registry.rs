@@ -48,7 +48,7 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
                 println!("    capabilities: {}", caps.join(", "));
                 println!();
             }
-        }
+        },
         RegistryCommands::Search { query } => {
             let registry = surge_acp::Registry::builtin();
             let results = registry.search(&query);
@@ -65,7 +65,7 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
                     println!();
                 }
             }
-        }
+        },
         RegistryCommands::Detect => {
             let registry = surge_acp::Registry::builtin();
             let detected = registry.detect_installed_with_paths();
@@ -110,7 +110,7 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
 
                 println!("\nUse 'surge registry add <id>' to add a detected agent to surge.toml.");
             }
-        }
+        },
         RegistryCommands::Info { id } => {
             let registry = surge_acp::Registry::builtin();
             match registry.find(&id) {
@@ -126,28 +126,28 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
                     match &entry.transport {
                         surge_core::config::Transport::Stdio => {
                             println!("  Transport:    stdio");
-                        }
+                        },
                         surge_core::config::Transport::Tcp { host, port } => {
                             println!("  Transport:    tcp ({}:{})", host, port);
-                        }
+                        },
                         surge_core::config::Transport::WebSocket { url } => {
                             println!("  Transport:    ws ({})", url);
-                        }
+                        },
                     }
                     println!("  Capabilities: {}", caps.join(", "));
                     println!("  Install:      {}", entry.install_instructions);
                     if let Some(website) = &entry.website {
                         println!("  Website:      {}", website);
                     }
-                }
+                },
                 None => {
                     anyhow::bail!(
                         "Agent '{}' not found in registry. Try: surge registry list",
                         id
                     );
-                }
+                },
             }
-        }
+        },
         RegistryCommands::Add { id, name } => {
             let registry = surge_acp::Registry::builtin();
             match registry.find(&id) {
@@ -186,15 +186,15 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
 
                     std::fs::write(&config_path, doc.to_string())?;
                     println!("✅ Added agent '{}' to surge.toml", agent_name);
-                }
+                },
                 None => {
                     anyhow::bail!(
                         "Agent '{}' not found in registry. Try: surge registry list",
                         id
                     );
-                }
+                },
             }
-        }
+        },
         RegistryCommands::Fetch { url } => {
             let registry_url = url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL);
             println!("⚡ Fetching remote registry from {}...", registry_url);
@@ -207,7 +207,7 @@ pub async fn run(command: RegistryCommands) -> Result<()> {
             println!("✅ Successfully fetched and cached {} agents", count);
             println!("   Cache location: ~/.surge/registry-cache.json");
             println!("\nUse 'surge registry list' to view all agents.");
-        }
+        },
     }
     Ok(())
 }

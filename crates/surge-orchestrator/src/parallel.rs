@@ -104,7 +104,7 @@ impl ParallelExecutor {
                     tracing::error!("concurrency semaphore closed unexpectedly");
                     failures.push((subtask.id, "semaphore closed".to_string()));
                     continue;
-                }
+                },
             };
 
             // Human input only goes to the first subtask in the batch.
@@ -133,7 +133,7 @@ impl ParallelExecutor {
                 SubtaskResult::Success { subtask_id } => successes.push(subtask_id),
                 SubtaskResult::Failed { subtask_id, reason } => {
                     failures.push((subtask_id, reason));
-                }
+                },
             }
         }
 

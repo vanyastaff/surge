@@ -16,8 +16,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
 use surge_core::{SurgeError, SurgeEvent};
@@ -368,20 +368,22 @@ async fn run_heartbeat_monitor(
             let (tx, rx) = oneshot::channel();
 
             // Send ping operation (Connect is effectively a ping)
-            if op_tx.send(PoolOp::Connect {
-                name: agent_name.clone(),
-                tx,
-            }).is_err() {
+            if op_tx
+                .send(PoolOp::Connect {
+                    name: agent_name.clone(),
+                    tx,
+                })
+                .is_err()
+            {
                 // Pool worker stopped, exit heartbeat monitor
                 debug!("Heartbeat monitor stopping: pool worker stopped");
                 return;
             }
 
             // Wait for response with a timeout
-            let ping_result = tokio::time::timeout(
-                Duration::from_secs(resilience.connect_timeout_secs),
-                rx
-            ).await;
+            let ping_result =
+                tokio::time::timeout(Duration::from_secs(resilience.connect_timeout_secs), rx)
+                    .await;
 
             // Record result in health tracker
             let mut health_lock = health.lock().await;
@@ -389,7 +391,7 @@ async fn run_heartbeat_monitor(
                 Ok(Ok(Ok(()))) => {
                     // Successful ping
                     health_lock.record_heartbeat_success(agent_name);
-                }
+                },
                 Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
                     // Failed ping (connection error, worker dropped response, or timeout)
                     health_lock.record_heartbeat_failure(agent_name);
@@ -416,33 +418,52 @@ async fn run_heartbeat_monitor(
                             drop(health_lock);
 
                             // Trigger reconnection with exponential backoff
-                            debug!("Triggering reconnection for agent '{}' after {} consecutive heartbeat failures", agent_name, consecutive);
+                            debug!(
+                                "Triggering reconnection for agent '{}' after {} consecutive heartbeat failures",
+                                agent_name, consecutive
+                            );
                             let (reconnect_tx, reconnect_rx) = oneshot::channel();
-                            if op_tx.send(PoolOp::Reconnect {
-                                name: agent_name.clone(),
-                                tx: reconnect_tx,
-                            }).is_ok() {
+                            if op_tx
+                                .send(PoolOp::Reconnect {
+                                    name: agent_name.clone(),
+                                    tx: reconnect_tx,
+                                })
+                                .is_ok()
+                            {
                                 // Wait for reconnection attempt to complete (with timeout)
                                 let reconnect_result = tokio::time::timeout(
-                                    Duration::from_secs(resilience.connect_timeout_secs * resilience.reconnect_max_attempts as u64),
-                                    reconnect_rx
-                                ).await;
+                                    Duration::from_secs(
+                                        resilience.connect_timeout_secs
+                                            * resilience.reconnect_max_attempts as u64,
+                                    ),
+                                    reconnect_rx,
+                                )
+                                .await;
 
                                 match reconnect_result {
                                     Ok(Ok(Ok(()))) => {
-                                        debug!("Successfully reconnected to agent '{}'", agent_name);
-                                    }
+                                        debug!(
+                                            "Successfully reconnected to agent '{}'",
+                                            agent_name
+                                        );
+                                    },
                                     Ok(Ok(Err(e))) => {
-                                        warn!("Failed to reconnect to agent '{}': {}", agent_name, e);
-                                    }
+                                        warn!(
+                                            "Failed to reconnect to agent '{}': {}",
+                                            agent_name, e
+                                        );
+                                    },
                                     Ok(Err(_)) | Err(_) => {
-                                        warn!("Reconnection attempt for agent '{}' timed out or was cancelled", agent_name);
-                                    }
+                                        warn!(
+                                            "Reconnection attempt for agent '{}' timed out or was cancelled",
+                                            agent_name
+                                        );
+                                    },
                                 }
                             }
                         }
                     }
-                }
+                },
             }
         }
     }
@@ -512,7 +533,7 @@ fn run_worker(
 
                     let _ = tx.send(());
                     break;
-                }
+                },
 
                 PoolOp::Connect { name, tx } => {
                     let st = Rc::clone(&state);
@@ -520,7 +541,7 @@ fn run_worker(
                         let result = connect(&st, &name).await;
                         let _ = tx.send(result);
                     });
-                }
+                },
 
                 PoolOp::Reconnect { name, tx } => {
                     let st = Rc::clone(&state);
@@ -532,7 +553,7 @@ fn run_worker(
                         let result = try_reconnect_with_backoff(&st, &name).await;
                         let _ = tx.send(result);
                     });
-                }
+                },
 
                 PoolOp::CreateSession {
                     agent_name,
@@ -546,7 +567,7 @@ fn run_worker(
                             create_session(&st, &agent_name, mode.as_deref(), &working_dir).await;
                         let _ = tx.send(result);
                     });
-                }
+                },
 
                 PoolOp::Prompt {
                     session,
@@ -558,7 +579,7 @@ fn run_worker(
                         let result = prompt(&st, &session, content).await;
                         let _ = tx.send(result);
                     });
-                }
+                },
             }
         }
     });
@@ -652,7 +673,7 @@ async fn try_reconnect_with_backoff(
                 );
                 state.borrow_mut().reconnecting.remove(name);
                 return Ok(());
-            }
+            },
             Err(e) => {
                 warn!(
                     "Reconnect attempt {}/{} failed for agent '{}': {}",
@@ -662,7 +683,7 @@ async fn try_reconnect_with_backoff(
                     e
                 );
                 last_error = Some(e);
-            }
+            },
         }
     }
 
@@ -794,9 +815,12 @@ async fn validate_agent_auth(
             Ok(_response) => {
                 // Auth is valid, but we created a test session. That's okay -
                 // it will be replaced by the real session immediately after.
-                debug!("Agent '{}' authentication validated successfully", agent_name);
+                debug!(
+                    "Agent '{}' authentication validated successfully",
+                    agent_name
+                );
                 Ok(())
-            }
+            },
             Err(e) => {
                 let error_msg = format!("{:?}", e);
 
@@ -815,7 +839,7 @@ async fn validate_agent_auth(
                     );
                     Ok(())
                 }
-            }
+            },
         }
     }
     .await;
@@ -878,7 +902,7 @@ async fn create_session(
             )
             .await
             {
-                Ok(Ok(_)) => {}
+                Ok(Ok(_)) => {},
                 Ok(Err(e)) => warn!("Failed to set session mode '{}': {:?}", m, e),
                 Err(_) => warn!("Timeout setting session mode '{}'", m),
             }
@@ -1010,7 +1034,7 @@ async fn prompt(
                     }
 
                     return Ok(response);
-                }
+                },
                 Ok(Err(e)) => {
                     let msg = format!("{e:?}");
 
@@ -1061,7 +1085,9 @@ async fn prompt(
 
                         // Remove stale connection and attempt reconnection
                         state.borrow_mut().connections.remove(agent_name);
-                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                        if let Err(reconnect_err) =
+                            try_reconnect_with_backoff(state, agent_name).await
+                        {
                             warn!(
                                 agent = agent_name.as_str(),
                                 error = %reconnect_err,
@@ -1082,7 +1108,7 @@ async fn prompt(
                         error = %msg,
                         "prompt failed"
                     );
-                }
+                },
                 Err(_) => {
                     let msg = format!("prompt timed out on '{agent_name}'");
                     health.lock().await.record_failure(agent_name, &msg);
@@ -1097,7 +1123,9 @@ async fn prompt(
 
                         // Remove potentially stale connection and attempt reconnection
                         state.borrow_mut().connections.remove(agent_name);
-                        if let Err(reconnect_err) = try_reconnect_with_backoff(state, agent_name).await {
+                        if let Err(reconnect_err) =
+                            try_reconnect_with_backoff(state, agent_name).await
+                        {
                             warn!(
                                 agent = agent_name.as_str(),
                                 error = %reconnect_err,
@@ -1115,7 +1143,7 @@ async fn prompt(
                         elapsed_ms = retry_start.elapsed().as_millis() as u64,
                         "prompt timed out"
                     );
-                }
+                },
             }
         }
 
@@ -1209,7 +1237,8 @@ fn parse_retry_after(error_msg: &str) -> u64 {
                     .trim_matches(|c: char| !c.is_ascii_digit())
                     .trim_end_matches(|c: char| !c.is_ascii_digit());
                 if let Ok(secs) = u64::from_str(cleaned)
-                    && secs > 0 && secs < 3600
+                    && secs > 0
+                    && secs < 3600
                 {
                     return secs;
                 }
@@ -1360,7 +1389,7 @@ fn calculate_backoff(
             // delay = initial_delay * 2^attempt, capped at max_delay
             let exponential = initial_delay_ms.saturating_mul(2u64.saturating_pow(attempt));
             exponential.min(max_delay_ms)
-        }
+        },
 
         BackoffStrategy::ExponentialWithJitter => {
             // Calculate exponential backoff
@@ -1370,7 +1399,7 @@ fn calculate_backoff(
             // Add random jitter: uniform random value in [0, capped]
             let mut rng = rand::rng();
             rng.random_range(0..=capped)
-        }
+        },
     };
 
     Duration::from_millis(delay_ms)
@@ -1814,62 +1843,32 @@ mod tests {
         let max_delay = 60000;
 
         // Linear backoff - always returns initial delay
-        let linear_delay = calculate_backoff(
-            0,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Linear,
-        );
+        let linear_delay = calculate_backoff(0, initial_delay, max_delay, &BackoffStrategy::Linear);
         assert_eq!(linear_delay.as_millis(), 1000);
 
-        let linear_delay = calculate_backoff(
-            5,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Linear,
-        );
+        let linear_delay = calculate_backoff(5, initial_delay, max_delay, &BackoffStrategy::Linear);
         assert_eq!(linear_delay.as_millis(), 1000);
 
         // Exponential backoff - doubles each time
-        let exp_delay_0 = calculate_backoff(
-            0,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Exponential,
-        );
+        let exp_delay_0 =
+            calculate_backoff(0, initial_delay, max_delay, &BackoffStrategy::Exponential);
         assert_eq!(exp_delay_0.as_millis(), 1000); // 1000 * 2^0 = 1000
 
-        let exp_delay_1 = calculate_backoff(
-            1,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Exponential,
-        );
+        let exp_delay_1 =
+            calculate_backoff(1, initial_delay, max_delay, &BackoffStrategy::Exponential);
         assert_eq!(exp_delay_1.as_millis(), 2000); // 1000 * 2^1 = 2000
 
-        let exp_delay_2 = calculate_backoff(
-            2,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Exponential,
-        );
+        let exp_delay_2 =
+            calculate_backoff(2, initial_delay, max_delay, &BackoffStrategy::Exponential);
         assert_eq!(exp_delay_2.as_millis(), 4000); // 1000 * 2^2 = 4000
 
-        let exp_delay_3 = calculate_backoff(
-            3,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Exponential,
-        );
+        let exp_delay_3 =
+            calculate_backoff(3, initial_delay, max_delay, &BackoffStrategy::Exponential);
         assert_eq!(exp_delay_3.as_millis(), 8000); // 1000 * 2^3 = 8000
 
         // Test max delay cap
-        let exp_delay_10 = calculate_backoff(
-            10,
-            initial_delay,
-            max_delay,
-            &BackoffStrategy::Exponential,
-        );
+        let exp_delay_10 =
+            calculate_backoff(10, initial_delay, max_delay, &BackoffStrategy::Exponential);
         assert_eq!(exp_delay_10.as_millis(), 60000); // Capped at max_delay
 
         // Exponential with jitter - should be within range

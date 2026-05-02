@@ -2,8 +2,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{Icon, IconName, StyledExt};
 use surge_acp::{
-    AgentDetail, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus,
-    Usage,
+    AgentDetail, AgentSummary, BadgeKind, EffortLevel, InstallMethod, SessionStatus, Usage,
 };
 
 use crate::app_state::AppState;
@@ -121,7 +120,7 @@ impl AgentHubScreen {
                 let label = match tab {
                     HubTab::Installed => {
                         format!("Installed ({})", self.state.read(cx).installed_agents.len())
-                    }
+                    },
                     HubTab::Available => format!("Available ({})", self.cached_available.len()),
                     HubTab::Benchmarks => "Benchmarks".to_string(),
                 };
@@ -905,11 +904,11 @@ impl AgentHubScreen {
                     CatalogFilter::Free => {
                         a.badges.iter().any(|b| b.kind == BadgeKind::OpenSource)
                             || a.license.to_lowercase().contains("free")
-                    }
+                    },
                     CatalogFilter::Paid => {
                         !a.badges.iter().any(|b| b.kind == BadgeKind::OpenSource)
                             && !a.license.to_lowercase().contains("free")
-                    }
+                    },
                 }
             })
             .collect()
@@ -933,11 +932,11 @@ impl AgentHubScreen {
                     .to_string();
                 // Map agent ID to vendor color
                 let (r, g, b) = match agent.name.as_str() {
-                    "claude-acp" => (0.851, 0.467, 0.341),  // #D97757 - Anthropic
+                    "claude-acp" => (0.851, 0.467, 0.341), // #D97757 - Anthropic
                     "github-copilot-cli" => (0.431, 0.251, 0.788), // #6E40C9 - GitHub
-                    "codex-acp" => (0.063, 0.639, 0.498),   // #10A37F - OpenAI
-                    "gemini" => (0.259, 0.522, 0.957),  // #4285F4 - Google
-                    _ => (0.5, 0.5, 0.5), // Default gray
+                    "codex-acp" => (0.063, 0.639, 0.498),  // #10A37F - OpenAI
+                    "gemini" => (0.259, 0.522, 0.957),     // #4285F4 - Google
+                    _ => (0.5, 0.5, 0.5),                  // Default gray
                 };
                 let vc: Hsla = gpui::rgba(
                     ((r * 255.0) as u32) << 24

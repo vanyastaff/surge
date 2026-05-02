@@ -12,13 +12,13 @@ mod fixtures;
 mod helpers;
 
 use helpers::{cleanup_dir, has_any_agent, temp_test_dir, test_surge_config};
-use surge_acp::discovery::AgentDiscovery;
+use std::process::Command;
 use surge_acp::Registry;
+use surge_acp::discovery::AgentDiscovery;
 use surge_core::error::SurgeError;
 use surge_orchestrator::executor::{ExecutorConfig, SubtaskExecutor};
 use surge_orchestrator::pipeline::{Orchestrator, OrchestratorConfig, PipelineResult};
-use surge_orchestrator::qa::{parse_qa_response, QaVerdict};
-use std::process::Command;
+use surge_orchestrator::qa::{QaVerdict, parse_qa_response};
 
 /// Initialize a git repository in the specified directory.
 ///
@@ -45,8 +45,7 @@ fn init_git_repo(dir: &std::path::Path) {
         .expect("Failed to set git user.email");
 
     // Create initial commit
-    std::fs::write(dir.join("README.md"), "# Test Project\n")
-        .expect("Failed to create README.md");
+    std::fs::write(dir.join("README.md"), "# Test Project\n").expect("Failed to create README.md");
 
     Command::new("git")
         .args(["add", "README.md"])
@@ -66,6 +65,7 @@ fn init_git_repo(dir: &std::path::Path) {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_simple_spec() {
     // Check if any agent is available
     if !has_any_agent() {
@@ -116,16 +116,16 @@ async fn test_e2e_simple_spec() {
     match result {
         PipelineResult::Completed => {
             eprintln!("Pipeline completed successfully");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("Pipeline paused at phase {:?}: {}", phase, reason);
             // For simple specs, pausing at a gate is acceptable
-        }
+        },
         PipelineResult::Failed { reason } => {
             // For E2E tests with real agents, some failures are acceptable
             // (agent might not be configured properly, network issues, etc.)
             eprintln!("Pipeline failed (may be expected in E2E test): {}", reason);
-        }
+        },
     }
 
     // Cleanup
@@ -142,6 +142,7 @@ async fn test_e2e_simple_spec() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_dependency_order() {
     use surge_core::event::SurgeEvent;
     use surge_core::id::SubtaskId;
@@ -196,9 +197,10 @@ async fn test_e2e_dependency_order() {
     assert!(spec_file.spec.subtasks[2].depends_on.contains(&utils_id));
 
     // Build dependency graph and verify topological order
-    let graph = DependencyGraph::from_spec(&spec_file.spec)
-        .expect("Failed to build dependency graph");
-    let topo_order = graph.topological_order()
+    let graph =
+        DependencyGraph::from_spec(&spec_file.spec).expect("Failed to build dependency graph");
+    let topo_order = graph
+        .topological_order()
         .expect("Failed to get topological order");
 
     eprintln!("Expected topological order: {:?}", topo_order);
@@ -206,11 +208,20 @@ async fn test_e2e_dependency_order() {
     // Verify that base comes before utils and integration
     let base_pos = topo_order.iter().position(|id| *id == base_id).unwrap();
     let utils_pos = topo_order.iter().position(|id| *id == utils_id).unwrap();
-    let integration_pos = topo_order.iter().position(|id| *id == integration_id).unwrap();
+    let integration_pos = topo_order
+        .iter()
+        .position(|id| *id == integration_id)
+        .unwrap();
 
     assert!(base_pos < utils_pos, "Base should come before utils");
-    assert!(base_pos < integration_pos, "Base should come before integration");
-    assert!(utils_pos < integration_pos, "Utils should come before integration");
+    assert!(
+        base_pos < integration_pos,
+        "Base should come before integration"
+    );
+    assert!(
+        utils_pos < integration_pos,
+        "Utils should come before integration"
+    );
 
     // Create orchestrator
     let config = OrchestratorConfig {
@@ -247,13 +258,13 @@ async fn test_e2e_dependency_order() {
     match result {
         PipelineResult::Completed => {
             eprintln!("Pipeline completed successfully");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("Pipeline paused at phase {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Failed { reason } => {
             eprintln!("Pipeline failed (may be expected in E2E test): {}", reason);
-        }
+        },
     }
 
     // Verify execution order respected dependencies
@@ -271,7 +282,9 @@ async fn test_e2e_dependency_order() {
                 );
             }
 
-            if let Some(integration_exec_pos) = final_order.iter().position(|id| *id == integration_id) {
+            if let Some(integration_exec_pos) =
+                final_order.iter().position(|id| *id == integration_id)
+            {
                 assert!(
                     base_exec_pos < integration_exec_pos,
                     "Base subtask should execute before integration subtask"
@@ -304,6 +317,7 @@ async fn test_e2e_dependency_order() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_streaming_events() {
     use surge_core::event::SurgeEvent;
 
@@ -355,7 +369,10 @@ async fn test_e2e_streaming_events() {
     let message_chunks = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
     let message_chunks_clone = message_chunks.clone();
 
-    let tokens_consumed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<(u64, u64, Option<u64>)>::new()));
+    let tokens_consumed =
+        std::sync::Arc::new(tokio::sync::Mutex::new(
+            Vec::<(u64, u64, Option<u64>)>::new(),
+        ));
     let tokens_consumed_clone = tokens_consumed.clone();
 
     let event_listener = tokio::spawn(async move {
@@ -365,7 +382,7 @@ async fn test_e2e_streaming_events() {
                     eprintln!("AgentMessageChunk [{}]: {}", session_id, text);
                     let mut chunks = message_chunks_clone.lock().await;
                     chunks.push(text);
-                }
+                },
                 SurgeEvent::TokensConsumed {
                     session_id,
                     agent_name,
@@ -380,8 +397,8 @@ async fn test_e2e_streaming_events() {
                     );
                     let mut tokens = tokens_consumed_clone.lock().await;
                     tokens.push((input_tokens, output_tokens, thought_tokens));
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     });
@@ -397,13 +414,13 @@ async fn test_e2e_streaming_events() {
     match result {
         PipelineResult::Completed => {
             eprintln!("Pipeline completed successfully");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("Pipeline paused at phase {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Failed { reason } => {
             eprintln!("Pipeline failed (may be expected in E2E test): {}", reason);
-        }
+        },
     }
 
     // Verify streaming events were received
@@ -455,9 +472,10 @@ async fn test_e2e_streaming_events() {
 /// This test requires a real ACP agent to be available on the system.
 /// If no agent is found, the test is skipped.
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_e2e_git_commits() {
-    use surge_git::GitManager;
     use std::process::Command;
+    use surge_git::GitManager;
 
     // Check if any agent is available
     if !has_any_agent() {
@@ -512,19 +530,18 @@ async fn test_e2e_git_commits() {
     match result {
         PipelineResult::Completed => {
             eprintln!("Pipeline completed successfully");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             eprintln!("Pipeline paused at phase {:?}: {}", phase, reason);
-        }
+        },
         PipelineResult::Failed { reason } => {
             eprintln!("Pipeline failed (may be expected in E2E test): {}", reason);
-        }
+        },
     }
 
     // Verify git commits in the worktree
     // Initialize GitManager to access worktree
-    let git_manager = GitManager::new(test_dir.clone())
-        .expect("Failed to create GitManager");
+    let git_manager = GitManager::new(test_dir.clone()).expect("Failed to create GitManager");
 
     let worktree_path = git_manager.worktree_path(&spec_id_str);
 
@@ -561,18 +578,22 @@ async fn test_e2e_git_commits() {
 
             // Verify commit message format
             // Expected format: "surge: subtask {title} — {id}"
-            let expected_commit_pattern = format!("surge: subtask {} — {}", subtask_title, subtask_id);
+            let expected_commit_pattern =
+                format!("surge: subtask {} — {}", subtask_title, subtask_id);
 
             // Check if any commit matches the expected pattern
-            let has_matching_commit = surge_commits.iter().any(|msg| {
-                msg.contains(&subtask_title) && msg.contains(&subtask_id.to_string())
-            });
+            let has_matching_commit = surge_commits
+                .iter()
+                .any(|msg| msg.contains(&subtask_title) && msg.contains(&subtask_id.to_string()));
 
             if has_matching_commit {
                 eprintln!("✓ Commit message matches expected pattern");
                 eprintln!("  Expected pattern: {}", expected_commit_pattern);
             } else {
-                eprintln!("⚠ No commit found matching expected pattern: {}", expected_commit_pattern);
+                eprintln!(
+                    "⚠ No commit found matching expected pattern: {}",
+                    expected_commit_pattern
+                );
                 eprintln!("  Actual surge commits:");
                 for commit in &surge_commits {
                     eprintln!("    - {}", commit);
@@ -603,7 +624,10 @@ async fn test_e2e_git_commits() {
             eprintln!("⚠ No surge commits found (may be expected if execution paused early)");
         }
     } else {
-        eprintln!("⚠ Worktree not found at {:?} (may be expected if execution failed early)", worktree_path);
+        eprintln!(
+            "⚠ Worktree not found at {:?} (may be expected if execution failed early)",
+            worktree_path
+        );
     }
 
     // Cleanup
@@ -623,7 +647,8 @@ async fn test_e2e_git_commits() {
 #[test]
 fn test_agent_timeout_retry_logic() {
     // Test 1: Verify timeout error structure and display
-    let timeout_error = SurgeError::Timeout("Agent 'claude-sonnet' did not respond within 300s".to_string());
+    let timeout_error =
+        SurgeError::Timeout("Agent 'claude-sonnet' did not respond within 300s".to_string());
     let error_msg = timeout_error.to_string();
 
     assert!(
@@ -656,7 +681,10 @@ fn test_agent_timeout_retry_logic() {
         "New executor should start with circuit closed"
     );
 
-    eprintln!("✓ Executor retry configuration verified (max_retries: {})", config.max_retries);
+    eprintln!(
+        "✓ Executor retry configuration verified (max_retries: {})",
+        config.max_retries
+    );
 
     // Test 3: Verify high-timeout configuration for slow operations
     let high_timeout_config = ExecutorConfig {
@@ -681,8 +709,7 @@ fn test_agent_timeout_retry_logic() {
 
     eprintln!(
         "✓ High-timeout configuration verified (max_retries: {}, circuit_breaker: {})",
-        high_timeout_config.max_retries,
-        high_timeout_config.circuit_breaker_threshold
+        high_timeout_config.max_retries, high_timeout_config.circuit_breaker_threshold
     );
 
     // Test 4: Verify circuit breaker prevents infinite timeout retry loops
@@ -710,7 +737,10 @@ fn test_agent_timeout_retry_logic() {
         detailed_msg
     );
 
-    eprintln!("✓ Timeout error provides actionable guidance: {}", detailed_msg);
+    eprintln!(
+        "✓ Timeout error provides actionable guidance: {}",
+        detailed_msg
+    );
 
     // Test 6: Verify different timeout scenarios can be distinguished
     let connection_timeout = SurgeError::Timeout("Connection timeout to agent".to_string());
@@ -722,9 +752,18 @@ fn test_agent_timeout_retry_logic() {
     let op_msg = operation_timeout.to_string();
 
     // Each should have distinct context
-    assert_ne!(conn_msg, resp_msg, "Different timeout types should have different messages");
-    assert_ne!(resp_msg, op_msg, "Different timeout types should have different messages");
-    assert_ne!(conn_msg, op_msg, "Different timeout types should have different messages");
+    assert_ne!(
+        conn_msg, resp_msg,
+        "Different timeout types should have different messages"
+    );
+    assert_ne!(
+        resp_msg, op_msg,
+        "Different timeout types should have different messages"
+    );
+    assert_ne!(
+        conn_msg, op_msg,
+        "Different timeout types should have different messages"
+    );
 
     eprintln!("✓ Timeout scenarios are distinguishable:");
     eprintln!("  - Connection: {}", conn_msg);
@@ -744,8 +783,7 @@ fn test_agent_timeout_retry_logic() {
 
     eprintln!(
         "✓ Default executor config balances retry attempts vs fast failure (retries: {}, circuit_breaker: {})",
-        default_config.max_retries,
-        default_config.circuit_breaker_threshold
+        default_config.max_retries, default_config.circuit_breaker_threshold
     );
 }
 
@@ -784,7 +822,10 @@ async fn test_agent_connection_failure_graceful_degradation() {
     };
     let orchestrator = Orchestrator::new(config);
 
-    eprintln!("Testing graceful degradation with invalid agent: {}", invalid_command);
+    eprintln!(
+        "Testing graceful degradation with invalid agent: {}",
+        invalid_command
+    );
 
     // Execute pipeline - this should fail gracefully
     let result = orchestrator.execute(&mut spec_file).await;
@@ -795,10 +836,7 @@ async fn test_agent_connection_failure_graceful_degradation() {
             eprintln!("✓ Pipeline failed gracefully with error: {}", reason);
 
             // Verify error message is descriptive
-            assert!(
-                !reason.is_empty(),
-                "Error message should not be empty"
-            );
+            assert!(!reason.is_empty(), "Error message should not be empty");
 
             // Error should contain information about the connection failure
             // Could be agent spawn failure, connection timeout, or similar
@@ -817,17 +855,17 @@ async fn test_agent_connection_failure_graceful_degradation() {
             );
 
             eprintln!("✓ Error message is descriptive and actionable");
-        }
+        },
         PipelineResult::Completed => {
             panic!("Pipeline should not complete with invalid agent configuration");
-        }
+        },
         PipelineResult::Paused { phase, reason } => {
             // Pausing due to agent failure is also acceptable
             eprintln!(
                 "✓ Pipeline paused gracefully at phase {:?}: {}",
                 phase, reason
             );
-        }
+        },
     }
 
     // Verify that the system is still in a consistent state after failure
@@ -885,7 +923,7 @@ fn test_error_malformed_qa_response() {
                 "Should extract issue description from text: {}",
                 issues
             );
-        }
+        },
         _ => panic!("Expected NeedsFix verdict when NEEDS_FIX marker is present"),
     }
 

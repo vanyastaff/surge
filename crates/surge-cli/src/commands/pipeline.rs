@@ -115,7 +115,7 @@ pub async fn run(
                     print!("\r\x1b[K");
                     let _ = std::io::stdout().flush();
                     println!("  ▶ Starting subtask {subtask_id}");
-                }
+                },
                 SurgeEvent::SubtaskCompleted {
                     subtask_id,
                     success,
@@ -126,7 +126,7 @@ pub async fn run(
                     let _ = std::io::stdout().flush();
                     let mark = if success { "✅" } else { "❌" };
                     println!("  {mark} Subtask {subtask_id}");
-                }
+                },
                 SurgeEvent::TaskStateChanged { new_state, .. } => {
                     // Capture QA state information
                     match &new_state {
@@ -139,7 +139,7 @@ pub async fn run(
                             if let Some(r) = reasoning {
                                 qa.reasoning = Some(r.clone());
                             }
-                        }
+                        },
                         TaskState::QaFix {
                             iteration,
                             verdict,
@@ -153,15 +153,15 @@ pub async fn run(
                             if let Some(r) = reasoning {
                                 qa.reasoning = Some(r.clone());
                             }
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
 
                     // Clear the token counter line before printing state change
                     print!("\r\x1b[K");
                     let _ = std::io::stdout().flush();
                     println!("  📊 State: {new_state}");
-                }
+                },
                 SurgeEvent::TokensConsumed {
                     input_tokens: input,
                     output_tokens: output,
@@ -192,7 +192,7 @@ pub async fn run(
                         t.total_cost
                     );
                     let _ = std::io::stdout().flush();
-                }
+                },
                 SurgeEvent::GateAwaitingApproval {
                     gate_name, reason, ..
                 } => {
@@ -216,7 +216,7 @@ pub async fn run(
                     if let Some(diff) = format_diff_summary() {
                         print!("  {}", diff);
                     }
-                }
+                },
                 SurgeEvent::GateApproved {
                     gate_name,
                     approved_by,
@@ -231,7 +231,7 @@ pub async fn run(
                         print!(" (by {})", by);
                     }
                     println!();
-                }
+                },
                 SurgeEvent::GateRejected {
                     gate_name,
                     rejected_by,
@@ -250,8 +250,8 @@ pub async fn run(
                         print!(" - {}", r);
                     }
                     println!();
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     });
@@ -285,10 +285,8 @@ pub async fn run(
                         // Persist the decision to DECISION.json
                         let specs_dir = surge_spec::SpecFile::specs_dir()?;
                         let gate_config = surge_core::config::GateConfig::default();
-                        let gate_manager = surge_orchestrator::gates::GateManager::new(
-                            gate_config,
-                            specs_dir,
-                        );
+                        let gate_manager =
+                            surge_orchestrator::gates::GateManager::new(gate_config, specs_dir);
                         gate_manager.record_decision(spec_file.spec.id, phase, decision.clone());
 
                         // Check if user aborted
@@ -299,13 +297,13 @@ pub async fn run(
 
                         // Continue to next iteration to resume pipeline
                         println!("▶️  Resuming pipeline...\n");
-                    }
+                    },
                     Err(e) => {
                         println!("❌ Failed to get gate approval: {e}");
                         std::process::exit(4);
-                    }
+                    },
                 }
-            }
+            },
             other => break other,
         }
     };
@@ -317,16 +315,16 @@ pub async fn run(
     match result {
         surge_orchestrator::PipelineResult::Completed => {
             println!("✅ Pipeline completed successfully!");
-        }
+        },
         surge_orchestrator::PipelineResult::Paused { phase, reason } => {
             // This shouldn't happen anymore since we handle pauses in the loop
             println!("⏸️  Pipeline paused at {phase}: {reason}");
             std::process::exit(3);
-        }
+        },
         surge_orchestrator::PipelineResult::Failed { reason } => {
             println!("❌ Pipeline failed: {reason}");
             std::process::exit(4);
-        }
+        },
     }
 
     // Display final cost summary
@@ -350,7 +348,10 @@ pub async fn run(
         }
         let total_tokens =
             final_totals.input_tokens + final_totals.output_tokens + final_totals.thought_tokens;
-        println!("   Total tokens:   {}", super::format::format_number(total_tokens));
+        println!(
+            "   Total tokens:   {}",
+            super::format::format_number(total_tokens)
+        );
         println!("   Estimated cost: ${:.4}", final_totals.total_cost);
     }
 
@@ -443,7 +444,10 @@ pub fn status(spec_id: String) -> Result<()> {
         }
         let total_tokens =
             spec_usage.input_tokens + spec_usage.output_tokens + spec_usage.thought_tokens;
-        println!("   Total tokens:   {}", super::format::format_number(total_tokens));
+        println!(
+            "   Total tokens:   {}",
+            super::format::format_number(total_tokens)
+        );
         println!("   Estimated cost: ${:.4}", spec_usage.estimated_cost_usd);
     }
 
@@ -654,7 +658,10 @@ pub fn pause(task_id: String) -> Result<()> {
     {
         println!("   Current state: {}", state);
         println!();
-        println!("ℹ️  Task execution can be resumed with: surge resume {}", task_id);
+        println!(
+            "ℹ️  Task execution can be resumed with: surge resume {}",
+            task_id
+        );
     } else {
         println!();
         println!("ℹ️  No active execution found for this task");
@@ -686,10 +693,7 @@ fn format_plan_preview(gate_name: &str) -> Option<String> {
         _ => return None,
     };
 
-    Some(format!(
-        "   📋 Next: {}\n",
-        next_phase
-    ))
+    Some(format!("   📋 Next: {}\n", next_phase))
 }
 
 /// Format a diff summary showing git changes statistics.
@@ -707,7 +711,7 @@ fn format_diff_summary() -> Option<String> {
         Err(e) => {
             tracing::debug!("git diff --stat failed to execute: {e}");
             return None;
-        }
+        },
     };
 
     if !output.status.success() {
@@ -730,10 +734,7 @@ fn format_diff_summary() -> Option<String> {
         return None;
     }
 
-    Some(format!(
-        "   📊 Changes: {}\n",
-        summary_line.trim()
-    ))
+    Some(format!("   📊 Changes: {}\n", summary_line.trim()))
 }
 
 /// Format QA verdict display with enhanced formatting.
@@ -763,11 +764,10 @@ fn format_qa_verdict(verdict: Option<&str>, reasoning: Option<&str>) -> Option<S
             let mut current_line = String::new();
 
             for word in words {
-                if current_line.len() + word.len() + 1 > max_width
-                    && !current_line.is_empty() {
-                        output.push_str(&format!("      {}\n", current_line));
-                        current_line.clear();
-                    }
+                if current_line.len() + word.len() + 1 > max_width && !current_line.is_empty() {
+                    output.push_str(&format!("      {}\n", current_line));
+                    current_line.clear();
+                }
                 if !current_line.is_empty() {
                     current_line.push(' ');
                 }
@@ -860,17 +860,13 @@ pub fn prompt_gate_approval(
 
                     let feedback = if let Some(line) = lines.next() {
                         let text = line?.trim().to_string();
-                        if text.is_empty() {
-                            None
-                        } else {
-                            Some(text)
-                        }
+                        if text.is_empty() { None } else { Some(text) }
                     } else {
                         None
                     };
 
                     return Ok(GateDecision::Approved { feedback });
-                }
+                },
                 "r" | "reject" => {
                     print!("   Rejection reason: ");
                     io::stdout().flush()?;
@@ -891,7 +887,7 @@ pub fn prompt_gate_approval(
                     };
 
                     return Ok(GateDecision::Rejected { reason, feedback });
-                }
+                },
                 "x" | "abort" => {
                     print!("   Abort reason: ");
                     io::stdout().flush()?;
@@ -903,16 +899,15 @@ pub fn prompt_gate_approval(
                     };
 
                     return Ok(GateDecision::Aborted { reason });
-                }
+                },
                 _ => {
                     println!("   Invalid choice. Please enter 'a', 'r', or 'x'.");
                     print!("   Your choice (a/r/x): ");
                     io::stdout().flush()?;
-                }
+                },
             }
         } else {
             return Err(anyhow::anyhow!("Failed to read user input"));
         }
     }
 }
-

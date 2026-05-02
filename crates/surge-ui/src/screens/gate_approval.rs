@@ -463,23 +463,26 @@ impl GateApprovalScreen {
         div()
             .v_flex()
             .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::TEXT_MUTED)
-                    .child(format!(
-                        "{} files changed  +{}  -{}",
-                        self.changed_files.len(),
-                        total_added,
-                        total_removed
-                    )),
-            )
+            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(format!(
+                "{} files changed  +{}  -{}",
+                self.changed_files.len(),
+                total_added,
+                total_removed
+            )))
             .child(div().v_flex().children(items))
     }
 
     fn render_qa_results(&self) -> Div {
-        let passed = self.qa_checks.iter().filter(|c| c.status == "Passed").count();
-        let failed = self.qa_checks.iter().filter(|c| c.status == "Failed").count();
+        let passed = self
+            .qa_checks
+            .iter()
+            .filter(|c| c.status == "Passed")
+            .count();
+        let failed = self
+            .qa_checks
+            .iter()
+            .filter(|c| c.status == "Failed")
+            .count();
         let total = self.qa_checks.len();
 
         let items: Vec<Div> = self
@@ -548,10 +551,7 @@ impl GateApprovalScreen {
                 div()
                     .text_sm()
                     .text_color(theme::TEXT_MUTED)
-                    .child(format!(
-                        "{} / {} checks passed",
-                        passed, total
-                    )),
+                    .child(format!("{} / {} checks passed", passed, total)),
             )
             .when(failed > 0, |el: Div| {
                 el.child(

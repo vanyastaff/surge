@@ -29,5 +29,8 @@ fn test_fixture_paths_exist() {
     let dependency_path = fixtures::fixture_path("dependency_spec.toml");
 
     assert!(simple_path.exists(), "simple_spec.toml should exist");
-    assert!(dependency_path.exists(), "dependency_spec.toml should exist");
+    assert!(
+        dependency_path.exists(),
+        "dependency_spec.toml should exist"
+    );
 }

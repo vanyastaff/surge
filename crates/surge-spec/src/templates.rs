@@ -91,7 +91,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .subtask(sub3)
                 .build()?
-        }
+        },
         TemplateKind::Bugfix => {
             let sub1 = SubtaskBuilder::new()
                 .title("Reproduce and diagnose")
@@ -117,7 +117,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub1)
                 .subtask(sub2)
                 .build()?
-        }
+        },
         TemplateKind::Refactor => {
             let sub1 = SubtaskBuilder::new()
                 .title("Ensure test coverage")
@@ -143,7 +143,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub1)
                 .subtask(sub2)
                 .build()?
-        }
+        },
         TemplateKind::Performance => {
             let sub1 = SubtaskBuilder::new()
                 .title("Profile and identify bottlenecks")
@@ -181,7 +181,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .subtask(sub3)
                 .build()?
-        }
+        },
         TemplateKind::Security => {
             let sub1 = SubtaskBuilder::new()
                 .title("Security audit")
@@ -218,7 +218,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .subtask(sub3)
                 .build()?
-        }
+        },
         TemplateKind::Docs => {
             let sub1 = SubtaskBuilder::new()
                 .title("Research and outline")
@@ -255,7 +255,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .subtask(sub3)
                 .build()?
-        }
+        },
         TemplateKind::Migration => {
             let sub1 = SubtaskBuilder::new()
                 .title("Migration plan")
@@ -292,7 +292,7 @@ pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, Surge
                 .subtask(sub2)
                 .subtask(sub3)
                 .build()?
-        }
+        },
     };
 
     Ok(SpecFile { spec, path: None })

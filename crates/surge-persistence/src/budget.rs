@@ -3,8 +3,8 @@
 //! Provides budget monitoring capabilities by querying aggregated token
 //! usage from the store and comparing against configured budget thresholds.
 
-use crate::store::Store;
 use crate::Result;
+use crate::store::Store;
 use std::time::SystemTime;
 
 /// Budget status for a specific time period.
@@ -135,12 +135,7 @@ impl BudgetTracker {
         let (start_ms, end_ms) = Self::get_current_day_range();
         let actual_spending = self.get_spending_in_range(store, start_ms, end_ms)?;
 
-        Ok(self.calculate_budget_status(
-            daily_budget_usd,
-            actual_spending,
-            start_ms,
-            end_ms,
-        ))
+        Ok(self.calculate_budget_status(daily_budget_usd, actual_spending, start_ms, end_ms))
     }
 
     /// Check weekly budget status.
@@ -156,16 +151,15 @@ impl BudgetTracker {
     /// # Errors
     ///
     /// Returns an error if querying the store fails.
-    pub fn check_weekly_budget(&self, store: &Store, weekly_budget_usd: f64) -> Result<BudgetStatus> {
+    pub fn check_weekly_budget(
+        &self,
+        store: &Store,
+        weekly_budget_usd: f64,
+    ) -> Result<BudgetStatus> {
         let (start_ms, end_ms) = Self::get_current_week_range();
         let actual_spending = self.get_spending_in_range(store, start_ms, end_ms)?;
 
-        Ok(self.calculate_budget_status(
-            weekly_budget_usd,
-            actual_spending,
-            start_ms,
-            end_ms,
-        ))
+        Ok(self.calculate_budget_status(weekly_budget_usd, actual_spending, start_ms, end_ms))
     }
 
     /// Get budget status for a custom time range.
@@ -189,12 +183,7 @@ impl BudgetTracker {
     ) -> Result<BudgetStatus> {
         let actual_spending = self.get_spending_in_range(store, start_ms, end_ms)?;
 
-        Ok(self.calculate_budget_status(
-            budget_usd,
-            actual_spending,
-            start_ms,
-            end_ms,
-        ))
+        Ok(self.calculate_budget_status(budget_usd, actual_spending, start_ms, end_ms))
     }
 
     // ── Internal Helpers ────────────────────────────────────────────────
@@ -276,8 +265,7 @@ impl BudgetTracker {
         let day_of_week = (days_since_epoch + 3) % 7; // 0=Monday, 1=Tuesday, ...
 
         // Calculate start of week (Monday 00:00:00 UTC)
-        let start_of_week_ms = now_ms - (day_of_week * 86400 * 1000)
-            - (now_ms % (86400 * 1000));
+        let start_of_week_ms = now_ms - (day_of_week * 86400 * 1000) - (now_ms % (86400 * 1000));
         let end_of_week_ms = start_of_week_ms + (7 * 86400 * 1000); // +7 days
 
         (start_of_week_ms, end_of_week_ms)

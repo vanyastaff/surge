@@ -81,12 +81,12 @@ pub fn parse_conflict_markers(content: &str) -> Option<ConflictContent> {
             State::Ours => {
                 ours.push_str(line);
                 ours.push('\n');
-            }
+            },
             State::Theirs => {
                 theirs.push_str(line);
                 theirs.push('\n');
-            }
-            State::Outside => {}
+            },
+            State::Outside => {},
         }
     }
 

@@ -78,7 +78,7 @@ impl SpecFile {
                     Ok(spec_file) => specs.push((path, spec_file)),
                     Err(e) => {
                         tracing::warn!("Skipping invalid spec file {}: {e}", path.display());
-                    }
+                    },
                 }
             }
         }

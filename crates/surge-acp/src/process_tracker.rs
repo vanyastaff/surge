@@ -88,11 +88,11 @@ impl ProcessTracker {
                     pid_file.display()
                 );
                 Ok(())
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Already removed or never existed — not an error
                 Ok(())
-            }
+            },
             Err(e) => {
                 warn!(
                     agent = agent_name,
@@ -102,7 +102,7 @@ impl ProcessTracker {
                 );
                 // Don't propagate error — best effort cleanup
                 Ok(())
-            }
+            },
         }
     }
 
@@ -133,7 +133,7 @@ impl ProcessTracker {
             Err(e) => {
                 warn!("Failed to read PID directory: {}", e);
                 return tracked;
-            }
+            },
         };
 
         for entry in entries.flatten() {
@@ -402,9 +402,20 @@ mod tests {
     fn test_is_running_invalid_pid() {
         let (_tmp, tracker) = setup();
 
-        // PID 0 and very high PIDs are unlikely to exist
-        assert!(!tracker.is_pid_alive(0));
-        assert!(!tracker.is_pid_alive(u32::MAX));
+        // High but valid `pid_t` (i32) value — well above typical
+        // `/proc/sys/kernel/pid_max` (default 4194303 on Linux). Don't use
+        // `u32::MAX`: when cast to `pid_t = i32` it wraps to `-1`, and
+        // `kill(-1, 0)` on POSIX targets the caller's process group rather
+        // than probing a single PID, so it succeeds and the assertion would
+        // wrongly fail.
+        assert!(!tracker.is_pid_alive(99_999_999));
+
+        // PID 0 has platform-specific semantics:
+        // - Linux: `kill(0, sig)` targets the caller's process group (not "is PID 0 alive")
+        // - macOS: PID 0 is `kernel_task`, which IS alive
+        // - Windows: PID 0 is the System Idle Process, also "alive"
+        // Skip the assertion on all platforms — there's no portable way to
+        // probe PID 0 with `kill(pid, 0)` semantics.
     }
 
     #[test]

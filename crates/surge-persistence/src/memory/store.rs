@@ -270,7 +270,11 @@ impl MemoryStore {
     /// println!("Found {} total results", results.total_count());
     /// # Ok::<(), surge_persistence::PersistenceError>(())
     /// ```
-    pub fn search_all(&self, query: &str, limit: Option<usize>) -> Result<crate::memory::fts::SearchResults> {
+    pub fn search_all(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<crate::memory::fts::SearchResults> {
         use crate::memory::fts::SearchResults;
 
         let limit = limit.unwrap_or(10) as i64;
@@ -327,19 +331,19 @@ impl MemoryStore {
             MemoryCategory::Discoveries => {
                 let results = self.search_discoveries_fts(query, limit)?;
                 Ok(CategorySearchResults::Discoveries(results))
-            }
+            },
             MemoryCategory::Patterns => {
                 let results = self.search_patterns_fts(query, limit)?;
                 Ok(CategorySearchResults::Patterns(results))
-            }
+            },
             MemoryCategory::Gotchas => {
                 let results = self.search_gotchas_fts(query, limit)?;
                 Ok(CategorySearchResults::Gotchas(results))
-            }
+            },
             MemoryCategory::FileContexts => {
                 let results = self.search_file_contexts_fts(query, limit)?;
                 Ok(CategorySearchResults::FileContexts(results))
-            }
+            },
         }
     }
 
@@ -365,16 +369,17 @@ impl MemoryStore {
                 // Note: unwrap_or_default is intentional here — we're inside a
                 // rusqlite row callback that can only return rusqlite::Error, not
                 // our PersistenceError. Corrupted JSON gracefully degrades to [].
-                let tags: Vec<String> = serde_json::from_str(&tags_json)
-                    .unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
                 Ok(Discovery {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     content: row.get(2)?,
-                    task_id: row.get::<_, Option<String>>(3)?
+                    task_id: row
+                        .get::<_, Option<String>>(3)?
                         .and_then(|s| s.parse().ok()),
-                    spec_id: row.get::<_, Option<String>>(4)?
+                    spec_id: row
+                        .get::<_, Option<String>>(4)?
                         .and_then(|s| s.parse().ok()),
                     category: row.get(5)?,
                     tags,
@@ -404,17 +409,18 @@ impl MemoryStore {
         let patterns = stmt
             .query_map(rusqlite::params![query, limit], |row| {
                 let tags_json: String = row.get(8)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json)
-                    .unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
                 Ok(Pattern {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     description: row.get(2)?,
                     example: row.get(3)?,
-                    task_id: row.get::<_, Option<String>>(4)?
+                    task_id: row
+                        .get::<_, Option<String>>(4)?
                         .and_then(|s| s.parse().ok()),
-                    spec_id: row.get::<_, Option<String>>(5)?
+                    spec_id: row
+                        .get::<_, Option<String>>(5)?
                         .and_then(|s| s.parse().ok()),
                     language: row.get(6)?,
                     category: row.get(7)?,
@@ -445,8 +451,7 @@ impl MemoryStore {
         let gotchas = stmt
             .query_map(rusqlite::params![query, limit], |row| {
                 let tags_json: String = row.get(9)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json)
-                    .unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
                 Ok(Gotcha {
                     id: row.get(0)?,
@@ -454,9 +459,11 @@ impl MemoryStore {
                     description: row.get(2)?,
                     symptom: row.get(3)?,
                     solution: row.get(4)?,
-                    task_id: row.get::<_, Option<String>>(5)?
+                    task_id: row
+                        .get::<_, Option<String>>(5)?
                         .and_then(|s| s.parse().ok()),
-                    spec_id: row.get::<_, Option<String>>(6)?
+                    spec_id: row
+                        .get::<_, Option<String>>(6)?
                         .and_then(|s| s.parse().ok()),
                     severity: row.get(7)?,
                     category: row.get(8)?,
@@ -488,16 +495,15 @@ impl MemoryStore {
         let contexts = stmt
             .query_map(rusqlite::params![query, limit], |row| {
                 let key_apis_json: String = row.get(3)?;
-                let key_apis: Vec<String> = serde_json::from_str(&key_apis_json)
-                    .unwrap_or_default();
+                let key_apis: Vec<String> =
+                    serde_json::from_str(&key_apis_json).unwrap_or_default();
 
                 let dependencies_json: String = row.get(5)?;
-                let dependencies: Vec<String> = serde_json::from_str(&dependencies_json)
-                    .unwrap_or_default();
+                let dependencies: Vec<String> =
+                    serde_json::from_str(&dependencies_json).unwrap_or_default();
 
                 let tags_json: String = row.get(10)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json)
-                    .unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
                 Ok(FileContext {
                     id: row.get(0)?,
@@ -506,9 +512,11 @@ impl MemoryStore {
                     key_apis,
                     description: row.get(4)?,
                     dependencies,
-                    task_id: row.get::<_, Option<String>>(6)?
+                    task_id: row
+                        .get::<_, Option<String>>(6)?
                         .and_then(|s| s.parse().ok()),
-                    spec_id: row.get::<_, Option<String>>(7)?
+                    spec_id: row
+                        .get::<_, Option<String>>(7)?
                         .and_then(|s| s.parse().ok()),
                     language: row.get(8)?,
                     module_category: row.get(9)?,
@@ -863,7 +871,7 @@ mod tests {
             CategorySearchResults::Discoveries(items) => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].title, "Async Strategy");
-            }
+            },
             _ => panic!("Expected Discoveries results"),
         }
     }
@@ -899,7 +907,7 @@ mod tests {
             CategorySearchResults::Patterns(items) => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].name, "Async Pattern");
-            }
+            },
             _ => panic!("Expected Patterns results"),
         }
     }

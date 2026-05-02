@@ -5,7 +5,10 @@
 
 use crate::Result;
 use crate::models::{SessionUsage, SpecUsage, SubtaskUsage};
-use crate::pricing::{PricingModel, claude_opus_pricing, claude_sonnet_35_pricing, gpt4_turbo_pricing, gemini_pro_pricing};
+use crate::pricing::{
+    PricingModel, claude_opus_pricing, claude_sonnet_35_pricing, gemini_pro_pricing,
+    gpt4_turbo_pricing,
+};
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -150,17 +153,18 @@ impl UsageAggregator {
             loop {
                 match event_rx.recv().await {
                     Ok(event) => {
-                        if let Err(e) = Self::handle_event(&store, &sessions, &pricing, event).await {
+                        if let Err(e) = Self::handle_event(&store, &sessions, &pricing, event).await
+                        {
                             warn!("Failed to handle event: {}", e);
                         }
-                    }
+                    },
                     Err(broadcast::error::RecvError::Closed) => {
                         debug!("Event channel closed, stopping aggregator");
                         break;
-                    }
+                    },
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!("Aggregator lagged, skipped {} events", skipped);
-                    }
+                    },
                 }
             }
         })
@@ -209,17 +213,15 @@ impl UsageAggregator {
             .unwrap_or(0);
 
         // Calculate cost using pricing model
-        let estimated_cost_usd = pricing
-            .get(&agent_name)
-            .map(|model| {
-                model.calculate_cost(
-                    input_tokens,
-                    output_tokens,
-                    thought_tokens,
-                    cached_read_tokens,
-                    cached_write_tokens,
-                )
-            });
+        let estimated_cost_usd = pricing.get(&agent_name).map(|model| {
+            model.calculate_cost(
+                input_tokens,
+                output_tokens,
+                thought_tokens,
+                cached_read_tokens,
+                cached_write_tokens,
+            )
+        });
 
         // Create session usage record
         let session = SessionUsage {
@@ -350,9 +352,14 @@ mod tests {
         };
 
         // Handle event
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event,
+        )
+        .await
+        .unwrap();
 
         // Verify session was stored
         let store = aggregator.store.lock().await;
@@ -427,9 +434,14 @@ mod tests {
             cached_write_tokens: None,
             estimated_cost_usd: Some(0.005),
         };
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event1)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event1,
+        )
+        .await
+        .unwrap();
 
         // Handle second event
         let event2 = SurgeEvent::TokensConsumed {
@@ -444,9 +456,14 @@ mod tests {
             cached_write_tokens: None,
             estimated_cost_usd: Some(0.004),
         };
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event2)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event2,
+        )
+        .await
+        .unwrap();
 
         // Verify aggregation
         let store = aggregator.store.lock().await;
@@ -494,9 +511,14 @@ mod tests {
         };
 
         // Handle event - should not error but should log warning
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event,
+        )
+        .await
+        .unwrap();
 
         // Verify nothing was stored
         let store = aggregator.store.lock().await;
@@ -515,9 +537,14 @@ mod tests {
         };
 
         // Handle event - should be ignored without error
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -611,9 +638,14 @@ mod tests {
         };
 
         // Handle event
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event,
+        )
+        .await
+        .unwrap();
 
         // Verify session was stored
         let store = aggregator.store.lock().await;
@@ -664,9 +696,14 @@ mod tests {
         };
 
         // Handle event
-        UsageAggregator::handle_event(&aggregator.store, &aggregator.sessions, &aggregator.pricing, event)
-            .await
-            .unwrap();
+        UsageAggregator::handle_event(
+            &aggregator.store,
+            &aggregator.sessions,
+            &aggregator.pricing,
+            event,
+        )
+        .await
+        .unwrap();
 
         // Verify cost was calculated correctly
         // Based on claude_sonnet_35_pricing():
@@ -683,7 +720,11 @@ mod tests {
 
         assert!(session.estimated_cost_usd.is_some());
         let actual_cost = session.estimated_cost_usd.unwrap();
-        assert!((actual_cost - expected_cost).abs() < 1e-6,
-            "Expected cost {}, got {}", expected_cost, actual_cost);
+        assert!(
+            (actual_cost - expected_cost).abs() < 1e-6,
+            "Expected cost {}, got {}",
+            expected_cost,
+            actual_cost
+        );
     }
 }

@@ -1,0 +1,372 @@
+schema_version = 1
+start = "roadmap_planner"
+
+[metadata]
+name = "real-world-roadmap"
+created_at = "2026-05-02T00:00:00Z"
+description = "Surge project roadmap: v0.1.0 through v1.0.0, expressed as a Milestone Loop with inner Task Loops"
+
+# ── Root graph ────────────────────────────────────────────────────────────────
+
+# Node: produce the milestones artifact (roadmap planning agent)
+[nodes.roadmap_planner]
+id = "roadmap_planner"
+
+[nodes.roadmap_planner.position]
+x = 0.0
+y = 0.0
+
+[[nodes.roadmap_planner.declared_outcomes]]
+id = "done"
+description = "Milestones breakdown ready"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.roadmap_planner.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[nodes.roadmap_planner.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.roadmap_planner.config.custom_fields]
+
+# Node: iterate over milestones (v0.1.0-alpha through v1.0.0)
+[nodes.milestone_loop]
+id = "milestone_loop"
+
+[nodes.milestone_loop.position]
+x = 200.0
+y = 0.0
+
+[[nodes.milestone_loop.declared_outcomes]]
+id = "done"
+description = "All milestones implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.milestone_loop.config]
+node_kind = "loop"
+body = "milestone_body"
+iteration_var_name = "milestone"
+parallelism = "sequential"
+gate_after_each = true
+
+[nodes.milestone_loop.config.iterates_over]
+type = "artifact"
+node = "roadmap_planner"
+name = "milestones.json"
+jsonpath = "$.milestones[*]"
+
+[nodes.milestone_loop.config.exit_condition]
+type = "all_items"
+
+[nodes.milestone_loop.config.on_iteration_failure]
+type = "abort"
+
+# Node: notify completion
+[nodes.completion_notify]
+id = "completion_notify"
+
+[nodes.completion_notify.position]
+x = 400.0
+y = 0.0
+
+[[nodes.completion_notify.declared_outcomes]]
+id = "done"
+description = "Notification sent"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.completion_notify.config]
+node_kind = "notify"
+on_failure = "continue"
+
+[nodes.completion_notify.config.channel]
+type = "desktop"
+
+[nodes.completion_notify.config.template]
+severity = "success"
+title = "Surge v1.0.0 shipped"
+body = "All milestones complete. Surge is production-ready."
+
+# Node: terminal success
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_planner_to_loop"
+to = "milestone_loop"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_planner"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_loop_to_notify"
+to = "completion_notify"
+kind = "forward"
+
+[edges.from]
+node = "milestone_loop"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_notify_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "completion_notify"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+# ── Level 1 subgraph: milestone_body ─────────────────────────────────────────
+# Plan the phases in this milestone, then loop over tasks
+
+[subgraphs.milestone_body]
+start = "phase_planner"
+
+[subgraphs.milestone_body.nodes.phase_planner]
+id = "phase_planner"
+
+[subgraphs.milestone_body.nodes.phase_planner.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.phase_planner.declared_outcomes]]
+id = "done"
+description = "Phase tasks planned"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.milestone_body.nodes.phase_planner.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.milestone_body.nodes.phase_planner.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[subgraphs.milestone_body.nodes.phase_planner.config.custom_fields]
+
+[subgraphs.milestone_body.nodes.task_loop]
+id = "task_loop"
+
+[subgraphs.milestone_body.nodes.task_loop.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "done"
+description = "All tasks in milestone done"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.milestone_body.nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
+type = "artifact"
+node = "phase_planner"
+name = "tasks.json"
+jsonpath = "$.tasks[*]"
+
+[subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
+type = "all_items"
+
+[subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+[subgraphs.milestone_body.nodes.milestone_gate]
+id = "milestone_gate"
+
+[subgraphs.milestone_body.nodes.milestone_gate.position]
+x = 400.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.milestone_gate.declared_outcomes]]
+id = "ship"
+description = "Milestone approved for release"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.milestone_body.nodes.milestone_gate.config]
+node_kind = "human_gate"
+allow_freetext = true
+
+[[subgraphs.milestone_body.nodes.milestone_gate.config.delivery_channels]]
+type = "desktop"
+duration = "persistent"
+
+[subgraphs.milestone_body.nodes.milestone_gate.config.summary]
+title = "Ship milestone?"
+body = "Review the milestone tasks and decide whether to ship this version."
+
+[[subgraphs.milestone_body.nodes.milestone_gate.config.options]]
+outcome = "ship"
+label = "Ship it"
+style = "primary"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mb_plan_to_tasks"
+to = "task_loop"
+kind = "forward"
+
+[subgraphs.milestone_body.edges.from]
+node = "phase_planner"
+outcome = "done"
+
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mb_tasks_to_gate"
+to = "milestone_gate"
+kind = "forward"
+
+[subgraphs.milestone_body.edges.from]
+node = "task_loop"
+outcome = "done"
+
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+# ── Level 2 subgraph: task_body ───────────────────────────────────────────────
+# Single task: spec -> implement -> qa
+
+[subgraphs.task_body]
+start = "task_spec"
+
+[subgraphs.task_body.nodes.task_spec]
+id = "task_spec"
+
+[subgraphs.task_body.nodes.task_spec.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.task_spec.declared_outcomes]]
+id = "done"
+description = "Task spec written"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.task_spec.config]
+node_kind = "agent"
+profile = "spec-writer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.task_spec.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[subgraphs.task_body.nodes.task_spec.config.custom_fields]
+
+[subgraphs.task_body.nodes.task_impl]
+id = "task_impl"
+
+[subgraphs.task_body.nodes.task_impl.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.task_impl.declared_outcomes]]
+id = "done"
+description = "Task implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.task_impl.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.task_impl.config.limits]
+timeout_seconds = 1800
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.task_body.nodes.task_impl.config.custom_fields]
+
+[subgraphs.task_body.nodes.task_qa]
+id = "task_qa"
+
+[subgraphs.task_body.nodes.task_qa.position]
+x = 400.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.task_qa.declared_outcomes]]
+id = "done"
+description = "QA passed"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.task_body.nodes.task_qa.config]
+node_kind = "agent"
+profile = "qa-agent@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.task_qa.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 150000
+
+[subgraphs.task_body.nodes.task_qa.config.custom_fields]
+
+[[subgraphs.task_body.edges]]
+id = "e_tb_spec_to_impl"
+to = "task_impl"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "task_spec"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_tb_impl_to_qa"
+to = "task_qa"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "task_impl"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"

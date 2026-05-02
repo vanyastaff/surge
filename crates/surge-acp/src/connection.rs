@@ -154,7 +154,7 @@ impl AgentConnection {
                 return Err(SurgeError::Config(
                     "WebSocket transport not yet supported".to_string(),
                 ));
-            }
+            },
         };
 
         Self::connect_with_io(name, io, worktree_root, permission_policy, event_tx).await
@@ -303,12 +303,12 @@ impl AgentConnection {
         match tokio::time::timeout(grace, process.wait()).await {
             Ok(Ok(_)) => {
                 // Exited cleanly
-            }
+            },
             _ => {
                 // Timed out or wait error — force kill and reap
                 let _ = process.kill().await;
                 let _ = process.wait().await;
-            }
+            },
         }
         self.process = None;
     }
@@ -341,7 +341,7 @@ impl AgentConnection {
                     match output {
                         Ok(out) if out.status.success() => {
                             debug!("Successfully killed process tree for PID {}", pid);
-                        }
+                        },
                         Ok(out) => {
                             // taskkill failed, fall back to tokio kill
                             debug!(
@@ -349,12 +349,12 @@ impl AgentConnection {
                                 out.status.code()
                             );
                             let _ = process.kill().await;
-                        }
+                        },
                         Err(e) => {
                             // taskkill command failed to spawn, fall back to tokio kill
                             debug!("taskkill spawn failed ({}), falling back to tokio kill", e);
                             let _ = process.kill().await;
-                        }
+                        },
                     }
                 } else {
                     // Process already exited
@@ -614,10 +614,10 @@ mod tests {
                                 .await;
 
                             match output {
-                                Ok(out) if out.status.success() => {}
+                                Ok(out) if out.status.success() => {},
                                 _ => {
                                     let _ = process.kill().await;
-                                }
+                                },
                             }
                         }
                     }
@@ -642,12 +642,12 @@ mod tests {
                 match tokio::time::timeout(grace, process.wait()).await {
                     Ok(Ok(_)) => {
                         // Exited cleanly
-                    }
+                    },
                     _ => {
                         // Timed out or wait error — force kill and reap
                         let _ = process.kill().await;
                         let _ = process.wait().await;
-                    }
+                    },
                 }
                 self.process = None;
             }

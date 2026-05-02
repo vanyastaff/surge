@@ -50,6 +50,10 @@ define_id!(SpecId, "spec");
 define_id!(TaskId, "task");
 define_id!(SubtaskId, "sub");
 
+// New runtime IDs added in M1 for vibe-flow data model.
+define_id!(RunId, "run");
+define_id!(SessionId, "session");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +101,35 @@ mod tests {
     #[test]
     fn from_str_invalid_returns_error() {
         let result: Result<SpecId, _> = "not-a-valid-id".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_id_displays_with_prefix() {
+        let id = RunId::new();
+        assert!(id.to_string().starts_with("run-"));
+    }
+
+    #[test]
+    fn session_id_displays_with_prefix() {
+        let id = SessionId::new();
+        assert!(id.to_string().starts_with("session-"));
+    }
+
+    #[test]
+    fn run_id_roundtrips_via_string() {
+        let id = RunId::new();
+        let s = id.to_string();
+        let parsed: RunId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn run_id_and_session_id_are_distinct_types() {
+        let r = RunId::new();
+        let s = r.to_string();
+        // Cross-type parse must fail because prefix differs.
+        let result: Result<SessionId, _> = s.parse();
         assert!(result.is_err());
     }
 }

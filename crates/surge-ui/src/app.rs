@@ -133,7 +133,7 @@ impl SurgeApp {
         match event {
             WelcomeEvent::OpenProject(path) => {
                 self.open_project(&path, cx);
-            }
+            },
             WelcomeEvent::BrowseProject => {
                 // Native directory picker dialog.
                 let receiver = cx.prompt_for_paths(PathPromptOptions {
@@ -156,7 +156,7 @@ impl SurgeApp {
                     }
                 })
                 .detach();
-            }
+            },
             WelcomeEvent::InitProject => {
                 // For now, open the directory picker and then create a project.
                 // TODO: show full init wizard dialog.
@@ -180,19 +180,19 @@ impl SurgeApp {
                     }
                 })
                 .detach();
-            }
+            },
             WelcomeEvent::RemoveProject(path) => {
                 let mut recent = RecentProjects::load();
                 recent.remove(&path);
                 let _ = recent.save();
                 self.refresh_welcome(cx);
-            }
+            },
             WelcomeEvent::TogglePin(path) => {
                 let mut recent = RecentProjects::load();
                 recent.toggle_pin(&path);
                 let _ = recent.save();
                 self.refresh_welcome(cx);
-            }
+            },
         }
     }
 
@@ -380,7 +380,7 @@ impl SurgeApp {
                     .dashboard
                     .get_or_insert_with(|| cx.new(|cx| DashboardScreen::new(state, cx)));
                 dashboard.clone().into_any_element()
-            }
+            },
             Screen::Kanban => {
                 let state = self.state.clone();
                 let kanban = self.kanban.get_or_insert_with(|| {
@@ -393,78 +393,78 @@ impl SurgeApp {
                     k
                 });
                 kanban.clone().into_any_element()
-            }
+            },
             Screen::AgentHub => {
                 let state = self.state.clone();
                 let agent_hub = self
                     .agent_hub
                     .get_or_insert_with(|| cx.new(|cx| AgentHubScreen::new(state, cx)));
                 agent_hub.clone().into_any_element()
-            }
+            },
             Screen::SpecExplorer => {
                 let state = self.state.clone();
                 let spec_explorer = self
                     .spec_explorer
                     .get_or_insert_with(|| cx.new(|cx| SpecExplorerScreen::new(state, cx)));
                 spec_explorer.clone().into_any_element()
-            }
+            },
             Screen::AgentTerminals => {
                 let state = self.state.clone();
                 let terminal = self
                     .agent_terminal
                     .get_or_insert_with(|| cx.new(|cx| AgentTerminalScreen::new(state, cx)));
                 terminal.clone().into_any_element()
-            }
+            },
             Screen::SpecWizard => {
                 let spec_wizard = self
                     .spec_wizard
                     .get_or_insert_with(|| cx.new(SpecWizardScreen::new));
                 spec_wizard.clone().into_any_element()
-            }
+            },
             Screen::LiveExecution => {
                 let live_exec = self
                     .live_execution
                     .get_or_insert_with(|| cx.new(LiveExecutionScreen::new));
                 live_exec.clone().into_any_element()
-            }
+            },
             Screen::DiffViewer => {
                 let s = self
                     .diff_viewer
                     .get_or_insert_with(|| cx.new(DiffViewerScreen::new));
                 s.clone().into_any_element()
-            }
+            },
             Screen::FileExplorer => {
                 let s = self
                     .file_explorer
                     .get_or_insert_with(|| cx.new(FileExplorerScreen::new));
                 s.clone().into_any_element()
-            }
+            },
             Screen::Worktrees => {
                 let state = self.state.clone();
                 let s = self
                     .worktrees
                     .get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
                 s.clone().into_any_element()
-            }
+            },
             Screen::GitHubPRs => {
                 let s = self
                     .github_prs
                     .get_or_insert_with(|| cx.new(GithubPrsScreen::new));
                 s.clone().into_any_element()
-            }
+            },
             Screen::Insights => {
                 let s = self
                     .insights
                     .get_or_insert_with(|| cx.new(InsightsScreen::new));
                 s.clone().into_any_element()
-            }
+            },
             Screen::Settings => {
                 let state = self.state.clone();
                 let s = self
                     .settings
                     .get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
-            }
+            },
             Screen::GateApproval => {
                 // Use task_detail_id or default demo task
                 let task_id = self.task_detail_id.as_deref().unwrap_or("task-001");
@@ -477,7 +477,7 @@ impl SurgeApp {
                     ga
                 });
                 gate_approval.clone().into_any_element()
-            }
+            },
             _ => {
                 // Placeholder for screens not yet implemented.
                 let label = self.active_screen.label();
@@ -519,7 +519,7 @@ impl SurgeApp {
                         ),
                     )
                     .into_any_element()
-            }
+            },
         }
     }
 
@@ -892,7 +892,7 @@ impl Render for SurgeApp {
                     .child(self.render_palette_overlay())
                     .child(self.render_task_detail_overlay(cx))
                     .into_any_element()
-            }
+            },
         }
     }
 }

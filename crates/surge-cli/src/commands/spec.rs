@@ -42,7 +42,7 @@ pub fn run(command: SpecCommands) -> Result<()> {
             println!("   ID: {}", spec_file.spec.id);
             println!("   File: {}", path.display());
             println!("   Subtasks: {}", spec_file.spec.subtasks.len());
-        }
+        },
         SpecCommands::List => {
             let specs = surge_spec::SpecFile::list_all()?;
             if specs.is_empty() {
@@ -62,7 +62,7 @@ pub fn run(command: SpecCommands) -> Result<()> {
                     );
                 }
             }
-        }
+        },
         SpecCommands::Show { id } => {
             let spec_file = load_spec_by_id(&id)?;
             let spec = &spec_file.spec;
@@ -88,11 +88,11 @@ pub fn run(command: SpecCommands) -> Result<()> {
                     Ok(graph) => {
                         println!("\nDependency Graph:");
                         println!("{}", graph.to_ascii(spec));
-                    }
+                    },
                     Err(e) => println!("\nGraph error: {e}"),
                 }
             }
-        }
+        },
         SpecCommands::Validate { id } => {
             let spec_file = load_spec_by_id(&id)?;
             let result = surge_spec::validate_spec(&spec_file.spec);
@@ -112,7 +112,7 @@ pub fn run(command: SpecCommands) -> Result<()> {
                 }
                 std::process::exit(1);
             }
-        }
+        },
     }
     Ok(())
 }

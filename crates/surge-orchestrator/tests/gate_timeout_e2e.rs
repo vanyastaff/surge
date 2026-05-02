@@ -37,6 +37,7 @@ fn all_gates_config() -> GateConfig {
 /// - Gate returns Timeout action after configured duration
 /// - Timeout includes elapsed time information
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_timeout_basic() {
     let test_dir = temp_test_dir("gate_timeout_basic");
     let specs_dir = test_dir.join("specs");
@@ -61,10 +62,10 @@ fn test_gate_timeout_basic() {
     match action {
         GateAction::Pause { reason } => {
             eprintln!("✓ Gate paused as expected: {}", reason);
-        }
+        },
         other => {
             panic!("Expected Pause, got {:?}", other);
-        }
+        },
     }
 
     // Wait for timeout
@@ -80,10 +81,10 @@ fn test_gate_timeout_basic() {
                 elapsed.as_secs() >= 1,
                 "Timeout elapsed time should be at least 1 second"
             );
-        }
+        },
         other => {
             panic!("Expected Timeout, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -95,6 +96,7 @@ fn test_gate_timeout_basic() {
 /// - Recording a decision before timeout prevents timeout
 /// - Decision persists and gates continue normally
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_decision_prevents_timeout() {
     let test_dir = temp_test_dir("gate_decision_prevents_timeout");
     let specs_dir = test_dir.join("specs");
@@ -129,10 +131,10 @@ fn test_gate_decision_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -145,6 +147,7 @@ fn test_gate_decision_prevents_timeout() {
 /// - Timeout works for after_plan gate
 /// - Timeout works for after_qa gate
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_timeout_different_phases() {
     let test_dir = temp_test_dir("gate_timeout_different_phases");
     let specs_dir = test_dir.join("specs");
@@ -185,10 +188,10 @@ fn test_gate_timeout_different_phases() {
                     gate_name,
                     elapsed.as_secs()
                 );
-            }
+            },
             other => {
                 panic!("Expected Timeout for {} gate, got {:?}", gate_name, other);
-            }
+            },
         }
     }
 
@@ -202,6 +205,7 @@ fn test_gate_timeout_different_phases() {
 /// - Longer timeouts (5 seconds) work correctly
 /// - Gates don't timeout before their configured duration
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_timeout_different_durations() {
     let test_dir = temp_test_dir("gate_timeout_different_durations");
     let specs_dir = test_dir.join("specs");
@@ -249,6 +253,7 @@ fn test_gate_timeout_different_durations() {
 /// - Gate state can be loaded and timeout is calculated correctly
 /// - Gate state includes phase information
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_timeout_state_persistence() {
     let test_dir = temp_test_dir("gate_timeout_state_persistence");
     let specs_dir = test_dir.join("specs");
@@ -280,10 +285,7 @@ fn test_gate_timeout_state_persistence() {
     let state: serde_json::Value =
         serde_json::from_str(&state_content).expect("Failed to parse GATE_STATE.json");
 
-    assert!(
-        state.get("phase").is_some(),
-        "State should include phase"
-    );
+    assert!(state.get("phase").is_some(), "State should include phase");
     assert!(
         state.get("triggered_at").is_some(),
         "State should include triggered_at timestamp"
@@ -315,6 +317,7 @@ fn test_gate_timeout_state_persistence() {
 /// - Gates created without timeout don't timeout
 /// - Gates pause indefinitely until decision is made
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_without_timeout() {
     let test_dir = temp_test_dir("gate_without_timeout");
     let specs_dir = test_dir.join("specs");
@@ -338,13 +341,13 @@ fn test_gate_without_timeout() {
     match action {
         GateAction::Pause { .. } => {
             eprintln!("✓ Gate still paused after 2 seconds (no timeout configured)");
-        }
+        },
         other => {
             panic!(
                 "Expected Pause (no timeout), got {:?}. Gates without timeout should not timeout.",
                 other
             );
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -356,6 +359,7 @@ fn test_gate_without_timeout() {
 /// - Rejection decision prevents timeout
 /// - Rejected gates can be retried with feedback
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_rejection_prevents_timeout() {
     let test_dir = temp_test_dir("gate_rejection_prevents_timeout");
     let specs_dir = test_dir.join("specs");
@@ -389,10 +393,10 @@ fn test_gate_rejection_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (rejection decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);
@@ -404,6 +408,7 @@ fn test_gate_rejection_prevents_timeout() {
 /// - Abort decision prevents timeout
 /// - Aborted gates are recorded correctly
 #[test]
+#[ignore = "e2e test — run with cargo test -- --ignored"]
 fn test_gate_abort_prevents_timeout() {
     let test_dir = temp_test_dir("gate_abort_prevents_timeout");
     let specs_dir = test_dir.join("specs");
@@ -436,10 +441,10 @@ fn test_gate_abort_prevents_timeout() {
     match action {
         GateAction::Continue => {
             eprintln!("✓ Gate continued (abort decision prevented timeout)");
-        }
+        },
         other => {
             panic!("Expected Continue, got {:?}", other);
-        }
+        },
     }
 
     cleanup_dir(&test_dir);

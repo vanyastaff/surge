@@ -5,7 +5,36 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-serde = { workspace = true }
-toml = { workspace = true }
-ulid = { workspace = true }
-thiserror = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+toml       = { workspace = true }
+ulid       = { workspace = true }
+thiserror  = { workspace = true }
+chrono     = { workspace = true }
+toml_edit  = { workspace = true }
+sha2       = { workspace = true }
+hex        = { workspace = true }
+bincode    = { workspace = true }
+semver     = { workspace = true }
+
+[dev-dependencies]
+proptest   = { workspace = true }
+insta      = { workspace = true }
+criterion  = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name    = "fold_events"
+harness = false
+
+[[bench]]
+name    = "validate_graphs"
+harness = false
+
+[[bench]]
+name    = "toml_roundtrip"
+harness = false
+
+[[bench]]
+name    = "bincode_roundtrip"
+harness = false

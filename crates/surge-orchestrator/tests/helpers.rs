@@ -8,8 +8,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use surge_acp::discovery::AgentDiscovery;
 use surge_acp::Registry;
+use surge_acp::discovery::AgentDiscovery;
 use surge_core::config::{AgentConfig, PipelineConfig, SurgeConfig, Transport};
 use surge_spec::SpecFile;
 
@@ -46,22 +46,15 @@ pub fn surge_bin() -> PathBuf {
 #[must_use]
 pub fn temp_db_path(test_name: &str) -> PathBuf {
     let temp_dir = std::env::temp_dir();
-    temp_dir.join(format!(
-        "surge-e2e-{}-{}.db",
-        test_name,
-        std::process::id()
-    ))
+    temp_dir.join(format!("surge-e2e-{}-{}.db", test_name, std::process::id()))
 }
 
 /// Create a unique temp directory for a test.
 ///
 /// The directory is created if it doesn't exist. Returns the path to the directory.
 pub fn temp_test_dir(test_name: &str) -> PathBuf {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "surge-e2e-{}-{}",
-        test_name,
-        std::process::id()
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("surge-e2e-{}-{}", test_name, std::process::id()));
 
     // Clean up any previous test run
     let _ = fs::remove_dir_all(&temp_dir);
