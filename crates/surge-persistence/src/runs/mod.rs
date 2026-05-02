@@ -8,6 +8,7 @@
 //! for the full design.
 
 pub mod clock;
+pub mod config;
 pub mod error;
 pub(crate) mod file_lock;
 mod macros;
@@ -19,6 +20,7 @@ mod reader_views;
 pub mod registry;
 pub mod run_writer;
 pub mod seq;
+pub mod storage;
 pub mod subscribe;
 pub mod types;
 pub mod views;
@@ -26,12 +28,14 @@ pub mod writer;
 pub(crate) mod writer_slot;
 
 pub use clock::{Clock, MockClock, SystemClock};
+pub use config::StorageConfig;
 pub use error::{CloseError, OpenError, StorageError, WriterError};
 pub(crate) use file_lock::FileLock;
 pub use reader::{ReadEvent, RunReader};
 pub use registry::{RunFilter, RunSummary};
 pub use run_writer::RunWriter;
 pub use seq::EventSeq;
+pub use storage::Storage;
 pub use subscribe::SUBSCRIBE_BATCH_MAX;
 pub use types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
 pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig};
