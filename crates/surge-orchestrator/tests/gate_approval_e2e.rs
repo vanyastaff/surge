@@ -64,6 +64,7 @@ fn init_git_repo(dir: &std::path::Path) {
 /// - Writing DECISION.json with approval allows pipeline to continue
 /// - GateApproved event is emitted
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_gate_approval_after_plan() {
     // Check if any agent is available
     if !has_any_agent() {
@@ -202,6 +203,7 @@ async fn test_gate_approval_after_plan() {
 /// - Rejection feedback is injected into agent prompt
 /// - GateRejected event is emitted
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_gate_rejection_with_feedback() {
     // Check if any agent is available
     if !has_any_agent() {
@@ -351,6 +353,7 @@ async fn test_gate_rejection_with_feedback() {
 /// - Pipeline fails with abort reason
 /// - No further execution occurs after abort
 #[tokio::test]
+#[ignore = "requires ACP agent (claude-code/codex/copilot-cli) — run with `cargo test -- --ignored`"]
 async fn test_gate_abort() {
     // Check if any agent is available
     if !has_any_agent() {
