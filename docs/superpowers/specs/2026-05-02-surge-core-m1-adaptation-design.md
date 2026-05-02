@@ -823,7 +823,7 @@ impl ValidationErrorKind {
 }
 ```
 
-**15 rules** (mapping to rule numbers in [RFC-0003 §validation](../../revision/0003-graph-model.md#validation-rules)):
+**17 structural rules** (rules 1–15 map to [RFC-0003 §validation](../../revision/0003-graph-model.md#validation-rules); rules 11b, 16, 17 added during flat-subgraph migration):
 
 1. `start` node ID exists in `nodes`.
 2. Every `Edge.from.node` references an existing node.
@@ -847,9 +847,6 @@ impl ValidationErrorKind {
 Plus warnings (non-error):
 - Rule W1: `Escalate` edges should target `HumanGate` or `Notify` nodes.
 - Rule W2: orphan subgraphs — entries in `Graph::subgraphs` that no `Loop.body` or `Subgraph.inner` references. Defined-but-unused subgraphs are likely user mistakes (typo in reference, or leftover after deletion). Report as `ValidationErrorKind::OrphanSubgraph { key }` with severity `Warning` so editor highlights but doesn't block save.
-
-Plus warning (rule 16, non-error):
-- `Escalate` edges should target `HumanGate` or `Notify` nodes.
 
 **Strategy**: validation is **non-fail-fast** — all errors collected into `Vec<ValidationError>`, so the editor can highlight every problem at once. Only abort early on rules that prevent further analysis (e.g., `start` missing makes reachability undefined — collect that and skip reachability checks). Warnings are returned in the same vector with `Severity::Warning`; callers (CLI vs editor) decide whether to fail-on-warning or just display them.
 
@@ -1188,6 +1185,8 @@ pub enum FoldError {
 `RunMemory::apply_event(&mut self, event: &RunEvent)` is a separate function for accumulating memory state independently — used in tests and for "what's the cost so far at seq N" queries without folding the full state machine.
 
 **Cursor scope**: `Cursor` tracks the current node and attempt number only. Loop iteration state (current iteration index, items remaining) is not part of the cursor — when fold encounters `LoopIterationStarted`, it does not descend into the loop body in M1; the body's execution state lives in the engine, not in `RunState`. M1 fold treats loop iterations as opaque progression markers. Engine-level descent into nested execution comes with the executor in M5.
+
+**Implication for crash recovery**: `RunState` from M1 fold is sufficient for **replay** and **visualization** but **not sufficient for resuming an interrupted run mid-loop-iteration**. If a daemon crashes while executing `implement_inner` inside `task_loop_body` inside `milestone_loop`, folding the event log gives `Pipeline { cursor: { node: milestone_loop } }` — the engine knows it's "somewhere inside the loop" but not which iteration index, not which body node was active. The engine in M5 will maintain additional execution context (active iteration index, sub-cursor within the active subgraph) **outside** `RunState`, persisted alongside the event log (e.g., as a separate "execution checkpoint" record written periodically). This is intentional: `RunState` stays pure and minimal for replay; the recovery layer is engine-owned and not part of the M1 contract. Documenting this here so M5 doesn't rediscover the gap as a surprise.
 
 **Graph sharing**: `Graph` is wrapped in `Arc` from the start. `Arc::clone` is a single atomic increment — folding 1000 events through `RunState::Pipeline` allocates the graph once. The trade-off (consumers see `Arc<Graph>` in their type signatures) is paid up front rather than as a breaking change later when benchmarks would force the migration anyway.
 
