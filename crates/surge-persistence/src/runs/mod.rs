@@ -11,8 +11,10 @@ pub mod clock;
 pub mod error;
 pub mod migrations;
 pub mod pragmas;
+pub mod registry;
 pub mod seq;
 
 pub use clock::{Clock, MockClock, SystemClock};
 pub use error::{CloseError, OpenError, StorageError, WriterError};
+pub use registry::{RunFilter, RunSummary};
 pub use seq::EventSeq;
