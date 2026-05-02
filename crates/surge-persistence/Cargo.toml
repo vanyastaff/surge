@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-surge-core = { path = "../surge-core" }
+surge-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -14,3 +14,21 @@ rusqlite = { workspace = true }
 dirs = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
+
+# M2 additions
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
+fd-lock = { workspace = true }
+async-stream = { workspace = true }
+tokio-stream = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tempfile = { workspace = true }
+sysinfo = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+insta = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
