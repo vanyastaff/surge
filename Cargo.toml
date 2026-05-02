@@ -88,7 +88,7 @@ rand = "0.9"
 
 # M2 storage layer
 r2d2 = "0.8"
-r2d2_sqlite = "0.25"
+r2d2_sqlite = "0.25"  # must match rusqlite 0.32 — bump together
 fd-lock = "4"
 async-stream = "0.3"
 tokio-stream = "0.1"
