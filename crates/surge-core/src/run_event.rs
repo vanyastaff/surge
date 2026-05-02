@@ -34,6 +34,22 @@ impl VersionedEventPayload {
             payload,
         }
     }
+
+    /// Returns the schema version of the payload.
+    ///
+    /// Provided as an explicit accessor so storage code can reason about the
+    /// payload's encoding stability without taking ownership or borrowing the
+    /// inner `EventPayload`.
+    #[must_use]
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Returns a reference to the inner payload.
+    #[must_use]
+    pub fn payload(&self) -> &EventPayload {
+        &self.payload
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -222,6 +238,49 @@ impl EventPayload {
     pub fn from_bincode(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(bytes)
     }
+
+    /// Returns a stable, kind-string discriminant for this payload.
+    ///
+    /// Used as the `events.kind` column value by the storage layer so that
+    /// indexed lookups and view-maintenance dispatch can avoid re-deserializing
+    /// the JSON blob.
+    #[must_use]
+    pub fn discriminant_str(&self) -> &'static str {
+        match self {
+            Self::RunStarted { .. } => "RunStarted",
+            Self::RunCompleted { .. } => "RunCompleted",
+            Self::RunFailed { .. } => "RunFailed",
+            Self::RunAborted { .. } => "RunAborted",
+            Self::BootstrapStageStarted { .. } => "BootstrapStageStarted",
+            Self::BootstrapArtifactProduced { .. } => "BootstrapArtifactProduced",
+            Self::BootstrapApprovalRequested { .. } => "BootstrapApprovalRequested",
+            Self::BootstrapApprovalDecided { .. } => "BootstrapApprovalDecided",
+            Self::BootstrapEditRequested { .. } => "BootstrapEditRequested",
+            Self::PipelineMaterialized { .. } => "PipelineMaterialized",
+            Self::StageEntered { .. } => "StageEntered",
+            Self::StageInputsResolved { .. } => "StageInputsResolved",
+            Self::SessionOpened { .. } => "SessionOpened",
+            Self::ToolCalled { .. } => "ToolCalled",
+            Self::ToolResultReceived { .. } => "ToolResultReceived",
+            Self::ArtifactProduced { .. } => "ArtifactProduced",
+            Self::OutcomeReported { .. } => "OutcomeReported",
+            Self::StageCompleted { .. } => "StageCompleted",
+            Self::StageFailed { .. } => "StageFailed",
+            Self::SessionClosed { .. } => "SessionClosed",
+            Self::EdgeTraversed { .. } => "EdgeTraversed",
+            Self::LoopIterationStarted { .. } => "LoopIterationStarted",
+            Self::LoopIterationCompleted { .. } => "LoopIterationCompleted",
+            Self::LoopCompleted { .. } => "LoopCompleted",
+            Self::ApprovalRequested { .. } => "ApprovalRequested",
+            Self::ApprovalDecided { .. } => "ApprovalDecided",
+            Self::SandboxElevationRequested { .. } => "SandboxElevationRequested",
+            Self::SandboxElevationDecided { .. } => "SandboxElevationDecided",
+            Self::HookExecuted { .. } => "HookExecuted",
+            Self::OutcomeRejectedByHook { .. } => "OutcomeRejectedByHook",
+            Self::TokensConsumed { .. } => "TokensConsumed",
+            Self::ForkCreated { .. } => "ForkCreated",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +365,34 @@ mod tests {
         let bytes = serde_json::to_vec(&v).unwrap();
         let parsed: VersionedEventPayload = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v, parsed);
+    }
+
+    #[test]
+    fn versioned_payload_accessors() {
+        let inner = EventPayload::RunCompleted {
+            terminal_node: NodeKey::try_from("end").unwrap(),
+        };
+        let v = VersionedEventPayload::new(inner.clone());
+        assert_eq!(v.schema_version(), 1);
+        assert_eq!(v.payload(), &inner);
+    }
+
+    #[test]
+    fn discriminant_str_is_pascal_case_kind() {
+        let p = EventPayload::RunFailed {
+            error: "boom".into(),
+        };
+        assert_eq!(p.discriminant_str(), "RunFailed");
+
+        let p = EventPayload::TokensConsumed {
+            session: SessionId::new(),
+            prompt_tokens: 1,
+            output_tokens: 2,
+            cache_hits: 0,
+            model: "claude-opus-4-7".into(),
+            cost_usd: None,
+        };
+        assert_eq!(p.discriminant_str(), "TokensConsumed");
     }
 
     #[test]
