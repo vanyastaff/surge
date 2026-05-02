@@ -47,9 +47,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
-# Stable string keys
-domain-key = "0.4"
-
 # Edit-aware TOML writes
 toml_edit = "0.22"
 
