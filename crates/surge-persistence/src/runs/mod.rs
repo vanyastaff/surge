@@ -9,6 +9,7 @@
 
 pub mod clock;
 pub mod error;
+pub mod migrations;
 pub mod pragmas;
 pub mod seq;
 
