@@ -17,6 +17,7 @@ mod reader_views;
 pub mod registry;
 pub mod seq;
 pub mod types;
+pub mod writer;
 
 pub use clock::{Clock, MockClock, SystemClock};
 pub use error::{CloseError, OpenError, StorageError, WriterError};
@@ -24,3 +25,4 @@ pub use reader::{ReadEvent, RunReader};
 pub use registry::{RunFilter, RunSummary};
 pub use seq::EventSeq;
 pub use types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
+pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig};
