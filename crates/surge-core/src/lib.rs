@@ -11,6 +11,7 @@ pub mod config;
 pub mod content_hash;
 pub mod error;
 pub mod event;
+pub mod hooks;
 pub mod id;
 pub mod keys;
 pub mod roadmap;
