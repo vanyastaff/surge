@@ -18,6 +18,7 @@ pub mod hooks;
 pub mod human_gate_config;
 pub mod id;
 pub mod keys;
+pub mod loop_config;
 pub mod notify_config;
 pub mod roadmap;
 pub mod sandbox;
