@@ -298,35 +298,55 @@ async fn handle_command(
             })();
             let _ = reply.send(result);
         }
+        WriterCommand::WriteSnapshot {
+            at_seq,
+            blob,
+            reply,
+        } => {
+            let result = (|| -> Result<(), WriterError> {
+                let bytes = blob.len() as i64;
+                conn.execute(
+                    "INSERT OR REPLACE INTO graph_snapshots (at_seq, snapshot, bytes_compressed)
+                     VALUES (?, ?, ?)",
+                    params![at_seq.0 as i64, blob, bytes],
+                )?;
+                Ok(())
+            })();
+            let _ = reply.send(result);
+        }
+        WriterCommand::RebuildViews { reply } => {
+            let result = (|| -> Result<(), WriterError> {
+                let tx = conn.transaction()?;
+                views::rebuild(&tx)?;
+
+                // Replay all events through views::maintain.
+                let mut stmt =
+                    tx.prepare("SELECT seq, timestamp, payload FROM events ORDER BY seq")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        EventSeq(row.get::<_, i64>(0)? as u64),
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                })?;
+                let collected: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+                drop(stmt);
+
+                for (seq, ts, blob) in collected {
+                    let versioned: VersionedEventPayload = serde_json::from_slice(&blob)?;
+                    views::maintain(&tx, seq, ts, versioned.payload())?;
+                }
+
+                tx.commit()?;
+                Ok(())
+            })();
+            let _ = reply.send(result);
+        }
         WriterCommand::Shutdown { reply } => {
             let _ = reply.send(());
             return false;
-        }
-        // WriteSnapshot / RebuildViews — Task 5.4
-        cmd => {
-            // Stub: tell caller the command is not yet wired in this skeleton commit.
-            stub_reject(cmd);
         }
     }
     true
 }
 
-fn stub_reject(cmd: WriterCommand) {
-    use WriterCommand::*;
-    let err = || WriterError::Internal("command not yet implemented in skeleton".into());
-    match cmd {
-        WriteSnapshot { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
-        RebuildViews { reply } => {
-            let _ = reply.send(Err(err()));
-        }
-        AppendEvent { .. }
-        | AppendBatch { .. }
-        | StoreArtifact { .. }
-        | Flush { .. }
-        | Shutdown { .. } => {
-            unreachable!("handled in handle_command")
-        }
-    }
-}
