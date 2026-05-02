@@ -9,6 +9,7 @@
 
 pub mod clock;
 pub mod error;
+pub mod pragmas;
 pub mod seq;
 
 pub use clock::{Clock, MockClock, SystemClock};
