@@ -15,6 +15,7 @@ pub mod edge;
 pub mod error;
 pub mod event;
 pub mod hooks;
+pub mod human_gate_config;
 pub mod id;
 pub mod keys;
 pub mod roadmap;
