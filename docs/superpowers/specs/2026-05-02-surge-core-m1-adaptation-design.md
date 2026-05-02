@@ -57,7 +57,7 @@ surge-core/src/
 ├── state.rs                    TaskState
 │
 │  ── new ──
-├── graph.rs                    Graph, GraphMetadata, schema_version constants
+├── graph.rs                    Graph, Subgraph, GraphMetadata, schema_version constants
 ├── node.rs                     Node, NodeKind, NodeConfig, Position, OutcomeDecl
 ├── edge.rs                     Edge, EdgeKind, EdgePolicy, PortRef, ExceededAction
 ├── agent_config.rs             AgentConfig, Binding, ArtifactSource, NodeLimits, CbConfig, PromptOverride, ToolOverride, RulesOverride, TemplateVar
@@ -65,16 +65,16 @@ surge-core/src/
 ├── branch_config.rs            BranchConfig, BranchArm, Predicate, CompareOp
 ├── terminal_config.rs          TerminalConfig, TerminalKind
 ├── notify_config.rs            NotifyConfig, NotifyTemplate, NotifyChannel, NotifySeverity, NotifyFailureAction
-├── loop_config.rs              LoopConfig, IterableSource, ExitCondition, FailurePolicy, ParallelismMode
-├── subgraph_config.rs          SubgraphConfig, SubgraphInput, SubgraphOutput
+├── loop_config.rs              LoopConfig (body: SubgraphKey), IterableSource, ExitCondition, FailurePolicy, ParallelismMode
+├── subgraph_config.rs          SubgraphConfig (inner: SubgraphKey), SubgraphInput, SubgraphOutput
 ├── sandbox.rs                  SandboxConfig, SandboxMode
-├── approvals.rs                ApprovalConfig, ApprovalPolicy, ApprovalChannel
-├── hooks.rs                    Hook, HookTrigger, HookFailureMode, HookInheritance
+├── approvals.rs                ApprovalConfig (elevation_channels), ApprovalPolicy, ApprovalChannel
+├── hooks.rs                    Hook, HookTrigger, HookFailureMode, HookInheritance, MatcherSpec, MatchContext
 ├── validation.rs               validate(&Graph) -> Result<(), Vec<ValidationError>>, ValidationError
 ├── profile.rs                  Profile, Role, RuntimeCfg, ToolsCfg, PromptTemplate, InspectorUiField, ProfileBindings, ExpectedBinding
 ├── run_event.rs                RunEvent, EventPayload (~30 variants), VersionedEventPayload, BootstrapStage, BootstrapDecision, BootstrapSubstate, ApprovalDecision, ElevationDecision, SessionDisposition, HookFailureMode (re-export)
-├── run_state.rs                RunState, RunMemory, Cursor, fold(), apply_event()
-├── keys.rs                     NodeKey, EdgeKey, OutcomeKey, ProfileKey, TemplateKey + KeyDomain markers
+├── run_state.rs                RunState (Pipeline holds Arc<Graph>), RunMemory, Cursor, fold(), apply_event()
+├── keys.rs                     NodeKey, EdgeKey, OutcomeKey, SubgraphKey, ProfileKey, TemplateKey + KeyDomain markers
 └── content_hash.rs             ContentHash([u8; 32])
 ```
 
@@ -92,18 +92,20 @@ use domain_key::{define_domain, key_type, KeyDomain};
 define_domain!(NodeDomain, "node", 32);
 define_domain!(EdgeDomain, "edge", 32);
 define_domain!(OutcomeDomain, "outcome", 32);
+define_domain!(SubgraphDomain, "subgraph", 32);
 define_domain!(ProfileDomain, "profile", 64);    // includes "@version" suffix
 define_domain!(TemplateDomain, "template", 64);
 
 key_type!(NodeKey, NodeDomain);
 key_type!(EdgeKey, EdgeDomain);
 key_type!(OutcomeKey, OutcomeDomain);
+key_type!(SubgraphKey, SubgraphDomain);
 key_type!(ProfileKey, ProfileDomain);
 key_type!(TemplateKey, TemplateDomain);
 ```
 
 Validation rules for keys:
-- `NodeKey`/`EdgeKey`/`OutcomeKey`: alphanumeric + underscore, must start with letter, max 32 chars.
+- `NodeKey`/`EdgeKey`/`OutcomeKey`/`SubgraphKey`: alphanumeric + underscore, must start with letter, max 32 chars.
 - `ProfileKey`/`TemplateKey`: alphanumeric + `-` + `_` + `.` + `@`, max 64 chars (e.g. `"implementer@1.0"`).
 
 `domain-key`'s `MAX_LENGTH` constant covers length enforcement. Character-set validation is implemented as a thin wrapper module:
@@ -177,12 +179,27 @@ define_id!(SessionId, "session");
 ```rust
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Top-level pipeline graph. One per `flow.toml`.
 pub struct Graph {
     pub schema_version: u32,
     pub metadata: GraphMetadata,
+    /// Top-level (root) graph contents.
+    pub start: NodeKey,
     pub nodes: BTreeMap<NodeKey, Node>,
     pub edges: Vec<Edge>,
+    /// Library of named subgraphs. `Loop.body` and `Subgraph.inner` reference
+    /// entries here by `SubgraphKey`. Always lives at the root — subgraphs
+    /// cannot themselves contain a `subgraphs` field.
+    #[serde(default)]
+    pub subgraphs: BTreeMap<SubgraphKey, Subgraph>,
+}
+
+/// A named, reusable inner graph. Lighter than `Graph` — no metadata, no nested
+/// subgraphs library (those would all live at the root `Graph` level).
+pub struct Subgraph {
     pub start: NodeKey,
+    pub nodes: BTreeMap<NodeKey, Node>,
+    pub edges: Vec<Edge>,
 }
 
 pub struct GraphMetadata {
@@ -197,7 +214,48 @@ pub struct GraphMetadata {
 Notes:
 - `nodes: BTreeMap<NodeKey, Node>` — O(log n) lookup, deterministic serialization order (alphabetical by key). Edge resolution looks up nodes by key on every routing decision; this is the hot path.
 - `edges: Vec<Edge>` — iterated more than indexed; stays a vec.
+- `subgraphs: BTreeMap<SubgraphKey, Subgraph>` — **flat** library of named subgraphs at the root. `LoopConfig.body` and `SubgraphConfig.inner` carry a `SubgraphKey` that resolves into this map (decision: §4.4.1 below).
 - `chrono` is a new workspace dep.
+
+#### 4.4.1 Why subgraphs are flat (not inline `Box<Graph>`)
+
+The earlier draft modeled `LoopConfig.body: Box<Graph>` and `SubgraphConfig.inner: Box<Graph>` — full inline recursion. This fails in TOML for non-trivial nesting:
+
+- 3-level nested loop produces `[nodes.task_loop.config.body.nodes.inner_loop.config.body.nodes.deep_impl]` — readability collapses.
+- Editing the body of an inner subgraph in a text editor requires expanding nested tables that grow O(depth).
+- Sharing a subgraph across multiple Loop nodes (e.g., one common task body invoked in two outer Milestone Loops) has no representation.
+
+The flat-library design solves this:
+
+```toml
+# Root graph
+schema_version = 1
+start = "spec_1"
+
+[[nodes]]
+id = "milestone_loop"
+
+[nodes.config]
+kind = "loop"
+body = "task_loop_body"          # ← SubgraphKey ref into root.subgraphs
+iterates_over = { ... }
+# ...
+
+# Named subgraph at root
+[subgraphs.task_loop_body]
+start = "implement_inner"
+
+[[subgraphs.task_loop_body.nodes]]
+id = "implement_inner"
+# ...
+
+[[subgraphs.task_loop_body.edges]]
+# ...
+```
+
+Trade-off: the root `Graph` is no longer fully self-contained-by-position (you can't grep one node's config and see its full execution context inline), but it is flat in TOML, shareable across nodes, and the editor's "open body" view becomes a simple tab switch within the same file rather than navigating nested tables.
+
+A 3-level nesting fixture (`tests/fixtures/graphs/nested-3-levels.toml`) is part of M1 acceptance to validate the format works in practice.
 
 ### 4.5 `node.rs`
 
@@ -325,7 +383,10 @@ pub struct ApprovalConfig {
     #[serde(default)] pub request_permissions: bool,
     #[serde(default)] pub skill_approval: bool,
     #[serde(default)] pub elevation: bool,
-    #[serde(default)] pub channels: Vec<ApprovalChannel>,
+    /// Channels where sandbox-elevation requests and other agent-stage
+    /// approval prompts get delivered. Distinct from `HumanGateConfig::delivery_channels`
+    /// (which is for explicit gate prompts). Field name disambiguates intent.
+    #[serde(default)] pub elevation_channels: Vec<ApprovalChannel>,
 }
 
 #[derive(Copy, PartialEq, Eq)]
@@ -351,13 +412,51 @@ pub enum ApprovalDuration { Persistent, Transient }
 pub struct Hook {
     pub id: String,
     pub trigger: HookTrigger,
-    pub matcher: Option<String>,        // simple expr, eval'd at runtime by engine
+    /// Structured match expression. Empty matcher (default) = always matches.
+    /// String-DSL is **not** supported — we want type-checked configurations
+    /// at parse time, not runtime expression-eval surprises.
+    #[serde(default)]
+    pub matcher: MatcherSpec,
     pub command: String,
     #[serde(default)]
     pub on_failure: HookFailureMode,
     pub timeout_seconds: Option<u32>,
     #[serde(default)]
     pub inherit: HookInheritance,
+}
+
+/// Structured matcher. Each field is an additional `AND` constraint;
+/// an empty `MatcherSpec` (all fields `None`) matches every event.
+/// New fields are added as needed when triggers gain new context.
+#[derive(Default)]
+pub struct MatcherSpec {
+    /// Match by tool name (for `pre_tool_use` / `post_tool_use`).
+    pub tool: Option<String>,
+    /// Match by outcome (for `on_outcome`).
+    pub outcome: Option<OutcomeKey>,
+    /// Match by node key.
+    pub node: Option<NodeKey>,
+    /// Substring match against tool args (best-effort; for `pre/post_tool_use`).
+    pub tool_arg_contains: Option<String>,
+    /// Match by file path glob (for `on_outcome` / `pre_tool_use` with file ops).
+    pub file_glob: Option<String>,
+}
+
+impl MatcherSpec {
+    /// Returns `true` if this matcher is empty (matches everything).
+    pub fn is_unconditional(&self) -> bool;
+    /// Evaluates the matcher against a `MatchContext`. Pure function — engine
+    /// builds the `MatchContext` from the current event before calling.
+    pub fn matches(&self, ctx: &MatchContext) -> bool;
+}
+
+pub struct MatchContext<'a> {
+    pub trigger: HookTrigger,
+    pub tool: Option<&'a str>,
+    pub tool_args_text: Option<&'a str>,
+    pub outcome: Option<&'a OutcomeKey>,
+    pub node: Option<&'a NodeKey>,
+    pub file_path: Option<&'a Path>,
 }
 
 #[derive(Copy, PartialEq, Eq)]
@@ -380,6 +479,8 @@ pub enum HookInheritance {
     Disable,
 }
 ```
+
+**Rationale**: the original RFC said `matcher: String` with "JS-like predicate" — that's a footgun. By M5 we'd need a parser, an evaluator, and tests that catch every weird edge case in user-written expressions. A typed `MatcherSpec` covers the documented use cases (`tool == "edit_file"`, `outcome == "done"`, file-path globs) at parse time. Extending it later is a backward-compatible additive change to the struct. If a real need emerges for free-form expressions (unlikely from the RFC's examples), we add a `custom: Option<String>` field with a documented mini-DSL — but only with a real driver, not speculation.
 
 ### 4.10 `agent_config.rs`
 
@@ -453,7 +554,10 @@ pub struct CbConfig {
 
 ```rust
 pub struct HumanGateConfig {
-    pub channels: Vec<ApprovalChannel>,
+    /// Channels where the gate's approval card is sent, in priority order.
+    /// Distinct from `ApprovalConfig::elevation_channels` (which is for sandbox
+    /// elevation prompts on agent stages). Field name disambiguates intent.
+    pub delivery_channels: Vec<ApprovalChannel>,
     pub timeout_seconds: Option<u32>,
     #[serde(default)] pub on_timeout: TimeoutAction,
     pub summary: SummaryTemplate,
@@ -576,7 +680,9 @@ pub enum NotifyFailureAction {
 ```rust
 pub struct LoopConfig {
     pub iterates_over: IterableSource,
-    pub body: Box<Graph>,                       // recursion via Box
+    /// Subgraph to execute per iteration. References `Graph::subgraphs[body]`.
+    /// Validation enforces existence (rule 11b in §4.17).
+    pub body: SubgraphKey,
     pub iteration_var_name: String,
     pub exit_condition: ExitCondition,
     #[serde(default)] pub on_iteration_failure: FailurePolicy,
@@ -619,7 +725,9 @@ pub enum ParallelismMode {
 
 ```rust
 pub struct SubgraphConfig {
-    pub inner: Box<Graph>,
+    /// Inner subgraph to execute. References `Graph::subgraphs[inner]`.
+    /// Validation enforces existence.
+    pub inner: SubgraphKey,
     pub inputs: Vec<SubgraphInput>,
     pub outputs: Vec<SubgraphOutput>,
 }
@@ -676,7 +784,8 @@ pub enum ValidationErrorKind {
     EscalateTargetNotHumanOrNotify,    // warning, not error
     SchemaVersionMismatch,
     KeyFormatViolation { key: String },
-    NestingTooDeep { depth: u32 },
+    SubgraphRefMissing { subgraph: SubgraphKey },
+    SubgraphReferenceCycle { cycle: Vec<SubgraphKey> },
 }
 ```
 
@@ -693,8 +802,9 @@ pub enum ValidationErrorKind {
 9. `HumanGate` nodes have at least one `ApprovalOption`.
 10. `Branch` nodes have at least one `BranchArm` plus `default_outcome`.
 11. `Loop` nodes have a valid `iterates_over` source.
-12. `Loop` body has a `start` node.
-13. `Subgraph` inner graph itself passes validation (recursive).
+11b. `Loop.body` and `Subgraph.inner` reference an existing `SubgraphKey` in `Graph::subgraphs`.
+12. Every subgraph has a `start` node that exists in its own `nodes`.
+13. Each `Subgraph` in `Graph::subgraphs` itself passes the same structural rules (recursive validation, but flat — no further nested `subgraphs` field).
 14. If outcome `is_terminal: true`, no edge from that outcome (terminal outcomes have no successors).
 15. `Backtrack` edges form valid cycles (target reachable from source via forward edges).
 
@@ -703,7 +813,7 @@ Plus warning (rule 16, non-error):
 
 **Strategy**: validation is **non-fail-fast** — all errors collected into `Vec<ValidationError>`, so the editor can highlight every problem at once. Only abort early on rules that prevent further analysis (e.g., `start` missing makes reachability undefined — collect that and skip reachability checks).
 
-Recursion: `validate` recurses into `LoopConfig.body` and `SubgraphConfig.inner`, prepending the parent node's key to `ErrorLocation::Subgraph.path` so error messages name the full nesting path. Maximum nesting depth is capped at `MAX_GRAPH_NESTING = 8` to prevent stack overflow from pathological inputs; exceeding this produces `ValidationErrorKind::NestingTooDeep`.
+**Subgraph traversal**: validation iterates flat — each `Subgraph` in `Graph::subgraphs` is checked once for structural rules, then a separate cycle detector walks the subgraph reference graph (`Loop.body` / `Subgraph.inner` → next subgraph), reporting `SubgraphReferenceCycle` if a cycle exists. `ErrorLocation::Subgraph.path` lists the chain of subgraph references that led to an error inside a deep subgraph. No stack-recursive walks; depth is bounded by the (acyclic) subgraph graph.
 
 ### 4.18 `profile.rs`
 
@@ -941,6 +1051,8 @@ pub struct RunConfig {
 ### 4.20 `run_state.rs`
 
 ```rust
+use std::sync::Arc;
+
 pub enum RunState {
     NotStarted,
     Bootstrapping {
@@ -948,7 +1060,15 @@ pub enum RunState {
         substate: BootstrapSubstate,
     },
     Pipeline {
-        graph: Graph,
+        /// `Arc<Graph>` because `Graph` is frozen after `PipelineMaterialized` —
+        /// every fold step that returns `Pipeline` shares the same graph.
+        /// Without `Arc` each fold call would clone tens of KB of nested
+        /// `BTreeMap`s on a 50-node run; with `Arc` each step is one atomic
+        /// increment. The graph is logically immutable through the entire
+        /// pipeline phase, so `Arc` is the correct primitive (not `Rc`,
+        /// because `RunState` may cross thread boundaries; not `Cow`, because
+        /// we never mutate).
+        graph: Arc<Graph>,
         cursor: Cursor,
         memory: RunMemory,
     },
@@ -1029,7 +1149,7 @@ pub enum FoldError {
 
 **Cursor scope**: `Cursor` tracks the current node and attempt number only. Loop iteration state (current iteration index, items remaining) is not part of the cursor — when fold encounters `LoopIterationStarted`, it does not descend into the loop body in M1; the body's execution state lives in the engine, not in `RunState`. M1 fold treats loop iterations as opaque progression markers. Engine-level descent into nested execution comes with the executor in M5.
 
-**Graph cloning cost**: `RunState::Pipeline` holds `Graph` by value, which clones on every fold step in the naive implementation. For real runs this is fine (graphs are small — <100 nodes), but the public API is designed to allow swapping the field to `Arc<Graph>` later if benchmarks justify it. M1 ships with `Graph` by value for simplicity.
+**Graph sharing**: `Graph` is wrapped in `Arc` from the start. `Arc::clone` is a single atomic increment — folding 1000 events through `RunState::Pipeline` allocates the graph once. The trade-off (consumers see `Arc<Graph>` in their type signatures) is paid up front rather than as a breaking change later when benchmarks would force the migration anyway.
 
 ### 4.21 `error.rs` (extension)
 
@@ -1136,12 +1256,14 @@ Test fixtures live in `crates/surge-core/tests/fixtures/`:
 ```
 tests/fixtures/
 ├── graphs/
-│   ├── linear-trivial.toml
-│   ├── linear-with-review.toml
-│   ├── single-milestone-loop.toml
-│   ├── nested-milestone-loop.toml
-│   ├── bug-fix-flow.toml
-│   └── refactor-flow.toml
+│   ├── linear-trivial.toml             # 3 nodes, no loops
+│   ├── linear-with-review.toml         # 5-7 nodes, no loops
+│   ├── single-milestone-loop.toml      # 1 outer node + 1 subgraph
+│   ├── nested-milestone-loop.toml      # 2 levels of subgraphs
+│   ├── nested-3-levels.toml            # 3 levels: milestone-loop → task-loop → impl-step. Validates flat-subgraph design holds for deepest realistic case.
+│   ├── bug-fix-flow.toml               # bug-fix archetype
+│   ├── refactor-flow.toml              # refactor archetype
+│   └── domain-key-real-roadmap.toml    # imported from a real project's roadmap (e.g., domain-key crate's planning doc) — catches issues that synthetic graphs miss
 ├── profiles/
 │   ├── implementer.toml
 │   ├── reviewer.toml
@@ -1150,6 +1272,22 @@ tests/fixtures/
     ├── linear-run-success.events.json     # human-editable for fixtures
     └── nested-loop-with-failure.events.json
 ```
+
+### 6.4 Benchmarks (`criterion`)
+
+Performance budgets are not aspirational — they're acceptance criteria. `criterion` is added as a dev-dep; benchmarks live in `crates/surge-core/benches/`.
+
+| Benchmark | Budget (M3 Pro / Ryzen 7 baseline) | Rationale |
+|---|---|---|
+| `fold_1k_events_typical_graph` | < 50 ms | 1000-event run on a 10-node graph; this is a typical 30-min run replay |
+| `fold_10k_events_typical_graph` | < 500 ms | Heavy run; bound for replay scrubber UX |
+| `validate_50_node_graph` | < 5 ms | Editor's live validation — must feel instant on every keystroke |
+| `validate_pathological_100_nodes_5_subgraphs` | < 50 ms | Worst case the editor needs to handle |
+| `toml_roundtrip_typical_flow` | < 20 ms | Editor save path |
+| `bincode_roundtrip_event` | < 10 µs | 30-event burst per second is plausible during heavy work |
+| `graph_clone` (for comparison) | reported, no budget | informational — quantifies the `Arc` decision |
+
+If any benchmark exceeds its budget at the end of M1, the milestone is not done — either the implementation needs fixing or the budget needs explicit relaxation with rationale.
 
 ## 7. Workspace dependency additions
 
@@ -1165,6 +1303,7 @@ bincode    = "1.3"
 semver     = { version = "1", features = ["serde"] }
 proptest   = "1"
 insta      = "1"
+criterion  = "0.5"
 ```
 
 `surge-core/Cargo.toml` adds:
@@ -1186,6 +1325,7 @@ semver     = { workspace = true }
 [dev-dependencies]
 proptest   = { workspace = true }
 insta      = { workspace = true }
+criterion  = { workspace = true }
 ```
 
 ## 8. Migration impact on other crates
@@ -1212,12 +1352,15 @@ The milestone is complete when **all** of the following pass:
 5. All existing `surge-core` tests still pass (no regressions in legacy modules).
 6. Other crates in the workspace build unchanged: `cargo build --workspace` succeeds.
 7. Existing crates that depend on `surge-core` (`surge-orchestrator`, `surge-persistence`, `surge-cli`, `surge-spec`) compile without code changes.
-8. TOML round-trip for `Graph`: serialize → parse → semantic equality for all 6 fixture graphs.
-9. Bincode round-trip for `EventPayload`: every variant survives a round-trip.
-10. Validation: each of the 15 rules has at least one failing fixture and one passing fixture, both verified by tests.
-11. Fold function: handcrafted event sequence of 50+ events folds to the expected `RunState`; this is captured in a snapshot test.
-12. Property test: 1000 generated valid graphs all pass validation; 1000 generated invalid graphs all fail with at least one `ValidationError`.
-13. `surge-core` public API (post-M1) is documented with `///` rustdoc on every public type and function. `cargo doc -p surge-core --no-deps` produces no warnings.
+8. **Behavioral smoke test**: `surge run` against a fixture project produces the same artifacts and final state before and after M1 (legacy code path unaffected). This is a required test, not aspirational.
+9. TOML round-trip for `Graph`: serialize → parse → semantic equality for all 8 fixture graphs (including 3-level nested and the imported real-world fixture).
+10. Bincode round-trip for `EventPayload`: every variant survives a round-trip.
+11. Validation: each of the 15 rules has at least one failing fixture and one passing fixture, both verified by tests. Subgraph reference cycle detection has its own dedicated fixture.
+12. Fold function: handcrafted event sequence of 50+ events folds to the expected `RunState`; this is captured in a snapshot test.
+13. Property test: 1000 generated valid graphs all pass validation; 1000 generated invalid graphs all fail with at least one `ValidationError`.
+14. `Profile.extends` field round-trips through TOML; an explicit test confirms it is **not** resolved (no registry lookup, no transitive merging) — locking the M1 boundary.
+15. All benchmarks in §6.4 meet their budget on the baseline machine (or have an explicit signed-off rationale for relaxation). `cargo bench -p surge-core` produces output that proves it.
+16. `surge-core` public API (post-M1) is documented with `///` rustdoc on every public type and function. `cargo doc -p surge-core --no-deps` produces no warnings.
 
 ## 10. Out of scope
 
@@ -1231,11 +1374,17 @@ Explicitly **not** part of M1:
 - `RunState::fold` for `Subgraph` / nested `Loop` execution — fold treats them as opaque transitions in M1; nested execution is engine work.
 - Mock ACP agent — testing utility, lives in `surge-testing` crate (not yet exists; created later).
 
-## 11. Open questions for implementation phase
+## 11. Realistic effort estimate
+
+The new vision's `ROADMAP.md` budgets M1 at 2 weeks. With 19 new files, 30+ event variants, 15 validation rules, property tests, snapshot tests, criterion benchmarks, plus verification across 4 dependent crates and the smoke-test acceptance, **realistic estimate is 3–4 weeks of solo evening/weekend work** (the original ROADMAP voice). Calendar planning should use the upper bound; under-estimating cascades into the rest of the milestone chain.
+
+If the implementer hits one of these unknowns hard (subgraph reference cycle detector turns out tricky; `toml_edit` integration is messier than expected; `domain-key` published version doesn't quite match the API used here) — that's another half-week per surprise. Build buffer in.
+
+## 12. Open questions for implementation phase
 
 These will surface during writing-plans / actual implementation; not blockers for design approval:
 
-- **`domain-key` exact published version.** Author maintains the crate; pin to whatever is current at implementation time.
-- **`bincode` 1.x vs 2.x.** 1.x is stable and what `surge-persistence` likely already uses; 2.x has a different API. Pick what the workspace is on; align if mismatched.
-- **`toml_edit` serialize integration.** Edit-aware writing is tricky with serde. If full preservation requires significant custom code, M1 ships with naive `toml::to_string` and notes "perfect preservation" as a follow-up.
-- **`InspectorUiField.kind` extensibility.** May need more variants (e.g., `Path`, `Color`) as we build the editor in M9. Closed enum for now; add variants when needed.
+- **`domain-key` exact published version.** Author maintains the crate; pin to whatever is current at implementation time. If the published API differs from what this spec assumes (e.g., macro signatures), reconcile during M1.T1.1 and amend this spec.
+- **`bincode` 1.x vs 2.x.** Pin to whatever `surge-persistence` already uses to share one version of the dep tree.
+- **`toml_edit` serialize integration.** Per §5.1, `merge_into_toml` may initially delegate to `to_toml`. Real comment-preservation logic is M9 territory.
+- **`InspectorUiField.kind` extensibility.** May need more variants (e.g., `Path`, `Color`) as we build the editor in M9. Closed enum for now; add variants when needed without breaking changes.
