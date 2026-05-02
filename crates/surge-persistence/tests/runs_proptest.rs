@@ -65,3 +65,43 @@ proptest! {
         }).unwrap();
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 16,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn view_maintenance_matches_rebuild(
+        payloads in proptest::collection::vec(payload_strategy(), 1..30)
+    ) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let clock = MockClock::new(1_700_000_000_000);
+            let storage = Storage::open_with(tmp.path(), Arc::new(clock)).await.unwrap();
+            let run_id = RunId::new();
+            let writer = storage.create_run(run_id.clone(), "/tmp", None).await.unwrap();
+
+            for p in &payloads { writer.append_event(p.clone()).await.unwrap(); }
+            writer.flush().await.unwrap();
+
+            let before = writer.cost_summary().await.unwrap();
+            writer.rebuild_views().await.unwrap();
+            let after = writer.cost_summary().await.unwrap();
+
+            prop_assert_eq!(before.tokens_in, after.tokens_in);
+            prop_assert_eq!(before.tokens_out, after.tokens_out);
+            prop_assert_eq!(before.cache_hits, after.cache_hits);
+
+            writer.close().await.unwrap();
+            Ok(())
+        }).unwrap();
+    }
+}
