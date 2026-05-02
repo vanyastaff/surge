@@ -104,3 +104,204 @@ impl RunWriter {
         self.reader.latest_snapshot_at_or_before(seq).await
     }
 }
+
+use surge_core::VersionedEventPayload;
+use tokio::sync::oneshot;
+
+use crate::runs::error::{CloseError, WriterError};
+
+impl RunWriter {
+    /// Append a single event. Returns the assigned `EventSeq`.
+    pub async fn append_event(
+        &self,
+        payload: VersionedEventPayload,
+    ) -> Result<EventSeq, StorageError> {
+        self.ensure_open()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::AppendEvent {
+                payload,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Append multiple events atomically (single transaction). Returns assigned seqs in order.
+    pub async fn append_events(
+        &self,
+        payloads: Vec<VersionedEventPayload>,
+    ) -> Result<Vec<EventSeq>, StorageError> {
+        self.ensure_open()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::AppendBatch {
+                payloads,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Store an artifact (atomic FS write + content-addressed dedup).
+    ///
+    /// `produced_at_seq` is set to the writer's current seq at call time
+    /// (best-effort association with the latest event).
+    pub async fn store_artifact(
+        &self,
+        name: &str,
+        content: &[u8],
+    ) -> Result<ArtifactRecord, StorageError> {
+        self.ensure_open()?;
+        let current_seq = self.current_seq().await?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::StoreArtifact {
+                name: name.to_string(),
+                content: content.to_vec(),
+                produced_by: None,
+                produced_at_seq: current_seq,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Write a graph snapshot.
+    ///
+    /// `blob` is the caller-encoded representation of the run state (typically
+    /// `serde_json::to_vec(&run_state)`). M2 storage is agnostic to the
+    /// snapshot's encoding; readers see only raw bytes via
+    /// `latest_snapshot_at_or_before`. (RunState lacks serde derives in M1.)
+    pub async fn write_graph_snapshot(
+        &self,
+        at_seq: EventSeq,
+        blob: Vec<u8>,
+    ) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::WriteSnapshot {
+                at_seq,
+                blob,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Truncate all materialized view tables and rebuild from events.
+    ///
+    /// Runs inside a single transaction; readers see pre-rebuild state until
+    /// commit (WAL gives them a snapshot view), so there is no transient empty-
+    /// view window from a reader perspective.
+    pub async fn rebuild_views(&self) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::RebuildViews { reply: reply_tx })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Wait for all previously-issued commands to be processed by the writer task.
+    ///
+    /// Strict ordering of the mpsc channel + sequential command processing
+    /// means once Flush is dequeued, all prior commands are already committed.
+    /// Does NOT trigger WAL checkpoint or fsync — those are managed by the
+    /// writer task via periodic `wal_checkpoint(TRUNCATE)`.
+    pub async fn flush(&self) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterCommand::Flush { reply: reply_tx })
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?;
+        reply_rx
+            .await
+            .map_err(|_| StorageError::WriterTaskDied)?
+            .map_err(map_writer_err)
+    }
+
+    /// Explicit clean shutdown — sends Shutdown to the writer task, waits for
+    /// it to drain in-flight commands and exit. Releases file lock and in-
+    /// process token.
+    ///
+    /// Prefer over `Drop` for clean shutdown — `Drop` is a fire-and-forget
+    /// fallback that warns via tracing.
+    pub async fn close(mut self) -> Result<(), CloseError> {
+        if self.closed {
+            return Ok(());
+        }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .writer_tx
+            .send(WriterCommand::Shutdown { reply: reply_tx })
+            .await
+            .is_ok()
+        {
+            let _ = reply_rx.await;
+        }
+        self.closed = true;
+        if let Some(join) = self.writer_join.take() {
+            join.await
+                .map_err(|e| CloseError::JoinFailed(e.to_string()))?
+                .map_err(CloseError::Writer)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> Result<(), StorageError> {
+        if self.closed {
+            return Err(StorageError::WriterTaskDied);
+        }
+        Ok(())
+    }
+}
+
+fn map_writer_err(e: WriterError) -> StorageError {
+    match e {
+        WriterError::Sqlite(s) => StorageError::Sqlite(s),
+        WriterError::Io(i) => StorageError::Io(i),
+        WriterError::Serialization(j) => StorageError::SerializationFailed(j),
+        WriterError::Internal(_) => StorageError::WriterTaskDied,
+    }
+}
+
+impl Drop for RunWriter {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Best-effort fire-and-forget shutdown. Drop is sync — we can't await join.
+        let (reply_tx, _reply_rx) = oneshot::channel();
+        let _ = self
+            .writer_tx
+            .try_send(WriterCommand::Shutdown { reply: reply_tx });
+        tracing::warn!(
+            run_id = %self.reader.run_id(),
+            "RunWriter dropped without close() — pending writes may be lost. \
+             Prefer RunWriter::close().await for clean shutdown."
+        );
+    }
+}
