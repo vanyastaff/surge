@@ -19,6 +19,18 @@ macro_rules! define_id {
             pub fn as_ulid(&self) -> Ulid {
                 self.0
             }
+
+            /// Short form for human-facing UI: first 12 chars of the ULID, no prefix.
+            ///
+            /// 12 chars = 10 timestamp chars + 2 randomness chars (~1024 distinct
+            /// suffixes per millisecond). Used in branch names, worktree paths, log
+            /// lines. Callers that absolutely require uniqueness use the full ID.
+            #[must_use]
+            pub fn short(&self) -> String {
+                let s = self.0.to_string();
+                debug_assert!(s.len() >= 12, "ULID display is always 26 chars");
+                s[..12].to_string()
+            }
         }
 
         impl Default for $name {
@@ -131,5 +143,25 @@ mod tests {
         // Cross-type parse must fail because prefix differs.
         let result: Result<SessionId, _> = s.parse();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn short_is_12_chars_for_all_ids() {
+        assert_eq!(SpecId::new().short().len(), 12);
+        assert_eq!(TaskId::new().short().len(), 12);
+        assert_eq!(SubtaskId::new().short().len(), 12);
+        assert_eq!(RunId::new().short().len(), 12);
+        assert_eq!(SessionId::new().short().len(), 12);
+    }
+
+    #[test]
+    fn short_has_timestamp_prefix_and_some_randomness() {
+        let a = RunId::new();
+        let b = RunId::new();
+        let sa = a.short();
+        let sb = b.short();
+        assert_eq!(sa.len(), 12);
+        assert_eq!(sb.len(), 12);
+        assert!(sa.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 }
