@@ -1,0 +1,290 @@
+schema_version = 1
+start = "roadmap_agent"
+
+[metadata]
+name = "nested-3-levels"
+created_at = "2026-05-02T00:00:00Z"
+description = "3 levels of loops: root -> milestone_body -> task_body -> step_body"
+
+# ── Root graph nodes ──────────────────────────────────────────────────────────
+
+[nodes.roadmap_agent]
+id = "roadmap_agent"
+
+[nodes.roadmap_agent.position]
+x = 0.0
+y = 0.0
+
+[[nodes.roadmap_agent.declared_outcomes]]
+id = "done"
+description = "Roadmap produced"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.roadmap_agent.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[nodes.roadmap_agent.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.roadmap_agent.config.custom_fields]
+
+[nodes.milestone_loop]
+id = "milestone_loop"
+
+[nodes.milestone_loop.position]
+x = 200.0
+y = 0.0
+
+[[nodes.milestone_loop.declared_outcomes]]
+id = "done"
+description = "All milestones processed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.milestone_loop.config]
+node_kind = "loop"
+body = "milestone_body"
+iteration_var_name = "milestone"
+parallelism = "sequential"
+gate_after_each = false
+
+[nodes.milestone_loop.config.iterates_over]
+type = "artifact"
+node = "roadmap_agent"
+name = "milestones.json"
+jsonpath = "$.milestones[*]"
+
+[nodes.milestone_loop.config.exit_condition]
+type = "all_items"
+
+[nodes.milestone_loop.config.on_iteration_failure]
+type = "abort"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 400.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_roadmap_to_loop"
+to = "milestone_loop"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_agent"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_loop_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "milestone_loop"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+# ── Level 1 subgraph: milestone_body ─────────────────────────────────────────
+# milestone_body: plan tasks, then loop over tasks
+
+[subgraphs.milestone_body]
+start = "task_planner"
+
+[subgraphs.milestone_body.nodes.task_planner]
+id = "task_planner"
+
+[subgraphs.milestone_body.nodes.task_planner.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.task_planner.declared_outcomes]]
+id = "done"
+description = "Tasks planned"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.milestone_body.nodes.task_planner.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.milestone_body.nodes.task_planner.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[subgraphs.milestone_body.nodes.task_planner.config.custom_fields]
+
+[subgraphs.milestone_body.nodes.task_loop]
+id = "task_loop"
+
+[subgraphs.milestone_body.nodes.task_loop.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "done"
+description = "All tasks processed"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.milestone_body.nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
+type = "artifact"
+node = "task_planner"
+name = "tasks.json"
+jsonpath = "$.tasks[*]"
+
+[subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
+type = "all_items"
+
+[subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+[[subgraphs.milestone_body.edges]]
+id = "e_mb_plan_to_loop"
+to = "task_loop"
+kind = "forward"
+
+[subgraphs.milestone_body.edges.from]
+node = "task_planner"
+outcome = "done"
+
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
+
+# ── Level 2 subgraph: task_body ───────────────────────────────────────────────
+# task_body: implement step, then loop over sub-steps
+
+[subgraphs.task_body]
+start = "step_planner"
+
+[subgraphs.task_body.nodes.step_planner]
+id = "step_planner"
+
+[subgraphs.task_body.nodes.step_planner.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.step_planner.declared_outcomes]]
+id = "done"
+description = "Steps planned"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.step_planner.config]
+node_kind = "agent"
+profile = "planner@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.step_planner.config.limits]
+timeout_seconds = 300
+max_retries = 2
+max_tokens = 50000
+
+[subgraphs.task_body.nodes.step_planner.config.custom_fields]
+
+[subgraphs.task_body.nodes.step_loop]
+id = "step_loop"
+
+[subgraphs.task_body.nodes.step_loop.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.step_loop.declared_outcomes]]
+id = "done"
+description = "All steps done"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.task_body.nodes.step_loop.config]
+node_kind = "loop"
+body = "step_body"
+iteration_var_name = "step"
+parallelism = "sequential"
+gate_after_each = false
+
+[subgraphs.task_body.nodes.step_loop.config.iterates_over]
+type = "artifact"
+node = "step_planner"
+name = "steps.json"
+jsonpath = "$.steps[*]"
+
+[subgraphs.task_body.nodes.step_loop.config.exit_condition]
+type = "all_items"
+
+[subgraphs.task_body.nodes.step_loop.config.on_iteration_failure]
+type = "abort"
+
+[[subgraphs.task_body.edges]]
+id = "e_tb_plan_to_loop"
+to = "step_loop"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "step_planner"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+# ── Level 3 subgraph: step_body ───────────────────────────────────────────────
+# step_body: single implementation agent
+
+[subgraphs.step_body]
+start = "step_impl"
+edges = []
+
+[subgraphs.step_body.nodes.step_impl]
+id = "step_impl"
+
+[subgraphs.step_body.nodes.step_impl.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.step_body.nodes.step_impl.declared_outcomes]]
+id = "done"
+description = "Step implemented"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.step_body.nodes.step_impl.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.step_body.nodes.step_impl.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.step_body.nodes.step_impl.config.custom_fields]

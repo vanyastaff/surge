@@ -1,0 +1,182 @@
+schema_version = 1
+start = "characterize"
+
+[metadata]
+name = "refactor-flow"
+created_at = "2026-05-02T00:00:00Z"
+description = "Refactor archetype: characterize -> write tests -> refactor -> diff-review -> end"
+
+# Node: characterize the code to refactor
+[nodes.characterize]
+id = "characterize"
+
+[nodes.characterize.position]
+x = 0.0
+y = 0.0
+
+[[nodes.characterize.declared_outcomes]]
+id = "done"
+description = "Code characterized and coverage measured"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.characterize.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.characterize.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.characterize.config.custom_fields]
+
+# Node: write characterization tests (golden-master / approval tests)
+[nodes.write_tests]
+id = "write_tests"
+
+[nodes.write_tests.position]
+x = 200.0
+y = 0.0
+
+[[nodes.write_tests.declared_outcomes]]
+id = "done"
+description = "Tests written and passing"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.write_tests.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.write_tests.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.write_tests.config.custom_fields]
+
+# Node: refactor the code
+[nodes.refactor]
+id = "refactor"
+
+[nodes.refactor.position]
+x = 400.0
+y = 0.0
+
+[[nodes.refactor.declared_outcomes]]
+id = "done"
+description = "Refactoring complete, tests still passing"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.refactor.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.refactor.config.limits]
+timeout_seconds = 1200
+max_retries = 3
+max_tokens = 200000
+
+[nodes.refactor.config.custom_fields]
+
+# Node: human review of the diff
+[nodes.diff_review]
+id = "diff_review"
+
+[nodes.diff_review.position]
+x = 600.0
+y = 0.0
+
+[[nodes.diff_review.declared_outcomes]]
+id = "approve"
+description = "Diff approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.diff_review.config]
+node_kind = "human_gate"
+allow_freetext = true
+
+[[nodes.diff_review.config.delivery_channels]]
+type = "desktop"
+duration = "persistent"
+
+[nodes.diff_review.config.summary]
+title = "Review refactor diff"
+body = "Please review the refactoring changes and approve or reject."
+
+[[nodes.diff_review.config.options]]
+outcome = "approve"
+label = "Approve"
+style = "primary"
+
+# Node: terminal success
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 800.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_char_to_tests"
+to = "write_tests"
+kind = "forward"
+
+[edges.from]
+node = "characterize"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_tests_to_refactor"
+to = "refactor"
+kind = "forward"
+
+[edges.from]
+node = "write_tests"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_refactor_to_review"
+to = "diff_review"
+kind = "forward"
+
+[edges.from]
+node = "refactor"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "diff_review"
+outcome = "approve"
+
+[edges.policy]
+on_max_exceeded = "escalate"

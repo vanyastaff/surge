@@ -1,0 +1,58 @@
+schema_version = 1
+start = "impl_1"
+
+[metadata]
+name = "linear-trivial"
+created_at = "2026-05-02T00:00:00Z"
+
+[nodes.impl_1]
+id = "impl_1"
+
+[nodes.impl_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.impl_1.declared_outcomes]]
+id = "done"
+description = "Implementation complete"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.impl_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.impl_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.impl_1.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 200.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e1"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "impl_1"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"

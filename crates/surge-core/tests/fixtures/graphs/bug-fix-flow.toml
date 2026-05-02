@@ -1,0 +1,139 @@
+schema_version = 1
+start = "reproduce"
+
+[metadata]
+name = "bug-fix-flow"
+created_at = "2026-05-02T00:00:00Z"
+description = "Bug-fix archetype: reproduce -> implement -> regression -> end"
+
+# Node: reproduce the bug (write a failing test)
+[nodes.reproduce]
+id = "reproduce"
+
+[nodes.reproduce.position]
+x = 0.0
+y = 0.0
+
+[[nodes.reproduce.declared_outcomes]]
+id = "done"
+description = "Bug reproduced with failing test"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.reproduce.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.reproduce.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.reproduce.config.custom_fields]
+
+# Node: implement the fix
+[nodes.implement]
+id = "implement"
+
+[nodes.implement.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement.declared_outcomes]]
+id = "done"
+description = "Bug fixed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement.config.custom_fields]
+
+# Node: run regression tests
+[nodes.regression]
+id = "regression"
+
+[nodes.regression.position]
+x = 400.0
+y = 0.0
+
+[[nodes.regression.declared_outcomes]]
+id = "done"
+description = "Regression tests pass"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.regression.config]
+node_kind = "agent"
+profile = "qa-agent@1.0"
+bindings = []
+hooks = []
+
+[nodes.regression.config.limits]
+timeout_seconds = 600
+max_retries = 2
+max_tokens = 100000
+
+[nodes.regression.config.custom_fields]
+
+# Node: terminal success
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_repro_to_impl"
+to = "implement"
+kind = "forward"
+
+[edges.from]
+node = "reproduce"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_to_regress"
+to = "regression"
+kind = "forward"
+
+[edges.from]
+node = "implement"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_regress_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "regression"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"
