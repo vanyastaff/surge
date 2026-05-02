@@ -7,10 +7,12 @@ use std::sync::Arc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use surge_core::{RunId, VersionedEventPayload};
+use surge_core::{ContentHash, RunId, VersionedEventPayload};
 
 use crate::runs::error::StorageError;
+use crate::runs::reader_views as views;
 use crate::runs::seq::EventSeq;
+use crate::runs::types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
 
 /// Read-only handle on a per-run database.
 ///
@@ -133,6 +135,106 @@ impl RunReader {
                 });
             }
             Ok(out)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read all rows of the `stage_executions` materialized view.
+    pub async fn stage_executions(&self) -> Result<Vec<StageExecution>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::stage_executions(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read all rows of the `artifacts` materialized view.
+    pub async fn artifacts(&self) -> Result<Vec<ArtifactRecord>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::artifacts(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read all rows of the `pending_approvals` materialized view.
+    pub async fn pending_approvals(&self) -> Result<Vec<PendingApproval>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::pending_approvals(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Aggregate the `cost_summary` view into a single `CostSummary`.
+    pub async fn cost_summary(&self) -> Result<CostSummary, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::cost_summary(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// List the seqs of all written graph snapshots.
+    pub async fn list_snapshots(&self) -> Result<Vec<EventSeq>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::list_snapshots(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Find the most recent snapshot at or before `seq`, returning the seq and raw blob.
+    ///
+    /// The blob is the `serde_json` encoding of `RunState` (see M2 design §2.3).
+    /// Decoding is intentionally left to the caller because `surge_core::RunState`
+    /// does not yet implement `serde::Deserialize`; once it does, this method may
+    /// be tightened to return a decoded `RunState`.
+    pub async fn latest_snapshot_at_or_before(
+        &self,
+        seq: EventSeq,
+    ) -> Result<Option<(EventSeq, Vec<u8>)>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::latest_snapshot_at_or_before(&conn, seq)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read the bytes of an artifact stored by content hash.
+    ///
+    /// Looks up the stored file path in the `artifacts` table and reads the
+    /// file from `artifacts_dir`.
+    pub async fn read_artifact(
+        &self,
+        content_hash: &ContentHash,
+    ) -> Result<Vec<u8>, StorageError> {
+        let pool = self.pool.clone();
+        let dir = self.artifacts_dir.clone();
+        let hash_str = content_hash.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, StorageError> {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            let path: String = conn.query_row(
+                "SELECT path FROM artifacts WHERE content_hash = ? LIMIT 1",
+                params![hash_str],
+                |row| row.get(0),
+            )?;
+            let full = dir.join(path);
+            let bytes = std::fs::read(&full)?;
+            Ok(bytes)
         })
         .await
         .map_err(|e| StorageError::Pool(e.to_string()))?

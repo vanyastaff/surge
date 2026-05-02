@@ -13,6 +13,7 @@ pub mod migrations;
 pub mod pragmas;
 pub mod process;
 pub mod reader;
+mod reader_views;
 pub mod registry;
 pub mod seq;
 pub mod types;
