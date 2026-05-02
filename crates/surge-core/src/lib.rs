@@ -6,6 +6,7 @@
 // scope for M1 (pure addition strategy); allow at crate level instead.
 #![allow(clippy::items_after_test_module)]
 
+pub mod agent_config;
 pub mod approvals;
 pub mod branch_config;
 pub mod config;
