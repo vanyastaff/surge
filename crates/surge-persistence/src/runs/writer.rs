@@ -210,11 +210,98 @@ async fn handle_command(
             // every previously enqueued command has been processed and committed.
             let _ = reply.send(Ok(()));
         }
+        WriterCommand::StoreArtifact {
+            name,
+            content,
+            produced_by,
+            produced_at_seq,
+            reply,
+        } => {
+            use std::io::Write;
+
+            use rusqlite::OptionalExtension;
+            use surge_core::ContentHash;
+
+            let result = (|| -> Result<ArtifactRecord, WriterError> {
+                let dir = &cfg.artifacts_dir;
+                std::fs::create_dir_all(dir)?;
+
+                let target = dir.join(&name);
+                let parent = target.parent().unwrap_or(dir);
+
+                // ContentHash::compute is the M1 constructor for sha256-of-bytes;
+                // it lives in surge-core::content_hash and uses the workspace `sha2` dep.
+                let hash = ContentHash::compute(&content);
+                let size = content.len() as u64;
+
+                let tx = conn.transaction()?;
+
+                let exists: bool = tx
+                    .query_row(
+                        "SELECT 1 FROM artifacts WHERE id = ?",
+                        params![hash.to_string()],
+                        |_| Ok(true),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+
+                if exists {
+                    tracing::debug!(hash = %hash, "artifact dedup: skipping FS write");
+                    let row: (String, String) = tx.query_row(
+                        "SELECT path, name FROM artifacts WHERE id = ? LIMIT 1",
+                        params![hash.to_string()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )?;
+                    tx.commit()?;
+                    return Ok(ArtifactRecord {
+                        id: hash,
+                        produced_by_node: produced_by,
+                        produced_at_seq,
+                        name: row.1,
+                        path: dir.join(row.0),
+                        size_bytes: size,
+                        content_hash: hash,
+                    });
+                }
+
+                // Atomic write: tmp + rename.
+                let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+                tmp.as_file_mut().write_all(&content)?;
+                tmp.as_file_mut().sync_all()?;
+                tmp.persist(&target).map_err(|e| WriterError::Io(e.error))?;
+
+                let rel_path = name.clone();
+                tx.execute(
+                    "INSERT INTO artifacts (id, produced_by_node, produced_at_seq, name, path, size_bytes, content_hash)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        hash.to_string(),
+                        produced_by.as_ref().map(NodeKey::as_str),
+                        produced_at_seq.0 as i64,
+                        name,
+                        rel_path,
+                        size as i64,
+                        hash.to_string(),
+                    ],
+                )?;
+                tx.commit()?;
+
+                Ok(ArtifactRecord {
+                    id: hash,
+                    produced_by_node: produced_by,
+                    produced_at_seq,
+                    name,
+                    path: target,
+                    size_bytes: size,
+                    content_hash: hash,
+                })
+            })();
+            let _ = reply.send(result);
+        }
         WriterCommand::Shutdown { reply } => {
             let _ = reply.send(());
             return false;
         }
-        // StoreArtifact — Task 5.3
         // WriteSnapshot / RebuildViews — Task 5.4
         cmd => {
             // Stub: tell caller the command is not yet wired in this skeleton commit.
@@ -228,16 +315,17 @@ fn stub_reject(cmd: WriterCommand) {
     use WriterCommand::*;
     let err = || WriterError::Internal("command not yet implemented in skeleton".into());
     match cmd {
-        StoreArtifact { reply, .. } => {
-            let _ = reply.send(Err(err()));
-        }
         WriteSnapshot { reply, .. } => {
             let _ = reply.send(Err(err()));
         }
         RebuildViews { reply } => {
             let _ = reply.send(Err(err()));
         }
-        AppendEvent { .. } | AppendBatch { .. } | Flush { .. } | Shutdown { .. } => {
+        AppendEvent { .. }
+        | AppendBatch { .. }
+        | StoreArtifact { .. }
+        | Flush { .. }
+        | Shutdown { .. } => {
             unreachable!("handled in handle_command")
         }
     }
