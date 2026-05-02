@@ -24,6 +24,7 @@ pub mod roadmap;
 pub mod sandbox;
 pub mod spec;
 pub mod state;
+pub mod subgraph_config;
 pub mod terminal_config;
 
 pub use config::SurgeConfig;
