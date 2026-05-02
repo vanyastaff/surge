@@ -22,6 +22,7 @@ pub mod keys;
 pub mod loop_config;
 pub mod node;
 pub mod notify_config;
+pub mod profile;
 pub mod roadmap;
 pub mod sandbox;
 pub mod spec;
