@@ -53,3 +53,6 @@ pub mod command;
 pub use command::BridgeCommand;
 
 pub(crate) mod worker;
+
+pub mod acp_bridge;
+pub use acp_bridge::AcpBridge;
