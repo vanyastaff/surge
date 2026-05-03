@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use crate::bridge::acp_bridge::AcpBridge;
-use crate::bridge::error::{BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
+use crate::bridge::error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError};
+use crate::bridge::event::ToolResultPayload;
 use crate::bridge::event::BridgeEvent;
 use crate::bridge::session::{MessageContent, SessionConfig, SessionState};
 use surge_core::SessionId;
@@ -45,6 +46,16 @@ pub trait BridgeFacade: Send + Sync {
         &self,
         session: SessionId,
     ) -> Result<(), CloseSessionError>;
+
+    /// Reply to an outstanding tool call. M5 engine uses this to dispatch
+    /// non-injected tools and to deliver the human's answer to
+    /// `request_human_input` requests.
+    async fn reply_to_tool(
+        &self,
+        session: SessionId,
+        call_id: String,
+        payload: ToolResultPayload,
+    ) -> Result<(), ReplyToToolError>;
 
     /// Subscribe to the broadcast event stream. Each subscriber receives
     /// every event from every active session.
@@ -80,6 +91,15 @@ impl BridgeFacade for AcpBridge {
         session: SessionId,
     ) -> Result<(), CloseSessionError> {
         AcpBridge::close_session(self, session).await
+    }
+
+    async fn reply_to_tool(
+        &self,
+        session: SessionId,
+        call_id: String,
+        payload: ToolResultPayload,
+    ) -> Result<(), ReplyToToolError> {
+        AcpBridge::reply_to_tool(self, session, call_id, payload).await
     }
 
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {

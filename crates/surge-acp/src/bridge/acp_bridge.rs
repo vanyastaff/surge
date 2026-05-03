@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::warn;
 
 use super::command::BridgeCommand;
-use super::error::{BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
+use super::error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError};
 use super::event::BridgeEvent;
 use super::session::{MessageContent, SessionConfig, SessionState};
 use super::worker::bridge_loop;
@@ -148,6 +148,33 @@ impl AcpBridge {
             })?;
         rx.await
             .map_err(|_| CloseSessionError::Bridge(BridgeError::ReplyDropped))?
+    }
+
+    /// Send a reply to an outstanding tool call. Used by M5 engine to:
+    /// - Reply to dispatcher tool calls (`read_file`, `write_file`, `shell_exec`, …)
+    /// - Reply to `request_human_input` with the human's actual answer
+    /// - Reply to `report_stage_outcome` with `Ok` after persisting the outcome
+    ///
+    /// If the session has ended or the `call_id` is unknown, returns the
+    /// appropriate `ReplyToToolError` variant.
+    pub async fn reply_to_tool(
+        &self,
+        session: SessionId,
+        call_id: String,
+        payload: crate::bridge::event::ToolResultPayload,
+    ) -> Result<(), ReplyToToolError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::ReplyToTool {
+                session,
+                call_id,
+                payload,
+                reply: tx,
+            })
+            .await
+            .map_err(|e| ReplyToToolError::Bridge(BridgeError::CommandSendFailed(e.to_string())))?;
+        rx.await
+            .map_err(|_| ReplyToToolError::Bridge(BridgeError::ReplyDropped))?
     }
 
     /// Test-only: inject a panic into the worker thread to verify that
