@@ -4617,7 +4617,7 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
 Create `crates/surge-acp/tests/bridge_close_timeout.rs`:
 
 ```rust
-//! Integration test: close_session against a stuck mock returns
+//! Integration test: close_session against a stuck (frozen) mock returns
 //! GracefulTimedOut and emits SessionEnded::Timeout.
 
 use std::collections::BTreeMap;
@@ -4639,12 +4639,14 @@ async fn close_against_stuck_mock_times_out() {
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
-    // long_streaming runs for ~1s of streaming chunks. We close immediately
-    // and expect close to time out (with a tighter close-grace setting it
-    // would happen sooner; the default is 5s, so this test takes ~5s).
+    // The `frozen` scenario (added in Task 10.1 fixup) processes prompts
+    // normally but the binary never exits on stdin EOF — `std::future::pending()`
+    // blocks forever. The bridge's close_session_impl will hit its 5s grace
+    // timeout and emit SessionEnded::Timeout. M3 has no force-kill path, so
+    // killed=false (per Task 8.3 limitation).
     let cfg = SessionConfig {
         agent_kind: AgentKind::Mock {
-            args: vec!["--scenario".into(), "long_streaming".into()],
+            args: vec!["--scenario".into(), "frozen".into()],
         },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "x".into(),
@@ -4659,11 +4661,13 @@ async fn close_against_stuck_mock_times_out() {
     let sid = bridge.open_session(cfg).await.unwrap();
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
+    // close_session will block ~5s waiting for the frozen child to exit, then
+    // give up and return GracefulTimedOut { killed: false }.
     let close_result = bridge.close_session(sid.clone()).await;
     assert!(matches!(
         close_result,
-        Err(CloseSessionError::GracefulTimedOut { killed: true, .. })
-    ));
+        Err(CloseSessionError::GracefulTimedOut { killed: false, .. })
+    ), "got {close_result:?}");
 
     // SessionEnded::Timeout should follow.
     let mut saw_timeout = false;
