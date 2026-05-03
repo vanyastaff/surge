@@ -19,7 +19,7 @@ use agent_client_protocol::{
 };
 use surge_core::SessionId;
 use tokio::sync::{Mutex, broadcast};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::shared::path_guard::ensure_in_worktree;
 use crate::shared::secrets::SecretsRedactor;
@@ -48,6 +48,7 @@ pub(crate) struct BridgeClient {
     /// Secrets redactor applied to event payloads (not file contents).
     pub(crate) secrets: Arc<SecretsRedactor>,
     /// Key-value bindings (environment overrides / session metadata).
+    #[allow(dead_code)] // wired in Task 8.3 SessionEstablished emit
     pub(crate) bindings: BTreeMap<String, String>,
     /// Canonicalized worktree root used for path-guard checks.
     pub(crate) worktree_root: PathBuf,
@@ -136,15 +137,28 @@ impl Client for BridgeClient {
         &self,
         req: WriteTextFileRequest,
     ) -> AcpResult<WriteTextFileResponse> {
-        // SDK Error::invalid_params() takes no message arg (0.10.2 shape).
-        ensure_in_worktree(&self.worktree_root, &req.path)
-            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+        // SDK Error::invalid_params() takes no message arg (0.10.2 shape), so we
+        // log the underlying error before discarding it at the ACP boundary.
+        ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
+            warn!(
+                session = %self.session_id,
+                error = %e,
+                "path guard rejected file access in write_text_file",
+            );
+            agent_client_protocol::Error::invalid_params()
+        })?;
         // Redact secrets from the content before writing? No — content is what
         // the agent wants persisted. Redaction applies to *event payloads*, not
         // file contents.
-        tokio::fs::write(&req.path, &req.content)
-            .await
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+        tokio::fs::write(&req.path, &req.content).await.map_err(|e| {
+            warn!(
+                session = %self.session_id,
+                path = %req.path.display(),
+                error = %e,
+                "write_text_file IO failure",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
         Ok(WriteTextFileResponse::new())
     }
 
@@ -153,11 +167,23 @@ impl Client for BridgeClient {
         &self,
         req: ReadTextFileRequest,
     ) -> AcpResult<ReadTextFileResponse> {
-        ensure_in_worktree(&self.worktree_root, &req.path)
-            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
-        let content = tokio::fs::read_to_string(&req.path)
-            .await
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+        ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
+            warn!(
+                session = %self.session_id,
+                error = %e,
+                "path guard rejected file access in read_text_file",
+            );
+            agent_client_protocol::Error::invalid_params()
+        })?;
+        let content = tokio::fs::read_to_string(&req.path).await.map_err(|e| {
+            debug!(
+                session = %self.session_id,
+                path = %req.path.display(),
+                error = %e,
+                "read_text_file IO failure",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
         Ok(ReadTextFileResponse::new(content))
     }
 
@@ -184,7 +210,16 @@ impl Client for BridgeClient {
                 req.cwd.as_ref(),
                 req.output_byte_limit,
             )
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                warn!(
+                    session = %self.session_id,
+                    op = "create_terminal",
+                    command = %req.command,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
 
         Ok(CreateTerminalResponse::new(TerminalId::new(terminal_id)))
     }
@@ -195,10 +230,18 @@ impl Client for BridgeClient {
         req: TerminalOutputRequest,
     ) -> AcpResult<TerminalOutputResponse> {
         let id = req.terminal_id.0.as_ref();
-        let (output, truncated, exit_opt) =
-            terminal_get_output(&self.terminals, id)
-                .await
-                .map_err(|_| agent_client_protocol::Error::internal_error())?;
+        let (output, truncated, exit_opt) = terminal_get_output(&self.terminals, id)
+            .await
+            .map_err(|e| {
+                debug!(
+                    session = %self.session_id,
+                    op = "terminal_output",
+                    terminal_id = %id,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
 
         // Build exit status via builder (non_exhaustive struct).
         let exit_status = exit_opt.map(|s| {
@@ -218,7 +261,16 @@ impl Client for BridgeClient {
         let id = req.terminal_id.0.as_ref();
         let s = terminal_wait_for_exit(&self.terminals, id)
             .await
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                warn!(
+                    session = %self.session_id,
+                    op = "wait_for_terminal_exit",
+                    terminal_id = %id,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
 
         // Build response via constructors (non_exhaustive structs).
         let exit_status = TerminalExitStatus::new()
@@ -233,9 +285,16 @@ impl Client for BridgeClient {
         req: KillTerminalRequest,
     ) -> AcpResult<KillTerminalResponse> {
         let id = req.terminal_id.0.as_ref();
-        terminal_kill(&self.terminals, id)
-            .await
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+        terminal_kill(&self.terminals, id).await.map_err(|e| {
+            warn!(
+                session = %self.session_id,
+                op = "kill_terminal",
+                terminal_id = %id,
+                error = %e,
+                "terminal operation failed",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
         Ok(KillTerminalResponse::new())
     }
 
@@ -245,9 +304,16 @@ impl Client for BridgeClient {
         req: ReleaseTerminalRequest,
     ) -> AcpResult<ReleaseTerminalResponse> {
         let id = req.terminal_id.0.as_ref();
-        terminal_release(&self.terminals, id)
-            .await
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+        terminal_release(&self.terminals, id).await.map_err(|e| {
+            warn!(
+                session = %self.session_id,
+                op = "release_terminal",
+                terminal_id = %id,
+                error = %e,
+                "terminal operation failed",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
         Ok(ReleaseTerminalResponse::new())
     }
 
@@ -265,7 +331,7 @@ impl Client for BridgeClient {
             &self.session_id,
             &self.event_tx,
             &self.state,
-            &self.sandbox,
+            &*self.sandbox,
             &self.secrets,
             notif,
         )

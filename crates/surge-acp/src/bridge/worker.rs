@@ -90,12 +90,16 @@ pub(crate) async fn bridge_loop(
 /// usage) to `BridgeEvent` emissions. Phase 8.3 implements the real dispatch;
 /// Phase 7 ships a stub so `BridgeClient::session_notification` can compile
 /// and the wiring is verified.
+///
+/// `_sandbox` is taken as `&dyn Sandbox` rather than `&Box<dyn Sandbox>` so
+/// that strict clippy (`borrowed_box`) is happy and the call site can pass
+/// `&*self.sandbox`.
 #[allow(dead_code)] // wired in Task 8.3 with real dispatch logic
 pub(crate) async fn handle_session_notification(
     _session_id: &SessionId,
     _event_tx: &broadcast::Sender<BridgeEvent>,
     _state: &std::rc::Rc<std::cell::RefCell<super::session_inner::SessionStateInner>>,
-    _sandbox: &Box<dyn super::sandbox::Sandbox>,
+    _sandbox: &dyn super::sandbox::Sandbox,
     _secrets: &std::sync::Arc<crate::shared::secrets::SecretsRedactor>,
     _notif: agent_client_protocol::SessionNotification,
 ) {

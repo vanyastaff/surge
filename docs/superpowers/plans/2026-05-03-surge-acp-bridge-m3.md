@@ -2222,6 +2222,9 @@ use std::collections::HashMap;
 
 use crate::bridge::event::SessionEndReason;
 
+/// Per-session mutable state. Accessed via `Rc<RefCell<...>>` because every
+/// task touching it runs on the same LocalSet thread (no cross-thread sharing).
+#[allow(dead_code)] // wired in Task 8.1 open_session_impl + Task 8.3 handle_session_notification
 #[derive(Debug)]
 pub(crate) struct SessionStateInner {
     /// ACP-side session string (from the agent's response to `session/new`).
@@ -2249,11 +2252,18 @@ pub(crate) struct SessionStateInner {
 }
 
 impl SessionStateInner {
+    /// Create a new `SessionStateInner` for the given ACP session ID.
+    #[allow(dead_code)] // wired in Task 8.1 open_session_impl
     pub(crate) fn new(acp_session_id: String) -> Self {
         Self {
             acp_session_id,
             last_token_usage: None,
-            last_token_usage_emitted: true,
+            // `false` matches the initial state where there is nothing to emit.
+            // Phase 8.3 flush logic should be a no-op when `last_token_usage`
+            // is `None` regardless, but `false` here avoids a subtle inversion
+            // (a `true` initial value would suggest an emission has already
+            // happened, which is the opposite of reality on a fresh session).
+            last_token_usage_emitted: false,
             open_tool_calls: HashMap::new(),
             closing: false,
             end_emitted: None,
@@ -2261,6 +2271,8 @@ impl SessionStateInner {
     }
 }
 
+/// Cumulative token usage snapshot read from the most recent ACP update.
+#[allow(dead_code)] // wired in Task 8.3 token extraction
 #[derive(Debug, Clone)]
 pub(crate) struct TokenUsageSnapshot {
     pub prompt_tokens: u32,
@@ -2269,6 +2281,9 @@ pub(crate) struct TokenUsageSnapshot {
     pub model: String,
 }
 
+/// One pending tool call (engine-injected or otherwise) the agent has
+/// initiated and the bridge is awaiting a result for.
+#[allow(dead_code)] // wired in Task 8.3 tool dispatch
 #[derive(Debug, Clone)]
 pub(crate) struct OpenToolCall {
     pub tool_name: String,
@@ -2306,19 +2321,22 @@ use std::sync::Arc;
 use agent_client_protocol::{
     Client, CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest,
     ExtResponse, KillTerminalRequest, KillTerminalResponse, PermissionOptionId,
-    PermissionOptionKind, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
     ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, Result as AcpResult, SelectedPermissionOutcome, SessionNotification,
-    TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
+    TerminalExitStatus, TerminalId, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use surge_core::SessionId;
 use tokio::sync::{Mutex, broadcast};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::shared::path_guard::ensure_in_worktree;
 use crate::shared::secrets::SecretsRedactor;
-use crate::terminal::Terminals;
+use crate::terminal::{
+    Terminals, terminal_get_output, terminal_kill, terminal_release, terminal_wait_for_exit,
+};
 
 use super::event::BridgeEvent;
 use super::sandbox::{Sandbox, SandboxDecision};
@@ -2330,6 +2348,7 @@ pub(crate) struct BridgeClient {
     pub(crate) state: Rc<RefCell<SessionStateInner>>,
     pub(crate) sandbox: Box<dyn Sandbox>,
     pub(crate) secrets: Arc<SecretsRedactor>,
+    #[allow(dead_code)] // wired in Task 8.3 SessionEstablished emit
     pub(crate) bindings: BTreeMap<String, String>,
     pub(crate) worktree_root: PathBuf,
     pub(crate) terminals: Arc<Mutex<Terminals>>,
@@ -2412,16 +2431,31 @@ Append to `client.rs` (continuing the same `impl Client for BridgeClient { ... }
         &self,
         req: WriteTextFileRequest,
     ) -> AcpResult<WriteTextFileResponse> {
+        // SDK 0.10.2's `Error::invalid_params()` / `internal_error()` are 0-arg
+        // constructors, so we log the original error before discarding it at
+        // the ACP boundary — otherwise security-relevant info (path-guard
+        // rejection details, IO source) becomes invisible.
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
-            agent_client_protocol::Error::invalid_params(e.to_string())
+            tracing::warn!(
+                session = %self.session_id,
+                error = %e,
+                "path guard rejected file access in write_text_file",
+            );
+            agent_client_protocol::Error::invalid_params()
         })?;
         // Redact secrets from the content before writing? No — content is what
         // the agent wants persisted. Redaction applies to *event payloads*, not
         // file contents.
-        tokio::fs::write(&req.path, &req.content)
-            .await
-            .map_err(|e| agent_client_protocol::Error::internal_error(e.to_string()))?;
-        Ok(WriteTextFileResponse {})
+        tokio::fs::write(&req.path, &req.content).await.map_err(|e| {
+            tracing::warn!(
+                session = %self.session_id,
+                path = %req.path.display(),
+                error = %e,
+                "write_text_file IO failure",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
+        Ok(WriteTextFileResponse::new())
     }
 
     async fn read_text_file(
@@ -2429,12 +2463,25 @@ Append to `client.rs` (continuing the same `impl Client for BridgeClient { ... }
         req: ReadTextFileRequest,
     ) -> AcpResult<ReadTextFileResponse> {
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
-            agent_client_protocol::Error::invalid_params(e.to_string())
+            tracing::warn!(
+                session = %self.session_id,
+                error = %e,
+                "path guard rejected file access in read_text_file",
+            );
+            agent_client_protocol::Error::invalid_params()
         })?;
-        let content = tokio::fs::read_to_string(&req.path)
-            .await
-            .map_err(|e| agent_client_protocol::Error::internal_error(e.to_string()))?;
-        Ok(ReadTextFileResponse { content })
+        // `debug` rather than `warn` — read failures are routine (file may not
+        // exist). The path-guard rejection above is the security-relevant case.
+        let content = tokio::fs::read_to_string(&req.path).await.map_err(|e| {
+            tracing::debug!(
+                session = %self.session_id,
+                path = %req.path.display(),
+                error = %e,
+                "read_text_file IO failure",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
+        Ok(ReadTextFileResponse::new(content))
     }
 ```
 
@@ -2447,44 +2494,130 @@ Append to `client.rs`:
         &self,
         req: CreateTerminalRequest,
     ) -> AcpResult<CreateTerminalResponse> {
-        let mut terms = self.terminals.lock().await;
-        terms.create(req).await
+        // Legacy `Terminals` doesn't have an ACP-shaped `create` method —
+        // bridge directly to its `spawn` and convert `EnvVariable` → tuple.
+        let env: Vec<(String, String)> = req
+            .env
+            .iter()
+            .map(|e| (e.name.clone(), e.value.clone()))
+            .collect();
+
+        let terminal_id = self
+            .terminals
+            .lock()
+            .await
+            .spawn(
+                &req.command,
+                &req.args,
+                &env,
+                req.cwd.as_ref(),
+                req.output_byte_limit,
+            )
+            .map_err(|e| {
+                tracing::warn!(
+                    session = %self.session_id,
+                    op = "create_terminal",
+                    command = %req.command,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
+
+        Ok(CreateTerminalResponse::new(TerminalId::new(terminal_id)))
     }
 
     async fn terminal_output(
         &self,
         req: TerminalOutputRequest,
     ) -> AcpResult<TerminalOutputResponse> {
-        let mut terms = self.terminals.lock().await;
-        terms.output(req).await
+        let id = req.terminal_id.0.as_ref();
+        let (output, truncated, exit_opt) = terminal_get_output(&self.terminals, id)
+            .await
+            .map_err(|e| {
+                tracing::debug!(
+                    session = %self.session_id,
+                    op = "terminal_output",
+                    terminal_id = %id,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
+        // Build via builder (`TerminalExitStatus` and `TerminalOutputResponse`
+        // are `#[non_exhaustive]` so direct struct literals don't compile).
+        let exit_status = exit_opt.map(|s| {
+            TerminalExitStatus::new()
+                .exit_code(s.exit_code)
+                .signal(s.signal)
+        });
+        Ok(TerminalOutputResponse::new(output, truncated).exit_status(exit_status))
     }
 
     async fn wait_for_terminal_exit(
         &self,
         req: WaitForTerminalExitRequest,
     ) -> AcpResult<WaitForTerminalExitResponse> {
-        let mut terms = self.terminals.lock().await;
-        terms.wait_for_exit(req).await
+        let id = req.terminal_id.0.as_ref();
+        let s = terminal_wait_for_exit(&self.terminals, id)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    session = %self.session_id,
+                    op = "wait_for_terminal_exit",
+                    terminal_id = %id,
+                    error = %e,
+                    "terminal operation failed",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
+        let exit_status = TerminalExitStatus::new()
+            .exit_code(s.exit_code)
+            .signal(s.signal);
+        Ok(WaitForTerminalExitResponse::new(exit_status))
     }
 
     async fn kill_terminal(
         &self,
         req: KillTerminalRequest,
     ) -> AcpResult<KillTerminalResponse> {
-        let mut terms = self.terminals.lock().await;
-        terms.kill(req).await
+        let id = req.terminal_id.0.as_ref();
+        terminal_kill(&self.terminals, id).await.map_err(|e| {
+            tracing::warn!(
+                session = %self.session_id,
+                op = "kill_terminal",
+                terminal_id = %id,
+                error = %e,
+                "terminal operation failed",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
+        Ok(KillTerminalResponse::new())
     }
 
     async fn release_terminal(
         &self,
         req: ReleaseTerminalRequest,
     ) -> AcpResult<ReleaseTerminalResponse> {
-        let mut terms = self.terminals.lock().await;
-        terms.release(req).await
+        let id = req.terminal_id.0.as_ref();
+        terminal_release(&self.terminals, id).await.map_err(|e| {
+            tracing::warn!(
+                session = %self.session_id,
+                op = "release_terminal",
+                terminal_id = %id,
+                error = %e,
+                "terminal operation failed",
+            );
+            agent_client_protocol::Error::internal_error()
+        })?;
+        Ok(ReleaseTerminalResponse::new())
     }
 ```
 
-The `Terminals` impl in legacy `crate::terminal` already exposes these methods returning `AcpResult` — same shape as what `Client` expects. If signatures differ slightly (e.g. legacy uses different request types), wrap the conversion inline rather than refactoring legacy.
+**SDK shape pin (verified against `agent-client-protocol-schema-0.11.x`):**
+- Legacy `crate::terminal::Terminals` exposes only `spawn` (struct method) plus free functions `terminal_get_output`, `terminal_wait_for_exit`, `terminal_kill`, `terminal_release`. There is no ACP-shaped `terms.create(req).await`.
+- `TerminalExitStatus`, `TerminalOutputResponse`, `WaitForTerminalExitResponse`, and the various terminal request/response types are `#[non_exhaustive]` — use the builder methods (`::new()`, `.exit_status(...)`, `.exit_code(...)`, `.signal(...)`) shown above, not struct literals.
+- `Error::invalid_params()` / `Error::internal_error()` take 0 args. The `tracing::warn`/`debug` calls preserve context.
 
 - [ ] **Step 8: Implement notification + ext methods (mostly observers / passthroughs)**
 
@@ -2504,7 +2637,9 @@ Append to `client.rs`:
             &self.session_id,
             &self.event_tx,
             &self.state,
-            &self.sandbox,
+            // Pass `&dyn Sandbox` (deref the Box once) so the worker stub can
+            // accept `&dyn Sandbox` and stay clippy-clean (`borrowed_box`).
+            &*self.sandbox,
             &self.secrets,
             notif,
         )
@@ -2512,11 +2647,11 @@ Append to `client.rs`:
         Ok(())
     }
 
-    async fn ext_request(&self, _req: ExtRequest) -> AcpResult<ExtResponse> {
+    async fn ext_method(&self, _req: ExtRequest) -> AcpResult<ExtResponse> {
         // Ext methods are vendor extensions. Bridge does not implement any in M3.
-        Err(agent_client_protocol::Error::method_not_found(
-            "bridge: ext_request not supported",
-        ))
+        // Note: SDK 0.10.2 names the method `ext_method` (not `ext_request`),
+        // and `Error::method_not_found()` is a 0-arg constructor.
+        Err(agent_client_protocol::Error::method_not_found())
     }
 
     async fn ext_notification(&self, _notif: ExtNotification) -> AcpResult<()> {
@@ -2536,11 +2671,19 @@ use crate::bridge::session_inner::SessionStateInner;
 use crate::bridge::sandbox::Sandbox;
 use crate::shared::secrets::SecretsRedactor;
 
+/// Routes incoming `SessionNotification` (agent messages, tool calls, token
+/// usage) to `BridgeEvent` emissions. Phase 8.3 implements the real dispatch;
+/// Phase 7 ships a stub so `BridgeClient::session_notification` can compile.
+///
+/// `_sandbox` is taken as `&dyn Sandbox` rather than `&Box<dyn Sandbox>` so
+/// strict clippy (`borrowed_box`) is happy and the call site can pass
+/// `&*self.sandbox`.
+#[allow(dead_code)] // wired in Task 8.3 with real dispatch logic
 pub(crate) async fn handle_session_notification(
     _session_id: &SessionId,
     _event_tx: &broadcast::Sender<BridgeEvent>,
     _state: &Rc<RefCell<SessionStateInner>>,
-    _sandbox: &Box<dyn Sandbox>,
+    _sandbox: &dyn Sandbox,
     _secrets: &Arc<SecretsRedactor>,
     _notif: agent_client_protocol::SessionNotification,
 ) {
@@ -2592,26 +2735,28 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn request_permission_allow_returns_allow_option() {
-        let client = make_client();
-        let req = RequestPermissionRequest {
-            session_id: agent_client_protocol::SessionId(arc_str("sess")),
-            tool_call: agent_client_protocol::ToolCallUpdate {
-                id: agent_client_protocol::ToolCallId(arc_str("c1")),
-                fields: agent_client_protocol::ToolCallUpdateFields {
-                    title: Some("read_file".into()),
-                    ..Default::default()
-                },
-            },
-            options: vec![],
+        use agent_client_protocol::{
+            SessionId as AcpSessionId, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
         };
-        // The exact field shape of RequestPermissionRequest depends on the SDK
-        // version. If this doesn't compile, look at the SDK's struct definition
-        // and adapt — the test's intent is to verify the response branch.
-        let _ = client.request_permission(req).await;
-    }
 
-    fn arc_str(s: &str) -> std::sync::Arc<str> {
-        std::sync::Arc::from(s)
+        let client = make_client();
+        // SDK 0.10.2 marks `ToolCallUpdateFields` as `#[non_exhaustive]`, so
+        // direct struct literals won't compile — use the builder.
+        let req = RequestPermissionRequest::new(
+            AcpSessionId::new("sess"),
+            ToolCallUpdate::new(
+                ToolCallId::new("c1"),
+                ToolCallUpdateFields::new().title("read_file".to_string()),
+            ),
+            vec![],
+        );
+        let resp = client.request_permission(req).await.unwrap();
+        match resp.outcome {
+            RequestPermissionOutcome::Selected(s) => {
+                assert_eq!(s.option_id.0.as_ref(), "allow");
+            }
+            other => panic!("expected Selected(allow), got {other:?}"),
+        }
     }
 }
 ```
@@ -3181,7 +3326,7 @@ pub(crate) async fn handle_session_notification(
     session_id: &SessionId,
     event_tx: &broadcast::Sender<BridgeEvent>,
     state: &Rc<RefCell<SessionStateInner>>,
-    sandbox: &Box<dyn Sandbox>,
+    sandbox: &dyn Sandbox,
     secrets: &Arc<SecretsRedactor>,
     notif: agent_client_protocol::SessionNotification,
 ) {
@@ -3237,7 +3382,7 @@ async fn handle_tool_call(
     session_id: &SessionId,
     event_tx: &broadcast::Sender<BridgeEvent>,
     _state: &Rc<RefCell<SessionStateInner>>,
-    sandbox: &Box<dyn Sandbox>,
+    sandbox: &dyn Sandbox,
     secrets: &Arc<SecretsRedactor>,
     tool_call: agent_client_protocol::ToolCall,
 ) {

@@ -8,6 +8,7 @@ use crate::bridge::event::SessionEndReason;
 
 /// Per-session mutable state. Accessed via `Rc<RefCell<...>>` because every
 /// task touching it runs on the same LocalSet thread (no cross-thread sharing).
+#[allow(dead_code)] // wired in Task 8.1 open_session_impl + Task 8.3 handle_session_notification
 #[derive(Debug)]
 pub(crate) struct SessionStateInner {
     /// ACP-side session string (from the agent's response to `session/new`).
@@ -36,11 +37,17 @@ pub(crate) struct SessionStateInner {
 
 impl SessionStateInner {
     /// Create a new `SessionStateInner` for the given ACP session ID.
+    #[allow(dead_code)] // wired in Task 8.1 open_session_impl
     pub(crate) fn new(acp_session_id: String) -> Self {
         Self {
             acp_session_id,
             last_token_usage: None,
-            last_token_usage_emitted: true,
+            // `false` matches the initial state where there is nothing to emit.
+            // Phase 8.3 flush logic should be a no-op when `last_token_usage`
+            // is `None` regardless, but `false` here avoids a subtle inversion
+            // (a `true` initial value would suggest an emission has already
+            // happened, which is the opposite of reality on a fresh session).
+            last_token_usage_emitted: false,
             open_tool_calls: HashMap::new(),
             closing: false,
             end_emitted: None,
@@ -49,6 +56,7 @@ impl SessionStateInner {
 }
 
 /// Cumulative token usage snapshot read from the most recent ACP update.
+#[allow(dead_code)] // wired in Task 8.3 token extraction
 #[derive(Debug, Clone)]
 pub(crate) struct TokenUsageSnapshot {
     /// Number of prompt (input) tokens consumed.
@@ -63,6 +71,7 @@ pub(crate) struct TokenUsageSnapshot {
 
 /// One pending tool call (engine-injected or otherwise) the agent has
 /// initiated and the bridge is awaiting a result for.
+#[allow(dead_code)] // wired in Task 8.3 tool dispatch
 #[derive(Debug, Clone)]
 pub(crate) struct OpenToolCall {
     /// Human-readable tool name from the agent's tool call.
