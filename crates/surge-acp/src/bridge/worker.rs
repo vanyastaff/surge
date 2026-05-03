@@ -85,8 +85,9 @@ pub(crate) async fn bridge_loop(
                 let result = open_session_impl(&sessions, &event_tx, config).await;
                 let _ = reply.send(result);
             }
-            BridgeCommand::SendMessage { session, reply, .. } => {
-                let _ = reply.send(Err(super::error::SendMessageError::SessionNotFound { session }));
+            BridgeCommand::SendMessage { session, content, reply } => {
+                let result = send_message_impl(&sessions, session, content).await;
+                let _ = reply.send(result);
             }
             BridgeCommand::GetSessionState { session, reply } => {
                 // Phase 6 stub: returns the bridge-observable state if the session
@@ -106,7 +107,8 @@ pub(crate) async fn bridge_loop(
                 let _ = reply.send(state.ok_or(super::error::BridgeError::ReplyDropped));
             }
             BridgeCommand::CloseSession { session, reply } => {
-                let _ = reply.send(Err(super::error::CloseSessionError::SessionNotFound { session }));
+                let result = close_session_impl(&sessions, &event_tx, session).await;
+                let _ = reply.send(result);
             }
             BridgeCommand::Shutdown { reply } => {
                 close_all_sessions(&sessions, &event_tx, SessionEndReason::ForcedClose).await;
@@ -125,23 +127,178 @@ pub(crate) async fn bridge_loop(
 }
 
 /// Routes incoming `SessionNotification` (agent messages, tool calls, token
-/// usage) to `BridgeEvent` emissions. Phase 8.3 implements the real dispatch;
-/// Phase 7 ships a stub so `BridgeClient::session_notification` can compile
-/// and the wiring is verified.
+/// usage) to `BridgeEvent` emissions. Phase 8.3 implements the real dispatch.
 ///
 /// `_sandbox` is taken as `&dyn Sandbox` rather than `&Box<dyn Sandbox>` so
 /// that strict clippy (`borrowed_box`) is happy and the call site can pass
 /// `&*self.sandbox`.
-#[allow(dead_code)] // wired in Task 8.3 with real dispatch logic
 pub(crate) async fn handle_session_notification(
-    _session_id: &SessionId,
-    _event_tx: &broadcast::Sender<BridgeEvent>,
-    _state: &std::rc::Rc<std::cell::RefCell<super::session_inner::SessionStateInner>>,
-    _sandbox: &dyn super::sandbox::Sandbox,
-    _secrets: &std::sync::Arc<crate::shared::secrets::SecretsRedactor>,
-    _notif: agent_client_protocol::SessionNotification,
+    session_id: &SessionId,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    state: &Rc<RefCell<SessionStateInner>>,
+    sandbox: &dyn super::sandbox::Sandbox,
+    secrets: &Arc<crate::shared::secrets::SecretsRedactor>,
+    notif: agent_client_protocol::SessionNotification,
 ) {
-    // Phase 8.3 implements: routes SessionUpdate variants to BridgeEvent emission.
+    use agent_client_protocol::SessionUpdate;
+    use crate::bridge::tokens::extract_usage;
+    use crate::bridge::event::AgentMessageMeta;
+
+    // Update last_token_usage if this notification carries it.
+    if let Some(snap) = extract_usage(&notif.update) {
+        let snap_clone = snap.clone();
+        {
+            let mut s = state.borrow_mut();
+            s.last_token_usage = Some(snap);
+            s.last_token_usage_emitted = false;
+        }
+        let _ = event_tx.send(BridgeEvent::TokenUsage {
+            session: session_id.clone(),
+            prompt_tokens: snap_clone.prompt_tokens,
+            output_tokens: snap_clone.output_tokens,
+            cache_hits: snap_clone.cache_hits,
+            model: snap_clone.model,
+        });
+        state.borrow_mut().last_token_usage_emitted = true;
+    }
+
+    match notif.update {
+        // SDK 0.10.2 shape: AgentMessageChunk(ContentChunk) where ContentChunk
+        // has field `content: ContentBlock` (not a `{ content }` struct pattern).
+        SessionUpdate::AgentMessageChunk(chunk) => {
+            let text = content_block_to_string(&chunk.content);
+            let _ = event_tx.send(BridgeEvent::AgentMessage {
+                session: session_id.clone(),
+                chunk: text,
+                meta: Some(AgentMessageMeta {
+                    model: None,
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                }),
+            });
+        }
+        // SDK 0.10.2 shape: ToolCall(ToolCall) where ToolCall has:
+        //   - tool_call_id: ToolCallId  (not `.id`)
+        //   - title: String             (not `.fields.title`)
+        //   - raw_input: Option<serde_json::Value>
+        SessionUpdate::ToolCall(tool_call) => {
+            handle_tool_call(session_id, event_tx, state, sandbox, secrets, tool_call).await;
+        }
+        // Other variants (AgentThoughtChunk, ToolCallUpdate, Plan,
+        // AvailableCommandsUpdate, CurrentModeUpdate, ConfigOptionUpdate,
+        // SessionInfoUpdate, UsageUpdate) are deferred to Phase 10
+        // observability tests.
+        _ => {}
+    }
+}
+
+fn content_block_to_string(b: &agent_client_protocol::ContentBlock) -> String {
+    match b {
+        agent_client_protocol::ContentBlock::Text(t) => t.text.clone(),
+        _ => String::new(),
+    }
+}
+
+async fn handle_tool_call(
+    session_id: &SessionId,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    _state: &Rc<RefCell<SessionStateInner>>,
+    sandbox: &dyn super::sandbox::Sandbox,
+    secrets: &Arc<crate::shared::secrets::SecretsRedactor>,
+    tool_call: agent_client_protocol::ToolCall,
+) {
+    use crate::bridge::event::{ToolCallMeta, ToolResultPayload};
+    use crate::bridge::tools::{REPORT_STAGE_OUTCOME, REQUEST_HUMAN_INPUT};
+
+    // SDK 0.10.2 ToolCall shape:
+    //   tool_call_id: ToolCallId  (ToolCallId wraps Arc<str>)
+    //   title: String
+    //   raw_input: Option<serde_json::Value>
+    let tool_name = tool_call.title.clone();
+    let call_id = tool_call.tool_call_id.0.to_string();
+    let args_json = serde_json::to_string(&tool_call.raw_input.unwrap_or(serde_json::Value::Null))
+        .unwrap_or_default();
+    let args_redacted = secrets.redact_json(&args_json);
+
+    if tool_name == REPORT_STAGE_OUTCOME {
+        match parse_outcome_args(&args_json) {
+            Ok((outcome, summary, artifacts)) => {
+                let _ = event_tx.send(BridgeEvent::OutcomeReported {
+                    session: session_id.clone(),
+                    outcome,
+                    summary,
+                    artifacts_produced: artifacts,
+                });
+            }
+            Err(e) => {
+                let _ = event_tx.send(BridgeEvent::Error {
+                    session: Some(session_id.clone()),
+                    error: format!("report_stage_outcome args parse failed: {e}"),
+                });
+            }
+        }
+        return;
+    }
+
+    if tool_name == REQUEST_HUMAN_INPUT {
+        match parse_human_input_args(&args_json) {
+            Ok((question, context)) => {
+                let _ = event_tx.send(BridgeEvent::HumanInputRequested {
+                    session: session_id.clone(),
+                    call_id,
+                    question,
+                    context,
+                });
+            }
+            Err(e) => {
+                let _ = event_tx.send(BridgeEvent::Error {
+                    session: Some(session_id.clone()),
+                    error: format!("request_human_input args parse failed: {e}"),
+                });
+            }
+        }
+        return;
+    }
+
+    // Generic tool call — emit ToolCall + auto-reply Unsupported (M3 stub per spec §5.3).
+    let decision = sandbox.allows_tool(&tool_name, None);
+    let _ = event_tx.send(BridgeEvent::ToolCall {
+        session: session_id.clone(),
+        call_id: call_id.clone(),
+        tool: tool_name.clone(),
+        args_redacted_json: args_redacted,
+        sandbox_decision: decision,
+        meta: ToolCallMeta { mcp_id: None, injected: false },
+    });
+    let _ = event_tx.send(BridgeEvent::ToolResult {
+        session: session_id.clone(),
+        call_id,
+        payload: ToolResultPayload::Unsupported,
+    });
+}
+
+fn parse_outcome_args(
+    args_json: &str,
+) -> Result<(surge_core::OutcomeKey, String, Vec<String>), String> {
+    let v: serde_json::Value = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+    let outcome_str = v.get("outcome").and_then(|o| o.as_str())
+        .ok_or_else(|| "missing or non-string `outcome`".to_string())?;
+    let outcome = surge_core::OutcomeKey::try_from(outcome_str)
+        .map_err(|e| format!("invalid OutcomeKey '{outcome_str}': {e}"))?;
+    let summary = v.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let artifacts = v.get("artifacts_produced")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    Ok((outcome, summary, artifacts))
+}
+
+fn parse_human_input_args(args_json: &str) -> Result<(String, Option<String>), String> {
+    let v: serde_json::Value = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+    let question = v.get("question").and_then(|q| q.as_str())
+        .ok_or_else(|| "missing or non-string `question`".to_string())?
+        .to_string();
+    let context = v.get("context").and_then(|c| c.as_str()).map(String::from);
+    Ok((question, context))
 }
 
 /// Emit `SessionEnded` for every open session, abort their spawned tasks,
@@ -583,6 +740,143 @@ pub(crate) fn flush_pending_token_usage(
         });
         state.borrow_mut().last_token_usage_emitted = true;
     }
+}
+
+/// Send a message to an existing ACP session.
+///
+/// Borrows the session's `ClientSideConnection` from the map and calls
+/// `connection.prompt(request)`. The borrow is held across the `.await`
+/// but is safe because all mutations to the session map happen on the same
+/// LocalSet thread and are serialized through `bridge_loop`'s sequential
+/// command dispatch.
+pub(crate) async fn send_message_impl(
+    sessions: &SessionMap,
+    session: SessionId,
+    content: crate::bridge::session::MessageContent,
+) -> Result<(), super::error::SendMessageError> {
+    use crate::bridge::session::MessageContent;
+    use agent_client_protocol::Agent;
+
+    // Resolve acp_session_id and confirm connection is present.
+    let (connection_present, acp_session_str) = {
+        let map = sessions.borrow();
+        let s = map.get(&session).ok_or_else(|| super::error::SendMessageError::SessionNotFound {
+            session: session.clone(),
+        })?;
+        let acp_id = s.inner.borrow().acp_session_id.clone();
+        (s.connection.is_some(), acp_id)
+    };
+
+    if !connection_present {
+        // Session is closing — connection has been .take()n by close_session_impl.
+        return Err(super::error::SendMessageError::SessionEnded {
+            session: session.clone(),
+            reason: super::event::SessionEndReason::Normal,
+        });
+    }
+
+    let blocks = match content {
+        MessageContent::Text(s) => crate::shared::content_block::text_vec(s),
+        MessageContent::Blocks(b) => b,
+    };
+
+    // Build ACP-side session id from the stored string.
+    let acp_session_id =
+        agent_client_protocol::SessionId::new(acp_session_str.as_str());
+    let req = agent_client_protocol::PromptRequest::new(acp_session_id, blocks);
+
+    // Borrow the connection and call prompt. The RefCell borrow is held across
+    // the await — see function doc comment for why this is safe.
+    let map = sessions.borrow();
+    let session_entry = map.get(&session).ok_or_else(|| {
+        super::error::SendMessageError::SessionNotFound { session: session.clone() }
+    })?;
+    let connection = session_entry.connection.as_ref().ok_or_else(|| {
+        super::error::SendMessageError::SessionEnded {
+            session: session.clone(),
+            reason: super::event::SessionEndReason::Normal,
+        }
+    })?;
+
+    connection.prompt(req).await.map_err(|e| {
+        warn!(session = %session, error = %e, "ACP prompt dispatch failed");
+        super::error::SendMessageError::Bridge(
+            super::error::BridgeError::CommandSendFailed(e.to_string()),
+        )
+    })?;
+
+    Ok(())
+}
+
+/// Close an ACP session gracefully.
+///
+/// Takes the `ClientSideConnection` from the session entry (dropping it closes
+/// the outgoing channel → io_task drains → agent's stdin closes → agent should
+/// exit cleanly). Then waits up to `GRACE_MS` for the subprocess waiter to
+/// observe child exit. Times out with a kill if the agent doesn't exit in time.
+pub(crate) async fn close_session_impl(
+    sessions: &SessionMap,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    session: SessionId,
+) -> Result<(), super::error::CloseSessionError> {
+    use std::time::Duration;
+
+    // Take connection and mark closing. The RefCell borrow_mut is released
+    // before any await point (scoped block).
+    let (inner, took_connection) = {
+        let mut map = sessions.borrow_mut();
+        let s = map.get_mut(&session).ok_or_else(|| {
+            super::error::CloseSessionError::SessionNotFound { session: session.clone() }
+        })?;
+        // Mark closing so observer/notification handlers drain quickly.
+        s.inner.borrow_mut().closing = true;
+        // Take connection — dropping it closes outgoing_tx → io_task winds down →
+        // agent's stdin closes → agent should exit cleanly.
+        let conn = s.connection.take();
+        (s.inner.clone(), conn.is_some())
+    };
+
+    if !took_connection {
+        // Already closed/closing.
+        return Ok(());
+    }
+
+    // Flush pending TokenUsage before SessionEnded (spec §5.7 ordering).
+    flush_pending_token_usage(event_tx, &inner, &session);
+
+    // Bound the wait for the waiter task to observe child exit.
+    const GRACE_MS: u64 = 5_000;
+    let start = tokio::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(GRACE_MS) {
+        if inner.borrow().end_emitted.is_some() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Timeout: forcibly abort tasks and kill child, then emit Timeout.
+    let mut killed = false;
+    if let Some(mut s) = sessions.borrow_mut().remove(&session) {
+        for handle in s.task_handles.drain(..) {
+            handle.abort();
+        }
+        if let Some(io) = s.io_task_handle.take() {
+            io.abort();
+        }
+        if let Some(mut child) = s.child.take() {
+            let _ = child.start_kill();
+            killed = true;
+        }
+    }
+
+    let reason = super::event::SessionEndReason::Timeout { duration_ms: GRACE_MS };
+    let _ = event_tx.send(BridgeEvent::SessionEnded {
+        session: session.clone(),
+        reason: reason.clone(),
+    });
+    inner.borrow_mut().end_emitted = Some(reason);
+
+    Err(super::error::CloseSessionError::GracefulTimedOut { session, killed })
 }
 
 #[cfg(test)]

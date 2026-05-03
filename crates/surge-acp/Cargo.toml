@@ -19,6 +19,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 reqwest = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
+chrono = { workspace = true }
 
 # Process tracking
 [target.'cfg(unix)'.dependencies]
