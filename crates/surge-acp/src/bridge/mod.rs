@@ -51,3 +51,5 @@ pub use session::{AgentKind, MessageContent, SessionConfig, SessionState, Sessio
 
 pub mod command;
 pub use command::BridgeCommand;
+
+pub(crate) mod worker;
