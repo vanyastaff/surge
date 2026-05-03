@@ -51,31 +51,8 @@ pub mod event {
 pub mod sandbox;
 pub use sandbox::{AlwaysAllowSandbox, DenyListSandbox, Sandbox, SandboxDecision};
 
-pub mod tools {
-    use serde_json::Value;
-
-    #[derive(Debug, Clone)]
-    pub struct ToolDef {
-        pub name: String,
-        pub description: String,
-        pub category: ToolCategory,
-        pub input_schema: Value,
-    }
-
-    impl ToolDef {
-        pub fn new(name: impl Into<String>, description: impl Into<String>,
-                   category: ToolCategory, input_schema: Value) -> Self {
-            Self { name: name.into(), description: description.into(), category, input_schema }
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum ToolCategory {
-        Injected,
-        Mcp(String),
-        Builtin,
-    }
-}
+pub mod tools;
+pub use tools::{ToolCategory, ToolDef};
 
 pub mod session;
 pub use session::{AgentKind, MessageContent, SessionConfig, SessionState, SessionStatus};
