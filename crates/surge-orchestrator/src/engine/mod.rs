@@ -8,3 +8,5 @@
 pub mod predicates;
 pub mod sandbox_factory;
 pub mod tools;
+pub mod error;
+pub mod config;
