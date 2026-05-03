@@ -40,8 +40,10 @@ pub enum BridgeCommand {
         reply: oneshot::Sender<()>,
     },
     /// Test-only: inject a panic into the worker thread to exercise the
-    /// `WorkerDead` recovery path. Gated by `#[cfg(test)]` to keep production
-    /// builds clean.
-    #[cfg(test)]
+    /// `WorkerDead` recovery path. Gated by `#[cfg(any(test, feature = "test-helpers"))]`
+    /// to keep production builds clean while remaining accessible to integration
+    /// tests (which compile as a separate crate and don't trigger `cfg(test)` of
+    /// the parent crate).
+    #[cfg(any(test, feature = "test-helpers"))]
     TestPanic,
 }

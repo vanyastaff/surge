@@ -134,7 +134,7 @@ pub(crate) async fn bridge_loop(
                 info!("bridge worker shutting down");
                 return;
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-helpers"))]
             BridgeCommand::TestPanic => {
                 panic!("bridge worker test-panic injected");
             }

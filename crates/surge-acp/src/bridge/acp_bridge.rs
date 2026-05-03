@@ -153,6 +153,19 @@ impl AcpBridge {
             .map_err(|_| CloseSessionError::Bridge(BridgeError::ReplyDropped))?
     }
 
+    /// Test-only: inject a panic into the worker thread to verify that
+    /// subsequent commands fail with `BridgeError::CommandSendFailed` or
+    /// `ReplyDropped`. Gated by `#[cfg(any(test, feature = "test-helpers"))]`
+    /// so production builds cannot accidentally call it.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn __test_panic_now(&self) {
+        // Best-effort send; channel may already be closed.
+        let cmd_tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            let _ = cmd_tx.send(BridgeCommand::TestPanic).await;
+        });
+    }
+
     /// Drain pending commands and shut down the worker. Open sessions emit
     /// `SessionEnded { reason: ForcedClose }`. Joins the worker thread.
     /// Consumes self — call exactly once.

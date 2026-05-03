@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+## Exposes `AcpBridge::__test_panic_now` and `BridgeCommand::TestPanic` for
+## integration tests that compile as a separate crate (and therefore don't
+## trigger `cfg(test)` of this crate).  Never enable in production.
+test-helpers = []
+
 [dependencies]
 surge-core = { workspace = true }
 agent-client-protocol = { workspace = true }
@@ -37,3 +44,8 @@ insta = { workspace = true }
 name = "mock_acp_agent"
 path = "src/bin/mock_acp_agent.rs"
 required-features = []
+
+[[test]]
+name = "bridge_worker_panic"
+path = "tests/bridge_worker_panic.rs"
+required-features = ["test-helpers"]
