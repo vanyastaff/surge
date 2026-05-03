@@ -1199,6 +1199,9 @@ pub struct ToolDef {
 }
 
 impl ToolDef {
+    /// Construct a `ToolDef` with owned strings; useful for both production
+    /// builders and tests.
+    #[must_use]
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -1247,7 +1250,7 @@ pub const REQUEST_HUMAN_INPUT: &str = "request_human_input";
 /// non-empty (`SessionConfig::validate` already checks this).
 #[must_use]
 pub fn build_report_stage_outcome_tool(declared_outcomes: &[OutcomeKey]) -> ToolDef {
-    debug_assert!(
+    assert!(
         !declared_outcomes.is_empty(),
         "M3 contract: caller must check via SessionConfig::validate"
     );
@@ -1293,16 +1296,24 @@ pub fn build_request_human_input_tool() -> ToolDef {
             "type": "object",
             "required": ["question"],
             "properties": {
-                "question": { "type": "string" },
-                "context": { "type": "string" }
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the human. Be specific."
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context the human needs to answer well."
+                }
             }
         }),
     )
 }
 
-/// Compose the visible tool list for a session: caller's tools first, then
-/// engine-injected. Sandbox filtering is applied separately by the worker
-/// (see `bridge::worker::filter_visible_tools`).
+/// Build the engine-injected tools for a session: always
+/// `report_stage_outcome` and, when `allows_escalation` is true,
+/// `request_human_input`. The worker prepends these to the caller-supplied
+/// tool list during session open (see `bridge::worker::filter_visible_tools`,
+/// added in Phase 8.1).
 #[must_use]
 pub fn build_injected_tools(
     declared_outcomes: &[OutcomeKey],
