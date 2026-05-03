@@ -3139,6 +3139,12 @@ pub(crate) struct AcpSession {
 
     /// Per-session inner state (shared with BridgeClient via Rc<RefCell<...>>).
     pub inner: std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
+
+    /// Sender used by `close_session_impl` on grace-timeout to instruct
+    /// `subprocess_waiter` to forcibly SIGKILL the child. `None` once the
+    /// kill has been requested or `subprocess_waiter` exits first.
+    /// (Added in bug-fix commit: M3(acp): force-kill on close timeout.)
+    pub kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 ```
 
@@ -3199,7 +3205,8 @@ fn read_stderr_tail(tail_storage: &std::rc::Rc<std::cell::RefCell<Vec<u8>>>) -> 
 
 - [x] **Step 3: Add the subprocess waiter helper**
 
-Append to `worker.rs`:
+Append to `worker.rs`. Note: signature includes `kill_rx` (added in bug-fix
+commit: M3(acp): force-kill on close timeout — the original plan omitted this):
 
 ```rust
 async fn subprocess_waiter(
@@ -3209,8 +3216,16 @@ async fn subprocess_waiter(
     session_id: SessionId,
     tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
     sessions: SessionMap,
+    mut kill_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let exit_status = child.wait().await;
+    let (exit_status, force_killed) = tokio::select! {
+        status = child.wait() => (status, false),
+        _ = &mut kill_rx => {
+            let _ = child.start_kill();
+            (child.wait().await, true)
+        }
+    };
+    // If force_killed, emit Timeout instead of AgentCrashed.
 
     {
         let s = state.borrow();
@@ -3285,6 +3300,9 @@ Replace the old `sessions.borrow_mut().insert(...)` block and `let _ = (stderr, 
         session_id.clone(),
     ));
 
+    // kill channel: close_session_impl sends on timeout; subprocess_waiter kills child.
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+
     let waiter_handle = tokio::task::spawn_local(subprocess_waiter(
         child,
         event_tx.clone(),
@@ -3292,6 +3310,7 @@ Replace the old `sessions.borrow_mut().insert(...)` block and `let _ = (stderr, 
         session_id.clone(),
         tail_storage.clone(),
         sessions.clone(),
+        kill_rx,
     ));
 
     // Insert the session — connection and io_task_handle go IN, not into a
@@ -3306,6 +3325,7 @@ Replace the old `sessions.borrow_mut().insert(...)` block and `let _ = (stderr, 
             child: None, // moved into subprocess_waiter
             task_handles: vec![drainer_handle, waiter_handle],
             inner: inner.clone(),
+            kill_tx: Some(kill_tx), // bug-fix addition
         },
     );
 
@@ -3701,27 +3721,36 @@ pub(crate) async fn close_session_impl(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // Timeout: forcibly remove from sessions; emit SessionEnded::Timeout.
-    // Note: the agent subprocess child handle was moved into `subprocess_waiter`
-    // at session-open time, so we cannot send SIGKILL from here in M3 —
-    // `start_kill()` would be a no-op (child is None on AcpSession). The
-    // waiter's `child.wait().await` will resolve naturally when the agent
-    // eventually exits (or the OS reaps it when the bridge worker thread
-    // exits). Phase 11 may add PID-tracking + a platform-specific kill if
-    // Phase 10 testing shows orphaned processes accumulating.
+    // Timeout: send kill_tx so subprocess_waiter force-kills the child.
+    // (Bug-fix: M3(acp): force-kill on close timeout. The original plan had
+    // killed: false here with no kill path. The fix adds kill_tx to AcpSession
+    // and subprocess_waiter listens on kill_rx to SIGKILL the child, then emits
+    // SessionEnded::Timeout. close_session_impl polls end_emitted for 1s after
+    // sending kill, then falls back to a direct emit if waiter hasn't reacted.)
+    let mut killed = false;
+    if let Some(s) = sessions.borrow_mut().get_mut(&session) {
+        if let Some(kill_tx) = s.kill_tx.take() {
+            if kill_tx.send(()).is_ok() {
+                killed = true;
+            }
+        }
+    }
+    // Poll 1s for waiter to emit SessionEnded after kill.
+    let post_kill_deadline = tokio::time::Instant::now() + Duration::from_millis(1000);
+    while tokio::time::Instant::now() < post_kill_deadline {
+        if inner.borrow().end_emitted.is_some() {
+            return Err(super::error::CloseSessionError::GracefulTimedOut { session, killed });
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Fallback: waiter wedged. Force-remove and emit Timeout ourselves.
     sessions.borrow_mut().remove(&session);
     let _ = event_tx.send(BridgeEvent::SessionEnded {
         session: session.clone(),
         reason: SessionEndReason::Timeout { duration_ms: GRACE_MS },
     });
-    // Set after send so the broadcast slot is taken before any racing waiter
-    // could observe the end_emitted flag. Safe in current single-threaded
-    // LocalSet (no .await between send and this assignment).
     inner.borrow_mut().end_emitted = Some(SessionEndReason::Timeout { duration_ms: GRACE_MS });
-    Err(super::error::CloseSessionError::GracefulTimedOut {
-        session,
-        killed: false, // see comment above — kill path is M3 limitation
-    })
+    Err(super::error::CloseSessionError::GracefulTimedOut { session, killed })
 }
 ```
 
@@ -4618,7 +4647,10 @@ Create `crates/surge-acp/tests/bridge_close_timeout.rs`:
 
 ```rust
 //! Integration test: close_session against a stuck (frozen) mock returns
-//! GracefulTimedOut and emits SessionEnded::Timeout.
+//! GracefulTimedOut { killed: true } and emits SessionEnded::Timeout.
+//!
+//! Hard 30s outer timeout guards against regressions in the kill_tx mechanism.
+//! (Updated in bug-fix: M3(acp): force-kill on close timeout.)
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -4635,15 +4667,20 @@ use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_against_stuck_mock_times_out() {
+    // Hard outer timeout — if kill_tx mechanism is broken, fail in 30s not hours.
+    timeout(Duration::from_secs(30), inner_test())
+        .await
+        .expect("test exceeded 30s — kill_tx mechanism is likely broken");
+}
+
+async fn inner_test() {
     let wt = TempDir::new().unwrap();
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
-    // The `frozen` scenario (added in Task 10.1 fixup) processes prompts
-    // normally but the binary never exits on stdin EOF — `std::future::pending()`
-    // blocks forever. The bridge's close_session_impl will hit its 5s grace
-    // timeout and emit SessionEnded::Timeout. M3 has no force-kill path, so
-    // killed=false (per Task 8.3 limitation).
+    // The `frozen` scenario blocks forever on stdin EOF. close_session_impl hits
+    // the 5s grace timeout, sends kill_tx → subprocess_waiter kills the child
+    // and emits SessionEnded::Timeout → returns GracefulTimedOut { killed: true }.
     let cfg = SessionConfig {
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "frozen".into()],
@@ -4661,15 +4698,16 @@ async fn close_against_stuck_mock_times_out() {
     let sid = bridge.open_session(cfg).await.unwrap();
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
-    // close_session will block ~5s waiting for the frozen child to exit, then
-    // give up and return GracefulTimedOut { killed: false }.
     let close_result = bridge.close_session(sid.clone()).await;
-    assert!(matches!(
-        close_result,
-        Err(CloseSessionError::GracefulTimedOut { killed: false, .. })
-    ), "got {close_result:?}");
+    assert!(
+        matches!(
+            close_result,
+            Err(CloseSessionError::GracefulTimedOut { killed: true, .. })
+        ),
+        "got {close_result:?}"
+    );
 
-    // SessionEnded::Timeout should follow.
+    // SessionEnded::Timeout should have been emitted (by subprocess_waiter).
     let mut saw_timeout = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {

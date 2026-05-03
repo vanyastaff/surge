@@ -66,6 +66,18 @@ pub(crate) struct AcpSession {
 
     /// Per-session inner state (shared with BridgeClient via Rc<RefCell<...>>).
     pub inner: std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
+
+    /// Sender used by `close_session_impl` on grace-timeout to instruct
+    /// `subprocess_waiter` to forcibly SIGKILL the child process.
+    ///
+    /// **Lifecycle:** created in `open_session_impl`, stored here as `Some`.
+    /// `close_session_impl` calls `.take()` on timeout and sends `()` to
+    /// trigger the kill. `subprocess_waiter` may also consume the receiver
+    /// side (via `kill_rx`) when it exits normally; in that case the sender
+    /// drops and any subsequent `close_session_impl` send would return `Err`
+    /// (harmless — the child is already gone). Set to `None` after the kill
+    /// has been requested or `subprocess_waiter` exits first.
+    pub kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 #[allow(dead_code)] // wired in Task 7.1 via AcpSession construction
@@ -323,11 +335,16 @@ pub(crate) async fn close_all_sessions(
     for sid in to_close {
         let session = sessions.borrow_mut().remove(&sid);
         if let Some(mut s) = session {
-            // Wind down in this order: abort the spawned helper tasks (drainer + waiter
-            // won't observe the connection drop), then abort the SDK's io_task pump
-            // (belt-and-suspenders — dropping `connection` would terminate it naturally),
-            // then drop `connection` (the load-bearing protocol-close trigger), then
-            // best-effort SIGKILL the child if the waiter didn't already consume it.
+            // Wind down in this order:
+            // 1. Send kill signal so subprocess_waiter can SIGKILL the child cleanly
+            //    before we abort it (belt-and-suspenders alongside child.take below).
+            // 2. Abort the spawned helper tasks (drainer + waiter won't observe drop).
+            // 3. Abort the SDK's io_task pump (drops stdin write end → agent sees EOF).
+            // 4. Drop `connection` (protocol-close trigger).
+            // 5. Best-effort SIGKILL the child if the waiter didn't already consume it.
+            if let Some(kill_tx) = s.kill_tx.take() {
+                let _ = kill_tx.send(());
+            }
             for handle in s.task_handles.drain(..) {
                 handle.abort();
             }
@@ -580,6 +597,12 @@ pub(crate) async fn open_session_impl(
         session_id.clone(),
     ));
 
+    // Create the kill channel: close_session_impl sends on kill_tx when the
+    // grace timeout fires; subprocess_waiter listens on kill_rx and SIGKILL the
+    // child, then awaits its actual exit so the OS fully reaps it. This avoids
+    // the "Drop doesn't kill" footgun with tokio::process::Child.
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+
     let waiter_handle = tokio::task::spawn_local(subprocess_waiter(
         child,
         event_tx.clone(),
@@ -587,6 +610,7 @@ pub(crate) async fn open_session_impl(
         session_id.clone(),
         tail_storage.clone(),
         sessions.clone(),
+        kill_rx,
     ));
 
     // Insert the session — connection and io_task_handle go IN, not into a
@@ -601,6 +625,7 @@ pub(crate) async fn open_session_impl(
             child: None, // moved into subprocess_waiter
             task_handles: vec![drainer_handle, waiter_handle],
             inner: inner.clone(),
+            kill_tx: Some(kill_tx),
         },
     );
 
@@ -632,6 +657,11 @@ fn filter_visible_tools(
 
 const STDERR_RING_CAP: usize = 8 * 1024;
 const STDERR_TAIL_CAP: usize = 2 * 1024;
+
+/// Grace period (ms) that `close_session_impl` waits for the agent to exit
+/// cleanly after the stdin pipe is closed. After this window the kill_tx
+/// signal fires and `subprocess_waiter` force-kills the child.
+pub(crate) const GRACE_MS: u64 = 5_000;
 
 /// Continuously read stderr into a bounded ring buffer; on session end the
 /// last `STDERR_TAIL_CAP` bytes are returned for inclusion in
@@ -683,6 +713,11 @@ fn read_stderr_tail(tail_storage: &std::rc::Rc<std::cell::RefCell<Vec<u8>>>) -> 
 /// - Otherwise flush any pending TokenUsage (spec §5.7 ordering) then emit
 ///   `SessionEnded` with the appropriate reason (`Normal` for clean exit;
 ///   `AgentCrashed` with exit_code + stderr_tail for non-zero / signal exits).
+///
+/// The `kill_rx` channel allows `close_session_impl` to request a force-kill
+/// when the grace timeout expires: it sends `()` and this function calls
+/// `child.start_kill()` then waits for the child to actually exit, so the
+/// session is always cleaned up promptly even for frozen/hung agents.
 async fn subprocess_waiter(
     mut child: tokio::process::Child,
     event_tx: tokio::sync::broadcast::Sender<BridgeEvent>,
@@ -690,8 +725,22 @@ async fn subprocess_waiter(
     session_id: SessionId,
     tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
     sessions: SessionMap,
+    mut kill_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let exit_status = child.wait().await;
+    // `force_killed` is set to true when kill_rx fires, so that subprocess_waiter
+    // can emit SessionEnded::Timeout rather than AgentCrashed — from the bridge's
+    // perspective a grace-timeout kill is a timeout event, not a crash.
+    let (exit_status, force_killed) = tokio::select! {
+        // Normal path: child exits on its own (e.g. clean ACP shutdown via EOF).
+        status = child.wait() => (status, false),
+        // Forced-kill path: close_session_impl hit the grace timeout and sent
+        // the kill signal. `start_kill` is synchronous and non-blocking; we
+        // then await the child's actual exit so the OS fully reaps it.
+        _ = &mut kill_rx => {
+            let _ = child.start_kill();
+            (child.wait().await, true)
+        }
+    };
 
     {
         let s = state.borrow();
@@ -703,16 +752,24 @@ async fn subprocess_waiter(
     flush_pending_token_usage(&event_tx, &state, &session_id);
 
     let stderr_tail = read_stderr_tail(&tail_storage);
-    let reason = match exit_status {
-        Ok(s) if s.success() => SessionEndReason::Normal,
-        Ok(s) => SessionEndReason::AgentCrashed {
-            exit_code: s.code(),
-            stderr_tail,
-        },
-        Err(_) => SessionEndReason::AgentCrashed {
-            exit_code: None,
-            stderr_tail,
-        },
+    // If force_killed (close_session sent the kill signal), emit Timeout rather
+    // than AgentCrashed: the agent didn't crash, it was killed due to a grace
+    // timeout. close_session_impl polls end_emitted and returns GracefulTimedOut
+    // once this fires.
+    let reason = if force_killed {
+        SessionEndReason::Timeout { duration_ms: GRACE_MS }
+    } else {
+        match exit_status {
+            Ok(s) if s.success() => SessionEndReason::Normal,
+            Ok(s) => SessionEndReason::AgentCrashed {
+                exit_code: s.code(),
+                stderr_tail,
+            },
+            Err(_) => SessionEndReason::AgentCrashed {
+                exit_code: None,
+                stderr_tail,
+            },
+        }
     };
 
     let _ = event_tx.send(BridgeEvent::SessionEnded {
@@ -835,9 +892,11 @@ pub(crate) async fn send_message_impl(
 /// stdin write end → mock sees EOF → exits status 0 → `subprocess_waiter`
 /// emits `SessionEnded::Normal` within ~100ms.
 ///
-/// On grace-timeout (mock ignores EOF or hangs), removes the session, aborts
-/// remaining tasks, emits `SessionEnded::Timeout`, returns `GracefulTimedOut`
-/// (M3 has no force-kill path — see comment in timeout block).
+/// On grace-timeout (agent ignores EOF or hangs), sends `kill_tx` so
+/// `subprocess_waiter` force-kills the child, then waits up to 1s for
+/// the waiter to emit `SessionEnded`. If the waiter still hasn't reacted
+/// (very rare), forcibly removes the session, aborts tasks, and emits
+/// `SessionEnded::Timeout` directly. Returns `GracefulTimedOut { killed: true }`.
 pub(crate) async fn close_session_impl(
     sessions: &SessionMap,
     event_tx: &broadcast::Sender<BridgeEvent>,
@@ -889,7 +948,6 @@ pub(crate) async fn close_session_impl(
     flush_pending_token_usage(event_tx, &inner, &session);
 
     // Bound the wait for the waiter task to observe child exit.
-    const GRACE_MS: u64 = 5_000;
     let start = tokio::time::Instant::now();
     while start.elapsed() < Duration::from_millis(GRACE_MS) {
         if inner.borrow().end_emitted.is_some() {
@@ -898,14 +956,37 @@ pub(crate) async fn close_session_impl(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // Timeout: forcibly remove session entry and abort tasks. Note: the agent
-    // subprocess child handle was moved into `subprocess_waiter` at session-open
-    // time, so we cannot send SIGKILL from here in M3 — `start_kill()` would be
-    // a no-op (child is None on AcpSession). The waiter's `child.wait().await`
-    // will resolve naturally when the agent eventually exits (or the OS reaps it
-    // when the bridge worker thread exits). Phase 11 may add PID-tracking + a
-    // platform-specific kill if Phase 10 testing shows orphaned processes
-    // accumulating.
+    // Timeout: send the kill signal to subprocess_waiter so it can call
+    // start_kill() and wait for the child to actually exit. The child handle
+    // was moved into subprocess_waiter at session-open time, so close_session
+    // cannot call start_kill() directly — the kill_tx channel is the correct
+    // indirection. subprocess_waiter will call start_kill(), await child.wait(),
+    // emit SessionEnded, and remove the session from the map.
+    let mut killed = false;
+    if let Some(s) = sessions.borrow_mut().get_mut(&session) {
+        if let Some(kill_tx) = s.kill_tx.take() {
+            if kill_tx.send(()).is_ok() {
+                killed = true;
+            }
+        }
+    }
+
+    // Short-wait for subprocess_waiter to react (it emits SessionEnded once the
+    // child is dead). On a well-functioning system this resolves within tens of ms.
+    let post_kill_deadline = tokio::time::Instant::now() + Duration::from_millis(1000);
+    while tokio::time::Instant::now() < post_kill_deadline {
+        if inner.borrow().end_emitted.is_some() {
+            // Waiter already emitted SessionEnded; we're done.
+            return Err(super::error::CloseSessionError::GracefulTimedOut {
+                session,
+                killed,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Waiter still hasn't reacted (very rare — kill_tx send failed AND waiter is
+    // wedged). Force-remove and emit Timeout ourselves as a last resort.
     if let Some(mut s) = sessions.borrow_mut().remove(&session) {
         for handle in s.task_handles.drain(..) {
             handle.abort();
@@ -927,7 +1008,7 @@ pub(crate) async fn close_session_impl(
 
     Err(super::error::CloseSessionError::GracefulTimedOut {
         session,
-        killed: false, // see comment above — kill path is M3 limitation
+        killed,
     })
 }
 

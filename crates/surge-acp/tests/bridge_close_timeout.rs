@@ -1,5 +1,8 @@
 //! Integration test: close_session against a stuck (frozen) mock returns
 //! GracefulTimedOut and emits SessionEnded::Timeout.
+//!
+//! The test has a hard 30-second outer timeout so that any regression in the
+//! kill_tx mechanism causes a fast, clear failure rather than hanging CI.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -16,15 +19,23 @@ use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_against_stuck_mock_times_out() {
+    // Hard outer timeout — if close_session_impl + the kill_tx mechanism is
+    // broken, this fires in 30s instead of hanging CI for hours.
+    timeout(Duration::from_secs(30), inner_test())
+        .await
+        .expect("test exceeded 30s — kill_tx mechanism is likely broken");
+}
+
+async fn inner_test() {
     let wt = TempDir::new().unwrap();
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
-    // The `frozen` scenario (added in Task 10.1 fixup) processes prompts
-    // normally but the binary never exits on stdin EOF — `std::future::pending()`
-    // blocks forever. The bridge's close_session_impl will hit its 5s grace
-    // timeout and emit SessionEnded::Timeout. M3 has no force-kill path, so
-    // killed=false (per Task 8.3 limitation).
+    // The `frozen` scenario processes the ACP handshake normally but the binary
+    // never exits on stdin EOF — it blocks forever. close_session_impl hits its
+    // 5s grace timeout, sends kill_tx to subprocess_waiter, which force-kills
+    // the child and emits SessionEnded::Timeout. The result is
+    // GracefulTimedOut { killed: true }.
     let cfg = SessionConfig {
         agent_kind: AgentKind::Mock {
             args: vec!["--scenario".into(), "frozen".into()],
@@ -43,14 +54,18 @@ async fn close_against_stuck_mock_times_out() {
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
     // close_session will block ~5s waiting for the frozen child to exit, then
-    // give up and return GracefulTimedOut { killed: false }.
+    // send kill_tx → subprocess_waiter kills the child → GracefulTimedOut { killed: true }.
     let close_result = bridge.close_session(sid.clone()).await;
-    assert!(matches!(
-        close_result,
-        Err(CloseSessionError::GracefulTimedOut { killed: false, .. })
-    ), "got {close_result:?}");
+    assert!(
+        matches!(
+            close_result,
+            Err(CloseSessionError::GracefulTimedOut { killed: true, .. })
+        ),
+        "got {close_result:?}"
+    );
 
-    // SessionEnded::Timeout should follow.
+    // SessionEnded::Timeout should have been emitted (by subprocess_waiter or
+    // close_session_impl's fallback path).
     let mut saw_timeout = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
