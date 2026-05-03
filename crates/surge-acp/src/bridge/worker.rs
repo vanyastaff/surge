@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -27,13 +27,15 @@ use super::tools::{ToolDef, build_injected_tools};
 use crate::bridge::client::BridgeClient;
 use crate::shared::secrets::SecretsRedactor;
 
-/// Per-session state held by the worker. Filled in by Phase 7.
+/// Per-session state held by the worker. Phase 6.1 ships the minimal shape;
+/// Phase 8.1 starts inserting; Phase 8.2 expands with `child`, `connection`,
+/// `inner`, and task handles for the waiter / stderr drainer / io pump.
 #[allow(dead_code)] // wired in Task 7.1 via open_session_impl
 pub(crate) struct AcpSession {
     pub session_id: SessionId,
     pub agent_label: String,
     // ACP-side connection, child handle, observer/waiter task handles, etc.
-    // are added in Phase 7.
+    // are added in Phase 8.2.
 }
 
 #[allow(dead_code)] // wired in Task 7.1 via AcpSession construction
@@ -142,7 +144,7 @@ pub(crate) async fn close_all_sessions(
 /// `Mock` short-circuits to `CARGO_BIN_EXE_mock_acp_agent` (set by Cargo
 /// during `cargo test`); falls back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`
 /// for non-test invocations.
-fn build_agent_command(kind: &AgentKind, working_dir: &PathBuf) -> Result<Command, std::io::Error> {
+fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, std::io::Error> {
     let mut cmd = match kind {
         AgentKind::ClaudeCode { binary, extra_args } => {
             let mut c = Command::new(binary);
@@ -290,7 +292,10 @@ pub(crate) async fn open_session_impl(
         });
 
     // Drive the io_task in the background (same pattern as legacy connection.rs).
-    tokio::task::spawn_local(async move {
+    // We capture the JoinHandle so Phase 8.2 can move it into `AcpSession` for
+    // proper shutdown coordination (currently dropped at function end with the
+    // rest of the handshake leftovers — see the `let _ = (...)` block below).
+    let io_task_handle = tokio::task::spawn_local(async move {
         if let Err(e) = io_task.await {
             tracing::error!("ACP IO task failed: {:?}", e);
         }
@@ -302,28 +307,40 @@ pub(crate) async fn open_session_impl(
     init_request.client_info =
         Some(Implementation::new("surge-bridge", env!("CARGO_PKG_VERSION")));
 
-    let init_resp = connection.initialize(init_request).await.map_err(|e| {
-        warn!(
-            session = %session_id,
-            error = ?e,
-            "ACP initialize handshake failed"
-        );
-        OpenSessionError::HandshakeFailed { reason: format!("{e:?}") }
-    })?;
+    let init_resp = match connection.initialize(init_request).await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(
+                session = %session_id,
+                error = ?e,
+                "ACP initialize handshake failed"
+            );
+            // Best-effort SIGKILL so the orphaned subprocess doesn't become a
+            // zombie. tokio::process::Child's implicit Drop on Unix detaches
+            // rather than killing — match the legacy AgentConnection::Drop
+            // pattern (start_kill is synchronous, no await needed).
+            let _ = child.start_kill();
+            return Err(OpenSessionError::HandshakeFailed { reason: format!("{e:?}") });
+        }
+    };
 
     // new_session — create an ACP session scoped to the working directory.
-    let new_resp = connection
+    let new_resp = match connection
         .new_session(NewSessionRequest::new(&config.working_dir))
         .await
-        .map_err(|e| {
+    {
+        Ok(r) => r,
+        Err(e) => {
             warn!(
                 session = %session_id,
                 working_dir = %config.working_dir.display(),
                 error = ?e,
                 "ACP new_session handshake failed"
             );
-            OpenSessionError::HandshakeFailed { reason: format!("{e:?}") }
-        })?;
+            let _ = child.start_kill();
+            return Err(OpenSessionError::HandshakeFailed { reason: format!("{e:?}") });
+        }
+    };
 
     // Step 5: store the ACP-side session string in the inner state.
     let acp_session_str = new_resp.session_id.to_string();
@@ -353,10 +370,19 @@ pub(crate) async fn open_session_impl(
         "session established with sandbox-filtered tools"
     );
 
-    // `stderr`, `init_resp`, and `child` are intentionally held here: Phase 8.2
-    // uses them to set up the subprocess waiter and stderr drainer tasks. Until
-    // then they are suppressed to avoid "unused variable" warnings.
-    let _ = (stderr, init_resp, child);
+    // Phase 8.2 prep: these handles are intentionally bound here and dropped at
+    // function return. **Critical:** `connection` and `io_task_handle` MUST be
+    // moved into `AcpSession` by Phase 8.2 before this function returns —
+    // dropping `connection` closes its `outgoing_tx`, which causes the io_task
+    // to drain and `handle_incoming` to exit, killing the protocol channel.
+    // Without this fix, any post-handshake send_message/session_notification
+    // will hit a dead channel. Today's tests don't catch it because the Mock
+    // binary lands in Phase 9; once it does, any open→send→close test will break.
+    //
+    // `child`, `stderr`, and `inner` also need to move into `AcpSession` so the
+    // subprocess waiter (Task 8.2) can call `child.wait()` and the stderr
+    // drainer can read the pipe.
+    let _ = (stderr, init_resp, child, connection, io_task_handle);
 
     Ok(session_id)
 }

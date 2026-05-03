@@ -61,7 +61,6 @@ impl BridgeClient {
     ///
     /// `terminals` is initialised from `worktree_root` so that every spawned
     /// process is rooted at the correct worktree for this session.
-    #[allow(dead_code)] // wired by Phase 8.1 open_session_impl when constructing per-session client
     pub(crate) fn new(
         session_id: SessionId,
         event_tx: broadcast::Sender<BridgeEvent>,

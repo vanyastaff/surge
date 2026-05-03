@@ -1802,13 +1802,15 @@ use tracing::{debug, info};
 use super::command::BridgeCommand;
 use super::event::{BridgeEvent, SessionEndReason};
 
-/// Per-session state held by the worker. Filled in by Phase 7.
+/// Per-session state held by the worker. Phase 6.1 ships the minimal shape;
+/// Phase 8.1 starts inserting; Phase 8.2 expands with `child`, `connection`,
+/// `inner`, and task handles for the waiter / stderr drainer / io pump.
 #[allow(dead_code)] // wired in Task 7.1 via open_session_impl
 pub(crate) struct AcpSession {
     pub session_id: SessionId,
     pub agent_label: String,
     // ACP-side connection, child handle, observer/waiter task handles, etc.
-    // are added in Phase 7.
+    // are added in Phase 8.2.
 }
 
 #[allow(dead_code)] // wired in Task 7.1 via AcpSession construction
@@ -2796,11 +2798,11 @@ Open `crates/surge-acp/src/bridge/worker.rs`. Add a helper section near the top:
 
 ```rust
 use crate::bridge::session::AgentKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
-fn build_agent_command(kind: &AgentKind, working_dir: &PathBuf) -> Result<Command, std::io::Error> {
+fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, std::io::Error> {
     let mut cmd = match kind {
         AgentKind::ClaudeCode { binary, extra_args } => {
             let mut c = Command::new(binary);
@@ -2826,18 +2828,18 @@ fn build_agent_command(kind: &AgentKind, working_dir: &PathBuf) -> Result<Comman
             c
         }
         AgentKind::Mock { args } => {
-            // CARGO_BIN_EXE_mock_acp_agent is set during `cargo test` builds.
-            // For non-test invocations, fall back to looking up the binary in
-            // CARGO_TARGET_DIR (best-effort).
+            // `CARGO_BIN_EXE_mock_acp_agent` is set by Cargo during `cargo test`.
+            // Outside of tests, fall back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`.
+            // Note: `?` on `VarError` doesn't compile (no `From<VarError> for io::Error`),
+            // so we always produce a `PathBuf` and let `Command::spawn` surface the
+            // missing binary as a clear `NotFound` `io::Error` at the call site.
             let path = std::env::var("CARGO_BIN_EXE_mock_acp_agent")
                 .map(PathBuf::from)
-                .or_else(|_| {
+                .unwrap_or_else(|_| {
                     let target = std::env::var("CARGO_TARGET_DIR")
                         .unwrap_or_else(|_| "target".to_string());
-                    Ok::<_, std::env::VarError>(
-                        PathBuf::from(target).join("debug").join("mock_acp_agent"),
-                    )
-                })?;
+                    PathBuf::from(target).join("debug").join("mock_acp_agent")
+                });
             let mut c = Command::new(path);
             c.args(args);
             c
@@ -2917,7 +2919,11 @@ pub(crate) async fn open_session_impl(
     let connection = ClientSideConnection::new(bridge_client, stdin, stdout)
         .map_err(|e| OpenSessionError::HandshakeFailed { reason: e.to_string() })?;
 
-    let init_resp = connection
+    // **Important:** on any handshake failure, call `child.start_kill()` before
+    // returning. `tokio::process::Child`'s implicit Drop on Unix does NOT send
+    // SIGKILL — it detaches, leaving an orphan/zombie. Match the legacy
+    // `AgentConnection::Drop` pattern (start_kill is synchronous, no await).
+    let init_resp = match connection
         .initialize(InitializeRequest {
             protocol_version: ProtocolVersion::latest(),
             client_capabilities: ClientCapabilities::default(),
@@ -2928,15 +2934,27 @@ pub(crate) async fn open_session_impl(
             },
         })
         .await
-        .map_err(|e| OpenSessionError::HandshakeFailed { reason: e.to_string() })?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = child.start_kill();
+            return Err(OpenSessionError::HandshakeFailed { reason: e.to_string() });
+        }
+    };
 
-    let new_resp = connection
+    let new_resp = match connection
         .new_session(NewSessionRequest {
             cwd: config.working_dir.clone(),
             mcp_servers: Vec::new(),
         })
         .await
-        .map_err(|e| OpenSessionError::HandshakeFailed { reason: e.to_string() })?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = child.start_kill();
+            return Err(OpenSessionError::HandshakeFailed { reason: e.to_string() });
+        }
+    };
 
     // Step 5: store the ACP-side session string in the inner state.
     inner.borrow_mut().acp_session_id = new_resp.session_id.0.to_string();
@@ -2965,7 +2983,20 @@ pub(crate) async fn open_session_impl(
         "session established with sandbox-filtered tools"
     );
 
-    let _ = (stderr, init_resp); // Stderr drainer + init metadata — Phase 8.2 uses these.
+    // Phase 8.2 prep: these handles are intentionally bound here and dropped at
+    // function return. **Critical:** `connection` and `io_task_handle` (capture
+    // the JoinHandle from `tokio::task::spawn_local` driving the io_task) MUST
+    // be moved into `AcpSession` by Phase 8.2 before this function returns —
+    // dropping `connection` closes its `outgoing_tx`, which causes the io_task
+    // to drain and `handle_incoming` to exit, killing the protocol channel.
+    // Without this fix, any post-handshake send_message/session_notification
+    // will hit a dead channel. Today's tests don't catch it because the Mock
+    // binary lands in Phase 9; once it does, any open→send→close test will break.
+    //
+    // `child`, `stderr`, and `inner` also need to move into `AcpSession` so the
+    // subprocess waiter (Task 8.2) can call `child.wait()` and the stderr
+    // drainer can read the pipe.
+    let _ = (stderr, init_resp, child, connection, io_task_handle);
 
     Ok(session_id)
 }
@@ -3013,6 +3044,12 @@ cargo check -p surge-acp
 ```
 
 Expected: clean. SDK shape mismatches manifest here — adapt minimally to legacy's pattern.
+
+- [ ] **Step 5b: Remove stale `#[allow(dead_code)]` on `BridgeClient::new`**
+
+Task 7.1 added `#[allow(dead_code)] // wired by Phase 8.1 open_session_impl when constructing per-session client` to `BridgeClient::new` in `crates/surge-acp/src/bridge/client.rs`. Phase 8.1 now wires it. Delete that single line.
+
+Verify with `cargo build -p surge-acp --lib 2>&1 | grep "warning:"` — should still show only the pre-existing `terminal.rs` warning (no new dead_code warning since `BridgeClient::new` is now reachable from `open_session_impl`).
 
 - [ ] **Step 6: Add unit test for `filter_visible_tools`**
 
