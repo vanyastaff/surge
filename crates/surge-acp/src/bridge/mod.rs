@@ -27,3 +27,20 @@
 //! (see spec §11.8).
 
 // Submodules are wired in subsequent tasks.
+pub mod error;
+pub use error::{
+    AcpError, BridgeError, CloseSessionError, OpenSessionError, SendMessageError,
+};
+
+// Temporary forward stub; replaced by `event::SessionEndReason` in Task 4.1.
+// Kept here only so error.rs can compile during Phase 1 development.
+pub mod event {
+    /// Stubbed in Task 1.1, replaced by full enum in Task 4.1.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SessionEndReason {
+        Normal,
+        AgentCrashed { exit_code: Option<i32>, stderr_tail: String },
+        Timeout { duration_ms: u64 },
+        ForcedClose,
+    }
+}
