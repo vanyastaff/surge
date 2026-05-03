@@ -190,7 +190,9 @@ pub use tools::{ToolDef, ToolDefSchema, ToolCategory};
 pub struct AcpBridge {
     cmd_tx: mpsc::Sender<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,        // kept alive so subscribe() works after spawn
-    worker: Option<std::thread::JoinHandle<Result<(), BridgeError>>>,
+    // JoinHandle<()> not Result<...>: a panicking thread cannot return a value;
+    // panic payload surfaces via the Err variant of JoinHandle::join().
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AcpBridge {

@@ -1932,8 +1932,9 @@ Create `crates/surge-acp/src/bridge/acp_bridge.rs`:
 
 ```rust
 //! `AcpBridge` — owned by callers, hides the worker thread + LocalSet.
-
-use std::sync::Arc;
+//!
+//! See spec §5.1 for the spawn machinery rationale, §11.6 for per-process
+//! count guidance, §11.8 for the lagged-subscriber contract.
 
 use surge_core::SessionId;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -1945,14 +1946,37 @@ use super::event::BridgeEvent;
 use super::session::{MessageContent, SessionConfig, SessionState};
 use super::worker::bridge_loop;
 
+/// Public handle to the ACP bridge worker thread.
+///
+/// Spawn one per process (see spec §11.6); methods can be called from any
+/// tokio context. All work funnels through a dedicated OS thread that runs
+/// a current-thread tokio runtime + `LocalSet` for the SDK's `!Send` futures.
+///
+/// `Drop` joins the worker thread best-effort. If the worker is stuck inside
+/// a future that never completes (a realistic failure mode once real ACP I/O
+/// lands in Phase 8), `Drop` will block the calling thread indefinitely with
+/// no timeout — `JoinHandle::join` has no timeout overload on stable Rust.
+/// **Always call `shutdown().await` before letting `AcpBridge` go out of
+/// scope in production paths.** Tests are exempt because they run a known
+/// quiescent worker.
 pub struct AcpBridge {
+    /// Command channel sender — bounded mpsc.
     cmd_tx: mpsc::Sender<BridgeCommand>,
+    /// Broadcast sender for `BridgeEvent`s. Subscribers obtain receivers via
+    /// `subscribe()`. Best-effort observability per spec §11.8.
     event_tx: broadcast::Sender<BridgeEvent>,
+    /// Worker thread handle. `Some` until `shutdown()` consumes it; `Drop`
+    /// joins it best-effort if `shutdown()` was not called.
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AcpBridge {
-    /// Spawn the bridge worker thread.
+    /// Spawn the bridge worker thread with explicit channel capacities.
+    ///
+    /// `cmd_capacity` bounds the mpsc command channel; producers block on
+    /// `send().await` if the worker can't drain fast enough. `event_capacity`
+    /// bounds the broadcast channel; subscribers that lag past this silently
+    /// drop oldest events (see spec §11.8 for the durable-consumer pattern).
     pub fn spawn(cmd_capacity: usize, event_capacity: usize) -> Result<Self, BridgeError> {
         let (cmd_tx, cmd_rx) = mpsc::channel(cmd_capacity);
         let (event_tx, _) = broadcast::channel(event_capacity);
@@ -1983,7 +2007,9 @@ impl AcpBridge {
         })
     }
 
-    /// Spawn with sane default capacities.
+    /// Spawn with sane default capacities (64 commands queued, 1024 events buffered).
+    /// Defaults chosen per spec §5.1 — high enough to absorb burst traffic from
+    /// open_session bootstrapping, low enough to surface backpressure quickly.
     pub fn with_defaults() -> Result<Self, BridgeError> {
         Self::spawn(64, 1024)
     }
@@ -1998,6 +2024,9 @@ impl AcpBridge {
         self.event_tx.subscribe()
     }
 
+    /// Open a new ACP session. The bridge spawns the agent subprocess,
+    /// performs the ACP handshake, declares the sandbox-filtered tool list,
+    /// and returns the freshly-allocated `SessionId`.
     pub async fn open_session(
         &self,
         config: SessionConfig,
@@ -2011,6 +2040,9 @@ impl AcpBridge {
             .map_err(|_| OpenSessionError::Bridge(BridgeError::ReplyDropped))?
     }
 
+    /// Send a user message to an open session. Returns once the bridge has
+    /// queued the message; the agent's response surfaces via subsequent
+    /// `BridgeEvent::AgentMessage` events.
     pub async fn send_message(
         &self,
         session: SessionId,
@@ -2025,6 +2057,7 @@ impl AcpBridge {
             .map_err(|_| SendMessageError::Bridge(BridgeError::ReplyDropped))?
     }
 
+    /// Read a session's bridge-observable state (open / closed / crashed).
     pub async fn session_state(
         &self,
         session: SessionId,
@@ -2037,6 +2070,9 @@ impl AcpBridge {
         rx.await.map_err(|_| BridgeError::ReplyDropped)?
     }
 
+    /// Close a session gracefully. The bridge sends ACP shutdown to the
+    /// agent and waits up to a grace period before forcibly killing the
+    /// child (see Phase 8.3 close_session_impl for the timeout details).
     pub async fn close_session(
         &self,
         session: SessionId,
@@ -2050,6 +2086,9 @@ impl AcpBridge {
             .map_err(|_| CloseSessionError::Bridge(BridgeError::ReplyDropped))?
     }
 
+    /// Drain pending commands and shut down the worker. Open sessions emit
+    /// `SessionEnded { reason: ForcedClose }`. Joins the worker thread.
+    /// Consumes self — call exactly once.
     pub async fn shutdown(mut self) -> Result<(), BridgeError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -2058,7 +2097,16 @@ impl AcpBridge {
             .map_err(|e| BridgeError::CommandSendFailed(e.to_string()))?;
         rx.await.map_err(|_| BridgeError::ReplyDropped)?;
         if let Some(t) = self.worker.take() {
-            t.join().map_err(|_| BridgeError::WorkerDead)?;
+            if let Err(panic_payload) = t.join() {
+                // Worker panicked after sending the Shutdown reply. Cleanup
+                // already completed; this is a bug to investigate via logs but
+                // not a caller-actionable failure (shutdown succeeded as far as
+                // the caller can observe).
+                tracing::warn!(
+                    "bridge worker panicked after shutdown reply: {:?}",
+                    panic_payload
+                );
+            }
         }
         Ok(())
     }
@@ -2066,10 +2114,11 @@ impl AcpBridge {
 
 impl Drop for AcpBridge {
     fn drop(&mut self) {
+        // No await possible in Drop. Dropping the only owned cmd_tx
+        // (when `self` is dropped) closes the channel, causing the worker's
+        // `cmd_rx.recv()` to return `None` and the loop to exit. We then
+        // best-effort join the thread.
         if let Some(handle) = self.worker.take() {
-            // Best-effort: closing cmd_tx causes recv() to return None; worker exits.
-            // No await possible in Drop — we just let the thread finish.
-            drop(self.cmd_tx.clone());
             let _ = handle.join();
         }
     }

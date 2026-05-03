@@ -19,8 +19,13 @@ use super::worker::bridge_loop;
 /// tokio context. All work funnels through a dedicated OS thread that runs
 /// a current-thread tokio runtime + `LocalSet` for the SDK's `!Send` futures.
 ///
-/// `Drop` lets the worker thread terminate when the last command sender
-/// goes out of scope. For deterministic shutdown, prefer `shutdown().await`.
+/// `Drop` joins the worker thread best-effort. If the worker is stuck inside
+/// a future that never completes (a realistic failure mode once real ACP I/O
+/// lands in Phase 8), `Drop` will block the calling thread indefinitely with
+/// no timeout — `JoinHandle::join` has no timeout overload on stable Rust.
+/// **Always call `shutdown().await` before letting `AcpBridge` go out of
+/// scope in production paths.** Tests are exempt because they run a known
+/// quiescent worker.
 pub struct AcpBridge {
     /// Command channel sender — bounded mpsc.
     cmd_tx: mpsc::Sender<BridgeCommand>,
@@ -159,7 +164,16 @@ impl AcpBridge {
             .map_err(|e| BridgeError::CommandSendFailed(e.to_string()))?;
         rx.await.map_err(|_| BridgeError::ReplyDropped)?;
         if let Some(t) = self.worker.take() {
-            t.join().map_err(|_| BridgeError::WorkerDead)?;
+            if let Err(panic_payload) = t.join() {
+                // Worker panicked after sending the Shutdown reply. Cleanup
+                // already completed; this is a bug to investigate via logs but
+                // not a caller-actionable failure (shutdown succeeded as far as
+                // the caller can observe).
+                tracing::warn!(
+                    "bridge worker panicked after shutdown reply: {:?}",
+                    panic_payload
+                );
+            }
         }
         Ok(())
     }
