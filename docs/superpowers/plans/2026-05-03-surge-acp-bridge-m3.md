@@ -26,6 +26,8 @@ The new `bridge/` module reuses three pieces of logic that currently live inside
 - Create: `crates/surge-acp/src/bridge/mod.rs`
 - Modify: `crates/surge-acp/src/lib.rs`
 
+> **Known transient state introduced by this task:** the `[[bin]] mock_acp_agent` entry references a file that doesn't exist until Phase 9 (Task 9.1). This is intentional — see step 3 rationale. Practical consequence for Tasks 0.2 through 8.3: `cargo check --workspace` and `cargo test --workspace` fail with a hard error because Cargo resolves all targets in workspace-wide invocations. Use `cargo check -p surge-acp --lib` and `cargo test -p surge-acp --lib` (or the more targeted `--test <name>` form) until Phase 9 lands the binary file. CI configuration is updated in Task 11.1 to match.
+
 - [ ] **Step 1: Verify workspace deps already cover M3**
 
 Open root `Cargo.toml` and confirm these `[workspace.dependencies]` entries exist (per spec §8). They were all added during M1/M2 work; M3 needs no new top-level deps.
