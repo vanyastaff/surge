@@ -17,6 +17,10 @@ pub mod secrets;
 pub mod terminal;
 pub mod transport;
 
+// New (M3) — vibe-flow ACP bridge. Pure addition, legacy modules untouched.
+pub mod bridge;
+// mod shared;  // uncomment in Task 0.2 once shared/mod.rs exists
+
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, EffectiveCapabilities, SessionState};
 pub use discovery::{AgentDiscovery, Platform};
