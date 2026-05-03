@@ -1797,12 +1797,13 @@ use std::rc::Rc;
 
 use surge_core::SessionId;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::command::BridgeCommand;
 use super::event::{BridgeEvent, SessionEndReason};
 
 /// Per-session state held by the worker. Filled in by Phase 7.
+#[allow(dead_code)] // wired in Task 7.1 via open_session_impl
 pub(crate) struct AcpSession {
     pub session_id: SessionId,
     pub agent_label: String,
@@ -1810,9 +1811,17 @@ pub(crate) struct AcpSession {
     // are added in Phase 7.
 }
 
+#[allow(dead_code)] // wired in Task 7.1 via AcpSession construction
 pub(crate) type SessionMap = Rc<RefCell<HashMap<SessionId, AcpSession>>>;
 
-pub async fn bridge_loop(
+/// Main worker loop. Drains commands from `cmd_rx`, dispatches them, and
+/// emits `BridgeEvent`s to subscribers. Returns when `Shutdown` is processed
+/// or the channel closes.
+///
+/// Phase 6 ships a skeleton: most commands return immediate stub errors;
+/// Phase 7+ replaces those arms with real handlers (`open_session_impl` etc).
+#[allow(dead_code)] // wired in Task 6.2 via AcpBridge::spawn
+pub(crate) async fn bridge_loop(
     mut cmd_rx: mpsc::Receiver<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,
 ) {
@@ -1832,6 +1841,11 @@ pub async fn bridge_loop(
                 let _ = reply.send(Err(super::error::SendMessageError::SessionNotFound { session }));
             }
             BridgeCommand::GetSessionState { session, reply } => {
+                // Phase 6 stub: returns the bridge-observable state if the session
+                // exists, else `BridgeError::ReplyDropped` as a stand-in. Phase 7
+                // replaces this with proper not-found semantics once `BridgeError`
+                // gains a `SessionNotFound` variant or `session_state` switches to
+                // `Result<Option<SessionState>, _>`.
                 let state = sessions
                     .borrow()
                     .get(&session)
@@ -1862,6 +1876,9 @@ pub async fn bridge_loop(
     debug!("command channel closed; bridge worker exiting");
 }
 
+/// Emit `SessionEnded` for every open session and drop them from the map.
+/// Used by `Shutdown` and (later) by failure paths in Phase 7+.
+#[allow(dead_code)] // wired in Task 7.1+ failure paths and called from bridge_loop
 pub(crate) async fn close_all_sessions(
     sessions: &SessionMap,
     event_tx: &broadcast::Sender<BridgeEvent>,
@@ -1869,23 +1886,16 @@ pub(crate) async fn close_all_sessions(
 ) {
     let to_close: Vec<SessionId> = sessions.borrow().keys().cloned().collect();
     for sid in to_close {
+        // Best-effort emit; broadcast::send returns Err only when no
+        // subscribers exist, which is acceptable during shutdown.
         let _ = event_tx.send(BridgeEvent::SessionEnded {
             session: sid.clone(),
             reason: reason.clone(),
         });
         sessions.borrow_mut().remove(&sid);
     }
-    if let Err(e) = event_tx.send(BridgeEvent::AgentMessage {
-        session: SessionId::new(),
-        chunk: String::new(),
-        meta: None,
-    }) {
-        warn!("(harmless) no subscribers during shutdown drain: {e}");
-    }
 }
 ```
-
-The harmless drain at the end of `close_all_sessions` is a no-op flush — safe on no-subscriber pools.
 
 - [ ] **Step 2: Wire `worker` module**
 

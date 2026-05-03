@@ -13,6 +13,7 @@ use super::command::BridgeCommand;
 use super::event::{BridgeEvent, SessionEndReason};
 
 /// Per-session state held by the worker. Filled in by Phase 7.
+#[allow(dead_code)] // wired in Task 7.1 via open_session_impl
 pub(crate) struct AcpSession {
     pub session_id: SessionId,
     pub agent_label: String,
@@ -20,6 +21,7 @@ pub(crate) struct AcpSession {
     // are added in Phase 7.
 }
 
+#[allow(dead_code)] // wired in Task 7.1 via AcpSession construction
 pub(crate) type SessionMap = Rc<RefCell<HashMap<SessionId, AcpSession>>>;
 
 /// Main worker loop. Drains commands from `cmd_rx`, dispatches them, and
@@ -28,7 +30,8 @@ pub(crate) type SessionMap = Rc<RefCell<HashMap<SessionId, AcpSession>>>;
 ///
 /// Phase 6 ships a skeleton: most commands return immediate stub errors;
 /// Phase 7+ replaces those arms with real handlers (`open_session_impl` etc).
-pub async fn bridge_loop(
+#[allow(dead_code)] // wired in Task 6.2 via AcpBridge::spawn
+pub(crate) async fn bridge_loop(
     mut cmd_rx: mpsc::Receiver<BridgeCommand>,
     event_tx: broadcast::Sender<BridgeEvent>,
 ) {
@@ -85,6 +88,7 @@ pub async fn bridge_loop(
 
 /// Emit `SessionEnded` for every open session and drop them from the map.
 /// Used by `Shutdown` and (later) by failure paths in Phase 7+.
+#[allow(dead_code)] // wired in Task 7.1+ failure paths and called from bridge_loop
 pub(crate) async fn close_all_sessions(
     sessions: &SessionMap,
     event_tx: &broadcast::Sender<BridgeEvent>,
