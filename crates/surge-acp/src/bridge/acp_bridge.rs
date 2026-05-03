@@ -232,8 +232,12 @@ mod tests {
             bindings: Default::default(),
         };
         let err = bridge.open_session(cfg).await.unwrap_err();
-        // Phase 6 stub returns HandshakeFailed; Phase 7 replaces with real impl.
-        assert!(matches!(err, OpenSessionError::HandshakeFailed { .. }));
+        // Phase 8.1 replaces the Phase 6 HandshakeFailed stub with the real
+        // open_session_impl. The mock_acp_agent binary does not exist yet
+        // (Phase 9), so the spawn fails here. Once Phase 9 lands the binary,
+        // this test should be replaced by a full `SessionEstablished` lifecycle
+        // test in `tests/bridge_session_lifecycle.rs`.
+        assert!(matches!(err, OpenSessionError::AgentSpawnFailed { .. }));
         bridge.shutdown().await.unwrap();
     }
 }

@@ -3,14 +3,29 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use agent_client_protocol::{
+    Agent, ClientCapabilities, ClientSideConnection, Implementation, InitializeRequest,
+    NewSessionRequest, ProtocolVersion,
+};
 use surge_core::SessionId;
+use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::command::BridgeCommand;
+use super::error::OpenSessionError;
 use super::event::{BridgeEvent, SessionEndReason};
+use super::sandbox::{Sandbox, SandboxDecision};
+use super::session::{AgentKind, SessionConfig};
+use super::session_inner::SessionStateInner;
+use super::tools::{ToolDef, build_injected_tools};
+use crate::bridge::client::BridgeClient;
+use crate::shared::secrets::SecretsRedactor;
 
 /// Per-session state held by the worker. Filled in by Phase 7.
 #[allow(dead_code)] // wired in Task 7.1 via open_session_impl
@@ -40,12 +55,9 @@ pub(crate) async fn bridge_loop(
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            BridgeCommand::OpenSession { reply, .. } => {
-                // Phase 7 lands the real impl. For now, refuse cleanly so the
-                // skeleton still tests the dispatch path.
-                let _ = reply.send(Err(super::error::OpenSessionError::HandshakeFailed {
-                    reason: "open_session not implemented in M3 skeleton".into(),
-                }));
+            BridgeCommand::OpenSession { config, reply } => {
+                let result = open_session_impl(&sessions, &event_tx, config).await;
+                let _ = reply.send(result);
             }
             BridgeCommand::SendMessage { session, reply, .. } => {
                 let _ = reply.send(Err(super::error::SendMessageError::SessionNotFound { session }));
@@ -123,5 +135,269 @@ pub(crate) async fn close_all_sessions(
             reason: reason.clone(),
         });
         sessions.borrow_mut().remove(&sid);
+    }
+}
+
+/// Resolve `AgentKind` to a `tokio::process::Command` ready to spawn.
+/// `Mock` short-circuits to `CARGO_BIN_EXE_mock_acp_agent` (set by Cargo
+/// during `cargo test`); falls back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`
+/// for non-test invocations.
+fn build_agent_command(kind: &AgentKind, working_dir: &PathBuf) -> Result<Command, std::io::Error> {
+    let mut cmd = match kind {
+        AgentKind::ClaudeCode { binary, extra_args } => {
+            let mut c = Command::new(binary);
+            c.arg("--acp");
+            c.args(extra_args);
+            c
+        }
+        AgentKind::Codex { binary, extra_args } => {
+            let mut c = Command::new(binary);
+            c.arg("acp");
+            c.args(extra_args);
+            c
+        }
+        AgentKind::GeminiCli { binary, extra_args } => {
+            let mut c = Command::new(binary);
+            c.arg("--acp");
+            c.args(extra_args);
+            c
+        }
+        AgentKind::Custom { binary, args } => {
+            let mut c = Command::new(binary);
+            c.args(args);
+            c
+        }
+        AgentKind::Mock { args } => {
+            // `CARGO_BIN_EXE_mock_acp_agent` is set by Cargo during `cargo test`.
+            // Outside of tests, fall back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`.
+            // No `?` on `VarError` since `VarError` isn't convertible to `io::Error`;
+            // instead we always produce a `PathBuf` and let Command::spawn fail with
+            // a clear `NotFound` if the binary is missing.
+            let path = std::env::var("CARGO_BIN_EXE_mock_acp_agent")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let target = std::env::var("CARGO_TARGET_DIR")
+                        .unwrap_or_else(|_| "target".to_string());
+                    PathBuf::from(target).join("debug").join("mock_acp_agent")
+                });
+            let mut c = Command::new(path);
+            c.args(args);
+            c
+        }
+    };
+    cmd.current_dir(working_dir);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    Ok(cmd)
+}
+
+/// Open a new ACP session — the production-real path that replaces the
+/// Phase 6 stub. Sequence:
+///
+/// 1. Validate the `SessionConfig` (rejects empty `declared_outcomes`, etc.).
+/// 2. Compose the visible tool list (caller tools + engine-injected, then
+///    sandbox-filtered).
+/// 3. Spawn the agent subprocess with piped stdio.
+/// 4. Hand stdio to the SDK to construct a `ClientSideConnection` with our
+///    `BridgeClient` as the trait impl, then run the ACP handshake
+///    (`initialize` + `new_session`).
+/// 5. Store the ACP-side session id in the per-session inner state and
+///    register the session in the worker's map.
+/// 6. Emit `BridgeEvent::SessionEstablished` carrying the visible tool names
+///    and engine-supplied bindings.
+/// 7. Stash `stderr` and `init_resp` for Phase 8.2 (waiter + drainer).
+///
+/// **SDK shape note:** `ClientSideConnection::new` returns `(connection, io_task)`.
+/// The `io_task` is spawned via `tokio::task::spawn_local` (same pattern as
+/// legacy `connection.rs`). Only `initialize` + `new_session` are called during
+/// the handshake; `new_session` is the correct ACP method (see `pool.rs`).
+///
+/// **Approach chosen:** SDK calls are inlined directly into this function (option
+/// (a) from the spec) rather than extracted into helpers — there is only one
+/// call site, so helpers would only add indirection without clarity benefit.
+pub(crate) async fn open_session_impl(
+    sessions: &SessionMap,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    config: SessionConfig,
+) -> Result<SessionId, OpenSessionError> {
+    // Step 1: validate config (rejects empty declared_outcomes etc.).
+    config.validate()?;
+
+    // Step 2: build full tool list = caller tools + engine-injected, then sandbox-filter.
+    let injected = build_injected_tools(&config.declared_outcomes, config.allows_escalation);
+    let mut combined: Vec<ToolDef> = config.tools.iter().cloned().collect();
+    combined.extend(injected.iter().cloned());
+    let (visible, hidden_names) = filter_visible_tools(combined, config.sandbox.as_ref());
+
+    // Step 3: spawn agent subprocess.
+    let mut cmd =
+        build_agent_command(&config.agent_kind, &config.working_dir).map_err(|e| {
+            warn!(
+                kind = config.agent_kind.label(),
+                working_dir = %config.working_dir.display(),
+                error = %e,
+                "build_agent_command failed before spawn"
+            );
+            OpenSessionError::AgentSpawnFailed { kind: config.agent_kind.label().into(), source: e }
+        })?;
+    let mut child: Child = cmd.spawn().map_err(|e| {
+        warn!(
+            kind = config.agent_kind.label(),
+            working_dir = %config.working_dir.display(),
+            error = %e,
+            "agent subprocess spawn failed"
+        );
+        OpenSessionError::AgentSpawnFailed {
+            kind: config.agent_kind.label().into(),
+            source: e,
+        }
+    })?;
+    let stdin = child.stdin.take().expect("piped stdin");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+
+    // Step 4: ACP handshake — mirrors the pattern in legacy connection.rs.
+    //
+    // ClientSideConnection::new(client, writer, reader, executor_fn) → (connection, io_task).
+    // The executor closure is called synchronously inside `new`; it spawns the io_task
+    // onto the current LocalSet so the ACP IO loop runs concurrently with the handshake.
+    let session_id = SessionId::new();
+    let inner = Rc::new(RefCell::new(SessionStateInner::new(String::new())));
+
+    let bridge_client = BridgeClient::new(
+        session_id.clone(),
+        event_tx.clone(),
+        inner.clone(),
+        config.sandbox.boxed_clone(),
+        Arc::new(SecretsRedactor::new()),
+        config.bindings.clone(),
+        config.working_dir.clone(),
+    );
+
+    // The ACP SDK requires `futures::AsyncWrite + Unpin` / `futures::AsyncRead + Unpin`.
+    // Tokio's ChildStdin/ChildStdout implement tokio's AsyncWrite/AsyncRead, so we wrap
+    // them with `tokio_util::compat` (same pattern as legacy `transport.rs`).
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+    let writer = stdin.compat_write();
+    let reader = stdout.compat();
+
+    // Construct ClientSideConnection; executor spawns the io_task on the LocalSet.
+    let (connection, io_task) =
+        ClientSideConnection::new(bridge_client, writer, reader, |fut| {
+            #[allow(clippy::let_underscore_future)]
+            let _ = tokio::task::spawn_local(fut);
+        });
+
+    // Drive the io_task in the background (same pattern as legacy connection.rs).
+    tokio::task::spawn_local(async move {
+        if let Err(e) = io_task.await {
+            tracing::error!("ACP IO task failed: {:?}", e);
+        }
+    });
+
+    // initialize — declare client capabilities and identity.
+    let mut init_request = InitializeRequest::new(ProtocolVersion::V1);
+    init_request.client_capabilities = ClientCapabilities::new().terminal(true);
+    init_request.client_info =
+        Some(Implementation::new("surge-bridge", env!("CARGO_PKG_VERSION")));
+
+    let init_resp = connection.initialize(init_request).await.map_err(|e| {
+        warn!(
+            session = %session_id,
+            error = ?e,
+            "ACP initialize handshake failed"
+        );
+        OpenSessionError::HandshakeFailed { reason: format!("{e:?}") }
+    })?;
+
+    // new_session — create an ACP session scoped to the working directory.
+    let new_resp = connection
+        .new_session(NewSessionRequest::new(&config.working_dir))
+        .await
+        .map_err(|e| {
+            warn!(
+                session = %session_id,
+                working_dir = %config.working_dir.display(),
+                error = ?e,
+                "ACP new_session handshake failed"
+            );
+            OpenSessionError::HandshakeFailed { reason: format!("{e:?}") }
+        })?;
+
+    // Step 5: store the ACP-side session string in the inner state.
+    let acp_session_str = new_resp.session_id.to_string();
+    inner.borrow_mut().acp_session_id = acp_session_str;
+
+    // Step 6: register session in the worker's map.
+    sessions.borrow_mut().insert(
+        session_id.clone(),
+        AcpSession {
+            session_id: session_id.clone(),
+            agent_label: config.agent_kind.label().into(),
+            // Phase 8.2 lands the spawned task handles, child reference, etc.
+        },
+    );
+
+    // Step 7: emit SessionEstablished.
+    let _ = event_tx.send(BridgeEvent::SessionEstablished {
+        session: session_id.clone(),
+        agent: config.agent_kind.label().into(),
+        bindings: config.bindings.clone(),
+        tools_visible: visible.iter().map(|t| t.name.clone()).collect(),
+    });
+
+    debug!(
+        session = %session_id,
+        hidden_count = hidden_names.len(),
+        "session established with sandbox-filtered tools"
+    );
+
+    // `stderr`, `init_resp`, and `child` are intentionally held here: Phase 8.2
+    // uses them to set up the subprocess waiter and stderr drainer tasks. Until
+    // then they are suppressed to avoid "unused variable" warnings.
+    let _ = (stderr, init_resp, child);
+
+    Ok(session_id)
+}
+
+/// Filter a combined tool list through the sandbox's `visibility` decision.
+///
+/// Returns `(visible_tools, hidden_tool_names)`. The hidden list is used for
+/// debug logging only — the bridge does not surface it to callers.
+fn filter_visible_tools(
+    tools: Vec<ToolDef>,
+    sandbox: &dyn Sandbox,
+) -> (Vec<ToolDef>, Vec<String>) {
+    let mut visible = Vec::with_capacity(tools.len());
+    let mut hidden_names = Vec::new();
+    for t in tools {
+        let mcp_id = t.category.mcp_id();
+        match sandbox.visibility(&t.name, mcp_id) {
+            SandboxDecision::Allow | SandboxDecision::Elevate { .. } => visible.push(t),
+            SandboxDecision::Deny { .. } => hidden_names.push(t.name.clone()),
+        }
+    }
+    (visible, hidden_names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::sandbox::DenyListSandbox;
+    use crate::bridge::tools::{ToolCategory, ToolDef};
+    use serde_json::json;
+
+    #[test]
+    fn filter_removes_denied_tools() {
+        let tools = vec![
+            ToolDef::new("read_file", "d", ToolCategory::Builtin, json!({})),
+            ToolDef::new("shell_exec", "d", ToolCategory::Mcp("ops".into()), json!({})),
+        ];
+        let s = DenyListSandbox::deny_tools(["shell_exec"]);
+        let (visible, hidden) = filter_visible_tools(tools, &s);
+        let names: Vec<_> = visible.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["read_file"]);
+        assert_eq!(hidden, vec!["shell_exec"]);
     }
 }
