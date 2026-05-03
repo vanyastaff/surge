@@ -428,12 +428,13 @@ fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, 
                 .unwrap_or_else(|_| {
                     let target =
                         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-                    let mut p = PathBuf::from(target).join("debug").join("mock_acp_agent");
                     // On Windows, Command::new won't find the binary without the
                     // .exe suffix when the CARGO_BIN_EXE env var is absent.
                     #[cfg(windows)]
-                    p.set_extension("exe");
-                    p
+                    let bin = "mock_acp_agent.exe";
+                    #[cfg(not(windows))]
+                    let bin = "mock_acp_agent";
+                    PathBuf::from(target).join("debug").join(bin)
                 });
             let mut c = Command::new(path);
             c.args(args);
