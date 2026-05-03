@@ -44,3 +44,42 @@ pub mod event {
         ForcedClose,
     }
 }
+
+// Forward stubs replaced in Phase 3 / Phase 4. Kept minimal so Phase 2 tests
+// can exercise SessionConfig in isolation.
+
+pub mod sandbox {
+    pub trait Sandbox: Send + Sync {}
+    #[derive(Debug, Clone)]
+    pub struct AlwaysAllowSandbox;
+    impl Sandbox for AlwaysAllowSandbox {}
+}
+
+pub mod tools {
+    use serde_json::Value;
+
+    #[derive(Debug, Clone)]
+    pub struct ToolDef {
+        pub name: String,
+        pub description: String,
+        pub category: ToolCategory,
+        pub input_schema: Value,
+    }
+
+    impl ToolDef {
+        pub fn new(name: impl Into<String>, description: impl Into<String>,
+                   category: ToolCategory, input_schema: Value) -> Self {
+            Self { name: name.into(), description: description.into(), category, input_schema }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum ToolCategory {
+        Injected,
+        Mcp(String),
+        Builtin,
+    }
+}
+
+pub mod session;
+pub use session::{AgentKind, MessageContent, SessionConfig, SessionState, SessionStatus};
