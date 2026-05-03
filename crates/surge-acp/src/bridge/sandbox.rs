@@ -15,6 +15,13 @@ pub enum SandboxDecision {
     /// Tool needs caller approval before execution. The bridge attaches
     /// the capability tag to `BridgeEvent::ToolCall::sandbox_decision`
     /// so M5 can route to a UI / Telegram elevation flow.
+    ///
+    /// Expected capability values (M3 contract; M5 may extend):
+    /// - `"filesystem_write"` — agent wants to write outside the worktree
+    /// - `"shell_exec"` — agent wants to execute a shell command
+    /// - `"network"` — agent wants to make an outbound network request
+    ///
+    /// See RFC-0006 §Tier-2 for the full taxonomy.
     Elevate { capability: String },
 }
 
@@ -54,6 +61,11 @@ impl Sandbox for AlwaysAllowSandbox {
 
 /// Allow-by-default with explicit denylists by tool name and by MCP server id.
 ///
+/// `DenyListSandbox::default()` (empty denylists) is semantically identical to
+/// `AlwaysAllowSandbox` and may be used interchangeably in tests that add entries
+/// via `denied_tools.insert(...)`. Use `AlwaysAllowSandbox` directly when you never
+/// intend to add denies.
+///
 /// Sufficient for RFC-0006 §Tier-1 enforcement and for the M3 integration
 /// test in `tests/bridge_sandbox_filtering.rs`. M4 introduces richer
 /// path-aware and OS-enforced impls additively.
@@ -71,9 +83,13 @@ pub struct DenyListSandbox {
 
 impl DenyListSandbox {
     /// Convenience constructor for tests.
-    pub fn deny_tools<I: IntoIterator<Item = String>>(tools: I) -> Self {
+    pub fn deny_tools<I, S>(tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         Self {
-            denied_tools: tools.into_iter().collect(),
+            denied_tools: tools.into_iter().map(Into::into).collect(),
             denied_mcp_ids: HashSet::new(),
         }
     }
@@ -126,7 +142,7 @@ mod tests {
 
     #[test]
     fn deny_list_denies_named_tool() {
-        let s = DenyListSandbox::deny_tools(["shell_exec".into()]);
+        let s = DenyListSandbox::deny_tools(["shell_exec"]);
         match s.visibility("shell_exec", None) {
             SandboxDecision::Deny { reason } => assert!(reason.contains("shell_exec")),
             other => panic!("expected Deny, got {other:?}"),
@@ -148,7 +164,7 @@ mod tests {
 
     #[test]
     fn deny_list_visibility_and_allows_tool_parity() {
-        let s = DenyListSandbox::deny_tools(["x".into()]);
+        let s = DenyListSandbox::deny_tools(["x"]);
         for (tool, mcp) in [("x", None), ("y", None), ("y", Some("a"))] {
             assert_eq!(s.visibility(tool, mcp), s.allows_tool(tool, mcp));
         }
