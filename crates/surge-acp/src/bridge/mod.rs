@@ -48,3 +48,6 @@ pub use tools::{ToolCategory, ToolDef};
 
 pub mod session;
 pub use session::{AgentKind, MessageContent, SessionConfig, SessionState, SessionStatus};
+
+pub mod command;
+pub use command::BridgeCommand;
