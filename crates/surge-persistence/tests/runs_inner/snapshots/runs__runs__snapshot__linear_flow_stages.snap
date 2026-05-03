@@ -1,0 +1,14 @@
+---
+source: crates/surge-persistence/tests/runs_inner/snapshot.rs
+expression: stages
+---
+- node_id: spec_1
+  attempt: 1
+  started_seq: 1
+  ended_seq: 3
+  started_at_ms: "[ts]"
+  ended_at_ms: "[ts]"
+  outcome: done
+  cost_usd: 0
+  tokens_in: 0
+  tokens_out: 0

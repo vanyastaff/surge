@@ -153,6 +153,9 @@ impl UsageAggregator {
             loop {
                 match event_rx.recv().await {
                     Ok(event) => {
+                        // Nesting allowed: tokio::spawn + loop + match arm is the
+                        // canonical shape for a per-message background task.
+                        #[allow(clippy::excessive_nesting)]
                         if let Err(e) = Self::handle_event(&store, &sessions, &pricing, event).await
                         {
                             warn!("Failed to handle event: {}", e);

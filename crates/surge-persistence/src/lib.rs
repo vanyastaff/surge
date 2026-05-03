@@ -27,6 +27,9 @@ pub mod pricing;
 /// SQLite-based storage implementation
 pub mod store;
 
+/// New M2 vibe-flow storage layer (per-run event log, registry, worktree integration).
+pub mod runs;
+
 /// Persistence error types
 pub mod error {
     use thiserror::Error;

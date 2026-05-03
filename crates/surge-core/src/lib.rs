@@ -32,6 +32,7 @@ pub mod notify_config;
 pub mod profile;
 pub mod run_event;
 pub mod run_state;
+pub mod run_status;
 pub mod sandbox;
 pub mod subgraph_config;
 pub mod terminal_config;
@@ -61,4 +62,5 @@ pub use run_event::{
     SessionDisposition, VersionedEventPayload,
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
+pub use run_status::{ParseRunStatusError, RunStatus};
 pub use validation::{Severity, ValidationError, ValidationErrorKind, validate};

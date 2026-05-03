@@ -466,6 +466,354 @@ impl GitManager {
             Ok(oid)
         }
     }
+
+    // ── Per-run worktree methods (extension for run-based workflow) ───────
+    //
+    // These run alongside the legacy `*_worktree(spec_id, ...)` methods. They
+    // use `RunId::short()` as the git2 worktree name (so `git worktree list`
+    // shows the short ID) and `surge/run-<short_id>` as the branch name.
+    // Worktree paths come from `crate::run_worktree::resolve_path`.
+
+    /// Returns the worktree directory for a given run id + location strategy.
+    ///
+    /// Pure path computation — does not touch the filesystem.
+    #[must_use]
+    pub fn run_worktree_path(
+        &self,
+        run_id: &surge_core::RunId,
+        location: crate::run_worktree::WorktreeLocation,
+    ) -> std::path::PathBuf {
+        crate::run_worktree::resolve_path(&self.repo_path, run_id, &location)
+    }
+
+    /// Create a new worktree and branch for the given run.
+    ///
+    /// The worktree branches from `base_branch` if given, otherwise from the
+    /// current HEAD. Creates branch `surge/run-<short_id>` and places the
+    /// worktree at the path computed by [`crate::run_worktree::resolve_path`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::WorktreeAlreadyExists`] if a worktree with the same
+    /// short id already exists, [`GitError::BranchNotFound`] if `base_branch`
+    /// is given but does not exist, [`GitError::EmptyRepository`] if the repo
+    /// has no commits.
+    pub fn create_run_worktree(
+        &self,
+        run_id: &surge_core::RunId,
+        base_branch: Option<&str>,
+        location: crate::run_worktree::WorktreeLocation,
+    ) -> Result<crate::run_worktree::RunWorktreeInfo, GitError> {
+        let repo = self.open_repo()?;
+        let short = run_id.short();
+        let branch_name = crate::run_worktree::run_branch_name(run_id);
+        let wt_path = crate::run_worktree::resolve_path(&self.repo_path, run_id, &location);
+
+        // Check for duplicate
+        let worktrees = repo.worktrees()?;
+        for name in worktrees.iter().flatten() {
+            if name == short {
+                return Err(GitError::WorktreeAlreadyExists(short));
+            }
+        }
+
+        // Resolve base commit
+        let commit = if let Some(base) = base_branch {
+            let b = repo
+                .find_branch(base, BranchType::Local)
+                .map_err(|_| GitError::BranchNotFound(base.to_string()))?;
+            b.get().peel_to_commit()?
+        } else {
+            let head = repo.head().map_err(|_| GitError::EmptyRepository)?;
+            head.peel_to_commit()
+                .map_err(|_| GitError::EmptyRepository)?
+        };
+
+        let branch = repo.branch(&branch_name, &commit, false)?;
+
+        if let Some(parent) = wt_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let reference = branch.into_reference();
+        let mut opts = WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+        let _wt = repo.worktree(&short, &wt_path, Some(&opts))?;
+
+        info!(run_id = %run_id, ?wt_path, branch = %branch_name, "created run worktree");
+
+        Ok(crate::run_worktree::RunWorktreeInfo {
+            run_id: *run_id,
+            path: wt_path,
+            branch: branch_name,
+            exists_on_disk: true,
+        })
+    }
+
+    /// Discard a run worktree: prune it, remove the directory, delete the branch.
+    ///
+    /// Tries to find the worktree by every known location (sibling, central) so
+    /// callers do not need to remember which location they used at creation
+    /// time. The git2 worktree name (the short id) is the same regardless.
+    pub fn discard_run_worktree(&self, run_id: &surge_core::RunId) -> Result<(), GitError> {
+        let repo = self.open_repo()?;
+        let short = run_id.short();
+        let branch_name = crate::run_worktree::run_branch_name(run_id);
+
+        // Prune git worktree by name (the git2 worktree name is the short id,
+        // so this is location-independent).
+        let recorded_path = match repo.find_worktree(&short) {
+            Ok(wt) => {
+                let p = wt.path().to_path_buf();
+                let mut prune_opts = WorktreePruneOptions::new();
+                prune_opts.valid(true).working_tree(true);
+                if let Err(e) = wt.prune(Some(&mut prune_opts)) {
+                    warn!(run_id = %run_id, %e, "run worktree prune failed, continuing cleanup");
+                }
+                Some(p)
+            },
+            Err(e) => {
+                debug!(run_id = %run_id, %e, "run worktree not found in git, continuing cleanup");
+                None
+            },
+        };
+
+        // Remove the on-disk directory at every candidate location, falling
+        // back to the recorded path if git knew about it. Best-effort.
+        let candidates = [
+            crate::run_worktree::resolve_path(
+                &self.repo_path,
+                run_id,
+                &crate::run_worktree::WorktreeLocation::Sibling,
+            ),
+            crate::run_worktree::resolve_path(
+                &self.repo_path,
+                run_id,
+                &crate::run_worktree::WorktreeLocation::Central,
+            ),
+        ];
+        for p in candidates.iter().chain(recorded_path.as_ref()) {
+            if p.exists() {
+                if let Err(e) = fs::remove_dir_all(p) {
+                    debug!(run_id = %run_id, ?p, %e, "failed to remove worktree dir, continuing");
+                } else {
+                    debug!(run_id = %run_id, ?p, "removed run worktree directory");
+                }
+            }
+        }
+
+        match repo.find_branch(&branch_name, BranchType::Local) {
+            Ok(mut branch) => {
+                branch.delete()?;
+                info!(run_id = %run_id, branch_name, "deleted run branch");
+            },
+            Err(e) => debug!(run_id = %run_id, %e, "branch not found, skipping delete"),
+        }
+
+        Ok(())
+    }
+
+    /// Stage all changes and commit in the worktree for the given run.
+    ///
+    /// Returns [`GitError::NothingToCommit`] if there are no changes to stage.
+    pub fn commit_run_worktree(
+        &self,
+        run_id: &surge_core::RunId,
+        message: &str,
+    ) -> Result<git2::Oid, GitError> {
+        let repo = self.open_repo()?;
+        let short = run_id.short();
+
+        // Find the worktree by name so we can resolve its path regardless of
+        // the location strategy used at creation time.
+        let wt = repo
+            .find_worktree(&short)
+            .map_err(|_| GitError::WorktreeNotFound(short.clone()))?;
+        let wt_path = wt.path().to_path_buf();
+        if !wt_path.exists() {
+            return Err(GitError::WorktreeNotFound(short));
+        }
+
+        let wt_repo = Repository::open(&wt_path)?;
+        let sig = Self::signature(&wt_repo);
+
+        let mut index = wt_repo.index()?;
+        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+        index.write()?;
+
+        // Guard: nothing to commit
+        let head = wt_repo.head()?;
+        let head_commit = head.peel_to_commit()?;
+        let head_tree = head_commit.tree()?;
+        let diff = wt_repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
+        if diff.stats()?.files_changed() == 0 {
+            return Err(GitError::NothingToCommit(short));
+        }
+
+        let tree_oid = index.write_tree()?;
+        let tree = wt_repo.find_tree(tree_oid)?;
+        let oid = wt_repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head_commit])?;
+
+        info!(run_id = %run_id, %oid, "committed in run worktree");
+        Ok(oid)
+    }
+
+    /// Merge the run branch into the target branch (default: current HEAD branch).
+    ///
+    /// Performs a fast-forward if possible, otherwise creates a merge commit.
+    /// When `checkout` is `false` the working tree is not updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::MergeConflict`] with the list of conflicting files,
+    /// [`GitError::SameBranch`] if source and target are the same reference.
+    pub fn merge_run_worktree(
+        &self,
+        run_id: &surge_core::RunId,
+        target_branch: Option<&str>,
+        checkout: bool,
+    ) -> Result<git2::Oid, GitError> {
+        let repo = self.open_repo()?;
+        let branch_name = crate::run_worktree::run_branch_name(run_id);
+
+        let target_ref_name = if let Some(target) = target_branch {
+            format!("refs/heads/{target}")
+        } else {
+            let head = repo.head()?;
+            head.name()
+                .ok_or_else(|| GitError::BranchNotFound("HEAD".to_string()))?
+                .to_string()
+        };
+
+        // Guard: source ≠ target
+        let source_ref_name = format!("refs/heads/{branch_name}");
+        if source_ref_name == target_ref_name {
+            return Err(GitError::SameBranch(branch_name));
+        }
+
+        let surge_branch = repo
+            .find_branch(&branch_name, BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound(branch_name.clone()))?;
+        let surge_commit = surge_branch.get().peel_to_commit()?;
+
+        let target_ref = repo.find_reference(&target_ref_name)?;
+        let target_commit = target_ref.peel_to_commit()?;
+
+        let can_ff = repo.graph_descendant_of(surge_commit.id(), target_commit.id())?;
+
+        if can_ff {
+            repo.reference(
+                &target_ref_name,
+                surge_commit.id(),
+                true,
+                &format!("surge: fast-forward merge of {branch_name}"),
+            )?;
+            if checkout {
+                repo.set_head(&target_ref_name)?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+            }
+            info!(run_id = %run_id, "fast-forward merge complete");
+            Ok(surge_commit.id())
+        } else {
+            let merge_opts = MergeOptions::new();
+            let mut merged_index: Index =
+                repo.merge_commits(&target_commit, &surge_commit, Some(&merge_opts))?;
+
+            if merged_index.has_conflicts() {
+                let mut files = Vec::new();
+                if let Ok(mut conflicts) = merged_index.conflicts() {
+                    while let Some(Ok(conflict)) = conflicts.next() {
+                        let entry = conflict.our.or(conflict.their).or(conflict.ancestor);
+                        if let Some(e) = entry {
+                            let path = PathBuf::from(String::from_utf8_lossy(&e.path).as_ref());
+                            files.push(path);
+                        }
+                    }
+                }
+                return Err(GitError::MergeConflict {
+                    conflicting_files: files,
+                });
+            }
+
+            let tree_oid = merged_index.write_tree_to(&repo)?;
+            let tree = repo.find_tree(tree_oid)?;
+            let sig = Self::signature(&repo);
+            let merge_msg = format!("Merge branch '{branch_name}'");
+            let oid = repo.commit(
+                Some(&target_ref_name),
+                &sig,
+                &sig,
+                &merge_msg,
+                &tree,
+                &[&target_commit, &surge_commit],
+            )?;
+
+            if checkout {
+                repo.set_head(&target_ref_name)?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+            }
+
+            info!(run_id = %run_id, %oid, "run merge commit created");
+            Ok(oid)
+        }
+    }
+
+    /// Find all worktrees whose recorded git path no longer exists on disk.
+    ///
+    /// Scans every git worktree in the repository (regardless of how it was
+    /// created — spec-keyed, run-keyed, or other) and returns those that look
+    /// orphaned to the on-disk filesystem.
+    pub fn find_orphaned_worktrees(
+        &self,
+    ) -> Result<Vec<crate::run_worktree::OrphanedWorktree>, GitError> {
+        let repo = self.open_repo()?;
+        let worktrees = repo.worktrees()?;
+        let mut result = Vec::new();
+        for name in worktrees.iter().flatten() {
+            let wt = match repo.find_worktree(name) {
+                Ok(wt) => wt,
+                Err(_) => continue,
+            };
+            let recorded_path = wt.path().to_path_buf();
+            if !recorded_path.exists() {
+                result.push(crate::run_worktree::OrphanedWorktree {
+                    name: name.to_string(),
+                    recorded_path,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Prune all orphaned worktrees (whose recorded path is missing).
+    ///
+    /// Returns the number of pruned worktree entries. Best-effort: errors on
+    /// individual prunes are logged and skipped so a single bad entry does not
+    /// abort the cleanup pass.
+    pub fn prune_orphaned_worktrees(&self) -> Result<u32, GitError> {
+        let repo = self.open_repo()?;
+        let orphaned = self.find_orphaned_worktrees()?;
+        let mut pruned = 0u32;
+        for o in orphaned {
+            let wt = match repo.find_worktree(&o.name) {
+                Ok(wt) => wt,
+                Err(e) => {
+                    debug!(name = %o.name, %e, "worktree vanished before prune, skipping");
+                    continue;
+                },
+            };
+            let mut prune_opts = WorktreePruneOptions::new();
+            prune_opts.valid(true).working_tree(true);
+            match wt.prune(Some(&mut prune_opts)) {
+                Ok(_) => {
+                    pruned += 1;
+                    debug!(name = %o.name, "pruned orphaned worktree");
+                },
+                Err(e) => warn!(name = %o.name, %e, "failed to prune orphaned worktree"),
+            }
+        }
+        Ok(pruned)
+    }
 }
 
 #[cfg(test)]
@@ -716,5 +1064,51 @@ mod tests {
         let gm = GitManager::new(path.clone()).unwrap();
         let wt_path = gm.worktree_path("my-spec");
         assert!(wt_path.ends_with(".surge/worktrees/my-spec"));
+    }
+
+    // ── Per-run worktree tests ───────────────────────────────────────────
+
+    #[test]
+    fn create_run_worktree_basic() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        let info = gm
+            .create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+        assert!(info.branch.starts_with("surge/run-"));
+        assert!(info.path.exists());
+        assert!(info.path.to_string_lossy().contains(&id.short()));
+    }
+
+    #[test]
+    fn discard_run_worktree_removes_branch() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        let _info = gm
+            .create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+        gm.discard_run_worktree(&id).unwrap();
+        let branch_name = crate::run_worktree::run_branch_name(&id);
+        let repo = Repository::open(&path).unwrap();
+        assert!(repo.find_branch(&branch_name, BranchType::Local).is_err());
+    }
+
+    #[test]
+    fn find_orphaned_worktrees_detects_missing_dir() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        let info = gm
+            .create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+        std::fs::remove_dir_all(&info.path).unwrap();
+
+        let orphaned = gm.find_orphaned_worktrees().unwrap();
+        assert!(orphaned.iter().any(|o| o.name == id.short()));
+
+        let pruned = gm.prune_orphaned_worktrees().unwrap();
+        assert_eq!(pruned, 1);
     }
 }
