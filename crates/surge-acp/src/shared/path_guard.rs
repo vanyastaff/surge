@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PathGuardError {
+pub enum PathGuardError {
     #[error("path '{path}' is not absolute (worktree paths must be absolute)")]
     NotAbsolute { path: PathBuf },
     #[error("path '{path}' escapes worktree root '{worktree}'")]
@@ -23,7 +23,7 @@ pub(crate) enum PathGuardError {
 /// `SurgeClient::new` and `bridge::session::open_session_impl` for the precedent).
 /// This function canonicalizes `path` here so that symlinks-to-outside are rejected
 /// even if the agent constructed the path via legitimate-looking components.
-pub(crate) fn ensure_in_worktree(
+pub fn ensure_in_worktree(
     worktree_root: &Path,
     path: &Path,
 ) -> Result<PathBuf, PathGuardError> {

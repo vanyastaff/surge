@@ -19,7 +19,7 @@ pub mod transport;
 
 // New (M3) — vibe-flow ACP bridge. Pure addition, legacy modules untouched.
 pub mod bridge;
-mod shared;
+pub mod shared;
 
 pub use client::{PermissionPolicy, SubtaskContext, SurgeClient};
 pub use connection::{AgentConnection, EffectiveCapabilities, SessionState};
