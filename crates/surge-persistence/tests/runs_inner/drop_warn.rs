@@ -36,17 +36,18 @@ impl<'a> MakeWriter<'a> for CaptureWriter {
 // `Storage::open` rejects single-threaded tokio runtimes, so we must use
 // `multi_thread`. But `tracing::subscriber::set_default` is per-thread,
 // and `multi_thread`'s scheduler can hop the test future across worker
-// threads at .await points — when `drop(writer)` runs, we may be on a
-// thread without the subscriber installed, and `tracing::warn!` from the
-// Drop impl silently falls through to the global default. Linux tokio
-// hops more aggressively than macOS, which is why the original test
-// passed on macOS but flaked on Linux.
+// threads at .await points. Wrapping in LocalSet didn't help either —
+// LocalSet pins SPAWNED tasks, but the run_until future itself still
+// gets polled by tokio on whichever worker is available.
 //
-// Fix: pin the test body to the calling thread via `LocalSet::run_until`.
-// Storage internals (its own writer task) still spawn onto worker threads
-// freely, but the Drop of `writer` we care about happens synchronously
-// on whichever thread is executing the test future — and inside
-// `run_until` that's the test thread, where `set_default` was applied.
+// Fix: install via `set_global_default`. Process-wide subscriber works
+// regardless of which thread the Drop fires on. `set_global_default`
+// returns `Err` if already set (only-once-per-process), which we
+// silently swallow — if another test already installed a global
+// subscriber, this test will use that one and may not see captured
+// output. To guarantee isolation, this test should be run alone, or
+// the subscriber should be the only global subscriber the test binary
+// installs (currently true — drop_warn is the only test using it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_without_close_emits_tracing_warning() {
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -58,26 +59,24 @@ async fn drop_without_close_emits_tracing_warning() {
         .with_ansi(false)
         .finish();
 
-    let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let _guard = tracing::subscriber::set_default(subscriber);
+    // Process-wide install. Returns Err if a global subscriber is already
+    // set (only-once-per-process); ignore — first wins and we just hope
+    // it's ours. See module comment above.
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
-            let t = setup().await;
-            let writer = t
-                .storage
-                .create_run(t.run_id, "/tmp/proj", None)
-                .await
-                .expect("create_run");
+    let t = setup().await;
+    let writer = t
+        .storage
+        .create_run(t.run_id, "/tmp/proj", None)
+        .await
+        .expect("create_run");
 
-            // Intentionally drop without close() — the Drop impl emits warn.
-            drop(writer);
+    // Intentionally drop without close() — the Drop impl emits warn.
+    drop(writer);
 
-            // Wait briefly to give any background task time to emit teardown
-            // traces, then capture and assert.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await;
+    // Wait briefly to give any background task time to emit teardown
+    // traces, then capture and assert.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let captured = buf.lock().expect("lock");
     let log = String::from_utf8_lossy(&captured);

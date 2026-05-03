@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn short_has_timestamp_prefix_and_some_randomness() {
+    fn short_is_alphanumeric_and_distinct() {
         let a = RunId::new();
         let b = RunId::new();
         let sa = a.short();
@@ -164,14 +164,10 @@ mod tests {
         assert_eq!(sb.len(), 12);
         assert!(sa.chars().all(|c| c.is_ascii_alphanumeric()));
         assert!(sb.chars().all(|c| c.is_ascii_alphanumeric()));
-        // Two ULIDs created back-to-back share the 10-char timestamp prefix in the
-        // common case (within the same ms). Compare first 9 chars to avoid a 1-char
-        // flake on a millisecond boundary.
-        assert_eq!(
-            &sa[..9],
-            &sb[..9],
-            "first 9 chars (timestamp) should match for adjacent IDs"
-        );
+        // Note: we deliberately don't assert that adjacent ULIDs share a timestamp
+        // prefix. On fast hardware, two `Ulid::new()` calls back-to-back can land
+        // on different millisecond boundaries, which makes any prefix-equality
+        // assertion racy (observed flaking on macOS CI).
         // Randomness chars (positions 10..12) almost always differ — collision is ~1/1024.
         assert_ne!(
             sa, sb,
