@@ -42,6 +42,9 @@ pub enum OpenSessionError {
     #[error("invalid tool definitions: {0}")]
     InvalidToolDefs(String),
 
+    #[error("invalid bindings: {0}")]
+    InvalidBindings(String),
+
     #[error("bridge: {0}")]
     Bridge(#[source] BridgeError),
 }

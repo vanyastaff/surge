@@ -33,6 +33,7 @@ pub enum SessionStatus {
 }
 
 /// User-visible message payload accepted by `AcpBridge::send_message`.
+#[derive(Debug)]
 pub enum MessageContent {
     Text(String),
     Blocks(Vec<ContentBlock>),
@@ -40,6 +41,7 @@ pub enum MessageContent {
 
 /// Agent-flavor input to `SessionConfig`. The bridge derives the subprocess
 /// invocation from this. `Mock` short-circuits to the test mock binary.
+#[derive(Debug)]
 pub enum AgentKind {
     ClaudeCode { binary: PathBuf, extra_args: Vec<String> },
     Codex { binary: PathBuf, extra_args: Vec<String> },
@@ -64,15 +66,59 @@ impl AgentKind {
 }
 
 /// Open-session input. Constructed by the engine, passed to `AcpBridge::open_session`.
+///
+/// `SessionConfig` deliberately does **not** derive `Clone`: it carries
+/// `Box<dyn Sandbox>`, which has no blanket `Clone` impl. When the bridge
+/// needs to duplicate sandbox state (e.g. into the per-session `BridgeClient`),
+/// it calls `Sandbox::boxed_clone()` and reconstructs the box. Callers that
+/// want to hold a config across multiple opens must rebuild it from inputs.
 pub struct SessionConfig {
+    /// Agent flavor — drives subprocess invocation. The bridge resolves the
+    /// binary path and CLI flags from this; for `Mock`, the bridge consults
+    /// `CARGO_BIN_EXE_mock_acp_agent`.
     pub agent_kind: AgentKind,
+
+    /// Working directory for the agent subprocess. Should be the per-run
+    /// worktree path produced by `surge_git::create_run_worktree` (M2).
+    /// The bridge does not validate this is a git worktree — that's M5's
+    /// responsibility.
     pub working_dir: PathBuf,
+
+    /// System prompt sent to the agent in the initial message frame.
     pub system_prompt: String,
+
+    /// Outcome keys that the engine will accept from `report_stage_outcome`.
+    /// The bridge derives the JSON-Schema enum from these and injects it as
+    /// a tool. Empty `Vec` is rejected by `validate()` — agents need at
+    /// least one outcome to terminate cleanly.
     pub declared_outcomes: Vec<OutcomeKey>,
+
+    /// Whether to inject `request_human_input` tool (for stages that allow
+    /// escalation). Drives the boolean check inside `tools::build_injected_tools`
+    /// once Phase 4 lands.
     pub allows_escalation: bool,
+
+    /// Engine-supplied list of tools (MCP-flavored or otherwise). The bridge
+    /// passes this through the sandbox `visibility` filter before declaring
+    /// tools to the agent.
     pub tools: Vec<ToolDef>,
+
+    /// Sandbox to apply to the tool list and to per-call `ToolCall` events.
+    /// Boxed because the trait is `dyn`-typed; cloned per-session via
+    /// `Sandbox::boxed_clone`. The presence of this field is why
+    /// `SessionConfig` itself does not derive `Clone`.
     pub sandbox: Box<dyn Sandbox>,
+
+    /// Permission policy shared with the legacy `SurgeClient` (auto-approve,
+    /// smart, …). In M3 the bridge uses this only for the `Client::request_permission`
+    /// impl; the actual sandbox decisions go through `Sandbox::allows_tool`.
     pub permission_policy: crate::client::PermissionPolicy,
+
+    /// Optional binding labels — opaque key-value pairs the engine attaches
+    /// to the `SessionConfig` for later correlation in `BridgeEvent`s
+    /// (e.g. the node_key, the run_id). The bridge passes these through to
+    /// `BridgeEvent::SessionEstablished` and treats them as opaque otherwise.
+    /// Capped by `validate()` at 8 entries × 64 bytes each to bound payload size.
     pub bindings: BTreeMap<String, String>,
 }
 
@@ -83,16 +129,16 @@ impl SessionConfig {
         if self.declared_outcomes.is_empty() {
             return Err(super::error::OpenSessionError::NoDeclaredOutcomes);
         }
-        // Cap bindings (per spec §4.3): 8 entries × 64 chars each.
+        // Cap bindings (per spec §4.3): 8 entries × 64 bytes each.
         if self.bindings.len() > 8 {
-            return Err(super::error::OpenSessionError::InvalidToolDefs(
+            return Err(super::error::OpenSessionError::InvalidBindings(
                 format!("bindings has {} entries (max 8)", self.bindings.len()),
             ));
         }
         for (k, v) in &self.bindings {
             if k.len() > 64 || v.len() > 64 {
-                return Err(super::error::OpenSessionError::InvalidToolDefs(
-                    format!("binding {k}=... exceeds 64-char limit"),
+                return Err(super::error::OpenSessionError::InvalidBindings(
+                    format!("binding {k}=... exceeds 64-byte limit"),
                 ));
             }
         }
@@ -193,7 +239,7 @@ mod tests {
         let err = cfg.validate().unwrap_err();
         assert!(matches!(
             err,
-            super::super::error::OpenSessionError::InvalidToolDefs(_)
+            super::super::error::OpenSessionError::InvalidBindings(_)
         ));
     }
 }
