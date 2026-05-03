@@ -16,6 +16,7 @@ pub mod snapshot;
 pub mod routing;
 pub mod replay;
 pub mod run_task;
+pub mod validate;
 
 pub use engine::Engine;
 pub use error::EngineError;
