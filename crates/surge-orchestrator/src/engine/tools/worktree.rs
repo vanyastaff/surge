@@ -6,6 +6,21 @@ use crate::engine::tools::{
 use async_trait::async_trait;
 use std::path::PathBuf;
 
+fn truncate_with_marker(s: String, cap: usize) -> String {
+    if s.len() <= cap {
+        s
+    } else {
+        let tail_start = s.len() - cap + 64;
+        let tail: String = s.chars().skip(tail_start).collect();
+        format!(
+            "[truncated, original length = {} bytes; showing last {} bytes]\n{}",
+            s.len(),
+            cap - 64,
+            tail
+        )
+    }
+}
+
 pub struct WorktreeToolDispatcher {
     worktree_root: PathBuf,
 }
@@ -180,6 +195,85 @@ impl WorktreeToolDispatcher {
             },
         }
     }
+
+    async fn shell_exec(&self, call: &ToolCall) -> ToolResultPayload {
+        let args = match call.arguments.as_object() {
+            Some(o) => o,
+            None => {
+                return ToolResultPayload::Error {
+                    message: "shell_exec: arguments must be an object".into(),
+                }
+            }
+        };
+        let command = match args.get("command").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return ToolResultPayload::Error {
+                    message: "shell_exec: missing 'command' arg".into(),
+                }
+            }
+        };
+        let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
+            self.worktree_root.join(rel)
+        } else {
+            self.worktree_root.clone()
+        };
+        let timeout_secs = args
+            .get("timeout_seconds")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(300);
+
+        let mut cmd = if cfg!(windows) {
+            let mut c = tokio::process::Command::new("cmd");
+            c.args(["/C", command]);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("sh");
+            c.args(["-c", command]);
+            c
+        };
+        cmd.current_dir(&cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolResultPayload::Error {
+                    message: format!("shell_exec: spawn failed: {e}"),
+                }
+            }
+        };
+
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let output_fut = child.wait_with_output();
+        let output = match tokio::time::timeout(timeout, output_fut).await {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                return ToolResultPayload::Error {
+                    message: format!("shell_exec: wait failed: {e}"),
+                }
+            }
+            Err(_) => {
+                return ToolResultPayload::Error {
+                    message: format!("shell_exec: timeout after {timeout_secs}s"),
+                }
+            }
+        };
+
+        const TAIL_CAP: usize = 64 * 1024;
+        let stdout = truncate_with_marker(String::from_utf8_lossy(&output.stdout).into_owned(), TAIL_CAP);
+        let stderr = truncate_with_marker(String::from_utf8_lossy(&output.stderr).into_owned(), TAIL_CAP);
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        ToolResultPayload::Ok {
+            content: serde_json::json!({
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
+            }),
+        }
+    }
 }
 
 #[async_trait]
@@ -192,7 +286,7 @@ impl ToolDispatcher for WorktreeToolDispatcher {
         match call.tool.as_str() {
             "read_file" => self.read_file(call).await,
             "write_file" => self.write_file(call).await,
-            // shell_exec implemented in Task 3.5
+            "shell_exec" => self.shell_exec(call).await,
             other => ToolResultPayload::Unsupported {
                 message: format!("WorktreeToolDispatcher: tool '{other}' not implemented (M5 supports read_file/write_file/shell_exec)"),
             },
@@ -306,5 +400,52 @@ mod tests {
         };
         let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
         assert!(matches!(result, ToolResultPayload::Unsupported { .. }));
+    }
+
+    #[tokio::test]
+    async fn shell_exec_runs_simple_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = WorktreeToolDispatcher::new(dir.path().to_path_buf());
+        let mem = surge_core::run_state::RunMemory::default();
+        // `echo hi` works on both Windows (via cmd /C) and Unix (via sh -c).
+        let call = ToolCall {
+            call_id: "c1".into(),
+            tool: "shell_exec".into(),
+            arguments: serde_json::json!({"command": "echo hi"}),
+        };
+        let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
+        match result {
+            ToolResultPayload::Ok { content } => {
+                let stdout = content["stdout"].as_str().unwrap();
+                assert!(stdout.contains("hi"), "stdout was {stdout:?}");
+                assert_eq!(content["exit_code"].as_i64().unwrap(), 0);
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_exec_reports_nonzero_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = WorktreeToolDispatcher::new(dir.path().to_path_buf());
+        let mem = surge_core::run_state::RunMemory::default();
+        // Portable variant: 1-line script that exits 7.
+        let cmd = if cfg!(windows) {
+            "cmd /C exit 7"
+        } else {
+            "exit 7"
+        };
+        let call = ToolCall {
+            call_id: "c1".into(),
+            tool: "shell_exec".into(),
+            arguments: serde_json::json!({"command": cmd}),
+        };
+        let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
+        match result {
+            ToolResultPayload::Ok { content } => {
+                assert_eq!(content["exit_code"].as_i64().unwrap(), 7);
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
     }
 }
