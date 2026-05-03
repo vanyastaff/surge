@@ -69,10 +69,7 @@ async fn subscribe_outlives_storage_handle() {
         .await
         .expect("create_run");
 
-    writer
-        .append_event(dummy_payload(1))
-        .await
-        .expect("append");
+    writer.append_event(dummy_payload(1)).await.expect("append");
     writer.flush().await.expect("flush");
 
     let mut stream = Box::pin(writer.subscribe_events());
@@ -99,9 +96,9 @@ async fn subscribe_outlives_storage_handle() {
     // Either is acceptable — what we forbid is panic / deadlock / UB.
     let next = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
     match next {
-        Ok(Some(Ok(_))) => {}        // unexpected new event — fine, no panic
-        Ok(Some(Err(_))) => {}       // clean error — fine
-        Ok(None) => {}               // stream ended cleanly — fine
-        Err(_) => {}                 // timed out (no new events) — fine, no panic
+        Ok(Some(Ok(_))) => {},  // unexpected new event — fine, no panic
+        Ok(Some(Err(_))) => {}, // clean error — fine
+        Ok(None) => {},         // stream ended cleanly — fine
+        Err(_) => {},           // timed out (no new events) — fine, no panic
     }
 }

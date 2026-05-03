@@ -19,7 +19,7 @@ async fn second_in_process_writer_fails_with_writer_already_held() {
         Ok(_) => panic!("second writer must fail while first is alive"),
         Err(OpenError::WriterAlreadyHeld { ref run_id }) => {
             assert_eq!(run_id, &t.run_id);
-        }
+        },
         Err(other) => panic!("expected WriterAlreadyHeld, got {other:?}"),
     }
 

@@ -36,7 +36,11 @@ impl ProcessProbe {
         Self {
             inner: Mutex::new(Inner {
                 sys,
-                last_refresh: Instant::now().checked_sub(ttl).unwrap().checked_sub(Duration::from_secs(1)).unwrap(),
+                last_refresh: Instant::now()
+                    .checked_sub(ttl)
+                    .unwrap()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap(),
             }),
             ttl,
         }
@@ -52,7 +56,8 @@ impl ProcessProbe {
         }
         let mut g = self.inner.lock().expect("poisoned ProcessProbe mutex");
         if g.last_refresh.elapsed() > self.ttl {
-            g.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, false);
+            g.sys
+                .refresh_processes(sysinfo::ProcessesToUpdate::All, false);
             g.last_refresh = Instant::now();
         }
         g.sys.process(Pid::from_u32(pid as u32)).is_some()

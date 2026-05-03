@@ -8,14 +8,14 @@
 //! item references purely linkage-sized.
 
 use surge_persistence::{
+    PersistenceError, Result,
     aggregator::{SessionContext, UsageAggregator},
     budget::{BudgetStatus, BudgetTracker, BudgetWarningLevel},
     pricing::{
-        claude_opus_pricing, claude_sonnet_35_pricing, get_model_pricing, gpt4_turbo_pricing,
-        PricingModel,
+        PricingModel, claude_opus_pricing, claude_sonnet_35_pricing, get_model_pricing,
+        gpt4_turbo_pricing,
     },
     store::Store,
-    PersistenceError, Result,
 };
 
 #[test]

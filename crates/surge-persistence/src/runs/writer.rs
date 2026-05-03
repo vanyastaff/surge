@@ -154,11 +154,7 @@ async fn writer_loop(
     Ok(())
 }
 
-async fn handle_command(
-    conn: &mut Connection,
-    cfg: &WriterConfig,
-    cmd: WriterCommand,
-) -> bool {
+async fn handle_command(conn: &mut Connection, cfg: &WriterConfig, cmd: WriterCommand) -> bool {
     match cmd {
         WriterCommand::AppendEvent { payload, reply } => {
             let result = (|| -> Result<EventSeq, WriterError> {
@@ -180,7 +176,7 @@ async fn handle_command(
                 Ok(seq)
             })();
             let _ = reply.send(result);
-        }
+        },
         WriterCommand::AppendBatch { payloads, reply } => {
             let result = (|| -> Result<Vec<EventSeq>, WriterError> {
                 let mut seqs = Vec::with_capacity(payloads.len());
@@ -204,12 +200,12 @@ async fn handle_command(
                 Ok(seqs)
             })();
             let _ = reply.send(result);
-        }
+        },
         WriterCommand::Flush { reply } => {
             // Strict-ordering ack: by the time the writer dequeues this command,
             // every previously enqueued command has been processed and committed.
             let _ = reply.send(Ok(()));
-        }
+        },
         WriterCommand::StoreArtifact {
             name,
             content,
@@ -297,7 +293,7 @@ async fn handle_command(
                 })
             })();
             let _ = reply.send(result);
-        }
+        },
         WriterCommand::WriteSnapshot {
             at_seq,
             blob,
@@ -313,7 +309,7 @@ async fn handle_command(
                 Ok(())
             })();
             let _ = reply.send(result);
-        }
+        },
         WriterCommand::RebuildViews { reply } => {
             let result = (|| -> Result<(), WriterError> {
                 let tx = conn.transaction()?;
@@ -341,12 +337,11 @@ async fn handle_command(
                 Ok(())
             })();
             let _ = reply.send(result);
-        }
+        },
         WriterCommand::Shutdown { reply } => {
             let _ = reply.send(());
             return false;
-        }
+        },
     }
     true
 }
-

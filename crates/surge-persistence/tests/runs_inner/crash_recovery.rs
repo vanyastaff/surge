@@ -38,10 +38,10 @@ async fn dropped_writer_can_be_reopened_with_intact_log() {
             Ok(w) => {
                 writer2 = Some(w);
                 break;
-            }
+            },
             Err(_) => {
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            }
+            },
         }
     }
     let writer2 = writer2.expect("reopen after drop within timeout");

@@ -167,8 +167,15 @@ mod tests {
         // Two ULIDs created back-to-back share the 10-char timestamp prefix in the
         // common case (within the same ms). Compare first 9 chars to avoid a 1-char
         // flake on a millisecond boundary.
-        assert_eq!(&sa[..9], &sb[..9], "first 9 chars (timestamp) should match for adjacent IDs");
+        assert_eq!(
+            &sa[..9],
+            &sb[..9],
+            "first 9 chars (timestamp) should match for adjacent IDs"
+        );
         // Randomness chars (positions 10..12) almost always differ — collision is ~1/1024.
-        assert_ne!(sa, sb, "two distinct ULIDs should produce distinct short forms");
+        assert_ne!(
+            sa, sb,
+            "two distinct ULIDs should produce distinct short forms"
+        );
     }
 }

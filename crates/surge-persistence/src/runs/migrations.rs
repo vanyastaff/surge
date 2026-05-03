@@ -8,7 +8,7 @@
 //! Resumability: if migration N fails, migrations 1..N-1 stay committed.
 //! On retry the runner picks up at N.
 
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::runs::clock::Clock;
 

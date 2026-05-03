@@ -27,7 +27,16 @@ pub fn maintain(
     timestamp_ms: i64,
     payload: &EventPayload,
 ) -> Result<(), WriterError> {
-    use EventPayload::{StageEntered, StageCompleted, StageFailed, ArtifactProduced, TokensConsumed, ApprovalRequested, ApprovalDecided, RunStarted, RunCompleted, RunFailed, RunAborted, BootstrapStageStarted, BootstrapArtifactProduced, BootstrapApprovalRequested, BootstrapApprovalDecided, BootstrapEditRequested, PipelineMaterialized, StageInputsResolved, SessionOpened, ToolCalled, ToolResultReceived, OutcomeReported, SessionClosed, EdgeTraversed, LoopIterationStarted, LoopIterationCompleted, LoopCompleted, SandboxElevationRequested, SandboxElevationDecided, HookExecuted, OutcomeRejectedByHook, ForkCreated};
+    use EventPayload::{
+        ApprovalDecided, ApprovalRequested, ArtifactProduced, BootstrapApprovalDecided,
+        BootstrapApprovalRequested, BootstrapArtifactProduced, BootstrapEditRequested,
+        BootstrapStageStarted, EdgeTraversed, ForkCreated, HookExecuted, LoopCompleted,
+        LoopIterationCompleted, LoopIterationStarted, OutcomeRejectedByHook, OutcomeReported,
+        PipelineMaterialized, RunAborted, RunCompleted, RunFailed, RunStarted,
+        SandboxElevationDecided, SandboxElevationRequested, SessionClosed, SessionOpened,
+        StageCompleted, StageEntered, StageFailed, StageInputsResolved, TokensConsumed, ToolCalled,
+        ToolResultReceived,
+    };
     match payload {
         StageEntered { node, attempt } => {
             tx.execute(
@@ -40,7 +49,7 @@ pub fn maintain(
                     timestamp_ms,
                 ],
             )?;
-        }
+        },
         StageCompleted { node, outcome } => {
             tx.execute(
                 "UPDATE stage_executions
@@ -55,21 +64,16 @@ pub fn maintain(
                     node.as_str(),
                 ],
             )?;
-        }
+        },
         StageFailed { node, .. } => {
             tx.execute(
                 "UPDATE stage_executions
                  SET ended_seq = ?, ended_at = ?, outcome = NULL
                  WHERE node_id = ?
                    AND attempt = (SELECT MAX(attempt) FROM stage_executions WHERE node_id = ?)",
-                rusqlite::params![
-                    seq.0 as i64,
-                    timestamp_ms,
-                    node.as_str(),
-                    node.as_str(),
-                ],
+                rusqlite::params![seq.0 as i64, timestamp_ms, node.as_str(), node.as_str(),],
             )?;
-        }
+        },
         ArtifactProduced {
             node,
             artifact,
@@ -93,7 +97,7 @@ pub fn maintain(
                     artifact.to_string(),
                 ],
             )?;
-        }
+        },
         TokensConsumed {
             prompt_tokens,
             output_tokens,
@@ -107,7 +111,7 @@ pub fn maintain(
             if let Some(cost) = cost_usd {
                 upsert_metric(tx, "cost_usd", *cost, timestamp_ms)?;
             }
-        }
+        },
         ApprovalRequested {
             gate,
             channel,
@@ -125,13 +129,13 @@ pub fn maintain(
                     payload_hash.to_string(),
                 ],
             )?;
-        }
+        },
         ApprovalDecided { gate, .. } => {
             tx.execute(
                 "DELETE FROM pending_approvals WHERE node_id = ?",
                 rusqlite::params![gate.as_str()],
             )?;
-        }
+        },
         // All other variants currently produce no view changes.
         // Listed explicitly here so a future variant addition forces a
         // conscious decision rather than silently falling through.
@@ -159,18 +163,13 @@ pub fn maintain(
         | SandboxElevationDecided { .. }
         | HookExecuted { .. }
         | OutcomeRejectedByHook { .. }
-        | ForkCreated { .. } => {}
+        | ForkCreated { .. } => {},
     }
     Ok(())
 }
 
 /// Upsert a single metric row in `cost_summary`, accumulating into `value`.
-fn upsert_metric(
-    tx: &Transaction<'_>,
-    metric: &str,
-    delta: f64,
-    ts: i64,
-) -> rusqlite::Result<()> {
+fn upsert_metric(tx: &Transaction<'_>, metric: &str, delta: f64, ts: i64) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO cost_summary (metric, value, updated_at)
          VALUES (?, ?, ?)

@@ -116,7 +116,9 @@ pub fn cost_summary(
 ) -> Result<CostSummary, StorageError> {
     let mut summary = CostSummary::default();
     let mut stmt = conn.prepare("SELECT metric, value FROM cost_summary")?;
-    let iter = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))?;
+    let iter = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })?;
     for r in iter {
         let (metric, value) = r?;
         match metric.as_str() {
@@ -124,7 +126,7 @@ pub fn cost_summary(
             "tokens_out" => summary.tokens_out = value as u64,
             "cache_hits" => summary.cache_hits = value as u64,
             "cost_usd" => summary.cost_usd = value,
-            _ => {}
+            _ => {},
         }
     }
     Ok(summary)

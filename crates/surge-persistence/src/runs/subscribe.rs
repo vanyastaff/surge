@@ -4,8 +4,8 @@
 //! last seen `seq`. Per-tick batch capped at `SUBSCRIBE_BATCH_MAX` to bound
 //! memory if the consumer lags behind the writer.
 
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
@@ -14,7 +14,7 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use surge_core::VersionedEventPayload;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{MissedTickBehavior, interval};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader::ReadEvent;

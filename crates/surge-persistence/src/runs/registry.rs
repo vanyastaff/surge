@@ -13,8 +13,8 @@ use surge_core::{RunId, RunStatus};
 
 use crate::runs::clock::Clock;
 use crate::runs::error::{OpenError, StorageError};
-use crate::runs::migrations::{apply as apply_migrations, REGISTRY_MIGRATIONS};
-use crate::runs::pragmas::{apply as apply_pragmas, REGISTRY_PRAGMAS};
+use crate::runs::migrations::{REGISTRY_MIGRATIONS, apply as apply_migrations};
+use crate::runs::pragmas::{REGISTRY_PRAGMAS, apply as apply_pragmas};
 
 /// Filter applied to `Storage::list_runs`.
 #[derive(Debug, Default, Clone)]
@@ -62,8 +62,8 @@ pub fn open_registry_pool(
         .map_err(|e| OpenError::MigrationFailed(e.to_string()))?;
     drop(conn);
 
-    let manager = SqliteConnectionManager::file(&db_path)
-        .with_init(|c| apply_pragmas(c, REGISTRY_PRAGMAS));
+    let manager =
+        SqliteConnectionManager::file(&db_path).with_init(|c| apply_pragmas(c, REGISTRY_PRAGMAS));
     let pool = Pool::builder()
         .max_size(8)
         .build(manager)
@@ -139,7 +139,8 @@ pub fn list_runs(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_refs: Vec<&dyn rusqlite::ToSql> =
+        binds.iter().map(std::convert::AsRef::as_ref).collect();
     let rows = stmt
         .query_map(rusqlite::params_from_iter(bind_refs), row_to_summary)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -177,9 +178,11 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
     let status_str: String = row.get(3)?;
-    let status: RunStatus = status_str.parse().map_err(|e: surge_core::ParseRunStatusError| {
-        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
-    })?;
+    let status: RunStatus = status_str
+        .parse()
+        .map_err(|e: surge_core::ParseRunStatusError| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
     Ok(RunSummary {
         id,

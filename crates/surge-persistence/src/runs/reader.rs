@@ -42,13 +42,13 @@ pub struct ReadEvent {
 
 impl RunReader {
     /// Run id this reader is bound to.
-    #[must_use] 
+    #[must_use]
     pub fn run_id(&self) -> &RunId {
         &self.run_id
     }
 
     /// Worktree directory for this run.
-    #[must_use] 
+    #[must_use]
     pub fn worktree_path(&self) -> &Path {
         &self.worktree_path
     }
@@ -58,7 +58,8 @@ impl RunReader {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<EventSeq, StorageError> {
             let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
-            let max: Option<i64> = conn.query_row("SELECT MAX(seq) FROM events", [], |r| r.get(0))?;
+            let max: Option<i64> =
+                conn.query_row("SELECT MAX(seq) FROM events", [], |r| r.get(0))?;
             Ok(EventSeq(max.unwrap_or(0) as u64))
         })
         .await
@@ -92,7 +93,7 @@ impl RunReader {
                         kind,
                         payload,
                     }))
-                }
+                },
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(e.into()),
             }
@@ -113,9 +114,8 @@ impl RunReader {
                 "SELECT seq, timestamp, kind, payload
                  FROM events WHERE seq >= ? AND seq < ? ORDER BY seq",
             )?;
-            let iter = stmt.query_map(
-                params![range.start.0 as i64, range.end.0 as i64],
-                |row| {
+            let iter =
+                stmt.query_map(params![range.start.0 as i64, range.end.0 as i64], |row| {
                     let blob: Vec<u8> = row.get(3)?;
                     Ok((
                         EventSeq(row.get::<_, i64>(0)? as u64),
@@ -123,8 +123,7 @@ impl RunReader {
                         row.get::<_, String>(2)?,
                         blob,
                     ))
-                },
-            )?;
+                })?;
             let mut out = Vec::new();
             for r in iter {
                 let (seq, ts, kind, blob) = r?;
@@ -220,10 +219,7 @@ impl RunReader {
     ///
     /// Looks up the stored file path in the `artifacts` table and reads the
     /// file from `artifacts_dir`.
-    pub async fn read_artifact(
-        &self,
-        content_hash: &ContentHash,
-    ) -> Result<Vec<u8>, StorageError> {
+    pub async fn read_artifact(&self, content_hash: &ContentHash) -> Result<Vec<u8>, StorageError> {
         let pool = self.pool.clone();
         let dir = self.artifacts_dir.clone();
         let hash_str = content_hash.to_string();

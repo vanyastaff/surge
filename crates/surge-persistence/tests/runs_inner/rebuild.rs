@@ -28,16 +28,14 @@ async fn rebuild_views_is_identity_over_event_log() {
 
     for (p, o) in [(50u32, 25u32), (75u32, 30u32), (100u32, 40u32)] {
         writer
-            .append_event(VersionedEventPayload::new(
-                EventPayload::TokensConsumed {
-                    session: SessionId::new(),
-                    prompt_tokens: p,
-                    output_tokens: o,
-                    cache_hits: 0,
-                    model: "claude".into(),
-                    cost_usd: Some(0.005),
-                },
-            ))
+            .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+                session: SessionId::new(),
+                prompt_tokens: p,
+                output_tokens: o,
+                cache_hits: 0,
+                model: "claude".into(),
+                cost_usd: Some(0.005),
+            }))
             .await
             .expect("append TokensConsumed");
     }

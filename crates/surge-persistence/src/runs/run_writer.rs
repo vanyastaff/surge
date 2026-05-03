@@ -40,19 +40,19 @@ pub struct RunWriter {
 
 impl RunWriter {
     /// Run id this writer is bound to.
-    #[must_use] 
+    #[must_use]
     pub fn run_id(&self) -> &RunId {
         self.reader.run_id()
     }
 
     /// Worktree path for this run.
-    #[must_use] 
+    #[must_use]
     pub fn worktree_path(&self) -> &Path {
         self.reader.worktree_path()
     }
 
     /// Returns true if `close()` has been called.
-    #[must_use] 
+    #[must_use]
     pub fn is_closed(&self) -> bool {
         self.closed
     }
@@ -94,10 +94,7 @@ impl RunWriter {
     }
 
     /// Read the bytes of an artifact stored by content hash. Forwarded to the embedded `RunReader`.
-    pub async fn read_artifact(
-        &self,
-        content_hash: &ContentHash,
-    ) -> Result<Vec<u8>, StorageError> {
+    pub async fn read_artifact(&self, content_hash: &ContentHash) -> Result<Vec<u8>, StorageError> {
         self.reader.read_artifact(content_hash).await
     }
 

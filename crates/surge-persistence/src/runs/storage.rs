@@ -41,13 +41,13 @@ impl Storage {
     ) -> Result<Arc<Self>, OpenError> {
         // Multi-thread runtime check — required by writer task design.
         match Handle::try_current().map(|h| h.runtime_flavor()) {
-            Ok(RuntimeFlavor::MultiThread) => {}
+            Ok(RuntimeFlavor::MultiThread) => {},
             Ok(_) => return Err(OpenError::SingleThreadedRuntime),
             Err(_) => {
                 return Err(OpenError::Config(
                     "Storage::open requires a tokio runtime in scope".into(),
                 ));
-            }
+            },
         }
 
         let home = home.as_ref().to_path_buf();
@@ -146,10 +146,7 @@ impl Storage {
     }
 
     /// Open a read-only handle to an existing run.
-    pub async fn open_run_reader(
-        self: &Arc<Self>,
-        run_id: RunId,
-    ) -> Result<RunReader, OpenError> {
+    pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
         let events_path = self.events_db_path(&run_id);
         if !events_path.exists() {
             return Err(OpenError::RunNotFound(run_id));
@@ -171,10 +168,7 @@ impl Storage {
 
     /// Open the exclusive writer for an existing run.
     /// Fails with `OpenError::WriterAlreadyHeld` if another writer holds the slot.
-    pub async fn open_run_writer(
-        self: &Arc<Self>,
-        run_id: RunId,
-    ) -> Result<RunWriter, OpenError> {
+    pub async fn open_run_writer(self: &Arc<Self>, run_id: RunId) -> Result<RunWriter, OpenError> {
         let token = self
             .active_writers
             .try_acquire(run_id.clone())
@@ -241,7 +235,10 @@ impl Storage {
         let Some(mut summary) = registry::get_run(&self.registry_pool, run_id)? else {
             return Ok(None);
         };
-        if matches!(summary.status, RunStatus::Running | RunStatus::Bootstrapping) {
+        if matches!(
+            summary.status,
+            RunStatus::Running | RunStatus::Bootstrapping
+        ) {
             if let Some(pid) = summary.daemon_pid {
                 if !self.process_probe.is_alive(pid) {
                     summary.status = RunStatus::Crashed;

@@ -28,30 +28,26 @@ async fn views_aggregate_after_canonical_event_sequence() {
         .expect("append StageEntered");
 
     writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::TokensConsumed {
-                session: SessionId::new(),
-                prompt_tokens: 100,
-                output_tokens: 50,
-                cache_hits: 10,
-                model: "claude".into(),
-                cost_usd: Some(0.01),
-            },
-        ))
+        .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+            session: SessionId::new(),
+            prompt_tokens: 100,
+            output_tokens: 50,
+            cache_hits: 10,
+            model: "claude".into(),
+            cost_usd: Some(0.01),
+        }))
         .await
         .expect("append TokensConsumed #1");
 
     writer
-        .append_event(VersionedEventPayload::new(
-            EventPayload::TokensConsumed {
-                session: SessionId::new(),
-                prompt_tokens: 200,
-                output_tokens: 75,
-                cache_hits: 5,
-                model: "claude".into(),
-                cost_usd: Some(0.02),
-            },
-        ))
+        .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+            session: SessionId::new(),
+            prompt_tokens: 200,
+            output_tokens: 75,
+            cache_hits: 5,
+            model: "claude".into(),
+            cost_usd: Some(0.02),
+        }))
         .await
         .expect("append TokensConsumed #2");
 

@@ -21,9 +21,9 @@ async fn flush_drains_pending_appends() {
     let mut futures = Vec::with_capacity(100);
     for i in 0..100u64 {
         let w = writer.clone();
-        futures.push(tokio::spawn(
-            async move { w.append_event(dummy_payload(i)).await },
-        ));
+        futures.push(tokio::spawn(async move {
+            w.append_event(dummy_payload(i)).await
+        }));
     }
     let results = join_all(futures).await;
     for r in results {

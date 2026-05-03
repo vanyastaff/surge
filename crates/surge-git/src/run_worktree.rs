@@ -76,7 +76,11 @@ mod tests {
     #[test]
     fn sibling_path_is_under_repo_parent() {
         let id = RunId::new();
-        let p = resolve_path(Path::new("/projects/myrepo"), &id, &WorktreeLocation::Sibling);
+        let p = resolve_path(
+            Path::new("/projects/myrepo"),
+            &id,
+            &WorktreeLocation::Sibling,
+        );
         // On Windows test runners the path uses backslashes; check substrings instead.
         let s = p.to_string_lossy().replace('\\', "/");
         assert!(s.contains("/projects/.surge-worktrees/"));
@@ -86,7 +90,11 @@ mod tests {
     #[test]
     fn central_path_under_home() {
         let id = RunId::new();
-        let p = resolve_path(Path::new("/projects/myrepo"), &id, &WorktreeLocation::Central);
+        let p = resolve_path(
+            Path::new("/projects/myrepo"),
+            &id,
+            &WorktreeLocation::Central,
+        );
         let s = p.to_string_lossy();
         assert!(s.contains(".surge"));
         assert!(s.contains(&id.to_string()));
