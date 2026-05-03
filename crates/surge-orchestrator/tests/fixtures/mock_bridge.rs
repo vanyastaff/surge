@@ -35,6 +35,8 @@ pub struct MockBridge {
     pub recorded_calls: Arc<Mutex<Vec<RecordedCall>>>,
     /// Broadcast channel.
     tx: broadcast::Sender<BridgeEvent>,
+    /// When set, `open_session` returns this id and clears it.
+    pinned_session_id: Mutex<Option<SessionId>>,
 }
 
 impl MockBridge {
@@ -44,7 +46,14 @@ impl MockBridge {
             scripted_events: Mutex::new(VecDeque::new()),
             recorded_calls: Arc::new(Mutex::new(Vec::new())),
             tx,
+            pinned_session_id: Mutex::new(None),
         }
+    }
+
+    /// Pin the `SessionId` that the next `open_session` call will return.
+    /// The id is consumed (cleared) after one use.
+    pub async fn pin_next_session_id(&self, id: SessionId) {
+        *self.pinned_session_id.lock().await = Some(id);
     }
 
     /// Queue an event to be broadcast on the next `pump_scripted_events()`.
@@ -77,7 +86,8 @@ impl BridgeFacade for MockBridge {
         _config: SessionConfig,
     ) -> Result<SessionId, OpenSessionError> {
         self.recorded_calls.lock().await.push(RecordedCall::OpenSession);
-        Ok(SessionId::new())
+        let pinned = self.pinned_session_id.lock().await.take();
+        Ok(pinned.unwrap_or_else(SessionId::new))
     }
 
     async fn send_message(
