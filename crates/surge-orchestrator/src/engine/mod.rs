@@ -4,4 +4,5 @@
 //! for the full design contract. M5 ships sequential-pipeline-only support;
 //! parallel/loops/subgraphs are M6 scope and rejected at run-start.
 
-// Submodules added incrementally as later phases land. Currently empty.
+// Submodules added incrementally as later phases land.
+pub mod sandbox_factory;
