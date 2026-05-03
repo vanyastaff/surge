@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, BridgeEvent, MessageContent, SessionConfig,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
     SessionEndReason,
 };
 use surge_acp::client::PermissionPolicy;
@@ -42,28 +42,30 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
     let _ = timeout(Duration::from_secs(2), events.recv()).await;
 
     // Trigger a prompt — mock crashes on first prompt.
-    bridge.send_message(sid.clone(), MessageContent::Text("crash now".into())).await.ok();
+    bridge
+        .send_message(sid, MessageContent::Text("crash now".into()))
+        .await
+        .ok();
 
     let crash_start = Instant::now();
     let mut saw_crash = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         match timeout(Duration::from_millis(200), events.recv()).await {
-            Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => {
-                match reason {
-                    SessionEndReason::AgentCrashed { exit_code, .. } => {
-                        assert_eq!(exit_code, Some(137));
-                        saw_crash = true;
-                        let elapsed = crash_start.elapsed();
-                        assert!(
-                            elapsed <= Duration::from_secs(2),
-                            "crash detection took {elapsed:?}, expected ≤2s"
-                        );
-                        break;
-                    }
-                    other => panic!("expected AgentCrashed, got {other:?}"),
-                }
-            }
+            Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => match reason
+            {
+                SessionEndReason::AgentCrashed { exit_code, .. } => {
+                    assert_eq!(exit_code, Some(137));
+                    saw_crash = true;
+                    let elapsed = crash_start.elapsed();
+                    assert!(
+                        elapsed <= Duration::from_secs(2),
+                        "crash detection took {elapsed:?}, expected ≤2s"
+                    );
+                    break;
+                },
+                other => panic!("expected AgentCrashed, got {other:?}"),
+            },
             _ => continue,
         }
     }

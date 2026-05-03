@@ -16,27 +16,37 @@ use super::session::{MessageContent, SessionConfig, SessionState};
 pub enum BridgeCommand {
     /// Open a new session — see `AcpBridge::open_session`.
     OpenSession {
+        /// Open-session parameters.
         config: SessionConfig,
+        /// Reply channel carrying the new `SessionId` or an `OpenSessionError`.
         reply: oneshot::Sender<Result<SessionId, OpenSessionError>>,
     },
     /// Send a message to an open session — see `AcpBridge::send_message`.
     SendMessage {
+        /// Target session.
         session: SessionId,
+        /// Message payload.
         content: MessageContent,
+        /// Reply channel carrying `()` on success or a `SendMessageError`.
         reply: oneshot::Sender<Result<(), SendMessageError>>,
     },
     /// Read a session's bridge-observable state — see `AcpBridge::session_state`.
     GetSessionState {
+        /// Target session.
         session: SessionId,
+        /// Reply channel carrying the `SessionState` or a `BridgeError`.
         reply: oneshot::Sender<Result<SessionState, BridgeError>>,
     },
     /// Close a session — see `AcpBridge::close_session`.
     CloseSession {
+        /// Target session.
         session: SessionId,
+        /// Reply channel carrying `()` on clean close or a `CloseSessionError`.
         reply: oneshot::Sender<Result<(), CloseSessionError>>,
     },
     /// Drain pending commands and exit the worker — see `AcpBridge::shutdown`.
     Shutdown {
+        /// Reply channel; worker sends `()` once the shutdown is complete.
         reply: oneshot::Sender<()>,
     },
     /// Test-only: inject a panic into the worker thread to exercise the

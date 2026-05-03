@@ -6,6 +6,8 @@
 //!
 //! Internally uses `tokio::sync::mpsc` for zero-polling async communication
 //! and `spawn_local` per-operation for concurrent ACP I/O.
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(clippy::excessive_nesting)]
 
 use agent_client_protocol::{
     Agent, ContentBlock, NewSessionRequest, PromptRequest, PromptResponse, SessionModeId,

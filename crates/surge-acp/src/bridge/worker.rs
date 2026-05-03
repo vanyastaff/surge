@@ -102,11 +102,15 @@ pub(crate) async fn bridge_loop(
             BridgeCommand::OpenSession { config, reply } => {
                 let result = open_session_impl(&sessions, &event_tx, config).await;
                 let _ = reply.send(result);
-            }
-            BridgeCommand::SendMessage { session, content, reply } => {
+            },
+            BridgeCommand::SendMessage {
+                session,
+                content,
+                reply,
+            } => {
                 let result = send_message_impl(&sessions, session, content).await;
                 let _ = reply.send(result);
-            }
+            },
             BridgeCommand::GetSessionState { session, reply } => {
                 // Phase 6 stub: returns the bridge-observable state if the session
                 // exists, else `BridgeError::ReplyDropped` as a stand-in. Phase 7
@@ -117,27 +121,27 @@ pub(crate) async fn bridge_loop(
                     .borrow()
                     .get(&session)
                     .map(|s| super::session::SessionState {
-                        session_id: s.session_id.clone(),
+                        session_id: s.session_id,
                         agent_label: s.agent_label.clone(),
                         status: super::session::SessionStatus::Open,
                         bindings: Default::default(),
                     });
                 let _ = reply.send(state.ok_or(super::error::BridgeError::ReplyDropped));
-            }
+            },
             BridgeCommand::CloseSession { session, reply } => {
                 let result = close_session_impl(&sessions, &event_tx, session).await;
                 let _ = reply.send(result);
-            }
+            },
             BridgeCommand::Shutdown { reply } => {
                 close_all_sessions(&sessions, &event_tx, SessionEndReason::ForcedClose).await;
                 let _ = reply.send(());
                 info!("bridge worker shutting down");
                 return;
-            }
+            },
             #[cfg(any(test, feature = "test-helpers"))]
             BridgeCommand::TestPanic => {
                 panic!("bridge worker test-panic injected");
-            }
+            },
         }
     }
 
@@ -158,9 +162,9 @@ pub(crate) async fn handle_session_notification(
     secrets: &Arc<crate::shared::secrets::SecretsRedactor>,
     notif: agent_client_protocol::SessionNotification,
 ) {
-    use agent_client_protocol::SessionUpdate;
-    use crate::bridge::tokens::extract_usage;
     use crate::bridge::event::AgentMessageMeta;
+    use crate::bridge::tokens::extract_usage;
+    use agent_client_protocol::SessionUpdate;
 
     // Update last_token_usage if this notification carries it.
     if let Some(snap) = extract_usage(&notif.update) {
@@ -171,7 +175,7 @@ pub(crate) async fn handle_session_notification(
             s.last_token_usage_emitted = false;
         }
         let _ = event_tx.send(BridgeEvent::TokenUsage {
-            session: session_id.clone(),
+            session: *session_id,
             prompt_tokens: snap_clone.prompt_tokens,
             output_tokens: snap_clone.output_tokens,
             cache_hits: snap_clone.cache_hits,
@@ -186,26 +190,26 @@ pub(crate) async fn handle_session_notification(
         SessionUpdate::AgentMessageChunk(chunk) => {
             let text = content_block_to_string(&chunk.content);
             let _ = event_tx.send(BridgeEvent::AgentMessage {
-                session: session_id.clone(),
+                session: *session_id,
                 chunk: text,
                 meta: Some(AgentMessageMeta {
                     model: None,
                     timestamp_ms: chrono::Utc::now().timestamp_millis(),
                 }),
             });
-        }
+        },
         // SDK 0.10.2 shape: ToolCall(ToolCall) where ToolCall has:
         //   - tool_call_id: ToolCallId  (not `.id`)
         //   - title: String             (not `.fields.title`)
         //   - raw_input: Option<serde_json::Value>
         SessionUpdate::ToolCall(tool_call) => {
             handle_tool_call(session_id, event_tx, state, sandbox, secrets, tool_call).await;
-        }
+        },
         // Other variants (AgentThoughtChunk, ToolCallUpdate, Plan,
         // AvailableCommandsUpdate, CurrentModeUpdate, ConfigOptionUpdate,
         // SessionInfoUpdate, UsageUpdate) are deferred to Phase 10
         // observability tests.
-        _ => {}
+        _ => {},
     }
 }
 
@@ -244,18 +248,18 @@ async fn handle_tool_call(
         match parse_outcome_args(&args_json) {
             Ok((outcome, summary, artifacts)) => {
                 let _ = event_tx.send(BridgeEvent::OutcomeReported {
-                    session: session_id.clone(),
+                    session: *session_id,
                     outcome,
                     summary,
                     artifacts_produced: artifacts,
                 });
-            }
+            },
             Err(e) => {
                 let _ = event_tx.send(BridgeEvent::Error {
-                    session: Some(session_id.clone()),
+                    session: Some(*session_id),
                     error: format!("report_stage_outcome args parse failed: {e}"),
                 });
-            }
+            },
         }
         return;
     }
@@ -264,18 +268,18 @@ async fn handle_tool_call(
         match parse_human_input_args(&args_json) {
             Ok((question, context)) => {
                 let _ = event_tx.send(BridgeEvent::HumanInputRequested {
-                    session: session_id.clone(),
+                    session: *session_id,
                     call_id,
                     question,
                     context,
                 });
-            }
+            },
             Err(e) => {
                 let _ = event_tx.send(BridgeEvent::Error {
-                    session: Some(session_id.clone()),
+                    session: Some(*session_id),
                     error: format!("request_human_input args parse failed: {e}"),
                 });
-            }
+            },
         }
         return;
     }
@@ -283,15 +287,18 @@ async fn handle_tool_call(
     // Generic tool call — emit ToolCall + auto-reply Unsupported (M3 stub per spec §5.3).
     let decision = sandbox.allows_tool(&tool_name, None);
     let _ = event_tx.send(BridgeEvent::ToolCall {
-        session: session_id.clone(),
+        session: *session_id,
         call_id: call_id.clone(),
         tool: tool_name.clone(),
         args_redacted_json: args_redacted,
         sandbox_decision: decision,
-        meta: ToolCallMeta { mcp_id: None, injected: false },
+        meta: ToolCallMeta {
+            mcp_id: None,
+            injected: false,
+        },
     });
     let _ = event_tx.send(BridgeEvent::ToolResult {
-        session: session_id.clone(),
+        session: *session_id,
         call_id,
         payload: ToolResultPayload::Unsupported,
     });
@@ -301,21 +308,34 @@ fn parse_outcome_args(
     args_json: &str,
 ) -> Result<(surge_core::OutcomeKey, String, Vec<String>), String> {
     let v: serde_json::Value = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
-    let outcome_str = v.get("outcome").and_then(|o| o.as_str())
+    let outcome_str = v
+        .get("outcome")
+        .and_then(|o| o.as_str())
         .ok_or_else(|| "missing or non-string `outcome`".to_string())?;
     let outcome = surge_core::OutcomeKey::try_from(outcome_str)
         .map_err(|e| format!("invalid OutcomeKey '{outcome_str}': {e}"))?;
-    let summary = v.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string();
-    let artifacts = v.get("artifacts_produced")
+    let summary = v
+        .get("summary")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let artifacts = v
+        .get("artifacts_produced")
         .and_then(|a| a.as_array())
-        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     Ok((outcome, summary, artifacts))
 }
 
 fn parse_human_input_args(args_json: &str) -> Result<(String, Option<String>), String> {
     let v: serde_json::Value = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
-    let question = v.get("question").and_then(|q| q.as_str())
+    let question = v
+        .get("question")
+        .and_then(|q| q.as_str())
         .ok_or_else(|| "missing or non-string `question`".to_string())?
         .to_string();
     let context = v.get("context").and_then(|c| c.as_str()).map(String::from);
@@ -331,7 +351,7 @@ pub(crate) async fn close_all_sessions(
     event_tx: &broadcast::Sender<BridgeEvent>,
     reason: SessionEndReason,
 ) {
-    let to_close: Vec<SessionId> = sessions.borrow().keys().cloned().collect();
+    let to_close: Vec<SessionId> = sessions.borrow().keys().copied().collect();
     for sid in to_close {
         let session = sessions.borrow_mut().remove(&sid);
         if let Some(mut s) = session {
@@ -362,7 +382,7 @@ pub(crate) async fn close_all_sessions(
 
         // Emit terminal event.
         let _ = event_tx.send(BridgeEvent::SessionEnded {
-            session: sid.clone(),
+            session: sid,
             reason: reason.clone(),
         });
     }
@@ -379,24 +399,24 @@ fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, 
             c.arg("--acp");
             c.args(extra_args);
             c
-        }
+        },
         AgentKind::Codex { binary, extra_args } => {
             let mut c = Command::new(binary);
             c.arg("acp");
             c.args(extra_args);
             c
-        }
+        },
         AgentKind::GeminiCli { binary, extra_args } => {
             let mut c = Command::new(binary);
             c.arg("--acp");
             c.args(extra_args);
             c
-        }
+        },
         AgentKind::Custom { binary, args } => {
             let mut c = Command::new(binary);
             c.args(args);
             c
-        }
+        },
         AgentKind::Mock { args } => {
             // `CARGO_BIN_EXE_mock_acp_agent` is set by Cargo during `cargo test`.
             // Outside of tests, fall back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`.
@@ -406,14 +426,14 @@ fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, 
             let path = std::env::var("CARGO_BIN_EXE_mock_acp_agent")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    let target = std::env::var("CARGO_TARGET_DIR")
-                        .unwrap_or_else(|_| "target".to_string());
+                    let target =
+                        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
                     PathBuf::from(target).join("debug").join("mock_acp_agent")
                 });
             let mut c = Command::new(path);
             c.args(args);
             c
-        }
+        },
     };
     cmd.current_dir(working_dir);
     cmd.stdin(Stdio::piped());
@@ -457,21 +477,23 @@ pub(crate) async fn open_session_impl(
 
     // Step 2: build full tool list = caller tools + engine-injected, then sandbox-filter.
     let injected = build_injected_tools(&config.declared_outcomes, config.allows_escalation);
-    let mut combined: Vec<ToolDef> = config.tools.iter().cloned().collect();
+    let mut combined: Vec<ToolDef> = config.tools.to_vec();
     combined.extend(injected.iter().cloned());
     let (visible, hidden_names) = filter_visible_tools(combined, config.sandbox.as_ref());
 
     // Step 3: spawn agent subprocess.
-    let mut cmd =
-        build_agent_command(&config.agent_kind, &config.working_dir).map_err(|e| {
-            warn!(
-                kind = config.agent_kind.label(),
-                working_dir = %config.working_dir.display(),
-                error = %e,
-                "build_agent_command failed before spawn"
-            );
-            OpenSessionError::AgentSpawnFailed { kind: config.agent_kind.label().into(), source: e }
-        })?;
+    let mut cmd = build_agent_command(&config.agent_kind, &config.working_dir).map_err(|e| {
+        warn!(
+            kind = config.agent_kind.label(),
+            working_dir = %config.working_dir.display(),
+            error = %e,
+            "build_agent_command failed before spawn"
+        );
+        OpenSessionError::AgentSpawnFailed {
+            kind: config.agent_kind.label().into(),
+            source: e,
+        }
+    })?;
     let mut child: Child = cmd.spawn().map_err(|e| {
         warn!(
             kind = config.agent_kind.label(),
@@ -497,7 +519,7 @@ pub(crate) async fn open_session_impl(
     let inner = Rc::new(RefCell::new(SessionStateInner::new(String::new())));
 
     let bridge_client = BridgeClient::new(
-        session_id.clone(),
+        session_id,
         event_tx.clone(),
         inner.clone(),
         config.sandbox.boxed_clone(),
@@ -514,11 +536,10 @@ pub(crate) async fn open_session_impl(
     let reader = stdout.compat();
 
     // Construct ClientSideConnection; executor spawns the io_task on the LocalSet.
-    let (connection, io_task) =
-        ClientSideConnection::new(bridge_client, writer, reader, |fut| {
-            #[allow(clippy::let_underscore_future)]
-            let _ = tokio::task::spawn_local(fut);
-        });
+    let (connection, io_task) = ClientSideConnection::new(bridge_client, writer, reader, |fut| {
+        #[allow(clippy::let_underscore_future)]
+        let _ = tokio::task::spawn_local(fut);
+    });
 
     // Drive the io_task in the background (same pattern as legacy connection.rs).
     // We capture the JoinHandle so it can be moved into `AcpSession` for proper
@@ -532,8 +553,10 @@ pub(crate) async fn open_session_impl(
     // initialize — declare client capabilities and identity.
     let mut init_request = InitializeRequest::new(ProtocolVersion::V1);
     init_request.client_capabilities = ClientCapabilities::new().terminal(true);
-    init_request.client_info =
-        Some(Implementation::new("surge-bridge", env!("CARGO_PKG_VERSION")));
+    init_request.client_info = Some(Implementation::new(
+        "surge-bridge",
+        env!("CARGO_PKG_VERSION"),
+    ));
 
     let init_resp = match connection.initialize(init_request).await {
         Ok(r) => r,
@@ -548,8 +571,10 @@ pub(crate) async fn open_session_impl(
             // rather than killing — match the legacy AgentConnection::Drop
             // pattern (start_kill is synchronous, no await needed).
             let _ = child.start_kill();
-            return Err(OpenSessionError::HandshakeFailed { reason: format!("{e:?}") });
-        }
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: format!("{e:?}"),
+            });
+        },
     };
 
     // new_session — create an ACP session scoped to the working directory.
@@ -566,8 +591,10 @@ pub(crate) async fn open_session_impl(
                 "ACP new_session handshake failed"
             );
             let _ = child.start_kill();
-            return Err(OpenSessionError::HandshakeFailed { reason: format!("{e:?}") });
-        }
+            return Err(OpenSessionError::HandshakeFailed {
+                reason: format!("{e:?}"),
+            });
+        },
     };
 
     // Step 5: store the ACP-side session string in the inner state.
@@ -576,7 +603,7 @@ pub(crate) async fn open_session_impl(
 
     // Step 6: emit SessionEstablished.
     let _ = event_tx.send(BridgeEvent::SessionEstablished {
-        session: session_id.clone(),
+        session: session_id,
         agent: config.agent_kind.label().into(),
         bindings: config.bindings.clone(),
         tools_visible: visible.iter().map(|t| t.name.clone()).collect(),
@@ -591,11 +618,8 @@ pub(crate) async fn open_session_impl(
     // Step 7: Spawn the stderr drainer + subprocess waiter on the LocalSet.
     let tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>> = std::rc::Rc::default();
 
-    let drainer_handle = tokio::task::spawn_local(stderr_drainer(
-        stderr,
-        tail_storage.clone(),
-        session_id.clone(),
-    ));
+    let drainer_handle =
+        tokio::task::spawn_local(stderr_drainer(stderr, tail_storage.clone(), session_id));
 
     // Create the kill channel: close_session_impl sends on kill_tx when the
     // grace timeout fires; subprocess_waiter listens on kill_rx and SIGKILL the
@@ -607,7 +631,7 @@ pub(crate) async fn open_session_impl(
         child,
         event_tx.clone(),
         inner.clone(),
-        session_id.clone(),
+        session_id,
         tail_storage.clone(),
         sessions.clone(),
         kill_rx,
@@ -616,9 +640,9 @@ pub(crate) async fn open_session_impl(
     // Insert the session — connection and io_task_handle go IN, not into a
     // suppression. Dropping connection here would close the protocol channel.
     sessions.borrow_mut().insert(
-        session_id.clone(),
+        session_id,
         AcpSession {
-            session_id: session_id.clone(),
+            session_id,
             agent_label: config.agent_kind.label().into(),
             connection: Some(connection),
             io_task_handle: Some(io_task_handle),
@@ -639,10 +663,7 @@ pub(crate) async fn open_session_impl(
 ///
 /// Returns `(visible_tools, hidden_tool_names)`. The hidden list is used for
 /// debug logging only — the bridge does not surface it to callers.
-fn filter_visible_tools(
-    tools: Vec<ToolDef>,
-    sandbox: &dyn Sandbox,
-) -> (Vec<ToolDef>, Vec<String>) {
+fn filter_visible_tools(tools: Vec<ToolDef>, sandbox: &dyn Sandbox) -> (Vec<ToolDef>, Vec<String>) {
     let mut visible = Vec::with_capacity(tools.len());
     let mut hidden_names = Vec::new();
     for t in tools {
@@ -693,11 +714,11 @@ async fn stderr_drainer(
                     let drop_n = tail.len() - STDERR_RING_CAP;
                     tail.drain(..drop_n);
                 }
-            }
+            },
             Err(e) => {
                 warn!(session = %session_id, "stderr read failed: {e}");
                 break;
-            }
+            },
         }
     }
 }
@@ -757,7 +778,9 @@ async fn subprocess_waiter(
     // timeout. close_session_impl polls end_emitted and returns GracefulTimedOut
     // once this fires.
     let reason = if force_killed {
-        SessionEndReason::Timeout { duration_ms: GRACE_MS }
+        SessionEndReason::Timeout {
+            duration_ms: GRACE_MS,
+        }
     } else {
         match exit_status {
             Ok(s) if s.success() => SessionEndReason::Normal,
@@ -773,7 +796,7 @@ async fn subprocess_waiter(
     };
 
     let _ = event_tx.send(BridgeEvent::SessionEnded {
-        session: session_id.clone(),
+        session: session_id,
         reason: reason.clone(),
     });
     state.borrow_mut().end_emitted = Some(reason);
@@ -798,7 +821,7 @@ pub(crate) fn flush_pending_token_usage(
     };
     if let Some(u) = snapshot {
         let _ = event_tx.send(BridgeEvent::TokenUsage {
-            session: session_id.clone(),
+            session: *session_id,
             prompt_tokens: u.prompt_tokens,
             output_tokens: u.output_tokens,
             cache_hits: u.cache_hits,
@@ -815,6 +838,14 @@ pub(crate) fn flush_pending_token_usage(
 /// but is safe because all mutations to the session map happen on the same
 /// LocalSet thread and are serialized through `bridge_loop`'s sequential
 /// command dispatch.
+// `send_message_impl` intentionally holds a `sessions.borrow()` (RefCell read
+// guard) across the `connection.prompt(...).await` point. This is safe ONLY
+// because `bridge_loop` dispatches commands one at a time on a single LocalSet
+// thread, so no other code can call `sessions.borrow_mut()` concurrently. The
+// lint is suppressed here rather than fixed, because the fix (extract the
+// connection into an Arc and release the borrow) would require a larger
+// structural change that belongs in a dedicated refactor, not a polish task.
+#[allow(clippy::await_holding_refcell_ref)]
 pub(crate) async fn send_message_impl(
     sessions: &SessionMap,
     session: SessionId,
@@ -826,9 +857,9 @@ pub(crate) async fn send_message_impl(
     // Resolve acp_session_id and confirm connection is present.
     let (connection_present, acp_session_str) = {
         let map = sessions.borrow();
-        let s = map.get(&session).ok_or_else(|| super::error::SendMessageError::SessionNotFound {
-            session: session.clone(),
-        })?;
+        let s = map
+            .get(&session)
+            .ok_or(super::error::SendMessageError::SessionNotFound { session })?;
         let acp_id = s.inner.borrow().acp_session_id.clone();
         (s.connection.is_some(), acp_id)
     };
@@ -836,7 +867,7 @@ pub(crate) async fn send_message_impl(
     if !connection_present {
         // Session is closing — connection has been .take()n by close_session_impl.
         return Err(super::error::SendMessageError::SessionEnded {
-            session: session.clone(),
+            session,
             reason: super::event::SessionEndReason::Normal,
         });
     }
@@ -847,8 +878,7 @@ pub(crate) async fn send_message_impl(
     };
 
     // Build ACP-side session id from the stored string.
-    let acp_session_id =
-        agent_client_protocol::SessionId::new(acp_session_str.as_str());
+    let acp_session_id = agent_client_protocol::SessionId::new(acp_session_str.as_str());
     let req = agent_client_protocol::PromptRequest::new(acp_session_id, blocks);
 
     // SAFETY: holding `sessions.borrow()` across the `prompt(...).await` below
@@ -860,21 +890,23 @@ pub(crate) async fn send_message_impl(
     // `Arc<ClientSideConnection>` out of the entry and release the borrow
     // before await would be the right fix at that point.
     let map = sessions.borrow();
-    let session_entry = map.get(&session).ok_or_else(|| {
-        super::error::SendMessageError::SessionNotFound { session: session.clone() }
-    })?;
-    let connection = session_entry.connection.as_ref().ok_or_else(|| {
-        super::error::SendMessageError::SessionEnded {
-            session: session.clone(),
-            reason: super::event::SessionEndReason::Normal,
-        }
-    })?;
+    let session_entry = map
+        .get(&session)
+        .ok_or(super::error::SendMessageError::SessionNotFound { session })?;
+    let connection =
+        session_entry
+            .connection
+            .as_ref()
+            .ok_or(super::error::SendMessageError::SessionEnded {
+                session,
+                reason: super::event::SessionEndReason::Normal,
+            })?;
 
     connection.prompt(req).await.map_err(|e| {
         warn!(session = %session, error = %e, "ACP prompt dispatch failed");
-        super::error::SendMessageError::Bridge(
-            super::error::BridgeError::CommandSendFailed(e.to_string()),
-        )
+        super::error::SendMessageError::Bridge(super::error::BridgeError::CommandSendFailed(
+            e.to_string(),
+        ))
     })?;
 
     Ok(())
@@ -908,9 +940,9 @@ pub(crate) async fn close_session_impl(
     // is released before any await point (scoped block).
     let (inner, took_connection, io_task) = {
         let mut map = sessions.borrow_mut();
-        let s = map.get_mut(&session).ok_or_else(|| {
-            super::error::CloseSessionError::SessionNotFound { session: session.clone() }
-        })?;
+        let s = map
+            .get_mut(&session)
+            .ok_or(super::error::CloseSessionError::SessionNotFound { session })?;
         // Mark closing so observer/notification handlers drain quickly.
         s.inner.borrow_mut().closing = true;
         // Take connection — dropping it closes outgoing_tx (one sender). The SDK's
@@ -977,10 +1009,7 @@ pub(crate) async fn close_session_impl(
     while tokio::time::Instant::now() < post_kill_deadline {
         if inner.borrow().end_emitted.is_some() {
             // Waiter already emitted SessionEnded; we're done.
-            return Err(super::error::CloseSessionError::GracefulTimedOut {
-                session,
-                killed,
-            });
+            return Err(super::error::CloseSessionError::GracefulTimedOut { session, killed });
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -996,9 +1025,11 @@ pub(crate) async fn close_session_impl(
         }
     }
 
-    let reason = super::event::SessionEndReason::Timeout { duration_ms: GRACE_MS };
+    let reason = super::event::SessionEndReason::Timeout {
+        duration_ms: GRACE_MS,
+    };
     let _ = event_tx.send(BridgeEvent::SessionEnded {
-        session: session.clone(),
+        session,
         reason: reason.clone(),
     });
     // Set after send so the broadcast slot is taken before any racing waiter
@@ -1006,10 +1037,7 @@ pub(crate) async fn close_session_impl(
     // LocalSet (no .await between send and this assignment).
     inner.borrow_mut().end_emitted = Some(reason);
 
-    Err(super::error::CloseSessionError::GracefulTimedOut {
-        session,
-        killed,
-    })
+    Err(super::error::CloseSessionError::GracefulTimedOut { session, killed })
 }
 
 #[cfg(test)]
@@ -1023,7 +1051,12 @@ mod tests {
     fn filter_removes_denied_tools() {
         let tools = vec![
             ToolDef::new("read_file", "d", ToolCategory::Builtin, json!({})),
-            ToolDef::new("shell_exec", "d", ToolCategory::Mcp("ops".into()), json!({})),
+            ToolDef::new(
+                "shell_exec",
+                "d",
+                ToolCategory::Mcp("ops".into()),
+                json!({}),
+            ),
         ];
         let s = DenyListSandbox::deny_tools(["shell_exec"]);
         let (visible, hidden) = filter_visible_tools(tools, &s);

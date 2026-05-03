@@ -10,12 +10,11 @@ use std::sync::Arc;
 use agent_client_protocol::{
     Client, CreateTerminalRequest, CreateTerminalResponse, ExtNotification, ExtRequest,
     ExtResponse, KillTerminalRequest, KillTerminalResponse, PermissionOptionId,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, Result as AcpResult, SelectedPermissionOutcome, SessionNotification,
-    TerminalExitStatus, TerminalId, TerminalOutputRequest, TerminalOutputResponse,
-    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
-    WriteTextFileResponse,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    Result as AcpResult, SelectedPermissionOutcome, SessionNotification, TerminalExitStatus,
+    TerminalId, TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use surge_core::SessionId;
 use tokio::sync::{Mutex, broadcast};
@@ -95,12 +94,7 @@ impl Client for BridgeClient {
     ) -> AcpResult<RequestPermissionResponse> {
         // The tool name lives at req.tool_call.fields.title (Option<String>).
         // Fall back to the empty string if the agent omitted it.
-        let tool_name = req
-            .tool_call
-            .fields
-            .title
-            .clone()
-            .unwrap_or_default();
+        let tool_name = req.tool_call.fields.title.clone().unwrap_or_default();
         let mcp_id: Option<String> = None; // Phase 8 fills in once tool dispatch lands
 
         let decision = self.sandbox.allows_tool(&tool_name, mcp_id.as_deref());
@@ -112,11 +106,9 @@ impl Client for BridgeClient {
         );
 
         let outcome = match decision {
-            SandboxDecision::Allow => {
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    PermissionOptionId::new("allow"),
-                ))
-            }
+            SandboxDecision::Allow => RequestPermissionOutcome::Selected(
+                SelectedPermissionOutcome::new(PermissionOptionId::new("allow")),
+            ),
             SandboxDecision::Deny { .. } | SandboxDecision::Elevate { .. } => {
                 // Both Deny and Elevate result in a denial in M3. Elevate routes
                 // to the engine via `BridgeEvent::ToolCall::sandbox_decision`
@@ -125,17 +117,14 @@ impl Client for BridgeClient {
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                     PermissionOptionId::new("deny"),
                 ))
-            }
+            },
         };
 
         Ok(RequestPermissionResponse::new(outcome))
     }
 
     /// Write a text file within the worktree. Path-guard enforced before any IO.
-    async fn write_text_file(
-        &self,
-        req: WriteTextFileRequest,
-    ) -> AcpResult<WriteTextFileResponse> {
+    async fn write_text_file(&self, req: WriteTextFileRequest) -> AcpResult<WriteTextFileResponse> {
         // SDK Error::invalid_params() takes no message arg (0.10.2 shape), so we
         // log the underlying error before discarding it at the ACP boundary.
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
@@ -149,23 +138,22 @@ impl Client for BridgeClient {
         // Redact secrets from the content before writing? No — content is what
         // the agent wants persisted. Redaction applies to *event payloads*, not
         // file contents.
-        tokio::fs::write(&req.path, &req.content).await.map_err(|e| {
-            warn!(
-                session = %self.session_id,
-                path = %req.path.display(),
-                error = %e,
-                "write_text_file IO failure",
-            );
-            agent_client_protocol::Error::internal_error()
-        })?;
+        tokio::fs::write(&req.path, &req.content)
+            .await
+            .map_err(|e| {
+                warn!(
+                    session = %self.session_id,
+                    path = %req.path.display(),
+                    error = %e,
+                    "write_text_file IO failure",
+                );
+                agent_client_protocol::Error::internal_error()
+            })?;
         Ok(WriteTextFileResponse::new())
     }
 
     /// Read a text file within the worktree. Path-guard enforced before any IO.
-    async fn read_text_file(
-        &self,
-        req: ReadTextFileRequest,
-    ) -> AcpResult<ReadTextFileResponse> {
+    async fn read_text_file(&self, req: ReadTextFileRequest) -> AcpResult<ReadTextFileResponse> {
         ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
             warn!(
                 session = %self.session_id,
@@ -279,10 +267,7 @@ impl Client for BridgeClient {
     }
 
     /// Kill the terminal process without releasing it.
-    async fn kill_terminal(
-        &self,
-        req: KillTerminalRequest,
-    ) -> AcpResult<KillTerminalResponse> {
+    async fn kill_terminal(&self, req: KillTerminalRequest) -> AcpResult<KillTerminalResponse> {
         let id = req.terminal_id.0.as_ref();
         terminal_kill(&self.terminals, id).await.map_err(|e| {
             warn!(
@@ -391,7 +376,7 @@ mod tests {
         match resp.outcome {
             RequestPermissionOutcome::Selected(s) => {
                 assert_eq!(s.option_id.0.as_ref(), "allow");
-            }
+            },
             other => panic!("expected Selected(allow), got {other:?}"),
         }
     }

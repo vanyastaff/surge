@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, BridgeEvent, MessageContent, SessionConfig,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::OutcomeKey;
@@ -35,21 +35,26 @@ async fn human_input_surfaces_as_distinct_event() {
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();
-    bridge.send_message(sid.clone(), MessageContent::Text("?".into())).await.unwrap();
+    bridge
+        .send_message(sid, MessageContent::Text("?".into()))
+        .await
+        .unwrap();
 
     let mut saw_human = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_millis(200), events.recv()).await {
-            Ok(Ok(BridgeEvent::HumanInputRequested { session, question, .. })) => {
+            Ok(Ok(BridgeEvent::HumanInputRequested {
+                session, question, ..
+            })) => {
                 assert_eq!(session, sid);
                 assert!(!question.is_empty());
                 saw_human = true;
                 break;
-            }
+            },
             Ok(Ok(BridgeEvent::ToolCall { tool, .. })) if tool == "request_human_input" => {
                 panic!("request_human_input should NOT surface as generic ToolCall");
-            }
+            },
             _ => continue,
         }
     }

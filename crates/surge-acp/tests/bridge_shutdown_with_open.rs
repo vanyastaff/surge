@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, BridgeEvent, SessionConfig, SessionEndReason,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, SessionConfig, SessionEndReason,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::{OutcomeKey, SessionId};
@@ -15,7 +15,8 @@ use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_emits_session_ended_for_each_open_session() {
-    tokio::time::timeout(Duration::from_secs(60), inner_test()).await
+    tokio::time::timeout(Duration::from_secs(60), inner_test())
+        .await
         .expect("test exceeded 60s — shutdown likely deadlocked");
 }
 
@@ -27,7 +28,9 @@ async fn inner_test() {
     let mut sids: Vec<SessionId> = Vec::with_capacity(2);
     for _ in 0..2 {
         let cfg = SessionConfig {
-            agent_kind: AgentKind::Mock { args: vec!["--scenario".into(), "echo".into()] },
+            agent_kind: AgentKind::Mock {
+                args: vec!["--scenario".into(), "echo".into()],
+            },
             working_dir: wt.path().to_path_buf(),
             system_prompt: "x".into(),
             declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
@@ -55,7 +58,10 @@ async fn inner_test() {
             // AgentCrashed and Normal — those would indicate the test is observing
             // some other path than bridge-initiated shutdown.
             assert!(
-                matches!(reason, SessionEndReason::ForcedClose | SessionEndReason::Timeout { .. }),
+                matches!(
+                    reason,
+                    SessionEndReason::ForcedClose | SessionEndReason::Timeout { .. }
+                ),
                 "expected bridge-initiated reason, got {reason:?}"
             );
             ended.insert(session);

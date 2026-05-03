@@ -11,6 +11,8 @@ use surge_acp::bridge::{Sandbox, SandboxDecision};
 
 #[derive(Clone, Debug)]
 struct WorkspaceWriteSandbox {
+    // Reserved for M4: M4's real impl will use this to bound write calls.
+    #[allow(dead_code)]
     worktree_root: PathBuf,
 }
 
@@ -51,12 +53,10 @@ impl Sandbox for WorkspaceWriteSandboxWithPath {
         SandboxDecision::Allow
     }
     fn allows_tool(&self, tool: &str, _mcp_id: Option<&str>) -> SandboxDecision {
-        if tool == "write_text_file" {
-            if path_escapes(&self.worktree_root, &self.requested_path) {
-                return SandboxDecision::Deny {
-                    reason: "path escapes worktree".into(),
-                };
-            }
+        if tool == "write_text_file" && path_escapes(&self.worktree_root, &self.requested_path) {
+            return SandboxDecision::Deny {
+                reason: "path escapes worktree".into(),
+            };
         }
         SandboxDecision::Allow
     }

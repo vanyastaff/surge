@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, BridgeEvent, MessageContent, SessionConfig,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, MessageContent, SessionConfig,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::{OutcomeKey, SessionId};
@@ -16,7 +16,8 @@ use tokio::time::timeout;
 async fn five_concurrent_sessions_complete_independently() {
     // Hard outer timeout — concurrent session shutdown shouldn't take more
     // than 60s. Anything longer indicates a deadlock regression.
-    tokio::time::timeout(Duration::from_secs(60), inner_test()).await
+    tokio::time::timeout(Duration::from_secs(60), inner_test())
+        .await
         .expect("test exceeded 60s — likely a deadlock in concurrent session handling");
 }
 
@@ -28,7 +29,9 @@ async fn inner_test() {
     let mut sids: Vec<SessionId> = Vec::with_capacity(5);
     for _ in 0..5 {
         let cfg = SessionConfig {
-            agent_kind: AgentKind::Mock { args: vec!["--scenario".into(), "echo".into()] },
+            agent_kind: AgentKind::Mock {
+                args: vec!["--scenario".into(), "echo".into()],
+            },
             working_dir: wt.path().to_path_buf(),
             system_prompt: "x".into(),
             declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
@@ -41,13 +44,20 @@ async fn inner_test() {
         let sid = bridge.open_session(cfg).await.expect("open session");
         sids.push(sid);
     }
-    assert_eq!(sids.iter().collect::<HashSet<_>>().len(), 5, "session ids must be distinct");
+    assert_eq!(
+        sids.iter().collect::<HashSet<_>>().len(),
+        5,
+        "session ids must be distinct"
+    );
 
     for sid in &sids {
-        bridge.send_message(sid.clone(), MessageContent::Text("hi".into())).await.ok();
+        bridge
+            .send_message(*sid, MessageContent::Text("hi".into()))
+            .await
+            .ok();
     }
     for sid in &sids {
-        bridge.close_session(sid.clone()).await.ok();
+        bridge.close_session(*sid).await.ok();
     }
 
     // Drain events; expect 5 SessionEnded events.
@@ -60,7 +70,12 @@ async fn inner_test() {
             ended.insert(session);
         }
     }
-    assert_eq!(ended.len(), 5, "expected 5 SessionEnded; got {}", ended.len());
+    assert_eq!(
+        ended.len(),
+        5,
+        "expected 5 SessionEnded; got {}",
+        ended.len()
+    );
 
     bridge.shutdown().await.unwrap();
 }

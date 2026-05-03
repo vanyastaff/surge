@@ -1,7 +1,7 @@
 //! Tool definitions injected into ACP sessions, plus the engine-injected
 //! `report_stage_outcome` and `request_human_input` builders. See spec §5.3 / §5.4.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use surge_core::OutcomeKey;
 
 /// Schema for a single tool the bridge declares to the agent at session-open time.
@@ -211,11 +211,7 @@ mod tests {
 
     #[test]
     fn report_stage_outcome_schema_snapshot() {
-        let t = build_report_stage_outcome_tool(&[
-            ok("done"),
-            ok("blocked"),
-            ok("escalate"),
-        ]);
+        let t = build_report_stage_outcome_tool(&[ok("done"), ok("blocked"), ok("escalate")]);
         insta::assert_json_snapshot!("report_stage_outcome_schema", t.input_schema);
     }
 

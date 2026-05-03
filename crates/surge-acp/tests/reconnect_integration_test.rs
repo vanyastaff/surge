@@ -3,6 +3,8 @@
 //! Tests verify:
 //! - Connection loss triggers automatic reconnection
 //! - AgentReconnecting events are emitted with correct attempt numbers
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(clippy::single_match)]
 //! - Exponential backoff delays increase correctly (1s, 2s, 4s, 8s)
 //! - AgentReconnected event is emitted on successful reconnect
 //! - Reconnection respects max_attempts limit

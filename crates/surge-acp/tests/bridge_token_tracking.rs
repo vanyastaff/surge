@@ -51,7 +51,7 @@ async fn inner_test() {
 
     let sid = bridge.open_session(cfg).await.unwrap();
     bridge
-        .send_message(sid.clone(), MessageContent::Text("go".into()))
+        .send_message(sid, MessageContent::Text("go".into()))
         .await
         .unwrap();
 
@@ -73,12 +73,12 @@ async fn inner_test() {
                 assert!(output_tokens >= last_output, "output_tokens not monotonic");
                 last_prompt = prompt_tokens;
                 last_output = output_tokens;
-            }
+            },
             Ok(Ok(BridgeEvent::SessionEnded { session, .. })) if session == sid => {
                 // Unexpected: session ended before we closed it.
                 // Still treat it as success since saw_end will be confirmed below.
                 break;
-            }
+            },
             _ => continue,
         }
     }
@@ -86,7 +86,7 @@ async fn inner_test() {
     // Close the session — this triggers subprocess_waiter to emit SessionEnded.
     // Monotonicity of any pending TokenUsage is guaranteed by close_session_impl's
     // flush_pending_token_usage call (spec §5.7).
-    bridge.close_session(sid.clone()).await.ok();
+    bridge.close_session(sid).await.ok();
 
     // Wait for SessionEnded — confirm no stray TokenUsage follows it.
     let mut saw_end = false;
@@ -99,12 +99,21 @@ async fn inner_test() {
                 ..
             })) => {
                 // A flush from close_session_impl — still before SessionEnded, valid.
-                assert!(!saw_end, "TokenUsage arrived after SessionEnded — ordering violated");
-                assert!(prompt_tokens >= last_prompt, "prompt_tokens not monotonic (post-close)");
-                assert!(output_tokens >= last_output, "output_tokens not monotonic (post-close)");
+                assert!(
+                    !saw_end,
+                    "TokenUsage arrived after SessionEnded — ordering violated"
+                );
+                assert!(
+                    prompt_tokens >= last_prompt,
+                    "prompt_tokens not monotonic (post-close)"
+                );
+                assert!(
+                    output_tokens >= last_output,
+                    "output_tokens not monotonic (post-close)"
+                );
                 last_prompt = prompt_tokens;
                 last_output = output_tokens;
-            }
+            },
             Ok(Ok(BridgeEvent::SessionEnded { session, .. })) if session == sid => {
                 saw_end = true;
                 // Drain a bit more to confirm no stray TokenUsage follows.
@@ -112,10 +121,10 @@ async fn inner_test() {
                 match post_end {
                     Ok(Ok(BridgeEvent::TokenUsage { .. })) => {
                         panic!("TokenUsage arrived after SessionEnded");
-                    }
+                    },
                     _ => break,
                 }
-            }
+            },
             _ => continue,
         }
     }

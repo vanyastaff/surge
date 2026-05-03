@@ -40,7 +40,7 @@ async fn inner_test() {
 
     let sid = bridge.open_session(cfg).await.unwrap();
     bridge
-        .send_message(sid.clone(), MessageContent::Text("go".into()))
+        .send_message(sid, MessageContent::Text("go".into()))
         .await
         .unwrap();
 

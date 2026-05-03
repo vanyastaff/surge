@@ -13,7 +13,10 @@ pub enum SandboxDecision {
     Allow,
     /// Tool is blocked; reason carries a human-readable explanation that
     /// the bridge surfaces in `BridgeEvent::ToolCall::sandbox_decision`.
-    Deny { reason: String },
+    Deny {
+        /// Human-readable reason the tool was denied (included in `BridgeEvent::ToolCall`).
+        reason: String,
+    },
     /// Tool needs caller approval before execution. The bridge attaches
     /// the capability tag to `BridgeEvent::ToolCall::sandbox_decision`
     /// so M5 can route to a UI / Telegram elevation flow.
@@ -24,7 +27,10 @@ pub enum SandboxDecision {
     /// - `"network"` — agent wants to make an outbound network request
     ///
     /// See RFC-0006 §Tier-2 for the full taxonomy.
-    Elevate { capability: String },
+    Elevate {
+        /// Capability tag attached to `BridgeEvent::ToolCall::sandbox_decision`.
+        capability: String,
+    },
 }
 
 /// Sandbox surface. Two-method split rationale: `WorkspaceWriteSandbox`
@@ -98,11 +104,15 @@ impl DenyListSandbox {
 
     fn decide(&self, tool: &str, mcp_id: Option<&str>) -> SandboxDecision {
         if self.denied_tools.contains(tool) {
-            return SandboxDecision::Deny { reason: format!("tool '{tool}' is denied") };
+            return SandboxDecision::Deny {
+                reason: format!("tool '{tool}' is denied"),
+            };
         }
         if let Some(id) = mcp_id {
             if self.denied_mcp_ids.contains(id) {
-                return SandboxDecision::Deny { reason: format!("mcp server '{id}' is denied") };
+                return SandboxDecision::Deny {
+                    reason: format!("mcp server '{id}' is denied"),
+                };
             }
         }
         SandboxDecision::Allow
@@ -132,7 +142,10 @@ mod tests {
     fn always_allow_visibility_and_call_both_allow() {
         let s = AlwaysAllowSandbox;
         assert_eq!(s.visibility("anything", None), SandboxDecision::Allow);
-        assert_eq!(s.allows_tool("anything", Some("mcp-a")), SandboxDecision::Allow);
+        assert_eq!(
+            s.allows_tool("anything", Some("mcp-a")),
+            SandboxDecision::Allow
+        );
     }
 
     #[test]
@@ -149,7 +162,10 @@ mod tests {
             SandboxDecision::Deny { reason } => assert!(reason.contains("shell_exec")),
             other => panic!("expected Deny, got {other:?}"),
         }
-        assert_eq!(s.visibility("write_text_file", None), SandboxDecision::Allow);
+        assert_eq!(
+            s.visibility("write_text_file", None),
+            SandboxDecision::Allow
+        );
     }
 
     #[test]
@@ -160,7 +176,10 @@ mod tests {
             SandboxDecision::Deny { reason } => assert!(reason.contains("dangerous-mcp")),
             other => panic!("expected Deny, got {other:?}"),
         }
-        assert_eq!(s.allows_tool("read_file", Some("safe-mcp")), SandboxDecision::Allow);
+        assert_eq!(
+            s.allows_tool("read_file", Some("safe-mcp")),
+            SandboxDecision::Allow
+        );
         assert_eq!(s.allows_tool("read_file", None), SandboxDecision::Allow);
     }
 

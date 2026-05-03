@@ -18,7 +18,7 @@ use super::sandbox::SandboxDecision;
 pub enum BridgeEvent {
     /// Emitted once after ACP handshake succeeds and tools are declared.
     SessionEstablished {
-        /// Identifier the bridge generated for this session.
+        /// Bridge-assigned session identifier.
         session: SessionId,
         /// Agent kind label (e.g. `"claude-code"`, `"codex"`, `"mock"`).
         agent: String,
@@ -31,6 +31,7 @@ pub enum BridgeEvent {
 
     /// Streaming agent output. Multiple events per session.
     AgentMessage {
+        /// Session this message belongs to.
         session: SessionId,
         /// One chunk of the agent's text output. Concatenate across consecutive
         /// `AgentMessage` events to reconstruct the full message.
@@ -43,6 +44,7 @@ pub enum BridgeEvent {
     /// Cumulative token usage. Bridge guarantees all `TokenUsage` for a given
     /// session precede `SessionEnded` for that session (spec §5.7).
     TokenUsage {
+        /// Session this usage snapshot belongs to.
         session: SessionId,
         /// Cumulative input tokens consumed since session start.
         prompt_tokens: u32,
@@ -57,6 +59,7 @@ pub enum BridgeEvent {
     /// Generic tool call (not the engine-injected ones). Bridge auto-replies
     /// `Unsupported` in M3; M5 will install a real dispatcher (spec §5.3).
     ToolCall {
+        /// Session that invoked the tool.
         session: SessionId,
         /// ACP-supplied call id; correlates with the matching `ToolResult`.
         call_id: String,
@@ -72,6 +75,7 @@ pub enum BridgeEvent {
 
     /// Result going back to the agent.
     ToolResult {
+        /// Session that owns this tool result.
         session: SessionId,
         /// ACP-supplied call id matching the corresponding `ToolCall`.
         call_id: String,
@@ -82,6 +86,7 @@ pub enum BridgeEvent {
     /// Engine-injected `report_stage_outcome` was called. Routed as a first-class
     /// event so M5 can fold directly into `EventPayload::OutcomeReported`.
     OutcomeReported {
+        /// Session that reported the outcome.
         session: SessionId,
         /// One of the outcomes declared in `SessionConfig::declared_outcomes`.
         outcome: OutcomeKey,
@@ -93,6 +98,7 @@ pub enum BridgeEvent {
 
     /// Engine-injected `request_human_input` was called.
     HumanInputRequested {
+        /// Session that requested human input.
         session: SessionId,
         /// ACP-supplied call id; M5 will use this to route the human's reply.
         call_id: String,
@@ -105,6 +111,7 @@ pub enum BridgeEvent {
     /// Final event for the session. After this, `SessionId` is gone from the
     /// bridge's internal map.
     SessionEnded {
+        /// Session that ended.
         session: SessionId,
         /// Why the session terminated. See `SessionEndReason`.
         reason: SessionEndReason,
@@ -217,7 +224,7 @@ mod tests {
     fn outcome_reported_serde_round_trip() {
         let session = SessionId::new();
         let ev = BridgeEvent::OutcomeReported {
-            session: session.clone(),
+            session,
             outcome: OutcomeKey::from_str("done").unwrap(),
             summary: "did it".into(),
             artifacts_produced: vec!["a.txt".into(), "b.txt".into()],
@@ -225,12 +232,17 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         let back: BridgeEvent = serde_json::from_str(&s).unwrap();
         match back {
-            BridgeEvent::OutcomeReported { session: s2, outcome, summary, artifacts_produced } => {
+            BridgeEvent::OutcomeReported {
+                session: s2,
+                outcome,
+                summary,
+                artifacts_produced,
+            } => {
                 assert_eq!(s2, session);
                 assert_eq!(outcome.as_str(), "done");
                 assert_eq!(summary, "did it");
                 assert_eq!(artifacts_produced.len(), 2);
-            }
+            },
             _ => panic!("variant mismatch"),
         }
     }

@@ -14,12 +14,17 @@ use super::tools::ToolDef;
 /// Returned by `AcpBridge::session_state`.
 #[derive(Debug, Clone)]
 pub struct SessionState {
+    /// Bridge-assigned session identifier.
     pub session_id: SessionId,
+    /// Human-readable agent kind label (e.g. `"claude-code"`, `"mock"`).
     pub agent_label: String,
+    /// Current lifecycle status of the session.
     pub status: SessionStatus,
+    /// Engine-supplied opaque key-value labels from `SessionConfig::bindings`.
     pub bindings: BTreeMap<String, String>,
 }
 
+/// Lifecycle status of a bridge session, returned in `SessionState`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionStatus {
     /// Handshake completed; session can accept messages.
@@ -35,7 +40,9 @@ pub enum SessionStatus {
 /// User-visible message payload accepted by `AcpBridge::send_message`.
 #[derive(Debug)]
 pub enum MessageContent {
+    /// Plain text message — the bridge wraps this in an ACP `ContentBlock::Text`.
     Text(String),
+    /// Pre-constructed ACP content blocks (for structured or multi-part messages).
     Blocks(Vec<ContentBlock>),
 }
 
@@ -43,12 +50,39 @@ pub enum MessageContent {
 /// invocation from this. `Mock` short-circuits to the test mock binary.
 #[derive(Debug)]
 pub enum AgentKind {
-    ClaudeCode { binary: PathBuf, extra_args: Vec<String> },
-    Codex { binary: PathBuf, extra_args: Vec<String> },
-    GeminiCli { binary: PathBuf, extra_args: Vec<String> },
-    Custom { binary: PathBuf, args: Vec<String> },
+    /// Claude Code launched with `--acp` flag.
+    ClaudeCode {
+        /// Path to the `claude` binary.
+        binary: PathBuf,
+        /// Extra CLI flags appended after `--acp`.
+        extra_args: Vec<String>,
+    },
+    /// OpenAI Codex CLI launched with `acp` subcommand.
+    Codex {
+        /// Path to the `codex` binary.
+        binary: PathBuf,
+        /// Extra CLI flags appended after `acp`.
+        extra_args: Vec<String>,
+    },
+    /// Gemini CLI launched with `--acp` flag.
+    GeminiCli {
+        /// Path to the `gemini` binary.
+        binary: PathBuf,
+        /// Extra CLI flags appended after `--acp`.
+        extra_args: Vec<String>,
+    },
+    /// Custom agent binary with fully explicit arguments.
+    Custom {
+        /// Path to the agent binary.
+        binary: PathBuf,
+        /// Arguments passed verbatim to the binary.
+        args: Vec<String>,
+    },
     /// Used by tests. Bridge launches `mock_acp_agent` from `CARGO_BIN_EXE_*`.
-    Mock { args: Vec<String> },
+    Mock {
+        /// Extra arguments forwarded to the mock binary.
+        args: Vec<String>,
+    },
 }
 
 impl AgentKind {
@@ -131,15 +165,16 @@ impl SessionConfig {
         }
         // Cap bindings (per spec §4.3): 8 entries × 64 bytes each.
         if self.bindings.len() > 8 {
-            return Err(super::error::OpenSessionError::InvalidBindings(
-                format!("bindings has {} entries (max 8)", self.bindings.len()),
-            ));
+            return Err(super::error::OpenSessionError::InvalidBindings(format!(
+                "bindings has {} entries (max 8)",
+                self.bindings.len()
+            )));
         }
         for (k, v) in &self.bindings {
             if k.len() > 64 || v.len() > 64 {
-                return Err(super::error::OpenSessionError::InvalidBindings(
-                    format!("binding {k}=... exceeds 64-byte limit"),
-                ));
+                return Err(super::error::OpenSessionError::InvalidBindings(format!(
+                    "binding {k}=... exceeds 64-byte limit"
+                )));
             }
         }
         // Tool name uniqueness — the engine-injected `report_stage_outcome` and
@@ -148,9 +183,10 @@ impl SessionConfig {
         let mut seen = std::collections::HashSet::with_capacity(self.tools.len());
         for t in &self.tools {
             if !seen.insert(t.name.as_str()) {
-                return Err(super::error::OpenSessionError::InvalidToolDefs(
-                    format!("duplicate tool name: {}", t.name),
-                ));
+                return Err(super::error::OpenSessionError::InvalidToolDefs(format!(
+                    "duplicate tool name: {}",
+                    t.name
+                )));
             }
             if t.name == "report_stage_outcome" || t.name == "request_human_input" {
                 return Err(super::error::OpenSessionError::InvalidToolDefs(format!(
@@ -205,7 +241,14 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_tool_names() {
-        let t = |n: &str| ToolDef::new(n, "desc", super::super::tools::ToolCategory::Mcp("x".into()), serde_json::json!({}));
+        let t = |n: &str| {
+            ToolDef::new(
+                n,
+                "desc",
+                super::super::tools::ToolCategory::Mcp("x".into()),
+                serde_json::json!({}),
+            )
+        };
         let cfg = cfg_with(vec!["done"], vec![t("a"), t("a")]);
         let err = cfg.validate().unwrap_err();
         assert!(matches!(

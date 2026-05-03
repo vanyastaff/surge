@@ -20,7 +20,9 @@ async fn open_send_close_round_trip() {
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
-        agent_kind: AgentKind::Mock { args: vec!["--scenario".into(), "echo".into()] },
+        agent_kind: AgentKind::Mock {
+            args: vec!["--scenario".into(), "echo".into()],
+        },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "you are a mock".into(),
         declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
@@ -34,16 +36,22 @@ async fn open_send_close_round_trip() {
     let sid = bridge.open_session(cfg).await.expect("open session");
 
     // Expect SessionEstablished as first event.
-    let ev = timeout(Duration::from_secs(3), events.recv()).await.unwrap().unwrap();
+    let ev = timeout(Duration::from_secs(3), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
     match ev {
         BridgeEvent::SessionEstablished { session, agent, .. } => {
             assert_eq!(session, sid);
             assert_eq!(agent, "mock");
-        }
+        },
         other => panic!("expected SessionEstablished, got {other:?}"),
     }
 
-    bridge.send_message(sid.clone(), MessageContent::Text("hello".into())).await.unwrap();
+    bridge
+        .send_message(sid, MessageContent::Text("hello".into()))
+        .await
+        .unwrap();
 
     // Drain until AgentMessage is observed (spec §9.2 requires this assertion).
     let agent_msg_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -54,13 +62,16 @@ async fn open_send_close_round_trip() {
                 assert!(!chunk.is_empty(), "agent message chunk should be non-empty");
                 saw_agent_msg = true;
                 break;
-            }
+            },
             _ => continue,
         }
     }
-    assert!(saw_agent_msg, "did not observe BridgeEvent::AgentMessage from echo scenario");
+    assert!(
+        saw_agent_msg,
+        "did not observe BridgeEvent::AgentMessage from echo scenario"
+    );
 
-    bridge.close_session(sid.clone()).await.expect("close session");
+    bridge.close_session(sid).await.expect("close session");
 
     // Drain events until SessionEnded.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -74,7 +85,7 @@ async fn open_send_close_round_trip() {
                 );
                 saw_end = true;
                 break;
-            }
+            },
             _ => continue,
         }
     }

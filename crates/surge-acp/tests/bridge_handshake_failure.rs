@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, OpenSessionError, SessionConfig,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, OpenSessionError, SessionConfig,
 };
 use surge_acp::client::PermissionPolicy;
 use surge_core::OutcomeKey;

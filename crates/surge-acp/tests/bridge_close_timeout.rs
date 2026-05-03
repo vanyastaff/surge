@@ -9,7 +9,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use surge_acp::bridge::{
-    AcpBridge, AlwaysAllowSandbox, AgentKind, BridgeEvent, CloseSessionError, SessionConfig,
+    AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeEvent, CloseSessionError, SessionConfig,
     SessionEndReason,
 };
 use surge_acp::client::PermissionPolicy;
@@ -55,7 +55,7 @@ async fn inner_test() {
 
     // close_session will block ~5s waiting for the frozen child to exit, then
     // send kill_tx → subprocess_waiter kills the child → GracefulTimedOut { killed: true }.
-    let close_result = bridge.close_session(sid.clone()).await;
+    let close_result = bridge.close_session(sid).await;
     assert!(
         matches!(
             close_result,
@@ -75,7 +75,7 @@ async fn inner_test() {
                     saw_timeout = true;
                     break;
                 }
-            }
+            },
             _ => continue,
         }
     }

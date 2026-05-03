@@ -3,6 +3,8 @@
 //! Process spawning and I/O setup is handled by the transport layer
 //! ([`crate::transport`]). This module performs the ACP handshake and owns
 //! the connection for the lifetime of the agent.
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(clippy::excessive_nesting)]
 
 use agent_client_protocol::{
     Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, Implementation,

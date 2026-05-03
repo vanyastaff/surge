@@ -37,7 +37,10 @@ async fn report_stage_outcome_emits_outcome_reported_event() {
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();
-    bridge.send_message(sid.clone(), MessageContent::Text("go".into())).await.unwrap();
+    bridge
+        .send_message(sid, MessageContent::Text("go".into()))
+        .await
+        .unwrap();
 
     let mut saw_outcome = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -47,10 +50,10 @@ async fn report_stage_outcome_emits_outcome_reported_event() {
                 assert_eq!(outcome.as_str(), "done");
                 saw_outcome = true;
                 break;
-            }
+            },
             Ok(Ok(BridgeEvent::ToolCall { tool, .. })) if tool == "report_stage_outcome" => {
                 panic!("report_stage_outcome should NOT surface as generic ToolCall");
-            }
+            },
             _ => continue,
         }
     }

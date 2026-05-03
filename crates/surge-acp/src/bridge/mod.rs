@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Vibe-flow ACP bridge.
 //!
 //! Pure-addition submodule introduced in M3. Coexists with the legacy
@@ -28,14 +29,10 @@
 
 // Submodules are wired in subsequent tasks.
 pub mod error;
-pub use error::{
-    AcpError, BridgeError, CloseSessionError, OpenSessionError, SendMessageError,
-};
+pub use error::{AcpError, BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
 
 pub mod event;
-pub use event::{
-    AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, ToolResultPayload,
-};
+pub use event::{AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, ToolResultPayload};
 
 // Forward stubs replaced in Phase 3 / Phase 4. Kept minimal so Phase 2 tests
 // can exercise SessionConfig in isolation.

@@ -1,4 +1,6 @@
 //! Health monitoring and fallback routing for ACP agents.
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(clippy::manual_range_contains)]
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};

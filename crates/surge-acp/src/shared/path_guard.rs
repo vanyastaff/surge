@@ -28,11 +28,14 @@ pub(crate) fn ensure_in_worktree(
     path: &Path,
 ) -> Result<PathBuf, PathGuardError> {
     if !path.is_absolute() {
-        return Err(PathGuardError::NotAbsolute { path: path.to_path_buf() });
+        return Err(PathGuardError::NotAbsolute {
+            path: path.to_path_buf(),
+        });
     }
-    let canonical = path
-        .canonicalize()
-        .map_err(|source| PathGuardError::Io { path: path.to_path_buf(), source })?;
+    let canonical = path.canonicalize().map_err(|source| PathGuardError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if !canonical.starts_with(worktree_root) {
         // Report the canonical (post-symlink) path so the operator sees where
         // the request actually resolved to, not just the lexical input.

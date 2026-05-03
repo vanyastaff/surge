@@ -70,7 +70,9 @@ impl Scenario {
             }
         });
 
-        let Some(value) = value else { return Self::Echo };
+        let Some(value) = value else {
+            return Self::Echo;
+        };
 
         if let Some(k) = value.strip_prefix("report_outcome=") {
             return Self::ReportOutcome(k.to_string());
@@ -91,7 +93,7 @@ impl Scenario {
             other => {
                 eprintln!("[mock_acp_agent] unknown scenario {other:?}; defaulting to echo");
                 Self::Echo
-            }
+            },
         }
     }
 }
@@ -131,10 +133,7 @@ impl MockAgent {
     }
 
     /// Helper: send a `SessionNotification` and wait for the ack.
-    async fn send_notification(
-        &self,
-        notif: acp::SessionNotification,
-    ) -> Result<(), acp::Error> {
+    async fn send_notification(&self, notif: acp::SessionNotification) -> Result<(), acp::Error> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.notif_tx
             .send((notif, ack_tx))
@@ -160,10 +159,8 @@ impl acp::Agent for MockAgent {
         req: acp::InitializeRequest,
     ) -> Result<acp::InitializeResponse, acp::Error> {
         self.log(&format!("initialize: {req:?}"));
-        Ok(
-            acp::InitializeResponse::new(acp::ProtocolVersion::V1)
-                .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1")),
-        )
+        Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V1)
+            .agent_info(acp::Implementation::new("mock-acp-agent", "0.0.1")))
     }
 
     async fn authenticate(
@@ -179,13 +176,12 @@ impl acp::Agent for MockAgent {
         req: acp::NewSessionRequest,
     ) -> Result<acp::NewSessionResponse, acp::Error> {
         self.log(&format!("new_session: {req:?}"));
-        Ok(acp::NewSessionResponse::new(acp::SessionId::new("mock-session-1")))
+        Ok(acp::NewSessionResponse::new(acp::SessionId::new(
+            "mock-session-1",
+        )))
     }
 
-    async fn prompt(
-        &self,
-        req: acp::PromptRequest,
-    ) -> Result<acp::PromptResponse, acp::Error> {
+    async fn prompt(&self, req: acp::PromptRequest) -> Result<acp::PromptResponse, acp::Error> {
         let count = self.prompt_count.get() + 1;
         self.prompt_count.set(count);
         self.log(&format!("prompt #{count}: session={:?}", req.session_id));
@@ -209,15 +205,14 @@ impl acp::Agent for MockAgent {
                     .collect::<Vec<_>>()
                     .join(" ");
 
-                let chunk = acp::ContentChunk::new(acp::ContentBlock::from(
-                    format!("echo: {text}"),
-                ));
+                let chunk =
+                    acp::ContentChunk::new(acp::ContentBlock::from(format!("echo: {text}")));
                 self.send_notification(acp::SessionNotification::new(
                     sid,
                     acp::SessionUpdate::AgentMessageChunk(chunk),
                 ))
                 .await?;
-            }
+            },
 
             // ── report_done ─────────────────────────────────────────────────
             Scenario::ReportDone => {
@@ -232,7 +227,7 @@ impl acp::Agent for MockAgent {
                     acp::SessionUpdate::ToolCall(tool_call),
                 ))
                 .await?;
-            }
+            },
 
             // ── report_outcome=K ─────────────────────────────────────────────
             Scenario::ReportOutcome(outcome) => {
@@ -247,7 +242,7 @@ impl acp::Agent for MockAgent {
                     acp::SessionUpdate::ToolCall(tool_call),
                 ))
                 .await?;
-            }
+            },
 
             // ── crash_after=N ────────────────────────────────────────────────
             Scenario::CrashAfter(n) => {
@@ -255,20 +250,22 @@ impl acp::Agent for MockAgent {
                 // (count=1, n=0); `crash_after=N` crashes on prompt N+1 after
                 // serving the first N prompts normally.
                 if count > *n {
-                    eprintln!("[mock_acp_agent] crash_after={n} threshold reached at prompt #{count}; exiting 137");
+                    eprintln!(
+                        "[mock_acp_agent] crash_after={n} threshold reached at prompt #{count}; exiting 137"
+                    );
                     std::process::exit(137);
                 }
                 // For prompts up to the threshold, emit a simple echo so the
                 // bridge has something to receive.
-                let chunk = acp::ContentChunk::new(acp::ContentBlock::from(
-                    format!("ok prompt {count}/{n}"),
-                ));
+                let chunk = acp::ContentChunk::new(acp::ContentBlock::from(format!(
+                    "ok prompt {count}/{n}"
+                )));
                 self.send_notification(acp::SessionNotification::new(
                     sid,
                     acp::SessionUpdate::AgentMessageChunk(chunk),
                 ))
                 .await?;
-            }
+            },
 
             // ── human_input ──────────────────────────────────────────────────
             Scenario::HumanInput => {
@@ -283,14 +280,13 @@ impl acp::Agent for MockAgent {
                     acp::SessionUpdate::ToolCall(tool_call),
                 ))
                 .await?;
-            }
+            },
 
             // ── long_streaming ───────────────────────────────────────────────
             Scenario::LongStreaming => {
                 for i in 0_u32..20 {
-                    let chunk = acp::ContentChunk::new(acp::ContentBlock::from(
-                        format!("chunk {i}"),
-                    ));
+                    let chunk =
+                        acp::ContentChunk::new(acp::ContentBlock::from(format!("chunk {i}")));
                     self.send_notification(acp::SessionNotification::new(
                         sid.clone(),
                         acp::SessionUpdate::AgentMessageChunk(chunk),
@@ -298,7 +294,7 @@ impl acp::Agent for MockAgent {
                     .await?;
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-            }
+            },
 
             // ── frozen ───────────────────────────────────────────────────────
             // Process the prompt normally (emit a small echo) so the bridge
@@ -307,15 +303,14 @@ impl acp::Agent for MockAgent {
             // responsive so the bridge can still establish the session and
             // exchange one message before close_session is invoked.
             Scenario::Frozen => {
-                let chunk = acp::ContentChunk::new(acp::ContentBlock::from(
-                    "frozen ack".to_string(),
-                ));
+                let chunk =
+                    acp::ContentChunk::new(acp::ContentBlock::from("frozen ack".to_string()));
                 self.send_notification(acp::SessionNotification::new(
                     sid,
                     acp::SessionUpdate::AgentMessageChunk(chunk),
                 ))
                 .await?;
-            }
+            },
         }
 
         // Emit a `UsageUpdate` notification so the bridge's token tracker can

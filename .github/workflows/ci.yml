@@ -91,6 +91,10 @@ jobs:
       - name: Run clippy (strict on surge-core)
         run: cargo clippy -p surge-core --all-targets --all-features -- -D warnings
 
+      # Strict: M3's surge-acp crate (bridge::* + shared::*) must be warning-free.
+      - name: Run clippy (strict on surge-acp)
+        run: cargo clippy -p surge-acp --all-targets -- -D warnings
+
       # Permissive: legacy crates have accumulated clippy debt that's tracked
       # as separate cleanup work, not blocking. We still run clippy to catch
       # new errors / clippy::correctness regressions, but don't fail on warnings.

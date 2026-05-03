@@ -60,7 +60,7 @@ impl AcpBridge {
                     Err(e) => {
                         warn!("bridge worker failed to build runtime: {e}");
                         return;
-                    }
+                    },
                 };
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, bridge_loop(cmd_rx, event_tx_for_worker));
@@ -94,10 +94,7 @@ impl AcpBridge {
     /// Open a new ACP session. The bridge spawns the agent subprocess,
     /// performs the ACP handshake, declares the sandbox-filtered tool list,
     /// and returns the freshly-allocated `SessionId`.
-    pub async fn open_session(
-        &self,
-        config: SessionConfig,
-    ) -> Result<SessionId, OpenSessionError> {
+    pub async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(BridgeCommand::OpenSession { config, reply: tx })
@@ -117,7 +114,11 @@ impl AcpBridge {
     ) -> Result<(), SendMessageError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(BridgeCommand::SendMessage { session, content, reply: tx })
+            .send(BridgeCommand::SendMessage {
+                session,
+                content,
+                reply: tx,
+            })
             .await
             .map_err(|e| SendMessageError::Bridge(BridgeError::CommandSendFailed(e.to_string())))?;
         rx.await
@@ -125,10 +126,7 @@ impl AcpBridge {
     }
 
     /// Read a session's bridge-observable state (open / closed / crashed).
-    pub async fn session_state(
-        &self,
-        session: SessionId,
-    ) -> Result<SessionState, BridgeError> {
+    pub async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(BridgeCommand::GetSessionState { session, reply: tx })
@@ -140,15 +138,14 @@ impl AcpBridge {
     /// Close a session gracefully. The bridge sends ACP shutdown to the
     /// agent and waits up to a grace period before forcibly killing the
     /// child (see Phase 8.3 close_session_impl for the timeout details).
-    pub async fn close_session(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CloseSessionError> {
+    pub async fn close_session(&self, session: SessionId) -> Result<(), CloseSessionError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(BridgeCommand::CloseSession { session, reply: tx })
             .await
-            .map_err(|e| CloseSessionError::Bridge(BridgeError::CommandSendFailed(e.to_string())))?;
+            .map_err(|e| {
+                CloseSessionError::Bridge(BridgeError::CommandSendFailed(e.to_string()))
+            })?;
         rx.await
             .map_err(|_| CloseSessionError::Bridge(BridgeError::ReplyDropped))?
     }
