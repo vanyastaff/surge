@@ -395,9 +395,12 @@ pub enum BridgeEvent {
     },
 
     /// Special engine-injected tool: agent asked for human input mid-stage.
-    /// M5 will route this to a HumanGate-style flow.
+    /// M5 will route this to a HumanGate-style flow. The `call_id` is required
+    /// because §13.4's future `reply_to_human_input(call_id, payload)` API
+    /// needs to correlate the human's reply back to the pending tool call.
     HumanInputRequested {
         session: SessionId,
+        call_id: String,
         question: String,
         context: Option<String>,
     },
