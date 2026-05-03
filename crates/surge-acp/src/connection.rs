@@ -3,6 +3,8 @@
 //! Process spawning and I/O setup is handled by the transport layer
 //! ([`crate::transport`]). This module performs the ACP handshake and owns
 //! the connection for the lifetime of the agent.
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(clippy::excessive_nesting)]
 
 use agent_client_protocol::{
     Agent, AgentCapabilities, ClientCapabilities, ClientSideConnection, Implementation,
@@ -603,11 +605,9 @@ mod tests {
 
             async fn kill(&mut self) -> Result<(), SurgeError> {
                 if let Some(process) = self.process.as_mut() {
-                    let pid = process.id();
-
                     #[cfg(windows)]
                     {
-                        if let Some(pid) = pid {
+                        if let Some(pid) = process.id() {
                             let output = tokio::process::Command::new("taskkill")
                                 .args(["/F", "/T", "/PID", &pid.to_string()])
                                 .output()

@@ -3,6 +3,9 @@
 //! Manages child processes spawned by agents, tracking their output
 //! and lifecycle within worktree boundaries. Each terminal is independently
 //! lockable to avoid blocking concurrent operations.
+// pre-existing per M2 precedent; not in scope for M3
+#![allow(dead_code)]
+#![allow(clippy::incompatible_msrv)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;

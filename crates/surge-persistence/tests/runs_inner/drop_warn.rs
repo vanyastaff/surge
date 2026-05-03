@@ -33,6 +33,21 @@ impl<'a> MakeWriter<'a> for CaptureWriter {
     }
 }
 
+// `Storage::open` rejects single-threaded tokio runtimes, so we must use
+// `multi_thread`. But `tracing::subscriber::set_default` is per-thread,
+// and `multi_thread`'s scheduler can hop the test future across worker
+// threads at .await points. Wrapping in LocalSet didn't help either —
+// LocalSet pins SPAWNED tasks, but the run_until future itself still
+// gets polled by tokio on whichever worker is available.
+//
+// Fix: install via `set_global_default`. Process-wide subscriber works
+// regardless of which thread the Drop fires on. `set_global_default`
+// returns `Err` if already set (only-once-per-process), which we
+// silently swallow — if another test already installed a global
+// subscriber, this test will use that one and may not see captured
+// output. To guarantee isolation, this test should be run alone, or
+// the subscriber should be the only global subscriber the test binary
+// installs (currently true — drop_warn is the only test using it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_without_close_emits_tracing_warning() {
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -44,13 +59,10 @@ async fn drop_without_close_emits_tracing_warning() {
         .with_ansi(false)
         .finish();
 
-    // Install the subscriber for THIS thread only — the .await points may
-    // hop threads, but the warn! we care about fires synchronously inside
-    // Drop on whichever thread the writer happens to be dropped on.
-    // Using set_default returns a guard that lives for the rest of the
-    // function; we stay inside the with_default closure for the awaits to
-    // make sure both the create_run and drop occur under the subscriber.
-    let _guard = tracing::subscriber::set_default(subscriber);
+    // Process-wide install. Returns Err if a global subscriber is already
+    // set (only-once-per-process); ignore — first wins and we just hope
+    // it's ours. See module comment above.
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     let t = setup().await;
     let writer = t

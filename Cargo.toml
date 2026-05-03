@@ -62,7 +62,7 @@ semver = { version = "1", features = ["serde"] }
 
 # Testing / dev
 proptest = "1"
-insta = { version = "1", features = ["yaml", "redactions"] }
+insta = { version = "1", features = ["yaml", "redactions", "json"] }
 criterion = "0.5"
 
 # Graph

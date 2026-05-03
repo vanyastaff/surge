@@ -21,6 +21,7 @@ use surge_core::SurgeEvent;
 use tokio::sync::{Mutex, broadcast};
 use tracing::debug;
 
+use crate::shared::path_guard::ensure_in_worktree;
 use crate::terminal::{self, Terminals};
 
 /// Permission policy for controlling agent access to system resources.
@@ -167,11 +168,16 @@ impl SurgeClient {
         // outside the worktree even when canonicalize would also catch them.
         Self::check_symlink_safety(&absolute, &self.worktree_root_canonical)?;
 
-        // For existing paths, canonicalize directly.
-        // For new files, canonicalize the parent and join the filename.
+        // For existing paths, delegate canonicalization and bounds check to the
+        // shared helper so BridgeClient and SurgeClient share the same logic.
+        // For new files, canonicalize the parent directory and join the filename,
+        // then perform the bounds check inline (ensure_in_worktree requires the
+        // path to exist on disk so it can call std::fs::canonicalize).
         let canonical = if absolute.exists() {
-            absolute
-                .canonicalize()
+            // Use a neutral "Cannot resolve path" prefix so IO failures
+            // (permission denied, broken symlink, etc.) are not misreported
+            // as sandbox escapes. Matches the pre-refactor wording.
+            ensure_in_worktree(&self.worktree_root_canonical, &absolute)
                 .map_err(|e| format!("Cannot resolve path {}: {e}", path.display()))?
         } else {
             let parent = absolute
@@ -180,19 +186,19 @@ impl SurgeClient {
             let canonical_parent = parent
                 .canonicalize()
                 .map_err(|e| format!("Cannot resolve parent of {}: {e}", path.display()))?;
-            canonical_parent.join(
+            let candidate = canonical_parent.join(
                 absolute
                     .file_name()
                     .ok_or_else(|| format!("Path {} has no filename component", path.display()))?,
-            )
+            );
+            if !candidate.starts_with(&self.worktree_root_canonical) {
+                return Err(format!(
+                    "Path {} is outside worktree bounds",
+                    path.display()
+                ));
+            }
+            candidate
         };
-
-        if !canonical.starts_with(&self.worktree_root_canonical) {
-            return Err(format!(
-                "Path {} is outside worktree bounds",
-                path.display()
-            ));
-        }
 
         Ok(canonical)
     }
