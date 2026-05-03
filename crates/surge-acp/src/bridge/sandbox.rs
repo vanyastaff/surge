@@ -2,10 +2,12 @@
 
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
+
 /// Per-tool decision returned by both `Sandbox::visibility` and
 /// `Sandbox::allows_tool`. `Elevate` keeps the tool visible to the agent
 /// but routes per-call invocations to the engine's elevation flow (M5).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SandboxDecision {
     /// Tool is fully permitted.
     Allow,
