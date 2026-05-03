@@ -830,24 +830,44 @@ pub(crate) async fn close_session_impl(
 ) -> Result<(), super::error::CloseSessionError> {
     use std::time::Duration;
 
-    // Take connection and mark closing. The RefCell borrow_mut is released
-    // before any await point (scoped block).
-    let (inner, took_connection) = {
+    // Take connection + io_task_handle and mark closing. The RefCell borrow_mut
+    // is released before any await point (scoped block).
+    let (inner, took_connection, io_task) = {
         let mut map = sessions.borrow_mut();
         let s = map.get_mut(&session).ok_or_else(|| {
             super::error::CloseSessionError::SessionNotFound { session: session.clone() }
         })?;
         // Mark closing so observer/notification handlers drain quickly.
         s.inner.borrow_mut().closing = true;
-        // Take connection — dropping it closes outgoing_tx → io_task winds down →
-        // agent's stdin closes → agent should exit cleanly.
+        // Take connection — dropping it closes outgoing_tx (one sender). The SDK's
+        // RpcConnection::handle_incoming also holds a cloned outgoing_tx sender, so
+        // dropping the connection alone is NOT enough to cause the io_task to exit:
+        // handle_incoming keeps its sender alive until incoming_rx closes, which only
+        // happens when io_task drops incoming_tx, which only happens when io_task
+        // exits, which requires ALL outgoing_tx senders to be dropped — a deadlock.
+        //
+        // Fix: take the io_task_handle and abort it below (after the borrow_mut is
+        // released). Aborting drops the io_task future, which drops outgoing_bytes
+        // (the child's stdin write end). The child then sees EOF on its stdin, its
+        // handle_io returns, run_agent completes, and the subprocess exits → the
+        // subprocess_waiter fires SessionEnded::Normal.
         let conn = s.connection.take();
-        (s.inner.clone(), conn.is_some())
+        let io = s.io_task_handle.take();
+        (s.inner.clone(), conn.is_some(), io)
     };
 
     if !took_connection {
         // Already closed/closing.
         return Ok(());
+    }
+
+    // Abort the SDK io_task immediately after releasing the borrow_mut so the
+    // child's stdin write-end closes and the agent subprocess can exit cleanly.
+    // This is the only way to break the handle_incoming↔handle_io cycle
+    // described in the comment above (see also: bridge close-session design note
+    // in docs/superpowers/specs/2026-05-03-surge-acp-bridge-m3-design.md §5.4).
+    if let Some(io) = io_task {
+        io.abort();
     }
 
     // Flush pending TokenUsage before SessionEnded (spec §5.7 ordering).
