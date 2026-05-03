@@ -14,6 +14,7 @@ pub mod project;
 pub mod qa;
 pub mod retry;
 pub mod schedule;
+pub mod engine;
 
 pub use budget::{BudgetStatus, BudgetTracker};
 pub use parallel::ParallelExecutor;
