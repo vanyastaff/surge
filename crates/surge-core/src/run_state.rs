@@ -9,6 +9,22 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Tracks a pending human-input request while the pipeline is paused
+/// waiting for operator response.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingHumanInput {
+    /// The graph node that issued the request.
+    pub node: NodeKey,
+    /// Tool-call identifier supplied by the agent; `None` for HumanGate-driven pauses.
+    pub call_id: Option<String>,
+    /// The prompt shown to the human operator.
+    pub prompt: String,
+    /// Optional JSON Schema for the expected response structure.
+    pub schema: Option<serde_json::Value>,
+    /// Sequence number of the `HumanInputRequested` event that created this.
+    pub requested_seq: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
     NotStarted,
@@ -22,6 +38,9 @@ pub enum RunState {
         graph: Arc<Graph>,
         cursor: Cursor,
         memory: RunMemory,
+        /// Set when a `HumanInputRequested` event is folded; cleared by
+        /// `HumanInputResolved` or `HumanInputTimedOut`.
+        pending_human_input: Option<PendingHumanInput>,
     },
     Terminal {
         kind: TerminalReason,
@@ -146,10 +165,17 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     attempt: 1,
                 },
                 memory: RunMemory::default(),
+                pending_human_input: None,
             })
         },
         (state @ RunState::Pipeline { .. }, EventPayload::StageEntered { node, attempt }) => {
-            if let RunState::Pipeline { graph, memory, .. } = state {
+            if let RunState::Pipeline {
+                graph,
+                memory,
+                pending_human_input,
+                ..
+            } = state
+            {
                 Ok(RunState::Pipeline {
                     graph,
                     cursor: Cursor {
@@ -157,6 +183,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                         attempt: *attempt,
                     },
                     memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -175,6 +202,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 mut memory,
+                pending_human_input,
             } = state
             {
                 let aref = ArtifactRef {
@@ -194,6 +222,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     graph,
                     cursor,
                     memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -211,6 +240,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 mut memory,
+                pending_human_input,
             } = state
             {
                 memory
@@ -226,6 +256,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     graph,
                     cursor,
                     memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -245,6 +276,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 mut memory,
+                pending_human_input,
             } = state
             {
                 memory.costs.tokens_in += u64::from(*prompt_tokens);
@@ -255,6 +287,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     graph,
                     cursor,
                     memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -281,6 +314,85 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
             kind: TerminalReason::Aborted,
             reason: reason.clone(),
         }),
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::HumanInputRequested {
+                node,
+                call_id,
+                prompt,
+                schema,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                ..
+            } = state
+            {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input: Some(PendingHumanInput {
+                        node: node.clone(),
+                        call_id: call_id.clone(),
+                        prompt: prompt.clone(),
+                        schema: schema.clone(),
+                        requested_seq: event.seq,
+                    }),
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::HumanInputResolved { .. },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                ..
+            } = state
+            {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input: None,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::HumanInputTimedOut { .. },
+        ) => {
+            // Timeout clears the pending field; engine writes a follow-up
+            // StageFailed/RunFailed if appropriate. Fold itself stays in
+            // Pipeline; the terminal transition is driven by the
+            // separately-emitted RunFailed event.
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                ..
+            } = state
+            {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input: None,
+                })
+            } else {
+                unreachable!()
+            }
+        },
         // Many (state, event) pairs are pass-through — events like ToolCalled,
         // EdgeTraversed, SandboxElevation*, HookExecuted, ApprovalRequested/Decided,
         // BootstrapStageStarted etc. are recorded for replay but do not drive
@@ -571,5 +683,176 @@ mod tests {
             attempt: 1,
         };
         let _c2 = c.clone();
+    }
+
+    #[test]
+    fn human_input_request_populates_pending_field() {
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let plan = NodeKey::try_from("plan").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            plan.clone(),
+            Node {
+                id: plan.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "minimal".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: plan.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "build".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"hash"),
+                },
+            ),
+            make_event(
+                3,
+                EventPayload::HumanInputRequested {
+                    node: plan.clone(),
+                    session: None,
+                    call_id: Some("c1".into()),
+                    prompt: "ok?".into(),
+                    schema: None,
+                },
+            ),
+        ];
+
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline {
+                pending_human_input: Some(p),
+                ..
+            } => {
+                assert_eq!(p.node, plan);
+                assert_eq!(p.call_id.as_deref(), Some("c1"));
+            },
+            other => panic!("expected Pipeline with pending_human_input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn human_input_resolution_clears_pending_field() {
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let plan = NodeKey::try_from("plan").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            plan.clone(),
+            Node {
+                id: plan.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "minimal".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: plan.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "build".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"hash"),
+                },
+            ),
+            make_event(
+                3,
+                EventPayload::HumanInputRequested {
+                    node: plan.clone(),
+                    session: None,
+                    call_id: Some("c1".into()),
+                    prompt: "ok?".into(),
+                    schema: None,
+                },
+            ),
+            make_event(
+                4,
+                EventPayload::HumanInputResolved {
+                    node: plan.clone(),
+                    call_id: Some("c1".into()),
+                    response: serde_json::json!({"decision": "approve"}),
+                },
+            ),
+        ];
+
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline {
+                pending_human_input: None,
+                ..
+            } => {},
+            other => panic!(
+                "expected Pipeline with cleared pending_human_input, got {other:?}"
+            ),
+        }
     }
 }
