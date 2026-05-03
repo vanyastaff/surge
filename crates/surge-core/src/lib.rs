@@ -29,6 +29,7 @@ pub mod keys;
 pub mod loop_config;
 pub mod node;
 pub mod notify_config;
+pub mod predicate;
 pub mod profile;
 pub mod run_event;
 pub mod run_state;
