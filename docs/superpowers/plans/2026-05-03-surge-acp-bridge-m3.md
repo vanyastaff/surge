@@ -3096,31 +3096,58 @@ git commit -m "M3(acp): open_session_impl — spawn, handshake, tool injection, 
 **Files:**
 - Modify: `crates/surge-acp/src/bridge/worker.rs`
 
-- [ ] **Step 1: Extend `AcpSession` to hold child + task handles**
+**Note (Phase 8.1 Critical fix incorporated):** `AcpSession` must hold
+`connection: Option<ClientSideConnection>` and `io_task_handle: Option<JoinHandle<()>>`
+so the protocol channel survives past `open_session_impl` return. Without these,
+dropping `connection` at function-end closes `outgoing_tx` → io_task drains →
+`handle_incoming` exits → no more send_message / session_notification possible.
 
-Open `crates/surge-acp/src/bridge/worker.rs`. Replace the `AcpSession` struct from Task 6.1:
+- [x] **Step 1: Extend `AcpSession` to hold connection + io_task + child + task handles**
+
+Open `crates/surge-acp/src/bridge/worker.rs`. Replace the `AcpSession` struct:
 
 ```rust
+/// Per-session state held by the worker. Phase 6.1 ships the minimal shape;
+/// Phase 8.1 starts inserting; Phase 8.2 expands with the live ACP connection
+/// + handles to the spawned waiter / drainer / io tasks.
 pub(crate) struct AcpSession {
     pub session_id: SessionId,
     pub agent_label: String,
-    /// Subprocess handle. Held inside the session map so close_session can
-    /// kill it on graceful-timeout.
-    pub child: Option<Child>,
-    /// Bridge-side LocalSet handles for the observer + waiter tasks.
+
+    /// The live ACP `ClientSideConnection`. **Must be held here**, not dropped
+    /// at the end of `open_session_impl`, or the protocol channel dies (the
+    /// `outgoing_tx` inside the connection closes → io_task drains → handle_incoming
+    /// exits → no more send_message / session_notification possible).
+    /// Held in `Option` so `close_session_impl` (Phase 8.3) can `.take()` it
+    /// for graceful shutdown.
+    pub connection: Option<agent_client_protocol::ClientSideConnection>,
+
+    /// JoinHandle for the SDK's io_task pump. Not strictly required for
+    /// correctness (io_task exits on its own when `connection` is dropped),
+    /// but capturing it lets close paths optionally `.abort()` or `.await`
+    /// the task for clean shutdown.
+    pub io_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Subprocess handle. `None` once `subprocess_waiter` has consumed it
+    /// for `child.wait()`. `close_session_impl` (Phase 8.3) checks this
+    /// before deciding whether to call `start_kill()` on graceful-timeout.
+    pub child: Option<tokio::process::Child>,
+
+    /// Bridge-side LocalSet handles for the observer + waiter + drainer tasks.
     /// Aborting them cancels work cleanly when the session closes.
     pub task_handles: Vec<tokio::task::JoinHandle<()>>,
-    /// Per-session inner state (shared with BridgeClient).
-    pub inner: Rc<RefCell<SessionStateInner>>,
+
+    /// Per-session inner state (shared with BridgeClient via Rc<RefCell<...>>).
+    pub inner: std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
 }
 ```
 
-- [ ] **Step 2: Add the stderr drainer helper**
+- [x] **Step 2: Add the stderr drainer helper**
 
 Append to `worker.rs`:
 
 ```rust
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 const STDERR_RING_CAP: usize = 8 * 1024;
 const STDERR_TAIL_CAP: usize = 2 * 1024;
@@ -3130,7 +3157,7 @@ const STDERR_TAIL_CAP: usize = 2 * 1024;
 /// `SessionEndReason::AgentCrashed::stderr_tail`.
 async fn stderr_drainer(
     mut stderr: tokio::process::ChildStderr,
-    tail_storage: Rc<RefCell<Vec<u8>>>,
+    tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
     session_id: SessionId,
 ) {
     let mut scratch = vec![0u8; 4096];
@@ -3138,11 +3165,9 @@ async fn stderr_drainer(
         match stderr.read(&mut scratch).await {
             Ok(0) => break,
             Ok(n) => {
-                // Log the chunk via tracing for post-mortem.
                 if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
                     tracing::warn!(session = %session_id, "agent stderr: {}", s.trim_end());
                 }
-                // Update the tail storage (kept compact for SessionEnded payload).
                 let mut tail = tail_storage.borrow_mut();
                 tail.extend_from_slice(&scratch[..n]);
                 if tail.len() > STDERR_TAIL_CAP {
@@ -3150,8 +3175,6 @@ async fn stderr_drainer(
                     tail.drain(..drop_n);
                 }
                 if tail.len() > STDERR_RING_CAP {
-                    // Sanity bound — should never trigger because we drain to
-                    // STDERR_TAIL_CAP above. Guard against accidental misuse.
                     let drop_n = tail.len() - STDERR_RING_CAP;
                     tail.drain(..drop_n);
                 }
@@ -3164,30 +3187,27 @@ async fn stderr_drainer(
     }
 }
 
-fn read_stderr_tail(tail_storage: &Rc<RefCell<Vec<u8>>>) -> String {
+fn read_stderr_tail(tail_storage: &std::rc::Rc<std::cell::RefCell<Vec<u8>>>) -> String {
     let buf = tail_storage.borrow();
     String::from_utf8_lossy(&buf).into_owned()
 }
 ```
 
-- [ ] **Step 3: Add the subprocess waiter helper**
+- [x] **Step 3: Add the subprocess waiter helper**
 
 Append to `worker.rs`:
 
 ```rust
 async fn subprocess_waiter(
-    mut child: Child,
-    event_tx: broadcast::Sender<BridgeEvent>,
-    state: Rc<RefCell<SessionStateInner>>,
+    mut child: tokio::process::Child,
+    event_tx: tokio::sync::broadcast::Sender<BridgeEvent>,
+    state: std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
     session_id: SessionId,
-    tail_storage: Rc<RefCell<Vec<u8>>>,
+    tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
     sessions: SessionMap,
 ) {
-    // Wait for the child process to exit.
     let exit_status = child.wait().await;
 
-    // Defer to state.end_emitted: if close_session_impl already emitted
-    // SessionEnded::Normal, we should not emit again.
     {
         let s = state.borrow();
         if s.end_emitted.is_some() {
@@ -3195,7 +3215,6 @@ async fn subprocess_waiter(
         }
     }
 
-    // Flush any pending TokenUsage before SessionEnded (spec §5.7 ordering).
     flush_pending_token_usage(&event_tx, &state, &session_id);
 
     let stderr_tail = read_stderr_tail(&tail_storage);
@@ -3221,9 +3240,10 @@ async fn subprocess_waiter(
 
 /// Emit a TokenUsage event if there's an unemitted snapshot. Called from
 /// session-end paths to honor the spec §5.7 ordering guarantee.
+#[allow(dead_code)] // wired in Task 8.3 close_session_impl
 pub(crate) fn flush_pending_token_usage(
-    event_tx: &broadcast::Sender<BridgeEvent>,
-    state: &Rc<RefCell<SessionStateInner>>,
+    event_tx: &tokio::sync::broadcast::Sender<BridgeEvent>,
+    state: &std::rc::Rc<std::cell::RefCell<SessionStateInner>>,
     session_id: &SessionId,
 ) {
     let snapshot = {
@@ -3247,20 +3267,21 @@ pub(crate) fn flush_pending_token_usage(
 }
 ```
 
-- [ ] **Step 4: Wire the waiter task into `open_session_impl`**
+- [x] **Step 4: Wire waiter + drainer into `open_session_impl`; store connection + io_task in AcpSession**
 
-In `open_session_impl`, after the `inner.borrow_mut().acp_session_id = ...` line, before the `sessions.borrow_mut().insert(...)`, replace the `AcpSession { session_id, agent_label, /* ... */ }` construction with:
+Replace the old `sessions.borrow_mut().insert(...)` block and `let _ = (stderr, init_resp, child, connection, io_task_handle)` suppression with:
 
 ```rust
-    let tail_storage: Rc<RefCell<Vec<u8>>> = Rc::default();
+    // Spawn the stderr drainer + subprocess waiter on the LocalSet.
+    let tail_storage: std::rc::Rc<std::cell::RefCell<Vec<u8>>> = std::rc::Rc::default();
 
-    let drainer = tokio::task::spawn_local(stderr_drainer(
+    let drainer_handle = tokio::task::spawn_local(stderr_drainer(
         stderr,
         tail_storage.clone(),
         session_id.clone(),
     ));
 
-    let waiter = tokio::task::spawn_local(subprocess_waiter(
+    let waiter_handle = tokio::task::spawn_local(subprocess_waiter(
         child,
         event_tx.clone(),
         inner.clone(),
@@ -3269,29 +3290,72 @@ In `open_session_impl`, after the `inner.borrow_mut().acp_session_id = ...` line
         sessions.clone(),
     ));
 
+    // Insert the session — connection and io_task_handle go IN, not into a
+    // suppression. Dropping connection here would close the protocol channel.
     sessions.borrow_mut().insert(
         session_id.clone(),
         AcpSession {
             session_id: session_id.clone(),
             agent_label: config.agent_kind.label().into(),
-            child: None, // moved into waiter
-            task_handles: vec![drainer, waiter],
+            connection: Some(connection),
+            io_task_handle: Some(io_task_handle),
+            child: None, // moved into subprocess_waiter
+            task_handles: vec![drainer_handle, waiter_handle],
             inner: inner.clone(),
         },
     );
+
+    // init_resp held only for handshake-time validation; nothing references it later.
+    let _ = init_resp;
 ```
 
-(The `child` field is set to `None` because `subprocess_waiter` consumed it. The Phase 8.3 close path coordinates close-vs-crash via `state.end_emitted`.)
+(io_task binding name from Task 8.1 is `io_task_handle`.)
 
-- [ ] **Step 5: Run `cargo check -p surge-acp`**
+- [x] **Step 5: Update `close_all_sessions` to abort tasks, drop connection, kill child**
 
-Expected: clean. The unused `connection` and `init_resp` warnings can be silenced with `let _ = (...)` until Phase 8.3 wires them up.
+Replace the old `close_all_sessions` (which only emitted events) with:
 
-- [ ] **Step 6: Commit**
+```rust
+pub(crate) async fn close_all_sessions(
+    sessions: &SessionMap,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    reason: SessionEndReason,
+) {
+    let to_close: Vec<SessionId> = sessions.borrow().keys().cloned().collect();
+    for sid in to_close {
+        // Drop connection first so io_task starts winding down.
+        let session = sessions.borrow_mut().remove(&sid);
+        if let Some(mut s) = session {
+            for handle in s.task_handles.drain(..) {
+                handle.abort();
+            }
+            if let Some(io) = s.io_task_handle.take() {
+                io.abort();
+            }
+            drop(s.connection.take());
+            if let Some(mut child) = s.child.take() {
+                let _ = child.start_kill();
+            }
+            s.inner.borrow_mut().end_emitted = Some(reason.clone());
+        }
+
+        let _ = event_tx.send(BridgeEvent::SessionEnded {
+            session: sid.clone(),
+            reason: reason.clone(),
+        });
+    }
+}
+```
+
+- [x] **Step 6: Run `cargo build -p surge-acp --lib`**
+
+Expected: only pre-existing `terminal.rs` warning. No new warnings.
+
+- [x] **Step 7: Commit**
 
 ```bash
-git add crates/surge-acp/src/bridge
-git commit -m "M3(acp): subprocess waiter + stderr drain + crash detection"
+git add crates/surge-acp/src/bridge/worker.rs
+git commit -m "M3(acp): subprocess waiter + stderr drain + crash detection + AcpSession holds connection"
 ```
 
 ### Task 8.3: `send_message_impl`, `close_session_impl`, token usage extraction
