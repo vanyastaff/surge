@@ -17,6 +17,7 @@ pub mod routing;
 pub mod replay;
 pub mod run_task;
 pub mod validate;
+pub mod stage;
 
 pub use engine::Engine;
 pub use error::EngineError;
