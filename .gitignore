@@ -30,3 +30,5 @@ Thumbs.db
 .worktrees/
 .security-key
 logs/security/
+
+.m5-acceptance/
