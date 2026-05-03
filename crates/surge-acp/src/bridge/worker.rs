@@ -201,6 +201,9 @@ fn content_block_to_string(b: &agent_client_protocol::ContentBlock) -> String {
 async fn handle_tool_call(
     session_id: &SessionId,
     event_tx: &broadcast::Sender<BridgeEvent>,
+    // Reserved for Phase 10: when generic tool dispatch lands, track
+    // open tool calls in `state.open_tool_calls` for correlation with
+    // tool/result notifications.
     _state: &Rc<RefCell<SessionStateInner>>,
     sandbox: &dyn super::sandbox::Sandbox,
     secrets: &Arc<crate::shared::secrets::SecretsRedactor>,
@@ -785,8 +788,14 @@ pub(crate) async fn send_message_impl(
         agent_client_protocol::SessionId::new(acp_session_str.as_str());
     let req = agent_client_protocol::PromptRequest::new(acp_session_id, blocks);
 
-    // Borrow the connection and call prompt. The RefCell borrow is held across
-    // the await — see function doc comment for why this is safe.
+    // SAFETY: holding `sessions.borrow()` across the `prompt(...).await` below
+    // is safe ONLY because `bridge_loop` dispatches commands sequentially on a
+    // single LocalSet thread — no other command can attempt `sessions.borrow_mut()`
+    // concurrently. If `bridge_loop` ever moves to concurrent command processing
+    // (e.g. a future `tokio::select!` over multiple cmd_rx receivers), this
+    // pattern becomes a `RefCell` panic at runtime. Refactor to clone an
+    // `Arc<ClientSideConnection>` out of the entry and release the borrow
+    // before await would be the right fix at that point.
     let map = sessions.borrow();
     let session_entry = map.get(&session).ok_or_else(|| {
         super::error::SendMessageError::SessionNotFound { session: session.clone() }
@@ -854,18 +863,20 @@ pub(crate) async fn close_session_impl(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // Timeout: forcibly abort tasks and kill child, then emit Timeout.
-    let mut killed = false;
+    // Timeout: forcibly remove session entry and abort tasks. Note: the agent
+    // subprocess child handle was moved into `subprocess_waiter` at session-open
+    // time, so we cannot send SIGKILL from here in M3 — `start_kill()` would be
+    // a no-op (child is None on AcpSession). The waiter's `child.wait().await`
+    // will resolve naturally when the agent eventually exits (or the OS reaps it
+    // when the bridge worker thread exits). Phase 11 may add PID-tracking + a
+    // platform-specific kill if Phase 10 testing shows orphaned processes
+    // accumulating.
     if let Some(mut s) = sessions.borrow_mut().remove(&session) {
         for handle in s.task_handles.drain(..) {
             handle.abort();
         }
         if let Some(io) = s.io_task_handle.take() {
             io.abort();
-        }
-        if let Some(mut child) = s.child.take() {
-            let _ = child.start_kill();
-            killed = true;
         }
     }
 
@@ -874,9 +885,15 @@ pub(crate) async fn close_session_impl(
         session: session.clone(),
         reason: reason.clone(),
     });
+    // Set after send so the broadcast slot is taken before any racing waiter
+    // could observe the end_emitted flag. Safe in current single-threaded
+    // LocalSet (no .await between send and this assignment).
     inner.borrow_mut().end_emitted = Some(reason);
 
-    Err(super::error::CloseSessionError::GracefulTimedOut { session, killed })
+    Err(super::error::CloseSessionError::GracefulTimedOut {
+        session,
+        killed: false, // see comment above — kill path is M3 limitation
+    })
 }
 
 #[cfg(test)]

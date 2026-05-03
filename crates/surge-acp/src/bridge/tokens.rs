@@ -19,7 +19,6 @@ use crate::bridge::session_inner::TokenUsageSnapshot;
 /// Defensive: malformed payloads return `None`, not panic
 /// (per spec §11.7 future-proofing). Phase 10's `bridge_token_tracking` test
 /// will surface what the Mock agent actually emits on `MOCK_ACP_USAGE=on`.
-#[allow(dead_code)] // wired in handle_session_notification (this task)
 pub(crate) fn extract_usage(
     update: &agent_client_protocol::SessionUpdate,
 ) -> Option<TokenUsageSnapshot> {

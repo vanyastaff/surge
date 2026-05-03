@@ -3490,6 +3490,9 @@ fn content_block_to_string(b: &agent_client_protocol::ContentBlock) -> String {
 async fn handle_tool_call(
     session_id: &SessionId,
     event_tx: &broadcast::Sender<BridgeEvent>,
+    // Reserved for Phase 10: when generic tool dispatch lands, track
+    // open tool calls in `state.open_tool_calls` for correlation with
+    // tool/result notifications.
     _state: &Rc<RefCell<SessionStateInner>>,
     sandbox: &dyn Sandbox,
     secrets: &Arc<SecretsRedactor>,
@@ -3598,34 +3601,65 @@ pub(crate) async fn send_message_impl(
     content: crate::bridge::session::MessageContent,
 ) -> Result<(), super::error::SendMessageError> {
     use crate::bridge::session::MessageContent;
+    use agent_client_protocol::Agent;
 
-    let exists = sessions.borrow().contains_key(&session);
-    if !exists {
-        return Err(super::error::SendMessageError::SessionNotFound { session });
+    // Resolve acp_session_id and confirm connection is present.
+    let (connection_present, acp_session_str) = {
+        let map = sessions.borrow();
+        let s = map.get(&session).ok_or_else(|| super::error::SendMessageError::SessionNotFound {
+            session: session.clone(),
+        })?;
+        let acp_id = s.inner.borrow().acp_session_id.clone();
+        (s.connection.is_some(), acp_id)
+    };
+
+    if !connection_present {
+        // Session is closing — connection has been .take()n by close_session_impl.
+        return Err(super::error::SendMessageError::SessionEnded {
+            session: session.clone(),
+            reason: super::event::SessionEndReason::Normal,
+        });
     }
 
-    // The actual ACP `prompt(session_id, content_blocks)` dispatch goes through
-    // the connection held by the session. Phase 8 stores the connection inside
-    // AcpSession; this function looks it up and calls connection.prompt(...).
-    //
-    // For brevity here, the impl marker:
-    //   1. Borrow session entry
-    //   2. Convert MessageContent → Vec<ContentBlock>
-    //   3. Call connection.prompt(...)
-    //   4. Map errors to SendMessageError
-    //
-    // Concrete code follows the same pattern as legacy `pool.rs` PoolOp::Prompt.
-
-    let _content = match content {
+    let blocks = match content {
         MessageContent::Text(s) => crate::shared::content_block::text_vec(s),
         MessageContent::Blocks(b) => b,
     };
 
+    // Build ACP-side session id from the stored string.
+    let acp_session_id =
+        agent_client_protocol::SessionId::new(acp_session_str.as_str());
+    let req = agent_client_protocol::PromptRequest::new(acp_session_id, blocks);
+
+    // SAFETY: holding `sessions.borrow()` across the `prompt(...).await` below
+    // is safe ONLY because `bridge_loop` dispatches commands sequentially on a
+    // single LocalSet thread — no other command can attempt `sessions.borrow_mut()`
+    // concurrently. If `bridge_loop` ever moves to concurrent command processing
+    // (e.g. a future `tokio::select!` over multiple cmd_rx receivers), this
+    // pattern becomes a `RefCell` panic at runtime. Refactor to clone an
+    // `Arc<ClientSideConnection>` out of the entry and release the borrow
+    // before await would be the right fix at that point.
+    let map = sessions.borrow();
+    let session_entry = map.get(&session).ok_or_else(|| {
+        super::error::SendMessageError::SessionNotFound { session: session.clone() }
+    })?;
+    let connection = session_entry.connection.as_ref().ok_or_else(|| {
+        super::error::SendMessageError::SessionEnded {
+            session: session.clone(),
+            reason: super::event::SessionEndReason::Normal,
+        }
+    })?;
+
+    connection.prompt(req).await.map_err(|e| {
+        warn!(session = %session, error = %e, "ACP prompt dispatch failed");
+        super::error::SendMessageError::Bridge(
+            super::error::BridgeError::CommandSendFailed(e.to_string()),
+        )
+    })?;
+
     Ok(())
 }
 ```
-
-(Real prompt dispatch wiring is deferred to a small follow-up commit if SDK shape requires it; the bridge skeleton accepts the message and observer task surfaces the agent's reply via `BridgeEvent::AgentMessage`.)
 
 - [ ] **Step 5: Implement `close_session_impl`**
 
@@ -3668,15 +3702,25 @@ pub(crate) async fn close_session_impl(
     }
 
     // Timeout: forcibly remove from sessions; emit SessionEnded::Timeout.
+    // Note: the agent subprocess child handle was moved into `subprocess_waiter`
+    // at session-open time, so we cannot send SIGKILL from here in M3 —
+    // `start_kill()` would be a no-op (child is None on AcpSession). The
+    // waiter's `child.wait().await` will resolve naturally when the agent
+    // eventually exits (or the OS reaps it when the bridge worker thread
+    // exits). Phase 11 may add PID-tracking + a platform-specific kill if
+    // Phase 10 testing shows orphaned processes accumulating.
     sessions.borrow_mut().remove(&session);
     let _ = event_tx.send(BridgeEvent::SessionEnded {
         session: session.clone(),
         reason: SessionEndReason::Timeout { duration_ms: GRACE_MS },
     });
+    // Set after send so the broadcast slot is taken before any racing waiter
+    // could observe the end_emitted flag. Safe in current single-threaded
+    // LocalSet (no .await between send and this assignment).
     inner.borrow_mut().end_emitted = Some(SessionEndReason::Timeout { duration_ms: GRACE_MS });
     Err(super::error::CloseSessionError::GracefulTimedOut {
         session,
-        killed: true,
+        killed: false, // see comment above — kill path is M3 limitation
     })
 }
 ```
