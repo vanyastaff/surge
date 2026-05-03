@@ -416,8 +416,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = Scenario::parse(&args);
     // CLI flag --usage / --log-stderr accepted in addition to env vars for
     // test isolation (avoids mutating process-global env under parallel tests).
-    let usage_on = env::var("MOCK_ACP_USAGE").as_deref() == Ok("on")
-        || args.iter().any(|a| a == "--usage");
+    let usage_on =
+        env::var("MOCK_ACP_USAGE").as_deref() == Ok("on") || args.iter().any(|a| a == "--usage");
     let verbose = env::var("MOCK_ACP_LOG").as_deref() == Ok("stderr")
         || args.iter().any(|a| a == "--log-stderr");
 

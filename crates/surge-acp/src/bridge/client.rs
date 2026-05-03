@@ -368,9 +368,9 @@ fn resolve_for_write(
             path: path.to_path_buf(),
         });
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| PathGuardError::NotAbsolute { path: path.to_path_buf() })?;
+    let parent = path.parent().ok_or_else(|| PathGuardError::NotAbsolute {
+        path: path.to_path_buf(),
+    })?;
     let canonical_parent = parent.canonicalize().map_err(|source| PathGuardError::Io {
         path: parent.to_path_buf(),
         source,
@@ -383,7 +383,9 @@ fn resolve_for_write(
     }
     let filename = path
         .file_name()
-        .ok_or_else(|| PathGuardError::NotAbsolute { path: path.to_path_buf() })?;
+        .ok_or_else(|| PathGuardError::NotAbsolute {
+            path: path.to_path_buf(),
+        })?;
     Ok(canonical_parent.join(filename))
 }
 
