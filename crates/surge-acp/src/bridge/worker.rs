@@ -428,7 +428,12 @@ fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, 
                 .unwrap_or_else(|_| {
                     let target =
                         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-                    PathBuf::from(target).join("debug").join("mock_acp_agent")
+                    let mut p = PathBuf::from(target).join("debug").join("mock_acp_agent");
+                    // On Windows, Command::new won't find the binary without the
+                    // .exe suffix when the CARGO_BIN_EXE env var is absent.
+                    #[cfg(windows)]
+                    p.set_extension("exe");
+                    p
                 });
             let mut c = Command::new(path);
             c.args(args);
@@ -518,6 +523,21 @@ pub(crate) async fn open_session_impl(
     let session_id = SessionId::new();
     let inner = Rc::new(RefCell::new(SessionStateInner::new(String::new())));
 
+    // Canonicalize working_dir once so path_guard's bounds checks work correctly.
+    // If working_dir contains symlinks or non-canonical components, the canonicalized
+    // request paths from ensure_in_worktree / resolve_for_write won't `starts_with`
+    // the non-canonical root, causing spurious rejection of valid in-worktree paths.
+    // Falls back to the raw path with a warning if canonicalization fails (matches
+    // SurgeClient::new behavior in legacy code).
+    let worktree_root_canonical = config.working_dir.canonicalize().unwrap_or_else(|e| {
+        warn!(
+            worktree = %config.working_dir.display(),
+            error = %e,
+            "failed to canonicalize worktree root; path bounds checks may be unreliable",
+        );
+        config.working_dir.clone()
+    });
+
     let bridge_client = BridgeClient::new(
         session_id,
         event_tx.clone(),
@@ -525,7 +545,7 @@ pub(crate) async fn open_session_impl(
         config.sandbox.boxed_clone(),
         Arc::new(SecretsRedactor::new()),
         config.bindings.clone(),
-        config.working_dir.clone(),
+        worktree_root_canonical,
     );
 
     // The ACP SDK requires `futures::AsyncWrite + Unpin` / `futures::AsyncRead + Unpin`.

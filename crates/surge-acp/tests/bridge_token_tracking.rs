@@ -27,17 +27,15 @@ async fn token_usage_monotonic_and_precedes_session_end() {
 
 async fn inner_test() {
     let wt = TempDir::new().unwrap();
-    // SAFETY: tokio multi-thread tests share env; this test runs alone.
-    unsafe {
-        std::env::set_var("MOCK_ACP_USAGE", "on");
-    }
 
     let bridge = AcpBridge::with_defaults().unwrap();
     let mut events = bridge.subscribe();
 
     let cfg = SessionConfig {
         agent_kind: AgentKind::Mock {
-            args: vec!["--scenario".into(), "long_streaming".into()],
+            // Pass --usage as a CLI flag instead of mutating the process-global
+            // MOCK_ACP_USAGE env var, which is fragile under parallel test execution.
+            args: vec!["--scenario".into(), "long_streaming".into(), "--usage".into()],
         },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "stream".into(),
@@ -130,8 +128,5 @@ async fn inner_test() {
     }
     assert!(saw_end, "never observed SessionEnded for {sid}");
 
-    unsafe {
-        std::env::remove_var("MOCK_ACP_USAGE");
-    }
     bridge.shutdown().await.unwrap();
 }

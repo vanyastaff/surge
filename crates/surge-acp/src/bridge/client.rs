@@ -124,26 +124,34 @@ impl Client for BridgeClient {
     }
 
     /// Write a text file within the worktree. Path-guard enforced before any IO.
+    ///
+    /// Uses `resolve_for_write` rather than `ensure_in_worktree` so that the
+    /// agent can create new files. `ensure_in_worktree` calls `canonicalize`
+    /// which requires the path to already exist; `resolve_for_write` mirrors
+    /// the legacy `SurgeClient::resolve_path` pattern — for non-existent paths
+    /// it canonicalizes the parent directory, joins the filename, then enforces
+    /// the worktree bound.
     async fn write_text_file(&self, req: WriteTextFileRequest) -> AcpResult<WriteTextFileResponse> {
-        // SDK Error::invalid_params() takes no message arg (0.10.2 shape), so we
-        // log the underlying error before discarding it at the ACP boundary.
-        ensure_in_worktree(&self.worktree_root, &req.path).map_err(|e| {
-            warn!(
-                session = %self.session_id,
-                error = %e,
-                "path guard rejected file access in write_text_file",
-            );
-            agent_client_protocol::Error::invalid_params()
-        })?;
+        let safe_path = match resolve_for_write(&self.worktree_root, &req.path) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(
+                    session = %self.session_id,
+                    error = %e,
+                    "path guard rejected write_text_file",
+                );
+                return Err(agent_client_protocol::Error::invalid_params());
+            },
+        };
         // Redact secrets from the content before writing? No — content is what
         // the agent wants persisted. Redaction applies to *event payloads*, not
         // file contents.
-        tokio::fs::write(&req.path, &req.content)
+        tokio::fs::write(&safe_path, &req.content)
             .await
             .map_err(|e| {
                 warn!(
                     session = %self.session_id,
-                    path = %req.path.display(),
+                    path = %safe_path.display(),
                     error = %e,
                     "write_text_file IO failure",
                 );
@@ -334,6 +342,49 @@ impl Client for BridgeClient {
         // No-op accept — bridge does not consume any ext notifications.
         Ok(())
     }
+}
+
+/// Worktree-rooted path resolution that allows new (non-existent) files.
+///
+/// For paths that already exist, behaves identically to `ensure_in_worktree`
+/// (full canonicalization + bounds check). For paths that do not yet exist,
+/// canonicalizes the parent directory, joins the filename, then enforces the
+/// worktree bound. This mirrors the legacy `SurgeClient::resolve_path` behavior
+/// so that an ACP agent can create new files without receiving a spurious
+/// `InvalidParams` error.
+///
+/// `read_text_file` continues to use `ensure_in_worktree` directly; reading a
+/// non-existent file should fail at the IO layer in any case.
+fn resolve_for_write(
+    worktree_root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, crate::shared::path_guard::PathGuardError> {
+    use crate::shared::path_guard::{PathGuardError, ensure_in_worktree};
+    if path.exists() {
+        return ensure_in_worktree(worktree_root, path);
+    }
+    if !path.is_absolute() {
+        return Err(PathGuardError::NotAbsolute {
+            path: path.to_path_buf(),
+        });
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| PathGuardError::NotAbsolute { path: path.to_path_buf() })?;
+    let canonical_parent = parent.canonicalize().map_err(|source| PathGuardError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    if !canonical_parent.starts_with(worktree_root) {
+        return Err(PathGuardError::Escapes {
+            path: canonical_parent.clone(),
+            worktree: worktree_root.to_path_buf(),
+        });
+    }
+    let filename = path
+        .file_name()
+        .ok_or_else(|| PathGuardError::NotAbsolute { path: path.to_path_buf() })?;
+    Ok(canonical_parent.join(filename))
 }
 
 #[cfg(test)]

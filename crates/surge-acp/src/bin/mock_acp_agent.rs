@@ -13,7 +13,13 @@
 //! - `long_streaming`    — emit 20 `AgentMessageChunk` notifications with 50 ms delays
 //! - `frozen`            — process prompts but ignore stdin EOF (for close_timeout test)
 //!
-//! **Env var flags**
+//! **Flags (CLI args — preferred for tests; env vars retained for back-compat)**
+//!
+//! - `--usage`               — equivalent to `MOCK_ACP_USAGE=on`
+//! - `--handshake-fail`      — equivalent to `MOCK_ACP_HANDSHAKE_FAIL=1`
+//! - `--log-stderr`          — equivalent to `MOCK_ACP_LOG=stderr`
+//!
+//! **Env var flags (honored for back-compat; use CLI flags in tests)**
 //!
 //! - `MOCK_ACP_USAGE=on`            — emit a `SessionUpdate::UsageUpdate`
 //!   notification per prompt turn (and also attach `Usage` to the
@@ -398,15 +404,22 @@ async fn run_agent(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
-    // ── MOCK_ACP_HANDSHAKE_FAIL: exit before building the connection ─────
-    if env::var("MOCK_ACP_HANDSHAKE_FAIL").as_deref() == Ok("1") {
-        eprintln!("[mock_acp_agent] MOCK_ACP_HANDSHAKE_FAIL=1: exiting before handshake");
+    // ── MOCK_ACP_HANDSHAKE_FAIL / --handshake-fail ──────────────────────
+    // CLI flag takes precedence so tests don't need to mutate process-global env.
+    let handshake_fail = env::var("MOCK_ACP_HANDSHAKE_FAIL").as_deref() == Ok("1")
+        || args.iter().any(|a| a == "--handshake-fail");
+    if handshake_fail {
+        eprintln!("[mock_acp_agent] handshake-fail: exiting before handshake");
         std::process::exit(1);
     }
 
     let scenario = Scenario::parse(&args);
-    let usage_on = env::var("MOCK_ACP_USAGE").as_deref() == Ok("on");
-    let verbose = env::var("MOCK_ACP_LOG").as_deref() == Ok("stderr");
+    // CLI flag --usage / --log-stderr accepted in addition to env vars for
+    // test isolation (avoids mutating process-global env under parallel tests).
+    let usage_on = env::var("MOCK_ACP_USAGE").as_deref() == Ok("on")
+        || args.iter().any(|a| a == "--usage");
+    let verbose = env::var("MOCK_ACP_LOG").as_deref() == Ok("stderr")
+        || args.iter().any(|a| a == "--log-stderr");
 
     if verbose {
         eprintln!("[mock_acp_agent] starting scenario={scenario:?} usage_on={usage_on}");

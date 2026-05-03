@@ -14,16 +14,14 @@ use tempfile::TempDir;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn handshake_failure_returns_open_session_error() {
     let wt = TempDir::new().unwrap();
-    // The mock honors MOCK_ACP_HANDSHAKE_FAIL=1 by exiting before handshake.
-    // SAFETY: tokio multi-thread tests share env; this test runs alone.
-    unsafe {
-        std::env::set_var("MOCK_ACP_HANDSHAKE_FAIL", "1");
-    }
-
+    // Pass --handshake-fail as a CLI flag instead of mutating the process-global
+    // MOCK_ACP_HANDSHAKE_FAIL env var, which is fragile under parallel test execution.
     let bridge = AcpBridge::with_defaults().unwrap();
 
     let cfg = SessionConfig {
-        agent_kind: AgentKind::Mock { args: vec![] },
+        agent_kind: AgentKind::Mock {
+            args: vec!["--handshake-fail".into()],
+        },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "x".into(),
         declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
@@ -40,8 +38,5 @@ async fn handshake_failure_returns_open_session_error() {
         OpenSessionError::HandshakeFailed { .. } | OpenSessionError::AgentSpawnFailed { .. }
     ));
 
-    unsafe {
-        std::env::remove_var("MOCK_ACP_HANDSHAKE_FAIL");
-    }
     bridge.shutdown().await.unwrap();
 }

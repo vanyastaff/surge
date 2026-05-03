@@ -11,9 +11,8 @@ use surge_acp::bridge::{
     AcpBridge, AgentKind, AlwaysAllowSandbox, BridgeError, OpenSessionError, SessionConfig,
 };
 use surge_acp::client::PermissionPolicy;
-use surge_core::OutcomeKey;
+use surge_core::{OutcomeKey, SessionId};
 use tempfile::TempDir;
-use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn worker_panic_surfaces_as_command_failure() {
@@ -26,7 +25,25 @@ async fn inner_test() {
     let bridge = AcpBridge::with_defaults().unwrap();
 
     bridge.__test_panic_now();
-    sleep(Duration::from_millis(200)).await;
+
+    // Poll until the worker is dead — `session_state` against a non-existent
+    // session normally returns a SessionNotFound-style error while the worker
+    // is alive. Once the worker panics and the channel closes, subsequent calls
+    // return CommandSendFailed / ReplyDropped. Bounded retry for determinism.
+    let dead_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let probe = bridge.session_state(SessionId::new()).await;
+        if matches!(
+            probe,
+            Err(BridgeError::CommandSendFailed(_) | BridgeError::ReplyDropped)
+        ) {
+            break; // Worker is dead.
+        }
+        if tokio::time::Instant::now() >= dead_deadline {
+            panic!("worker did not die within 2s after TestPanic injection");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     let wt = TempDir::new().unwrap();
     let cfg = SessionConfig {

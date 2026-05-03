@@ -792,6 +792,18 @@ If the underlying agent doesn't report usage (some agents don't), the bridge emi
 
 Verified by integration test `bridge_token_tracking` (§9.2): after the mock agent emits N usage blocks then exits, the subscriber observes N `TokenUsage` events strictly preceding `SessionEnded::Normal`.
 
+**M3 known limitation:** `bridge::tokens::extract_usage` is currently stubbed
+to return `None` for all `SessionUpdate` variants. SDK 0.10.2's
+`unstable_session_usage` exposes `SessionUpdate::UsageUpdate { used: u64, size: u64 }`
+(context-window stats), not per-request `prompt_tokens`/`output_tokens`/`cache_hits`/`model`.
+The stub honors §5.7's ordering guarantee trivially (no events to order).
+The `bridge_token_tracking` integration test currently passes vacuously.
+
+Followup tracked in [issue #5](https://github.com/vanyastaff/surge/issues/5).
+Resolution will either: (a) introduce delta accounting from `UsageUpdate.used` to
+synthesize per-request output_tokens, or (b) wait for ACP SDK 0.11+ that exposes
+the per-request fields directly.
+
 ### 5.8 Secrets redaction
 
 `crate::secrets::redact_secrets` already does regex-based redaction of common API key formats (AWS, OpenAI, Anthropic, GitHub PAT, generic `Bearer` tokens). M3 reuses it — every `BridgeEvent::ToolCall` runs `args_redacted_json = redact_secrets(&args_json)` before emission.
