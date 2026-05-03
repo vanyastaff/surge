@@ -86,6 +86,22 @@ pub(crate) async fn bridge_loop(
     debug!("command channel closed; bridge worker exiting");
 }
 
+/// Routes incoming `SessionNotification` (agent messages, tool calls, token
+/// usage) to `BridgeEvent` emissions. Phase 8.3 implements the real dispatch;
+/// Phase 7 ships a stub so `BridgeClient::session_notification` can compile
+/// and the wiring is verified.
+#[allow(dead_code)] // wired in Task 8.3 with real dispatch logic
+pub(crate) async fn handle_session_notification(
+    _session_id: &SessionId,
+    _event_tx: &broadcast::Sender<BridgeEvent>,
+    _state: &std::rc::Rc<std::cell::RefCell<super::session_inner::SessionStateInner>>,
+    _sandbox: &Box<dyn super::sandbox::Sandbox>,
+    _secrets: &std::sync::Arc<crate::shared::secrets::SecretsRedactor>,
+    _notif: agent_client_protocol::SessionNotification,
+) {
+    // Phase 8.3 implements: routes SessionUpdate variants to BridgeEvent emission.
+}
+
 /// Emit `SessionEnded` for every open session and drop them from the map.
 /// Used by `Shutdown` and (later) by failure paths in Phase 7+.
 #[allow(dead_code)] // wired in Task 7.1+ failure paths and called from bridge_loop

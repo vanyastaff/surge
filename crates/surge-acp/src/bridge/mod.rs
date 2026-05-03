@@ -54,5 +54,9 @@ pub use command::BridgeCommand;
 
 pub(crate) mod worker;
 
+pub(crate) mod session_inner;
+
+pub(crate) mod client;
+
 pub mod acp_bridge;
 pub use acp_bridge::AcpBridge;
