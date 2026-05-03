@@ -34,6 +34,8 @@ pub(crate) fn ensure_in_worktree(
         .canonicalize()
         .map_err(|source| PathGuardError::Io { path: path.to_path_buf(), source })?;
     if !canonical.starts_with(worktree_root) {
+        // Report the canonical (post-symlink) path so the operator sees where
+        // the request actually resolved to, not just the lexical input.
         return Err(PathGuardError::Escapes {
             path: canonical,
             worktree: worktree_root.to_path_buf(),

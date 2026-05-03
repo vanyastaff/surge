@@ -174,9 +174,11 @@ impl SurgeClient {
         // then perform the bounds check inline (ensure_in_worktree requires the
         // path to exist on disk so it can call std::fs::canonicalize).
         let canonical = if absolute.exists() {
-            ensure_in_worktree(&self.worktree_root_canonical, &absolute).map_err(|e| {
-                format!("Path {} is outside worktree bounds: {e}", path.display())
-            })?
+            // Use a neutral "Cannot resolve path" prefix so IO failures
+            // (permission denied, broken symlink, etc.) are not misreported
+            // as sandbox escapes. Matches the pre-refactor wording.
+            ensure_in_worktree(&self.worktree_root_canonical, &absolute)
+                .map_err(|e| format!("Cannot resolve path {}: {e}", path.display()))?
         } else {
             let parent = absolute
                 .parent()

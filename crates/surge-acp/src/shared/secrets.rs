@@ -2,9 +2,11 @@
 //! Lets the bridge hold an `Arc<SecretsRedactor>` and pass it into `BridgeClient`
 //! without re-allocating regex per call.
 
+#[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 #[derive(Debug)]
 pub(crate) struct SecretsRedactor;
 
+#[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 impl SecretsRedactor {
     pub(crate) fn new() -> Self {
         Self
@@ -17,6 +19,7 @@ impl SecretsRedactor {
     }
 }
 
+#[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 impl Default for SecretsRedactor {
     fn default() -> Self {
         Self::new()

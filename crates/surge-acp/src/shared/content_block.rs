@@ -4,11 +4,13 @@
 use agent_client_protocol::ContentBlock;
 
 /// Build a single text `ContentBlock` from an owned string.
+#[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 pub(crate) fn text(s: impl Into<String>) -> ContentBlock {
     ContentBlock::Text(agent_client_protocol::TextContent::new(s))
 }
 
 /// Build a single-element `Vec<ContentBlock>` from a string.
+#[allow(dead_code)] // consumed in Task 7.1 BridgeClient
 pub(crate) fn text_vec(s: impl Into<String>) -> Vec<ContentBlock> {
     vec![text(s)]
 }
