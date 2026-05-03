@@ -3776,15 +3776,17 @@ Create `crates/surge-acp/src/bin/mock_acp_agent.rs`:
 //! Speaks real ACP via `agent-client-protocol`'s `Agent` trait, so any SDK
 //! change shows up in tests the same way it would for a real agent.
 //!
-//! Behavior is selected via env vars and CLI args:
+//! Behavior is selected via env vars and CLI args (both `--scenario X` and
+//! `--scenario=X` forms are accepted):
 //! - `--scenario echo`              — echo user messages back as AgentMessage
 //! - `--scenario report_done`       — call report_stage_outcome after first message
 //! - `--scenario report_outcome=K`  — call report_stage_outcome with outcome=K
-//! - `--scenario crash_after=N`     — process N tool calls then exit 137
+//! - `--scenario crash_after=N`     — process N prompts then exit 137 on prompt N+1
 //! - `--scenario human_input`       — call request_human_input and wait
 //! - `--scenario long_streaming`    — emit 20 chunks with 50ms delays
-//! - `MOCK_ACP_USAGE=on`            — include usage metadata in agent messages
-//! - `MOCK_ACP_HANDSHAKE_FAIL=1`    — return error from initialize handshake
+//! - `MOCK_ACP_USAGE=on`            — emit `SessionUpdate::UsageUpdate` notification
+//!                                    per prompt (and attach `Usage` to PromptResponse)
+//! - `MOCK_ACP_HANDSHAKE_FAIL=1`    — exit(1) before writing the initialize response
 //! - `MOCK_ACP_LOG=stderr`          — verbose stderr output
 
 use std::env;
@@ -3800,29 +3802,37 @@ enum Scenario {
 }
 
 impl Scenario {
+    /// Supports both `--scenario X` (two tokens) and `--scenario=X` (single token).
+    /// Falls back to `Echo` with a stderr warning if missing or unrecognised.
     fn parse(args: &[String]) -> Self {
-        for arg in args {
-            if let Some(s) = arg.strip_prefix("--scenario") {
-                let s = s.trim_start_matches('=').trim();
-                if let Some(k) = s.strip_prefix("report_outcome=") {
-                    return Scenario::ReportOutcome(k.to_string());
-                }
-                if let Some(n) = s.strip_prefix("crash_after=") {
-                    return Scenario::CrashAfter(n.parse().unwrap_or(1));
-                }
-                return match s {
-                    "echo" => Scenario::Echo,
-                    "report_done" => Scenario::ReportDone,
-                    "human_input" => Scenario::HumanInput,
-                    "long_streaming" => Scenario::LongStreaming,
-                    other => {
-                        eprintln!("mock_acp_agent: unknown scenario '{other}', defaulting to echo");
-                        Scenario::Echo
-                    }
-                };
+        let value = args.iter().enumerate().find_map(|(i, arg)| {
+            if let Some(v) = arg.strip_prefix("--scenario=") {
+                Some(v.to_string())
+            } else if arg == "--scenario" {
+                args.get(i + 1).cloned()
+            } else {
+                None
+            }
+        });
+
+        let Some(value) = value else { return Scenario::Echo };
+
+        if let Some(k) = value.strip_prefix("report_outcome=") {
+            return Scenario::ReportOutcome(k.to_string());
+        }
+        if let Some(n) = value.strip_prefix("crash_after=") {
+            return Scenario::CrashAfter(n.parse().unwrap_or(1));
+        }
+        match value.as_str() {
+            "echo" => Scenario::Echo,
+            "report_done" => Scenario::ReportDone,
+            "human_input" => Scenario::HumanInput,
+            "long_streaming" => Scenario::LongStreaming,
+            other => {
+                eprintln!("mock_acp_agent: unknown scenario '{other}', defaulting to echo");
+                Scenario::Echo
             }
         }
-        Scenario::Echo
     }
 }
 
@@ -3932,6 +3942,10 @@ impl agent_client_protocol::Agent for MockAgent {
             Scenario::CrashAfter(n) => {
                 let count = self.tool_call_count.get() + 1;
                 self.tool_call_count.set(count);
+                // `count > n` semantics: `crash_after=0` crashes on prompt 1
+                // (count=1, n=0); `crash_after=N` crashes on prompt N+1 after
+                // serving the first N prompts normally. Tests that want the
+                // crash on the *first* prompt should use `crash_after=0`.
                 if count > *n {
                     std::process::exit(137);
                 }
@@ -3967,6 +3981,18 @@ impl agent_client_protocol::Agent for MockAgent {
 ```
 
 This skeleton compiles against the SDK's `Agent` trait. The actual emission of `AgentMessageChunk` / tool calls / `request_human_input` from inside `prompt(...)` requires the connection's session-notification API — its exact shape comes from the SDK rustdoc. Implementer pins it during the writing-plans → execution handoff.
+
+**Implementer notes (Task 9.1, commit `e14222f`)**
+
+SDK shape adaptations required during implementation:
+
+- **Notification emission API.** Use the SDK example pattern: the `MockAgent` holds an `mpsc::UnboundedSender<(SessionNotification, oneshot::Sender<()>)>`. A `tokio::task::spawn_local` background task drains the channel and forwards each `SessionNotification` to the client via `conn.session_notification(notif).await`. The agent's `send_notification` helper awaits the oneshot ack so the prompt handler can guarantee in-order delivery. The ack is also deadlock-safe: if the background task exits (e.g. `session_notification` errored and the loop broke), the oneshot's sender is dropped and `ack_rx.await` returns `Err(RecvError)` which we map to `internal_error()`.
+- **`SessionId::new("mock-session-1")`** — `SessionId` is `#[non_exhaustive]`, so the `SessionId(Arc::from("..."))` literal in the template above does not compile.
+- **`InitializeResponse::new(ProtocolVersion::V1).agent_info(Implementation::new(...))`** — uses builder chain; struct literal does not compile.
+- **`NewSessionResponse::new(SessionId::new(...))`** — same.
+- **`PromptResponse::new(StopReason::EndTurn).usage(Usage::new(total, input, output))`** — the `usage(...)` builder is gated behind `unstable_session_usage`, which the workspace already enables.
+- **`Agent` trait `authenticate` is required** — add a trivial `Ok(AuthenticateResponse::default())` impl. (The default-method extras like `set_session_mode`, `load_session`, `list_sessions`, `ext_method`, `ext_notification` ride on the trait's default impls and need no manual stub.)
+- **`MOCK_ACP_USAGE=on` should emit `SessionUpdate::UsageUpdate`**, not just attach `Usage` to the `PromptResponse`. The bridge's token tracker reads notifications, not response-attached usage. Use `acp::UsageUpdate::new(used, size)` (fields: `used` = tokens currently in context, `size` = context-window size in tokens). Both signals are emitted in the implementation for symmetry.
 
 - [ ] **Step 2: Build the binary**
 
@@ -4478,7 +4504,10 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
 
     let cfg = SessionConfig {
         agent_kind: AgentKind::Mock {
-            args: vec!["--scenario".into(), "crash_after=1".into()],
+            // crash_after=0: mock crashes on the first prompt
+            // (count > N is satisfied at count=1, N=0). Sending one
+            // message is enough to trigger the crash.
+            args: vec!["--scenario".into(), "crash_after=0".into()],
         },
         working_dir: wt.path().to_path_buf(),
         system_prompt: "x".into(),

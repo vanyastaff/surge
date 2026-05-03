@@ -948,7 +948,7 @@ M3 ships none of these. The trait surface defined in §4.6 is sufficient for the
 | `--scenario human_input`            | Call `request_human_input { question: "what now?" }` and wait for the bridge reply. |
 | `--scenario long_streaming`         | Emit 20 `AgentMessage` chunks with 50 ms delay between each.                 |
 | `MOCK_ACP_USAGE=on`                 | Include `unstable_session_usage` token usage metadata in agent messages.     |
-| `MOCK_ACP_HANDSHAKE_FAIL=1`         | Negotiate ACP, then return `HandshakeFailed` for testing OpenSessionError.   |
+| `MOCK_ACP_HANDSHAKE_FAIL=1`         | Exit with code 1 before writing the ACP initialize response. The bridge sees the subprocess exit during handshake; depending on which side of the race wins, this surfaces as `OpenSessionError::HandshakeFailed` or `OpenSessionError::AgentSpawnFailed`. |
 | `MOCK_ACP_LOG=stderr`               | Print verbose stderr for `read_stderr_tail` testing.                         |
 
 ### 7.2 Implementation approach

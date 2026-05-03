@@ -14,7 +14,9 @@
 //!
 //! **Env var flags**
 //!
-//! - `MOCK_ACP_USAGE=on`            — include token usage metadata in `PromptResponse`
+//! - `MOCK_ACP_USAGE=on`            — emit a `SessionUpdate::UsageUpdate`
+//!   notification per prompt turn (and also attach `Usage` to the
+//!   `PromptResponse`)
 //! - `MOCK_ACP_HANDSHAKE_FAIL=1`    — exit(1) before creating the ACP connection
 //! - `MOCK_ACP_LOG=stderr`          — write verbose diagnostics to stderr
 
@@ -47,37 +49,39 @@ enum Scenario {
 }
 
 impl Scenario {
-    /// Parse `--scenario <value>` from `args`.  Falls back to `Echo` with a
-    /// stderr warning if the value is unrecognised.
+    /// Parse the scenario flag from `args`.  Supports both `--scenario X` (two
+    /// tokens) and `--scenario=X` (single token).  Falls back to `Echo` with a
+    /// stderr warning if the value is missing or unrecognised.
     fn parse(args: &[String]) -> Self {
-        let value = args
-            .windows(2)
-            .find(|w| w[0] == "--scenario")
-            .map(|w| w[1].as_str());
+        let value = args.iter().enumerate().find_map(|(i, arg)| {
+            if let Some(v) = arg.strip_prefix("--scenario=") {
+                Some(v.to_string())
+            } else if arg == "--scenario" {
+                args.get(i + 1).cloned()
+            } else {
+                None
+            }
+        });
 
-        match value {
-            None | Some("echo") => Self::Echo,
-            Some("report_done") => Self::ReportDone,
-            Some(s) if s.starts_with("report_outcome=") => {
-                let key = s["report_outcome=".len()..].to_owned();
-                Self::ReportOutcome(key)
-            }
-            Some(s) if s.starts_with("crash_after=") => {
-                let n: u32 = s["crash_after=".len()..]
-                    .parse()
-                    .unwrap_or_else(|e| {
-                        eprintln!("[mock_acp_agent] bad crash_after value: {e}; defaulting to 1");
-                        1
-                    });
-                Self::CrashAfter(n)
-            }
-            Some("human_input") => Self::HumanInput,
-            Some("long_streaming") => Self::LongStreaming,
-            Some(unknown) => {
-                eprintln!(
-                    "[mock_acp_agent] unknown scenario {:?}; falling back to echo",
-                    unknown
-                );
+        let Some(value) = value else { return Self::Echo };
+
+        if let Some(k) = value.strip_prefix("report_outcome=") {
+            return Self::ReportOutcome(k.to_string());
+        }
+        if let Some(n) = value.strip_prefix("crash_after=") {
+            let parsed = n.parse().unwrap_or_else(|e| {
+                eprintln!("[mock_acp_agent] bad crash_after value {n:?}: {e}; defaulting to 1");
+                1
+            });
+            return Self::CrashAfter(parsed);
+        }
+        match value.as_str() {
+            "echo" => Self::Echo,
+            "report_done" => Self::ReportDone,
+            "human_input" => Self::HumanInput,
+            "long_streaming" => Self::LongStreaming,
+            other => {
+                eprintln!("[mock_acp_agent] unknown scenario {other:?}; defaulting to echo");
                 Self::Echo
             }
         }
@@ -127,6 +131,10 @@ impl MockAgent {
         self.notif_tx
             .send((notif, ack_tx))
             .map_err(|_| acp::Error::internal_error())?;
+        // `ack_rx` returns `Err(RecvError)` if the background notification
+        // task has exited (e.g. `session_notification` errored and the loop
+        // broke), which we map to `internal_error`.  No deadlock risk:
+        // `RecvError` fires as soon as the corresponding `ack_tx` is dropped.
         ack_rx.await.map_err(|_| acp::Error::internal_error())
     }
 
@@ -235,6 +243,9 @@ impl acp::Agent for MockAgent {
 
             // ── crash_after=N ────────────────────────────────────────────────
             Scenario::CrashAfter(n) => {
+                // `count > n` semantics: `crash_after=0` crashes on prompt 1
+                // (count=1, n=0); `crash_after=N` crashes on prompt N+1 after
+                // serving the first N prompts normally.
                 if count > *n {
                     eprintln!("[mock_acp_agent] crash_after={n} threshold reached at prompt #{count}; exiting 137");
                     std::process::exit(137);
@@ -282,7 +293,19 @@ impl acp::Agent for MockAgent {
             }
         }
 
-        // Build the PromptResponse, optionally attaching usage metadata.
+        // Emit a `UsageUpdate` notification so the bridge's token tracker can
+        // observe a `TokenUsage` event when `extract_usage` is updated to read
+        // it (Task 10.6 scope).  Also attach `Usage` to the `PromptResponse`
+        // for symmetry — Bridge consumers that read response-attached usage
+        // see the same numbers.
+        if self.usage_on {
+            self.send_notification(acp::SessionNotification::new(
+                req.session_id.clone(),
+                acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(100, 200_000)),
+            ))
+            .await?;
+        }
+
         let mut resp = acp::PromptResponse::new(acp::StopReason::EndTurn);
 
         if self.usage_on {
