@@ -5,5 +5,6 @@
 //! parallel/loops/subgraphs are M6 scope and rejected at run-start.
 
 // Submodules added incrementally as later phases land.
+pub mod predicates;
 pub mod sandbox_factory;
 pub mod tools;
