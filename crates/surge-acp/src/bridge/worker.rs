@@ -155,22 +155,20 @@ pub(crate) async fn close_all_sessions(
 ) {
     let to_close: Vec<SessionId> = sessions.borrow().keys().cloned().collect();
     for sid in to_close {
-        // Drop connection first so io_task starts winding down.
         let session = sessions.borrow_mut().remove(&sid);
         if let Some(mut s) = session {
-            // Abort spawned tasks (drainer, waiter). Best-effort.
+            // Wind down in this order: abort the spawned helper tasks (drainer + waiter
+            // won't observe the connection drop), then abort the SDK's io_task pump
+            // (belt-and-suspenders — dropping `connection` would terminate it naturally),
+            // then drop `connection` (the load-bearing protocol-close trigger), then
+            // best-effort SIGKILL the child if the waiter didn't already consume it.
             for handle in s.task_handles.drain(..) {
                 handle.abort();
             }
             if let Some(io) = s.io_task_handle.take() {
                 io.abort();
             }
-            // Drop connection explicitly (the explicit drop is the protocol
-            // close trigger).
             drop(s.connection.take());
-            // If subprocess_waiter didn't already consume `child` (e.g. session
-            // never reached the open state), best-effort SIGKILL so we don't
-            // orphan it.
             if let Some(mut child) = s.child.take() {
                 let _ = child.start_kill();
             }
@@ -491,6 +489,10 @@ async fn stderr_drainer(
                     let drop_n = tail.len() - STDERR_TAIL_CAP;
                     tail.drain(..drop_n);
                 }
+                // Belt-and-suspenders: the TAIL_CAP check above always brings tail.len() to
+                // STDERR_TAIL_CAP (2 KiB) which is < STDERR_RING_CAP (8 KiB), so this branch
+                // is logically unreachable. Retained as a defensive bound in case the caps
+                // ever decouple. See spec §5.6 unified-buffer design rationale.
                 if tail.len() > STDERR_RING_CAP {
                     let drop_n = tail.len() - STDERR_RING_CAP;
                     tail.drain(..drop_n);

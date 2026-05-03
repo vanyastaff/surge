@@ -768,7 +768,14 @@ The waiter task is awaited as part of the session's `Drop` cleanup. `read_stderr
 - **8 KiB ring (`stderr_drainer` task, runs throughout the session)** — exists to relieve pipe-buffer pressure (~64 KiB on Linux, smaller on Windows) so the agent never blocks on `write(stderr)`. Drained continuously, flushed to `tracing::warn!` for post-mortem inspection in logs. Ring size is generous because the consumer is a log file, not a network frame.
 - **2 KiB tail (`read_stderr_tail`, runs once at exit)** — exists to populate `SessionEndReason::AgentCrashed::stderr_tail`, which is broadcast to *every* subscriber and ultimately persisted as part of `EventPayload::SessionClosed` in M5. Kept compact so the event payload stays small. Reads the most recent 2 KiB at exit, which may be a subset of (or overlap with) what the drainer task has already logged.
 
-The two buffers are independent — the drainer doesn't seed the tail, and vice versa. Implementation detail, but documented to prevent an implementer from "unifying" them and accidentally enlarging every `SessionEnded` event payload.
+**Unified `tail_storage` shared between drainer and waiter.** The drainer feeds `tail_storage` (an `Rc<RefCell<Vec<u8>>>`); the waiter reads it via `read_stderr_tail` at exit time. The drainer enforces the cap at every write — `tail_storage.len()` is bounded by `STDERR_TAIL_CAP` (2 KiB), so the `SessionEnded` payload size guarantee holds without a separate exit-time pipe read.
+
+The original §5.6 design called for two independent buffers (drainer's own ring + a separate exit-time pipe read). The unified-buffer approach replaces it for these reasons:
+- Avoids racing the drainer's last reads when the waiter does its own pipe read at exit time.
+- Simpler ownership: only the drainer owns the `ChildStderr` handle.
+- Same payload size guarantee — the drainer's cap is the load-bearing invariant.
+
+`STDERR_RING_CAP` (8 KiB) is retained as a defensive belt-and-suspenders bound; in the unified-buffer design it is logically unreachable (the TAIL_CAP check fires first), but kept for future-proofing if the buffer caps ever decouple.
 
 Acceptance: integration test `bridge_crash_detection.rs` SIGKILLs the mock agent, expects `SessionEnded` event within 2 s. Achievable on all three OSes because tokio's `Child::wait` polls process exit at runtime tick granularity (~ms).
 
