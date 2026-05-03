@@ -34,17 +34,84 @@ impl Engine {
         }
     }
 
-    /// Start a new run. Phase 5 implements the body.
+    /// Start a new run.
     pub async fn start_run(
         &self,
-        _run_id: RunId,
-        _graph: Graph,
-        _worktree_path: PathBuf,
-        _run_config: EngineRunConfig,
+        run_id: RunId,
+        graph: Graph,
+        worktree_path: PathBuf,
+        run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
-        Err(EngineError::Internal(
-            "Engine::start_run not yet implemented (Phase 5)".into(),
-        ))
+        use crate::engine::handle::RunHandle;
+        use crate::engine::run_task::{execute, RunTaskParams};
+        use crate::engine::validate::validate_for_m5;
+        use surge_core::content_hash::ContentHash;
+        use surge_core::run_event::{EventPayload, RunConfig as CoreRunConfig, VersionedEventPayload};
+        use surge_core::sandbox::SandboxMode;
+        use surge_core::approvals::ApprovalPolicy;
+        use tokio::sync::broadcast;
+        use tokio_util::sync::CancellationToken;
+
+        validate_for_m5(&graph)?;
+
+        if !worktree_path.exists() {
+            return Err(EngineError::WorktreeMissing(worktree_path));
+        }
+
+        let writer = self
+            .storage
+            .create_run(run_id, &worktree_path, None)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        // Emit RunStarted + PipelineMaterialized atomically.
+        let core_run_config = CoreRunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+        };
+        let graph_bytes = serde_json::to_vec(&graph)
+            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
+        let graph_hash = ContentHash::compute(&graph_bytes);
+
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: worktree_path.clone(),
+                    initial_prompt: String::new(),
+                    config: core_run_config,
+                }),
+                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph.clone()),
+                    graph_hash,
+                }),
+            ])
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        let (event_tx, event_rx) = broadcast::channel(256);
+        let cancel = CancellationToken::new();
+
+        let params = RunTaskParams {
+            writer,
+            bridge: self.bridge.clone(),
+            tool_dispatcher: self.tool_dispatcher.clone(),
+            graph,
+            worktree_path,
+            run_config,
+            event_tx,
+            cancel,
+            resume_mode: false,
+        };
+
+        let join = tokio::spawn(execute(params));
+
+        Ok(RunHandle {
+            run_id,
+            events: event_rx,
+            completion: join,
+        })
     }
 
     /// Resume an existing run. Phase 10 implements the body.
@@ -78,11 +145,8 @@ impl Engine {
     }
 }
 
-// Suppress unused-field warnings on stubbed methods until Phase 5+ lands.
+// Suppress unused-field warning for config until Phase 6+ uses it.
 #[allow(dead_code)]
-fn _engine_unused_field_check(e: &Engine) {
-    let _ = &e.bridge;
-    let _ = &e.storage;
-    let _ = &e.tool_dispatcher;
+fn _engine_config_used(e: &Engine) {
     let _ = &e.config;
 }
