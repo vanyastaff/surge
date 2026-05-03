@@ -10,3 +10,14 @@ pub mod sandbox_factory;
 pub mod tools;
 pub mod error;
 pub mod config;
+pub mod handle;
+pub mod engine;
+pub mod snapshot;
+pub mod routing;
+pub mod replay;
+pub mod run_task;
+
+pub use engine::Engine;
+pub use error::EngineError;
+pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
+pub use handle::{RunHandle, RunOutcome, EngineRunEvent};
