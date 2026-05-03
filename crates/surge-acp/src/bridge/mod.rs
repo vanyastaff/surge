@@ -48,12 +48,8 @@ pub mod event {
 // Forward stubs replaced in Phase 3 / Phase 4. Kept minimal so Phase 2 tests
 // can exercise SessionConfig in isolation.
 
-pub mod sandbox {
-    pub trait Sandbox: Send + Sync {}
-    #[derive(Debug, Clone)]
-    pub struct AlwaysAllowSandbox;
-    impl Sandbox for AlwaysAllowSandbox {}
-}
+pub mod sandbox;
+pub use sandbox::{AlwaysAllowSandbox, DenyListSandbox, Sandbox, SandboxDecision};
 
 pub mod tools {
     use serde_json::Value;
