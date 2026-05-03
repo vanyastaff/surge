@@ -45,6 +45,21 @@ async fn open_send_close_round_trip() {
 
     bridge.send_message(sid.clone(), MessageContent::Text("hello".into())).await.unwrap();
 
+    // Drain until AgentMessage is observed (spec §9.2 requires this assertion).
+    let agent_msg_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut saw_agent_msg = false;
+    while tokio::time::Instant::now() < agent_msg_deadline {
+        match timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(BridgeEvent::AgentMessage { session, chunk, .. })) if session == sid => {
+                assert!(!chunk.is_empty(), "agent message chunk should be non-empty");
+                saw_agent_msg = true;
+                break;
+            }
+            _ => continue,
+        }
+    }
+    assert!(saw_agent_msg, "did not observe BridgeEvent::AgentMessage from echo scenario");
+
     bridge.close_session(sid.clone()).await.expect("close session");
 
     // Drain events until SessionEnded.
@@ -53,7 +68,10 @@ async fn open_send_close_round_trip() {
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_millis(200), events.recv()).await {
             Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => {
-                assert!(matches!(reason, SessionEndReason::Normal | SessionEndReason::Timeout { .. }));
+                assert!(
+                    matches!(reason, SessionEndReason::Normal),
+                    "expected Normal close, got {reason:?} (regression of close_session_impl io_task_handle.abort()?)"
+                );
                 saw_end = true;
                 break;
             }

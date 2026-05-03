@@ -11,6 +11,7 @@
 //! - `crash_after=N`     — process N prompts then call `std::process::exit(137)`
 //! - `human_input`       — emit `request_human_input` tool call notification
 //! - `long_streaming`    — emit 20 `AgentMessageChunk` notifications with 50 ms delays
+//! - `frozen`            — process prompts but ignore stdin EOF (for close_timeout test)
 //!
 //! **Env var flags**
 //!
@@ -46,6 +47,12 @@ enum Scenario {
     HumanInput,
     /// Emit 20 `AgentMessageChunk` notifications with 50 ms delays.
     LongStreaming,
+    /// Process prompts normally but ignore stdin EOF — when the bridge drops
+    /// the connection, the mock's `handle_io` returns but the process keeps
+    /// running on an infinite sleep so `child.wait()` in the bridge's
+    /// subprocess waiter never resolves. Used by Task 10.4
+    /// `bridge_close_timeout` to exercise the 5s grace path.
+    Frozen,
 }
 
 impl Scenario {
@@ -80,6 +87,7 @@ impl Scenario {
             "report_done" => Self::ReportDone,
             "human_input" => Self::HumanInput,
             "long_streaming" => Self::LongStreaming,
+            "frozen" => Self::Frozen,
             other => {
                 eprintln!("[mock_acp_agent] unknown scenario {other:?}; defaulting to echo");
                 Self::Echo
@@ -291,6 +299,23 @@ impl acp::Agent for MockAgent {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             }
+
+            // ── frozen ───────────────────────────────────────────────────────
+            // Process the prompt normally (emit a small echo) so the bridge
+            // sees a successful turn, then return.  The "freeze on stdin EOF"
+            // behaviour lives in `run_agent` below — we keep the prompt path
+            // responsive so the bridge can still establish the session and
+            // exchange one message before close_session is invoked.
+            Scenario::Frozen => {
+                let chunk = acp::ContentChunk::new(acp::ContentBlock::from(
+                    "frozen ack".to_string(),
+                ));
+                self.send_notification(acp::SessionNotification::new(
+                    sid,
+                    acp::SessionUpdate::AgentMessageChunk(chunk),
+                ))
+                .await?;
+            }
         }
 
         // Emit a `UsageUpdate` notification so the bridge's token tracker can
@@ -334,6 +359,7 @@ async fn run_agent(
 
     let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<NotifItem>();
 
+    let is_frozen = matches!(scenario, Scenario::Frozen);
     let agent = MockAgent::new(scenario, usage_on, verbose, notif_tx);
 
     let (conn, handle_io) = acp::AgentSideConnection::new(agent, outgoing, incoming, |fut| {
@@ -354,6 +380,20 @@ async fn run_agent(
     });
 
     handle_io.await?;
+
+    // ── frozen scenario: never exit ─────────────────────────────────────
+    // After `handle_io` returns (because the bridge dropped the connection and
+    // the mock's stdin got EOF), normally `main` returns and the process exits.
+    // For `Scenario::Frozen` we instead block forever so the bridge's
+    // `subprocess_waiter` never observes child exit, exercising the 5s
+    // grace-timeout path in `close_session_impl`. The bridge will eventually
+    // emit `SessionEnded::Timeout` and the test process will reap us when it
+    // tears down (or the OS reaps the orphan when the bridge thread dies).
+    if is_frozen {
+        eprintln!("[mock_acp_agent] frozen: handle_io returned; sleeping forever");
+        std::future::pending::<()>().await;
+    }
+
     Ok(())
 }
 

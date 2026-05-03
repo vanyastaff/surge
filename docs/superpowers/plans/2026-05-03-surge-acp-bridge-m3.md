@@ -3784,6 +3784,7 @@ Create `crates/surge-acp/src/bin/mock_acp_agent.rs`:
 //! - `--scenario crash_after=N`     — process N prompts then exit 137 on prompt N+1
 //! - `--scenario human_input`       — call request_human_input and wait
 //! - `--scenario long_streaming`    — emit 20 chunks with 50ms delays
+//! - `--scenario frozen`            — process prompts but ignore stdin EOF (close_timeout test)
 //! - `MOCK_ACP_USAGE=on`            — emit `SessionUpdate::UsageUpdate` notification
 //!                                    per prompt (and attach `Usage` to PromptResponse)
 //! - `MOCK_ACP_HANDSHAKE_FAIL=1`    — exit(1) before writing the initialize response
@@ -3799,6 +3800,12 @@ enum Scenario {
     CrashAfter(u32),
     HumanInput,
     LongStreaming,
+    /// Process prompts but ignore stdin EOF — when the bridge drops the
+    /// connection, the mock's `handle_io` returns but the process keeps
+    /// running on `std::future::pending()` so `child.wait()` in the bridge's
+    /// subprocess waiter never resolves. Used by Task 10.4 `bridge_close_timeout`
+    /// to exercise the 5s grace path. See `run_agent` for the freeze logic.
+    Frozen,
 }
 
 impl Scenario {
@@ -3828,6 +3835,7 @@ impl Scenario {
             "report_done" => Scenario::ReportDone,
             "human_input" => Scenario::HumanInput,
             "long_streaming" => Scenario::LongStreaming,
+            "frozen" => Scenario::Frozen,
             other => {
                 eprintln!("mock_acp_agent: unknown scenario '{other}', defaulting to echo");
                 Scenario::Echo
@@ -3965,6 +3973,17 @@ impl agent_client_protocol::Agent for MockAgent {
                     stop_reason: agent_client_protocol::StopReason::EndTurn,
                 })
             }
+            Scenario::Frozen => {
+                // Process the prompt normally (emit a small "frozen ack" chunk so
+                // the bridge sees one AgentMessage), then return EndTurn. The
+                // freeze-on-EOF behaviour lives in `run_agent`: after `handle_io`
+                // returns, when scenario is Frozen, the binary awaits
+                // `std::future::pending::<()>()` so the OS process never exits
+                // and the bridge's `subprocess_waiter` never observes child exit.
+                Ok(agent_client_protocol::PromptResponse {
+                    stop_reason: agent_client_protocol::StopReason::EndTurn,
+                })
+            }
         }
     }
 
@@ -4083,15 +4102,35 @@ async fn open_send_close_round_trip() {
 
     bridge.send_message(sid.clone(), MessageContent::Text("hello".into())).await.unwrap();
 
+    // Drain until AgentMessage is observed (spec §9.2 requires this assertion).
+    let agent_msg_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut saw_agent_msg = false;
+    while tokio::time::Instant::now() < agent_msg_deadline {
+        match timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(BridgeEvent::AgentMessage { session, chunk, .. })) if session == sid => {
+                assert!(!chunk.is_empty(), "agent message chunk should be non-empty");
+                saw_agent_msg = true;
+                break;
+            }
+            _ => continue,
+        }
+    }
+    assert!(saw_agent_msg, "did not observe BridgeEvent::AgentMessage from echo scenario");
+
     bridge.close_session(sid.clone()).await.expect("close session");
 
-    // Drain events until SessionEnded.
+    // Drain events until SessionEnded. With the io_task_handle.abort() fix in
+    // close_session_impl, this MUST be SessionEndReason::Normal — accepting
+    // Timeout would silently mask a regression of that fix.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     let mut saw_end = false;
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_millis(200), events.recv()).await {
             Ok(Ok(BridgeEvent::SessionEnded { session, reason })) if session == sid => {
-                assert!(matches!(reason, SessionEndReason::Normal | SessionEndReason::Timeout { .. }));
+                assert!(
+                    matches!(reason, SessionEndReason::Normal),
+                    "expected Normal close, got {reason:?} (regression of close_session_impl io_task_handle.abort()?)"
+                );
                 saw_end = true;
                 break;
             }
@@ -4103,6 +4142,17 @@ async fn open_send_close_round_trip() {
     bridge.shutdown().await.unwrap();
 }
 ```
+
+> **Implementer note (Task 10.1, post-review)** — Running this test against the
+> Phase 8.3 close_session_impl exposed an SDK shutdown deadlock: the ACP SDK's
+> `RpcConnection::handle_incoming` clones `outgoing_tx`, so dropping
+> `ClientSideConnection` alone leaves a sender alive and io_task never sees
+> `outgoing_rx` close. Fix: `close_session_impl` takes the `io_task_handle` out
+> of the session map and `.abort()`s it immediately after taking the connection.
+> Aborting drops `outgoing_bytes` (child stdin write end) → mock gets stdin EOF →
+> exits → `subprocess_waiter` emits `SessionEnded::Normal` within ~100ms. Without
+> this abort, close_session hangs for the full 5s grace period. Commit the
+> worker.rs change alongside the two test files in this task.
 
 - [ ] **Step 2: Write `bridge_tool_injection.rs`**
 
@@ -4184,7 +4234,13 @@ Expected: both pass. If `mock_acp_agent` doesn't actually emit the tool call yet
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/surge-acp/tests/bridge_session_lifecycle.rs crates/surge-acp/tests/bridge_tool_injection.rs
+# Include worker.rs alongside the test files: the implementer note above
+# explains why close_session_impl needs the io_task_handle.abort() change for
+# this test to pass. Skipping it leaves close_session hanging 5s on every test
+# run that uses it.
+git add crates/surge-acp/tests/bridge_session_lifecycle.rs \
+        crates/surge-acp/tests/bridge_tool_injection.rs \
+        crates/surge-acp/src/bridge/worker.rs
 git commit -m "M3(acp): tests bridge_session_lifecycle + bridge_tool_injection"
 ```
 

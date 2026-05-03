@@ -43,10 +43,16 @@ pub(crate) struct AcpSession {
     /// for graceful shutdown.
     pub connection: Option<agent_client_protocol::ClientSideConnection>,
 
-    /// JoinHandle for the SDK's io_task pump. Not strictly required for
-    /// correctness (io_task exits on its own when `connection` is dropped),
-    /// but capturing it lets close paths optionally `.abort()` or `.await`
-    /// the task for clean shutdown.
+    /// JoinHandle for the SDK's io_task pump.
+    ///
+    /// **Required for clean close — not optional.** The ACP SDK's `RpcConnection`
+    /// internally clones `outgoing_tx` for `handle_incoming` and the io_task,
+    /// creating a circular dependency: dropping `connection` alone leaves clones
+    /// alive, so io_task never sees its `outgoing_rx` close. `close_session_impl`
+    /// MUST `.abort()` this handle to drop `outgoing_bytes` (the child's stdin
+    /// write end), which causes the agent to see EOF and exit cleanly. Without
+    /// the abort, `close_session` hangs until the 5s grace timeout. See
+    /// `close_session_impl` for the inline diagnosis.
     pub io_task_handle: Option<tokio::task::JoinHandle<()>>,
 
     /// Subprocess handle. `None` once `subprocess_waiter` has consumed it
@@ -817,12 +823,21 @@ pub(crate) async fn send_message_impl(
     Ok(())
 }
 
-/// Close an ACP session gracefully.
+/// Close a session gracefully.
 ///
-/// Takes the `ClientSideConnection` from the session entry (dropping it closes
-/// the outgoing channel → io_task drains → agent's stdin closes → agent should
-/// exit cleanly). Then waits up to `GRACE_MS` for the subprocess waiter to
-/// observe child exit. Times out with a kill if the agent doesn't exit in time.
+/// **The mechanism that actually closes the agent's stdin pipe is aborting
+/// `io_task_handle`, not dropping `connection`.** See the inline comment in
+/// the take-and-abort block for the full SDK-internal deadlock chain. The
+/// connection is taken anyway so subsequent `send_message` calls return
+/// `SessionEnded` rather than racing the close.
+///
+/// On graceful close (the common case), aborting io_task drops the child's
+/// stdin write end → mock sees EOF → exits status 0 → `subprocess_waiter`
+/// emits `SessionEnded::Normal` within ~100ms.
+///
+/// On grace-timeout (mock ignores EOF or hangs), removes the session, aborts
+/// remaining tasks, emits `SessionEnded::Timeout`, returns `GracefulTimedOut`
+/// (M3 has no force-kill path — see comment in timeout block).
 pub(crate) async fn close_session_impl(
     sessions: &SessionMap,
     event_tx: &broadcast::Sender<BridgeEvent>,
