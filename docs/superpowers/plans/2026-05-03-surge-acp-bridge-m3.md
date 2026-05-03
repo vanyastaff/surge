@@ -493,7 +493,7 @@ pub enum CloseSessionError {
 #[derive(Debug, Error)]
 pub enum AcpError {
     #[error("ACP protocol error: {0}")]
-    Protocol(String),
+    Protocol(#[source] agent_client_protocol::Error),
 
     #[error("io: {0}")]
     Io(#[source] std::io::Error),
@@ -561,15 +561,15 @@ Compilation will still fail on the `SessionEndReason` import. The next task fixe
 
 - [ ] **Step 4: Add a forward stub for `SessionEndReason` to unblock the build**
 
-This is a temporary placeholder so Task 1.1 can compile and test in isolation. It will be replaced by the real definition in Task 4.1.
+This is a temporary placeholder so Task 1.1 can compile and test in isolation. It will be replaced by the real definition in Task 5.1.
 
 Append to `crates/surge-acp/src/bridge/mod.rs`:
 
 ```rust
-// Temporary forward stub; replaced by `event::SessionEndReason` in Task 4.1.
+// Temporary forward stub; replaced by `event::SessionEndReason` in Task 5.1.
 // Kept here only so error.rs can compile during Phase 1 development.
 pub mod event {
-    /// Stubbed in Task 1.1, replaced by full enum in Task 4.1.
+    /// Stubbed in Task 1.1, replaced by full enum in Task 5.1.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum SessionEndReason {
         Normal,
@@ -580,7 +580,7 @@ pub mod event {
 }
 ```
 
-This stub matches the final shape promised in spec §4.5 — swapping it for the real one in Task 4.1 changes nothing at the type level for `error.rs`.
+This stub matches the final shape promised in spec §4.5 — swapping it for the real one in Task 5.1 changes nothing at the type level for `error.rs`.
 
 - [ ] **Step 5: Run tests, expect pass**
 
@@ -1382,7 +1382,7 @@ Open `crates/surge-acp/src/bridge/mod.rs`. Find and delete:
 
 ```rust
 pub mod event {
-    /// Stubbed in Task 1.1, replaced by full enum in Task 4.1.
+    /// Stubbed in Task 1.1, replaced by full enum in Task 5.1.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum SessionEndReason {
         Normal,

@@ -78,7 +78,7 @@ pub enum CloseSessionError {
 #[derive(Debug, Error)]
 pub enum AcpError {
     #[error("ACP protocol error: {0}")]
-    Protocol(String),
+    Protocol(#[source] agent_client_protocol::Error),
 
     #[error("io: {0}")]
     Io(#[source] std::io::Error),
