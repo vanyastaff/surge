@@ -33,6 +33,20 @@ impl<'a> MakeWriter<'a> for CaptureWriter {
     }
 }
 
+// `Storage::open` rejects single-threaded tokio runtimes, so we must use
+// `multi_thread`. But `tracing::subscriber::set_default` is per-thread,
+// and `multi_thread`'s scheduler can hop the test future across worker
+// threads at .await points — when `drop(writer)` runs, we may be on a
+// thread without the subscriber installed, and `tracing::warn!` from the
+// Drop impl silently falls through to the global default. Linux tokio
+// hops more aggressively than macOS, which is why the original test
+// passed on macOS but flaked on Linux.
+//
+// Fix: pin the test body to the calling thread via `LocalSet::run_until`.
+// Storage internals (its own writer task) still spawn onto worker threads
+// freely, but the Drop of `writer` we care about happens synchronously
+// on whichever thread is executing the test future — and inside
+// `run_until` that's the test thread, where `set_default` was applied.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_without_close_emits_tracing_warning() {
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -44,27 +58,26 @@ async fn drop_without_close_emits_tracing_warning() {
         .with_ansi(false)
         .finish();
 
-    // Install the subscriber for THIS thread only — the .await points may
-    // hop threads, but the warn! we care about fires synchronously inside
-    // Drop on whichever thread the writer happens to be dropped on.
-    // Using set_default returns a guard that lives for the rest of the
-    // function; we stay inside the with_default closure for the awaits to
-    // make sure both the create_run and drop occur under the subscriber.
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let _guard = tracing::subscriber::set_default(subscriber);
 
-    let t = setup().await;
-    let writer = t
-        .storage
-        .create_run(t.run_id, "/tmp/proj", None)
-        .await
-        .expect("create_run");
+            let t = setup().await;
+            let writer = t
+                .storage
+                .create_run(t.run_id, "/tmp/proj", None)
+                .await
+                .expect("create_run");
 
-    // Intentionally drop without close() — the Drop impl emits warn.
-    drop(writer);
+            // Intentionally drop without close() — the Drop impl emits warn.
+            drop(writer);
 
-    // Wait briefly to give any background task time to emit teardown
-    // traces, then capture and assert.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Wait briefly to give any background task time to emit teardown
+            // traces, then capture and assert.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await;
 
     let captured = buf.lock().expect("lock");
     let log = String::from_utf8_lossy(&captured);
