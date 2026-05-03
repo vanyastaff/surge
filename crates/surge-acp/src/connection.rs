@@ -605,11 +605,9 @@ mod tests {
 
             async fn kill(&mut self) -> Result<(), SurgeError> {
                 if let Some(process) = self.process.as_mut() {
-                    let pid = process.id();
-
                     #[cfg(windows)]
                     {
-                        if let Some(pid) = pid {
+                        if let Some(pid) = process.id() {
                             let output = tokio::process::Command::new("taskkill")
                                 .args(["/F", "/T", "/PID", &pid.to_string()])
                                 .output()
