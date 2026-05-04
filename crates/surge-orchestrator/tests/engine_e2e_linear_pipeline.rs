@@ -168,19 +168,12 @@ fn build_linear_graph() -> Graph {
 }
 
 /// Integration test: 3-stage linear pipeline completes end-to-end against a
-/// real `AcpBridge` driving `mock_acp_agent`.
-///
-/// # Failure mode (currently)
-///
-/// This test **hangs at the 60-second timeout** because `execute_agent_stage`
-/// spawns `mock_acp_agent` with `args: vec![]` (no `--scenario` flag). Without
-/// `--scenario report_done`, the mock defaults to the `echo` scenario and never
-/// emits `report_stage_outcome`. The engine event loop therefore blocks waiting
-/// for `BridgeEvent::OutcomeReported`.
-///
-/// See the module-level doc comment for the fix options.
+/// real `AcpBridge` driving `mock_acp_agent`. The mock's default scenario is
+/// `report_done` (set in `mock_acp_agent::Scenario::parse`), so each stage
+/// terminates with `report_stage_outcome { outcome: "done" }` and the
+/// pipeline advances plan → execute → qa → end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires mock_acp_agent binary built; enable with --ignored. Currently hangs due to missing --scenario report_done arg in execute_agent_stage (see module doc)."]
+#[ignore = "requires mock_acp_agent binary built; enable with --ignored"]
 async fn linear_pipeline_completes_end_to_end() {
     // Guard: fail fast with a clear message if the binary isn't built yet.
     let bin = mock_agent_path();
@@ -190,25 +183,33 @@ async fn linear_pipeline_completes_end_to_end() {
         bin.display()
     );
 
+    // Inject the absolute binary path so the AcpBridge worker can find
+    // mock_acp_agent regardless of the process CWD. Cargo only sets
+    // CARGO_BIN_EXE_<name> for tests in the same crate as the binary;
+    // surge-orchestrator is a different crate, so we backfill it here.
+    if std::env::var("CARGO_BIN_EXE_mock_acp_agent").is_err() {
+        // SAFETY: single-threaded at this point in the test setup; no other
+        // threads read this variable before we set it. Rustc 2024 requires
+        // unsafe for set_var due to POSIX thread-safety concerns.
+        unsafe {
+            std::env::set_var("CARGO_BIN_EXE_mock_acp_agent", &bin);
+        }
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
 
-    // Use the real AcpBridge. The engine's SessionConfig will use
-    // AgentKind::Mock { args: vec![] }, so the bridge spawns
-    // `mock_acp_agent` from CARGO_BIN_EXE_mock_acp_agent (or
-    // target/debug/mock_acp_agent as fallback).
-    let bridge_real = AcpBridge::with_defaults().expect("AcpBridge::with_defaults");
-    let bridge: Arc<dyn BridgeFacade> = Arc::new(bridge_real);
+    // Keep a typed Arc<AcpBridge> so we can call shutdown() after the engine
+    // drops its clone. Dropping AcpBridge from within an async context blocks
+    // the tokio thread (Drop::join on the bridge OS thread); calling shutdown()
+    // explicitly avoids that.
+    let bridge_owned = Arc::new(AcpBridge::with_defaults().expect("AcpBridge::with_defaults"));
+    let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
 
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
 
-    let engine = Engine::new(
-        bridge.clone(),
-        storage.clone(),
-        dispatcher,
-        EngineConfig::default(),
-    );
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
     let run_id = RunId::new();
     let handle = engine
@@ -230,5 +231,14 @@ async fn linear_pipeline_completes_end_to_end() {
     match outcome {
         RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
         other => panic!("expected Completed, got {other:?}"),
+    }
+
+    // Drop the engine so the bridge's refcount can reach 1 (only bridge_owned).
+    drop(engine);
+
+    // Explicitly shut down the bridge via the async path so the OS thread
+    // exits cleanly without blocking a tokio worker thread in Drop::join.
+    if let Some(bridge_for_shutdown) = Arc::into_inner(bridge_owned) {
+        let _ = bridge_for_shutdown.shutdown().await;
     }
 }

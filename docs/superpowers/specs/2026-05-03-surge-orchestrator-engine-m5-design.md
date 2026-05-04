@@ -1874,10 +1874,14 @@ M5 implementation completed on branch `claude/m5-engine`. Acceptance verificatio
 - **#3 cargo clippy --workspace --all-targets -- -D warnings**: ✓ pass
 - **#4 strict pedantic clippy on engine module**: ✓ pass with documented allows
 - **#5 rustdoc coverage on new public items**: ✓ pass
-- **#6-#10 integration tests**: written as `#[ignore]`d tests; #6 (linear pipeline) currently hangs
-  due to a deeper M3 worker `BridgeCommand::ReplyToTool` stub — tracked as M5.1 follow-up.
-  Tests #7-#10 are smoke/placeholder pending the same M3 fix. CI runs them with
-  `continue-on-error: true`.
+- **#6-#10 integration tests**: M5 shipped these as `#[ignore]`d with infrastructure stubs.
+  M5.1 (commit history follows) replaced the `BridgeCommand::ReplyToTool` worker stub with
+  real per-session `call_id` bookkeeping + emission of `BridgeEvent::ToolResult` on reply,
+  removed the stale auto-emit `Unsupported`, fixed `linear_pipeline`'s missing
+  `CARGO_BIN_EXE_mock_acp_agent` env-var injection, and added the explicit
+  `Arc::into_inner` + `bridge.shutdown().await` pattern. All 5 tests now pass under
+  `cargo test … -- --ignored`. CI continues to gate them with `continue-on-error: true`
+  until they're moved to a regular runner.
 - **#11 BridgeFacade contract test**: ✓ pass
 - **#12 predicate evaluator coverage**: ✓ pass (13 unit tests, all variants)
 - **#13 EngineSnapshot serde roundtrip**: ✓ pass
@@ -1887,9 +1891,17 @@ M5 implementation completed on branch `claude/m5-engine`. Acceptance verificatio
   not behavior changes.
 - **#15 examples/engine_in_daemon.rs**: ✓ ships, builds clean, demonstrates API ergonomics
 
-Known M5 limitations (M5.1 follow-up):
-- M3 worker `BridgeCommand::ReplyToTool` is a logging stub; engine→agent tool replies
-  don't actually flow through ACP. Affects integration tests; unit tests with MockBridge
-  are unaffected.
+Known M5 limitations (resolved in M5.1):
+- M3 worker `BridgeCommand::ReplyToTool` was a logging stub — replaced in M5.1 with
+  real per-session `call_id` bookkeeping. Note that ACP itself (SDK 0.10.4) has no
+  client→agent "tool result" RPC method, so even with the M5.1 fix the bridge does
+  NOT deliver the payload to the agent subprocess at the wire level — `reply_to_tool`
+  is internal Surge bookkeeping that closes the call-id loop and surfaces the engine's
+  result to event subscribers. Real ACP agents emit tool calls as one-way notifications
+  and continue without expecting a wire-level reply; if a future Surge milestone needs
+  out-of-band tool delivery, the natural extension is `connection.ext_notification`
+  with a vendor method.
+
+Other carried-over notes:
 - `surge_core::run_state::RunState` triggers `clippy::large_enum_variant` after the
   `pending_human_input` field addition; allowed at the enum level.

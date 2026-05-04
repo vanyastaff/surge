@@ -376,10 +376,10 @@ pub enum BridgeEvent {
         meta: ToolCallMeta,
     },
 
-    /// Tool call result returning to the agent. M5 produces this via
-    /// AcpBridge::send_tool_result(call_id, result) in a follow-up command;
-    /// in M3 the bridge auto-replies with `unsupported` for non-injected tools.
-    /// (See §5.4 for the §M3 bridge auto-reply policy.)
+    /// Tool call result event emitted by the bridge after the engine calls
+    /// `AcpBridge::reply_to_tool(call_id, payload)`. Pure observability event:
+    /// ACP itself has no client→agent tool-result protocol, so the agent does
+    /// not receive this payload at the wire level (see §5.3).
     ToolResult {
         session: SessionId,
         call_id: String,
@@ -464,8 +464,9 @@ pub struct ToolCallMeta {
 pub enum ToolResultPayload {
     Ok { result_json: String },
     Error { message: String },
-    /// Sent automatically by the bridge for tools the engine has not yet
-    /// implemented. M5 will replace this auto-reply with real dispatch.
+    /// Engine indicated the tool is not supported (no dispatcher handler).
+    /// Surfaced via `reply_to_tool` from the engine; the bridge never
+    /// auto-emits this since M5.1.
     Unsupported,
 }
 ```
@@ -657,21 +658,15 @@ ACP 0.10.2 lets the client declare tools to the agent during the `InitializeRequ
 4. Validates no duplicate names; returns `OpenSessionError::InvalidToolDefs` if any.
 5. Sends the resulting list as part of `InitializeRequest`.
 
-When the agent invokes a tool, the bridge receives `SessionUpdate::ToolCallPending` (or equivalent for the SDK version we're on — exact discriminant verified in plan phase). Routing:
+When the agent invokes a tool, the bridge receives `SessionUpdate::ToolCall` (one-way notification). Every incoming `ToolCall` registers its `call_id` in the per-session pending-replies map (`SessionStateInner::open_tool_calls`). Routing of the originating event differs by tool name:
 
-- If `tool == "report_stage_outcome"`: parse args, emit `BridgeEvent::OutcomeReported`, auto-reply with `ToolResultPayload::Ok` so the agent knows the stage is over.
-- If `tool == "request_human_input"`: parse args, emit `BridgeEvent::HumanInputRequested`, **do not** auto-reply — M5 will provide the answer via a future `AcpBridge::reply_to_tool(call_id, payload)` method. M3 stub: auto-reply with `Unsupported` after a hard timeout (10s) to prevent dangling sessions in M3 integration tests.
-- Otherwise: emit `BridgeEvent::ToolCall { sandbox_decision, .. }`. In M3, the bridge auto-replies with `Unsupported` immediately (M5 will replace this with real dispatch).
+- If `tool == "report_stage_outcome"`: parse args, emit `BridgeEvent::OutcomeReported`. Engine acknowledges by calling `AcpBridge::reply_to_tool(call_id, ToolResultPayload::Ok { … })` after persisting the outcome.
+- If `tool == "request_human_input"`: parse args, emit `BridgeEvent::HumanInputRequested`. Engine resolves the request via `Engine::resolve_human_input` (or times out) and calls `reply_to_tool` with the answer/timeout result.
+- Otherwise: emit `BridgeEvent::ToolCall { sandbox_decision, … }`. Engine's `ToolDispatcher` handles the call and replies via `reply_to_tool` with the dispatcher's result.
 
-The auto-reply policy lets M3 ship a complete bridge that the mock agent can drive end-to-end without M5 being implemented. M5 will provide a `ToolDispatcher` callback installed at `AcpBridge::spawn()` time:
+The bridge does **not** auto-reply. `reply_to_tool` removes the call_id from the pending-replies map and broadcasts a matching `BridgeEvent::ToolResult { call_id, payload }`. Unknown call_ids surface as `ReplyToToolError::UnknownCallId`.
 
-```rust
-// Reserved for M5 (not part of M3 API):
-pub type ToolDispatcher =
-    Arc<dyn Fn(SessionId, ToolCallMeta, String) -> BoxFuture<'static, ToolResultPayload> + Send + Sync>;
-```
-
-M3 ships the architectural seam (the auto-reply path is a single match arm to replace) without committing to the full callback shape.
+> **ACP wire-level caveat (M5.1).** ACP v1 (SDK 0.10.4) has no client→agent "tool result" RPC method — `SessionUpdate::ToolCall` is a one-way agent→client notification, and the agent's prompt turn ends after firing it. `reply_to_tool` therefore does NOT deliver the payload to the agent subprocess at the wire level; it's purely Surge-internal bookkeeping that closes the call-id loop and surfaces the engine's result to event subscribers (run-event persistence, telemetry). Real agents that follow the ACP-typical "agent runs the tool itself, then continues" pattern do not require a wire-level reply. If a future Surge milestone needs out-of-band tool delivery to the agent, the natural extension point is `connection.ext_notification(...)` with a vendor-specific method.
 
 ### 5.4 `report_stage_outcome` schema construction
 
