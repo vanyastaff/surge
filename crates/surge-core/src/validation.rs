@@ -4,6 +4,7 @@ use crate::edge::EdgeKind;
 use crate::graph::{Graph, Subgraph};
 use crate::keys::{NodeKey, OutcomeKey, SubgraphKey};
 use crate::node::NodeConfig;
+use crate::notify_config::NotifyFailureAction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationError {
@@ -57,6 +58,19 @@ pub enum ValidationErrorKind {
     OrphanSubgraph {
         key: SubgraphKey,
     },
+    /// A `NodeKind::Notify` node does not declare the required `delivered`
+    /// outcome. Engine emits this on every successful delivery, so the
+    /// outcome must exist for routing to work.
+    NotifyMissingDelivered {
+        node: NodeKey,
+    },
+    /// A `NodeKind::Notify` node configured with `on_failure: Fail`
+    /// does not declare an `undeliverable` outcome. Without it, a
+    /// failed delivery in `Fail` mode produces `StageFailed` and halts
+    /// the run. Warning, not error — authors may want fail-fast.
+    NotifyFailMissingUndeliverable {
+        node: NodeKey,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,7 +89,10 @@ impl ValidationErrorKind {
     #[must_use]
     pub fn severity(&self) -> Severity {
         match self {
-            Self::EscalateTargetNotHumanOrNotify | Self::OrphanSubgraph { .. } => Severity::Warning,
+            Self::EscalateTargetNotHumanOrNotify
+            | Self::OrphanSubgraph { .. }
+            | Self::NotifyFailMissingUndeliverable { .. } => Severity::Warning,
+            Self::NotifyMissingDelivered { .. } => Severity::Error,
             _ => Severity::Error,
         }
     }
@@ -101,6 +118,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     rule_17_node_key_uniqueness(graph, &mut findings);
     warning_w1_escalate_target(graph, &mut findings);
     warning_w2_orphan_subgraphs(graph, &mut findings);
+    warning_w3_notify_outcomes(graph, &mut findings);
 
     let has_error = findings
         .iter()
@@ -604,6 +622,49 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
     }
 }
 
+fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
+    let delivered =
+        OutcomeKey::try_from("delivered").expect("'delivered' is valid OutcomeKey");
+    let undeliverable =
+        OutcomeKey::try_from("undeliverable").expect("'undeliverable' is valid OutcomeKey");
+
+    for (id, node) in &graph.nodes {
+        let NodeConfig::Notify(cfg) = &node.config else {
+            continue;
+        };
+
+        let has_delivered = node.declared_outcomes.iter().any(|o| o.id == delivered);
+        if !has_delivered {
+            out.push(ValidationError {
+                kind: ValidationErrorKind::NotifyMissingDelivered { node: id.clone() },
+                location: ErrorLocation::Node { id: id.clone() },
+                message: format!(
+                    "notify node `{}` must declare a `delivered` outcome",
+                    id.as_str()
+                ),
+            });
+        }
+
+        if matches!(cfg.on_failure, NotifyFailureAction::Fail) {
+            let has_undeliverable =
+                node.declared_outcomes.iter().any(|o| o.id == undeliverable);
+            if !has_undeliverable {
+                out.push(ValidationError {
+                    kind: ValidationErrorKind::NotifyFailMissingUndeliverable {
+                        node: id.clone(),
+                    },
+                    location: ErrorLocation::Node { id: id.clone() },
+                    message: format!(
+                        "notify node `{}` uses on_failure: Fail but does not declare \
+                         an `undeliverable` outcome; failed deliveries will halt the run",
+                        id.as_str()
+                    ),
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,5 +926,118 @@ mod tests {
             ValidationErrorKind::StartNodeMissing.severity(),
             Severity::Error
         );
+    }
+
+    mod m6_notify_validation_tests {
+        use super::*;
+        use crate::edge::EdgeKind;
+        use crate::graph::{GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::{NodeKey, OutcomeKey};
+        use crate::node::{Node, NodeConfig, OutcomeDecl, Position};
+        use crate::notify_config::{
+            NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate,
+        };
+        use std::collections::BTreeMap;
+
+        fn notify_node_with_outcomes(
+            outcomes: Vec<&str>,
+            on_failure: NotifyFailureAction,
+        ) -> Node {
+            let key = NodeKey::try_from("notify_1").unwrap();
+            Node {
+                id: key.clone(),
+                position: Position::default(),
+                declared_outcomes: outcomes
+                    .iter()
+                    .map(|o| OutcomeDecl {
+                        id: OutcomeKey::try_from(*o).unwrap(),
+                        description: format!("{o} outcome"),
+                        edge_kind_hint: EdgeKind::Forward,
+                        is_terminal: false,
+                    })
+                    .collect(),
+                config: NodeConfig::Notify(NotifyConfig {
+                    channel: NotifyChannel::Desktop,
+                    template: NotifyTemplate {
+                        severity: NotifySeverity::Info,
+                        title: "t".into(),
+                        body: "b".into(),
+                        artifacts: vec![],
+                    },
+                    on_failure,
+                }),
+            }
+        }
+
+        fn graph_with_node(node: Node) -> Graph {
+            let key = node.id.clone();
+            let mut nodes = BTreeMap::new();
+            nodes.insert(key.clone(), node);
+            Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "t".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                },
+                start: key,
+                nodes,
+                edges: vec![],
+                subgraphs: BTreeMap::new(),
+            }
+        }
+
+        #[test]
+        fn notify_missing_delivered_outcome_is_error() {
+            let n = notify_node_with_outcomes(vec!["sent"], NotifyFailureAction::Continue);
+            let g = graph_with_node(n);
+            let result = validate(&g);
+            let errors = result.expect_err("validation should fail");
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e.kind, ValidationErrorKind::NotifyMissingDelivered { .. })),
+                "expected NotifyMissingDelivered, got {errors:?}"
+            );
+        }
+
+        #[test]
+        fn notify_with_delivered_only_continue_is_ok() {
+            let n =
+                notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Continue);
+            let g = graph_with_node(n);
+            let result = validate(&g);
+            // ok branch returns Vec<ValidationError> (warnings only); should be empty.
+            let warnings = result.unwrap_or_else(|errs| errs);
+            assert!(
+                !warnings.iter().any(|w| matches!(
+                    w.kind,
+                    ValidationErrorKind::NotifyMissingDelivered { .. }
+                )),
+                "delivered-only-Continue should not produce NotifyMissingDelivered, got {warnings:?}"
+            );
+        }
+
+        #[test]
+        fn notify_fail_without_undeliverable_is_warning() {
+            let n =
+                notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Fail);
+            let g = graph_with_node(n);
+            // The minimal graph has no edges or Terminal node, so other structural
+            // rules fire as errors. Use unwrap_or_else to get all findings regardless.
+            let findings = match validate(&g) {
+                Ok(w) => w,
+                Err(all) => all,
+            };
+            assert!(
+                findings.iter().any(|w| matches!(
+                    w.kind,
+                    ValidationErrorKind::NotifyFailMissingUndeliverable { .. }
+                ) && w.kind.severity() == Severity::Warning),
+                "expected NotifyFailMissingUndeliverable warning, got {findings:?}"
+            );
+        }
     }
 }

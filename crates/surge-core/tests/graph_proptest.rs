@@ -53,7 +53,8 @@ fn arb_linear_graph(min_inner: usize, max_inner: usize) -> impl Strategy<Value =
 fn build_linear_graph(keys: Vec<NodeKey>) -> Graph {
     let mut nodes = BTreeMap::new();
     let mut edges = Vec::new();
-    let done_outcome = OutcomeKey::try_from("done").unwrap();
+    // Notify nodes require a `delivered` outcome (validation rule W3).
+    let done_outcome = OutcomeKey::try_from("delivered").unwrap();
 
     for (i, k) in keys.iter().enumerate() {
         let is_last = i == keys.len() - 1;
