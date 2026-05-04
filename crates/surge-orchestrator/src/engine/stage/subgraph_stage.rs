@@ -123,6 +123,78 @@ fn resolve_artifact_source(
     }
 }
 
+/// Called by `run_task::execute` when the cursor reaches a `Terminal`
+/// node and the top frame is a `SubgraphFrame` (`TerminalSignal::SubgraphDone`).
+/// Projects the inner outcome to an outer outcome via
+/// `SubgraphConfig::outputs` (first match wins), pops the frame, and
+/// resumes the outer cursor at the frame's `return_to`.
+pub async fn on_subgraph_done(
+    outputs: &[surge_core::subgraph_config::SubgraphOutput],
+    memory: &RunMemory,
+    frames: &mut Vec<Frame>,
+    cursor: &mut surge_core::run_state::Cursor,
+    writer: &RunWriter,
+) -> Result<(), StageError> {
+    // Snapshot frame fields BEFORE the mutable pop (avoid double-borrow).
+    let (outer_node, inner_subgraph, return_to) = match frames.last() {
+        Some(Frame::Subgraph(sf)) => (
+            sf.outer_node.clone(),
+            sf.inner_subgraph.clone(),
+            sf.return_to.clone(),
+        ),
+        _ => {
+            return Err(StageError::Internal(
+                "on_subgraph_done called without Subgraph frame on top".into(),
+            ));
+        },
+    };
+
+    // First-match output projection.
+    let outcome = outputs
+        .iter()
+        .find_map(|o| project_output(o, memory).ok())
+        .ok_or_else(|| {
+            StageError::Internal(format!(
+                "no SubgraphConfig::outputs entry resolved successfully for subgraph \
+                 {inner_subgraph}"
+            ))
+        })?;
+
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::SubgraphExited {
+            outer: outer_node.clone(),
+            inner: inner_subgraph.clone(),
+            outcome: outcome.clone(),
+        }))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
+            node: outer_node,
+            outcome,
+            summary: format!("subgraph {inner_subgraph} completed"),
+        }))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    frames.pop();
+    cursor.node = return_to;
+    cursor.attempt = 1;
+
+    Ok(())
+}
+
+fn project_output(
+    out: &surge_core::subgraph_config::SubgraphOutput,
+    memory: &RunMemory,
+) -> Result<surge_core::keys::OutcomeKey, StageError> {
+    // Resolve the inner_artifact to verify it exists. If yes, the
+    // configured outer_outcome is the projection.
+    let _ = resolve_artifact_source(&out.inner_artifact, memory)?;
+    Ok(out.outer_outcome.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +414,68 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].inner_var, TemplateVar("x".into()));
         assert_eq!(result[0].value, serde_json::Value::String("val".into()));
+    }
+
+    use surge_core::run_state::Cursor;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exit_pops_frame_and_projects_first_matching_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let outer_key = NodeKey::try_from("sg_1").unwrap();
+        let inner_key = SubgraphKey::try_from("review_block").unwrap();
+        let return_to = NodeKey::try_from("after").unwrap();
+
+        // RunMemory has the inner artifact registered.
+        let inner_artifact_path = dir.path().join("review.md");
+        std::fs::write(&inner_artifact_path, "approved").unwrap();
+        let mut memory = RunMemory::default();
+        let aref = surge_core::run_state::ArtifactRef {
+            hash: surge_core::content_hash::ContentHash::compute(b"approved"),
+            path: inner_artifact_path,
+            name: "review.md".into(),
+            produced_by: NodeKey::try_from("review_inner").unwrap(),
+            produced_at_seq: 1,
+        };
+        memory.artifacts.insert("review.md".into(), aref.clone());
+        memory
+            .artifacts_by_node
+            .entry(NodeKey::try_from("review_inner").unwrap())
+            .or_default()
+            .push(aref);
+
+        // Frame stack with one Subgraph frame.
+        let mut frames: Vec<Frame> = vec![Frame::Subgraph(SubgraphFrame {
+            outer_node: outer_key.clone(),
+            inner_subgraph: inner_key.clone(),
+            bound_inputs: vec![],
+            return_to: return_to.clone(),
+        })];
+
+        // Outputs: first match wins. Configure a single matching output.
+        let outputs = vec![SubgraphOutput {
+            inner_artifact: ArtifactSource::NodeOutput {
+                node: NodeKey::try_from("review_inner").unwrap(),
+                artifact: "review.md".into(),
+            },
+            outer_outcome: OutcomeKey::try_from("approved").unwrap(),
+        }];
+
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("inner_terminal").unwrap(),
+            attempt: 1,
+        };
+
+        on_subgraph_done(&outputs, &memory, &mut frames, &mut cursor, &writer)
+            .await
+            .unwrap();
+
+        assert!(frames.is_empty(), "frame popped");
+        assert_eq!(cursor.node, return_to, "cursor restored to return_to");
     }
 }
