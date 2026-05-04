@@ -94,6 +94,7 @@ impl Engine {
         let cancel = CancellationToken::new();
 
         let params = RunTaskParams {
+            run_id,
             writer,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
@@ -102,7 +103,8 @@ impl Engine {
             run_config,
             event_tx,
             cancel,
-            resume_mode: false,
+            resume_cursor: None,
+            resume_memory: None,
         };
 
         let join = tokio::spawn(execute(params));

@@ -47,7 +47,7 @@ fn minimal_graph() -> Graph {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_run_smoke_completes_with_stub_failure() {
+async fn start_run_smoke_completes_terminal_node() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
@@ -68,11 +68,10 @@ async fn start_run_smoke_completes_with_stub_failure() {
         .expect("start_run");
 
     let outcome = handle.await_completion().await.unwrap();
-    // Phase 5 stub returns Failed; later phases will produce Completed.
     match outcome {
-        RunOutcome::Failed { error } => {
-            assert!(error.contains("Phase 5 stub"));
+        RunOutcome::Completed { terminal } => {
+            assert_eq!(terminal.as_ref(), "end");
         }
-        other => panic!("expected Failed (stub), got {other:?}"),
+        other => panic!("expected Completed, got {other:?}"),
     }
 }
