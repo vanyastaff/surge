@@ -105,6 +105,7 @@ impl Engine {
             cancel,
             resume_cursor: None,
             resume_memory: None,
+            gate_resolutions: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         };
 
         let join = tokio::spawn(execute(params));

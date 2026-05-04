@@ -37,6 +37,10 @@ pub(crate) struct RunTaskParams {
     pub resume_cursor: Option<Cursor>,
     /// Resume from existing memory; if None, start fresh.
     pub resume_memory: Option<RunMemory>,
+    /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
+    /// Engine's `resolve_human_input` finds the sender and fires it.
+    /// Phase 9 wires the registry; for now Just plumb the field through.
+    pub gate_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<surge_core::keys::NodeKey, tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>>>>,
 }
 
 pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
@@ -122,11 +126,21 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 .await;
                 r.map(StageOutcome::Terminal)
             }
-            NodeConfig::HumanGate(_) => {
-                // Phase 8 implements; for now treat as failure.
-                Err(StageError::Internal(
-                    "HumanGate stage not yet implemented (Phase 8)".into(),
-                ))
+            NodeConfig::HumanGate(cfg) => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                params.gate_resolutions.lock().await.insert(cursor.node.clone(), tx);
+                use crate::engine::stage::human_gate::{execute_human_gate_stage, HumanGateStageParams};
+                let r = execute_human_gate_stage(HumanGateStageParams {
+                    node: &cursor.node,
+                    gate_config: cfg,
+                    writer: &params.writer,
+                    run_memory: &memory,
+                    resolution_rx: Some(rx),
+                    default_timeout: params.run_config.human_input_timeout,
+                })
+                .await;
+                params.gate_resolutions.lock().await.remove(&cursor.node);
+                r.map(StageOutcome::Routed)
             }
             NodeConfig::Loop(_) | NodeConfig::Subgraph(_) => Err(StageError::Internal(format!(
                 "node kind {:?} not supported in M5",
