@@ -1,0 +1,12 @@
+//! `surge-daemon` — long-running process that hosts the M7+ engine
+//! and exposes it over IPC. See
+//! `docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m7-design.md`
+//! §3 and §6 for the design contract.
+
+#![warn(missing_docs)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+
+// Modules added incrementally in Phase 3+.
