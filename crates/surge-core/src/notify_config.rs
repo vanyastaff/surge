@@ -47,6 +47,34 @@ pub enum NotifyFailureAction {
     Fail,
 }
 
+/// Stripped-down dispatch tag for [`NotifyChannel`] — used in
+/// [`crate::run_event::EventPayload::NotifyDelivered`] so the event
+/// log records *which kind* of channel was attempted without leaking
+/// secrets or transport-specific data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyChannelKind {
+    Telegram,
+    Slack,
+    Email,
+    Desktop,
+    Webhook,
+}
+
+impl NotifyChannel {
+    /// Project this channel down to its dispatch-tag form.
+    #[must_use]
+    pub fn kind(&self) -> NotifyChannelKind {
+        match self {
+            Self::Telegram { .. } => NotifyChannelKind::Telegram,
+            Self::Slack { .. } => NotifyChannelKind::Slack,
+            Self::Email { .. } => NotifyChannelKind::Email,
+            Self::Desktop => NotifyChannelKind::Desktop,
+            Self::Webhook { .. } => NotifyChannelKind::Webhook,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
