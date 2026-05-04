@@ -6,6 +6,7 @@ pub mod branch;
 pub mod human_gate;
 pub mod loop_stage;
 pub mod notify;
+pub mod subgraph_stage;
 pub mod terminal;
 
 use crate::engine::error::EngineError;
