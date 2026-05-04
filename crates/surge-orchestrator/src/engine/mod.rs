@@ -29,5 +29,5 @@ pub mod validate;
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use engine::Engine;
 pub use error::EngineError;
-pub use frames::{Frame, LoopFrame, SubgraphFrame};
+pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome};

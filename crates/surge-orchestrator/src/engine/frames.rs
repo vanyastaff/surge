@@ -93,6 +93,39 @@ pub fn top_subgraph(frames: &[Frame]) -> Option<&SubgraphFrame> {
     }
 }
 
+/// Outcome of inspecting the frame stack when a Terminal node is reached.
+/// Drives the run loop's branching at terminal-inside-frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TerminalSignal {
+    /// Frame stack is empty — the run reached a top-level Terminal node.
+    /// Run loop emits `RunCompleted` / `RunFailed` per `TerminalKind`.
+    OuterComplete,
+    /// Top frame is a `LoopFrame` — current iteration finished.
+    /// Caller dispatches to `loop_stage::on_loop_iteration_done`.
+    LoopIterDone,
+    /// Top frame is a `SubgraphFrame` — inner subgraph finished.
+    /// Caller dispatches to `subgraph_stage::on_subgraph_done`.
+    SubgraphDone,
+}
+
+/// Inspect the frame stack and decide what to do with a Terminal node hit.
+///
+/// **Does not mutate the frame stack** — that's the responsibility of the
+/// loop/subgraph stage handlers. This helper is read-only on `frames` and
+/// `cursor`; it only matches them. The caller dispatches to the right
+/// handler which then mutates state.
+#[must_use]
+pub fn on_terminal_decision(
+    frames: &mut Vec<Frame>,
+    _cursor: &mut surge_core::run_state::Cursor,
+) -> TerminalSignal {
+    match frames.last() {
+        None => TerminalSignal::OuterComplete,
+        Some(Frame::Loop(_)) => TerminalSignal::LoopIterDone,
+        Some(Frame::Subgraph(_)) => TerminalSignal::SubgraphDone,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +182,58 @@ mod tests {
         };
         let frames = vec![Frame::Loop(lf)];
         assert!(top_subgraph(&frames).is_none());
+    }
+
+    use surge_core::run_state::Cursor;
+
+    #[test]
+    fn on_terminal_outer_returns_complete_signal() {
+        let mut frames: Vec<Frame> = vec![];
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("end").unwrap(),
+            attempt: 1,
+        };
+        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        assert!(matches!(signal, TerminalSignal::OuterComplete));
+        assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn on_terminal_inside_loop_returns_iter_done_signal() {
+        let lf = LoopFrame {
+            loop_node: NodeKey::try_from("loop_1").unwrap(),
+            config: empty_loop_config(),
+            items: vec![toml::Value::Integer(1), toml::Value::Integer(2)],
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: NodeKey::try_from("after").unwrap(),
+            traversal_counts: HashMap::new(),
+        };
+        let mut frames = vec![Frame::Loop(lf)];
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("body_end").unwrap(),
+            attempt: 1,
+        };
+        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        assert!(matches!(signal, TerminalSignal::LoopIterDone));
+        assert_eq!(frames.len(), 1, "frame should still be on stack");
+    }
+
+    #[test]
+    fn on_terminal_inside_subgraph_returns_subgraph_done_signal() {
+        let sf = SubgraphFrame {
+            outer_node: NodeKey::try_from("sg_1").unwrap(),
+            inner_subgraph: SubgraphKey::try_from("inner").unwrap(),
+            bound_inputs: vec![],
+            return_to: NodeKey::try_from("after").unwrap(),
+        };
+        let mut frames = vec![Frame::Subgraph(sf)];
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("inner_end").unwrap(),
+            attempt: 1,
+        };
+        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        assert!(matches!(signal, TerminalSignal::SubgraphDone));
+        assert_eq!(frames.len(), 1, "frame should still be on stack");
     }
 }
