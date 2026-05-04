@@ -704,19 +704,20 @@ fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
     let undeliverable =
         OutcomeKey::try_from("undeliverable").expect("'undeliverable' is valid OutcomeKey");
 
-    for (id, node) in &graph.nodes {
+    // Inner helper — checks a single node and appends findings.
+    let check_node = |node: &crate::node::Node, out: &mut Vec<ValidationError>| {
         let NodeConfig::Notify(cfg) = &node.config else {
-            continue;
+            return;
         };
 
         let has_delivered = node.declared_outcomes.iter().any(|o| o.id == delivered);
         if !has_delivered {
             out.push(ValidationError {
-                kind: ValidationErrorKind::NotifyMissingDelivered { node: id.clone() },
-                location: ErrorLocation::Node { id: id.clone() },
+                kind: ValidationErrorKind::NotifyMissingDelivered { node: node.id.clone() },
+                location: ErrorLocation::Node { id: node.id.clone() },
                 message: format!(
                     "notify node `{}` must declare a `delivered` outcome",
-                    id.as_str()
+                    node.id.as_str()
                 ),
             });
         }
@@ -727,16 +728,27 @@ fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
             if !has_undeliverable {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::NotifyFailMissingUndeliverable {
-                        node: id.clone(),
+                        node: node.id.clone(),
                     },
-                    location: ErrorLocation::Node { id: id.clone() },
+                    location: ErrorLocation::Node { id: node.id.clone() },
                     message: format!(
                         "notify node `{}` uses on_failure: Fail but does not declare \
                          an `undeliverable` outcome; failed deliveries will halt the run",
-                        id.as_str()
+                        node.id.as_str()
                     ),
                 });
             }
+        }
+    };
+
+    for node in graph.nodes.values() {
+        check_node(node, out);
+    }
+    // Also recurse into subgraphs — Notify nodes can appear inside Loop/Subgraph
+    // bodies (M6 primary use case: notify fan-out inside a loop body).
+    for sg in graph.subgraphs.values() {
+        for node in sg.nodes.values() {
+            check_node(node, out);
         }
     }
 }
@@ -1103,6 +1115,105 @@ mod tests {
                 .collect();
             assert!(!cap_errors.is_empty(), "expected LoopStaticTooLarge, got {errors:?}");
         }
+
+        #[test]
+        fn loop_in_subgraph_static_size_above_cap_is_rejected() {
+            // Build a graph where the offending Loop is inside a subgraph,
+            // not at the outer graph level. Cap enforcement must still catch it.
+            let outer_loop = NodeKey::try_from("outer_loop").unwrap();
+            let outer_body = SubgraphKey::try_from("outer_body").unwrap();
+            let inner_loop = NodeKey::try_from("inner_loop").unwrap();
+            let inner_body = SubgraphKey::try_from("inner_body").unwrap();
+            let inner_terminal = NodeKey::try_from("inner_t").unwrap();
+
+            // The OUTER loop has a small Static iterable (ok).
+            let outer_loop_node = Node {
+                id: outer_loop.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Loop(LoopConfig {
+                    iterates_over: IterableSource::Static(vec![toml::Value::Integer(1)]),
+                    body: outer_body.clone(),
+                    iteration_var_name: "i".into(),
+                    exit_condition: ExitCondition::AllItems,
+                    on_iteration_failure: FailurePolicy::Abort,
+                    parallelism: ParallelismMode::Sequential,
+                    gate_after_each: false,
+                }),
+            };
+
+            // The INNER loop (inside the outer's body subgraph) has too many items.
+            let big_items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC + 5)
+                .map(|i| toml::Value::Integer(i as i64))
+                .collect();
+            let inner_loop_node = Node {
+                id: inner_loop.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Loop(LoopConfig {
+                    iterates_over: IterableSource::Static(big_items),
+                    body: inner_body.clone(),
+                    iteration_var_name: "j".into(),
+                    exit_condition: ExitCondition::AllItems,
+                    on_iteration_failure: FailurePolicy::Abort,
+                    parallelism: ParallelismMode::Sequential,
+                    gate_after_each: false,
+                }),
+            };
+
+            let inner_t_node = Node {
+                id: inner_terminal.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(crate::terminal_config::TerminalConfig {
+                    kind: crate::terminal_config::TerminalKind::Success,
+                    message: None,
+                }),
+            };
+
+            let mut outer_nodes = BTreeMap::new();
+            outer_nodes.insert(outer_loop.clone(), outer_loop_node);
+
+            let mut outer_body_nodes = BTreeMap::new();
+            outer_body_nodes.insert(inner_loop.clone(), inner_loop_node);
+
+            let mut inner_body_nodes = BTreeMap::new();
+            inner_body_nodes.insert(inner_terminal.clone(), inner_t_node);
+
+            let mut subgraphs = BTreeMap::new();
+            subgraphs.insert(outer_body, crate::graph::Subgraph {
+                start: inner_loop.clone(),
+                nodes: outer_body_nodes,
+                edges: vec![],
+            });
+            subgraphs.insert(inner_body, crate::graph::Subgraph {
+                start: inner_terminal,
+                nodes: inner_body_nodes,
+                edges: vec![],
+            });
+
+            let g = Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "nested".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                },
+                start: outer_loop,
+                nodes: outer_nodes,
+                edges: vec![],
+                subgraphs,
+            };
+
+            let result = validate(&g);
+            let errors = result.expect_err("must fail");
+            let cap_errors: Vec<_> = errors.iter()
+                .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
+                .collect();
+            assert!(!cap_errors.is_empty(), "Loop in subgraph above cap must be rejected: {errors:?}");
+        }
     }
 
     mod m6_notify_validation_tests {
@@ -1214,6 +1325,83 @@ mod tests {
                     ValidationErrorKind::NotifyFailMissingUndeliverable { .. }
                 ) && w.kind.severity() == Severity::Warning),
                 "expected NotifyFailMissingUndeliverable warning, got {findings:?}"
+            );
+        }
+
+        #[test]
+        fn notify_in_subgraph_missing_delivered_is_error() {
+            use crate::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+            use crate::keys::SubgraphKey;
+
+            let inner_notify = NodeKey::try_from("inner_notify").unwrap();
+            let inner_body = SubgraphKey::try_from("body").unwrap();
+
+            let inner_notify_node = Node {
+                id: inner_notify.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("sent").unwrap(), // NOT "delivered"
+                    description: "wrong".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                }],
+                config: NodeConfig::Notify(NotifyConfig {
+                    channel: NotifyChannel::Desktop,
+                    template: NotifyTemplate {
+                        severity: NotifySeverity::Info,
+                        title: "t".into(),
+                        body: "b".into(),
+                        artifacts: vec![],
+                    },
+                    on_failure: NotifyFailureAction::Continue,
+                }),
+            };
+
+            // Outer node — Terminal so the graph has a valid start.
+            let outer = NodeKey::try_from("outer_t").unwrap();
+            let outer_node = Node {
+                id: outer.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(crate::terminal_config::TerminalConfig {
+                    kind: crate::terminal_config::TerminalKind::Success,
+                    message: None,
+                }),
+            };
+
+            let mut nodes = BTreeMap::new();
+            nodes.insert(outer.clone(), outer_node);
+
+            let mut inner_nodes = BTreeMap::new();
+            inner_nodes.insert(inner_notify.clone(), inner_notify_node);
+
+            let mut subgraphs = BTreeMap::new();
+            subgraphs.insert(inner_body, Subgraph {
+                start: inner_notify,
+                nodes: inner_nodes,
+                edges: vec![],
+            });
+
+            let g = Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "n".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                },
+                start: outer,
+                nodes,
+                edges: vec![],
+                subgraphs,
+            };
+
+            let result = validate(&g);
+            let errors = result.expect_err("must fail");
+            assert!(
+                errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::NotifyMissingDelivered { .. })),
+                "Notify-in-subgraph missing delivered must be caught: {errors:?}"
             );
         }
     }

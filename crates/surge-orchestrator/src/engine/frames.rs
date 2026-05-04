@@ -15,6 +15,13 @@ use surge_core::loop_config::{FailurePolicy, LoopConfig};
 pub const MAX_LOOP_ITEMS_RESOLVED: usize = 1000;
 
 /// Single entry on the per-run frame stack.
+///
+/// `LoopFrame` is intentionally large (~312 bytes) because it carries the full
+/// resolved item list and traversal counters for the current loop. Boxing was
+/// considered and deferred: the frame stack depth is bounded by graph nesting
+/// depth (typically 1–3 frames), so the memory cost is acceptable and boxing
+/// adds an indirection on every hot-path access. See spec §2.2.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Frame {
     /// Pushed on entering a `NodeKind::Loop`.
@@ -110,14 +117,14 @@ pub enum TerminalSignal {
 
 /// Inspect the frame stack and decide what to do with a Terminal node hit.
 ///
-/// **Does not mutate the frame stack** — that's the responsibility of the
-/// loop/subgraph stage handlers. This helper is read-only on `frames` and
-/// `cursor`; it only matches them. The caller dispatches to the right
-/// handler which then mutates state.
+/// **Read-only** — does not mutate the frame stack or cursor. That is the
+/// responsibility of the loop/subgraph stage handlers. This helper only
+/// inspects the top of `frames` and returns the appropriate signal. The
+/// caller dispatches to the right handler which then mutates state.
 #[must_use]
 pub fn on_terminal_decision(
-    frames: &mut Vec<Frame>,
-    _cursor: &mut surge_core::run_state::Cursor,
+    frames: &[Frame],
+    _cursor: &surge_core::run_state::Cursor,
 ) -> TerminalSignal {
     match frames.last() {
         None => TerminalSignal::OuterComplete,
@@ -188,12 +195,12 @@ mod tests {
 
     #[test]
     fn on_terminal_outer_returns_complete_signal() {
-        let mut frames: Vec<Frame> = vec![];
-        let mut cursor = Cursor {
+        let frames: Vec<Frame> = vec![];
+        let cursor = Cursor {
             node: NodeKey::try_from("end").unwrap(),
             attempt: 1,
         };
-        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        let signal = on_terminal_decision(&frames, &cursor);
         assert!(matches!(signal, TerminalSignal::OuterComplete));
         assert!(frames.is_empty());
     }
@@ -209,12 +216,12 @@ mod tests {
             return_to: NodeKey::try_from("after").unwrap(),
             traversal_counts: HashMap::new(),
         };
-        let mut frames = vec![Frame::Loop(lf)];
-        let mut cursor = Cursor {
+        let frames = vec![Frame::Loop(lf)];
+        let cursor = Cursor {
             node: NodeKey::try_from("body_end").unwrap(),
             attempt: 1,
         };
-        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        let signal = on_terminal_decision(&frames, &cursor);
         assert!(matches!(signal, TerminalSignal::LoopIterDone));
         assert_eq!(frames.len(), 1, "frame should still be on stack");
     }
@@ -227,12 +234,12 @@ mod tests {
             bound_inputs: vec![],
             return_to: NodeKey::try_from("after").unwrap(),
         };
-        let mut frames = vec![Frame::Subgraph(sf)];
-        let mut cursor = Cursor {
+        let frames = vec![Frame::Subgraph(sf)];
+        let cursor = Cursor {
             node: NodeKey::try_from("inner_end").unwrap(),
             attempt: 1,
         };
-        let signal = on_terminal_decision(&mut frames, &mut cursor);
+        let signal = on_terminal_decision(&frames, &cursor);
         assert!(matches!(signal, TerminalSignal::SubgraphDone));
         assert_eq!(frames.len(), 1, "frame should still be on stack");
     }

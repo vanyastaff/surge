@@ -16,7 +16,7 @@ pub struct EngineSnapshot {
     /// Frame stack — empty for unnested execution. New in v2.
     #[serde(default)]
     pub frames: Vec<SerializableFrame>,
-    /// Per-edge traversal counters for max_traversals enforcement
+    /// Per-edge traversal counters for `max_traversals` enforcement
     /// outside loop frames. Map key is the `EdgeKey` as a string. New in v2.
     #[serde(default)]
     pub root_traversal_counts: HashMap<String, u32>,
@@ -58,7 +58,7 @@ pub enum SnapshotError {
     /// The blob does not include a `schema_version` field.
     #[error("snapshot is missing schema_version")]
     MissingSchemaVersion,
-    /// The blob has a schema_version this engine doesn't support.
+    /// The blob has a `schema_version` this engine doesn't support.
     #[error("unsupported snapshot schema version: {0:?}")]
     UnsupportedSchema(Option<u64>),
 }
@@ -172,7 +172,7 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                 // `iterable_source_json` field is `null` for that variant.
                 let iterable_source_json = match &lf.config.iterates_over {
                     IterableSource::Static(_) => None,
-                    src => Some(
+                    src @ IterableSource::Artifact { .. } => Some(
                         serde_json::to_string(src)
                             .expect("IterableSource::Artifact is json-serializable"),
                     ),
@@ -191,7 +191,7 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                     parallelism_json: serde_json::to_string(&lf.config.parallelism)
                         .expect("ParallelismMode is json-serializable"),
                     gate_after_each: lf.config.gate_after_each,
-                    items_json: lf.items.into_iter().map(toml_value_to_json).collect(),
+                    items_json: lf.items.iter().map(toml_value_to_json).collect(),
                     current_index: lf.current_index,
                     attempts_remaining: lf.attempts_remaining,
                     return_to: lf.return_to.to_string(),
@@ -221,8 +221,8 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
     }
 }
 
-fn toml_value_to_json(v: toml::Value) -> serde_json::Value {
-    serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)
+fn toml_value_to_json(v: &toml::Value) -> serde_json::Value {
+    serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
 }
 
 impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
@@ -245,18 +245,17 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
 
                 // Reconstruct IterableSource. For Static, items are already
                 // captured in items_json; iterable_source_json is null.
-                let iterates_over: IterableSource = match lf.iterable_source_json {
-                    Some(blob) => serde_json::from_str(&blob)
-                        .map_err(|e| SnapshotError::InvalidJson(format!("iterable_source_json: {e}")))?,
-                    None => {
-                        let items: Vec<toml::Value> = lf
-                            .items_json
-                            .iter()
-                            .cloned()
-                            .map(json_to_toml_value)
-                            .collect();
-                        IterableSource::Static(items)
-                    }
+                let iterates_over: IterableSource = if let Some(blob) = lf.iterable_source_json {
+                    serde_json::from_str(&blob)
+                        .map_err(|e| SnapshotError::InvalidJson(format!("iterable_source_json: {e}")))?
+                } else {
+                    let items: Vec<toml::Value> = lf
+                        .items_json
+                        .iter()
+                        .cloned()
+                        .map(json_to_toml_value)
+                        .collect();
+                    IterableSource::Static(items)
                 };
 
                 let exit_condition: ExitCondition = serde_json::from_str(&lf.exit_condition_json)
@@ -364,7 +363,7 @@ fn json_to_toml_value(v: serde_json::Value) -> toml::Value {
 impl EngineSnapshot {
     /// Current schema version. Bump on any breaking layout change.
     /// Version 2 (M6) — adds `frames` (Loop/Subgraph nesting) and
-    /// `root_traversal_counts` (max_traversals enforcement outside loops).
+    /// `root_traversal_counts` (`max_traversals` enforcement outside loops).
     pub const SCHEMA_VERSION: u32 = 2;
 
     /// Create a new snapshot for the given cursor and sequence numbers.
@@ -382,12 +381,12 @@ impl EngineSnapshot {
         }
     }
 
-    /// Deserialise from a JSON blob. Reads schema_version first and routes
+    /// Deserialise from a JSON blob. Reads `schema_version` first and routes
     /// to either v1 back-compat path or direct v2 deserialisation.
     pub fn deserialize(blob: &[u8]) -> Result<Self, SnapshotError> {
         let value: serde_json::Value = serde_json::from_slice(blob)
             .map_err(|e| SnapshotError::InvalidJson(e.to_string()))?;
-        let version = value.get("schema_version").and_then(|v| v.as_u64());
+        let version = value.get("schema_version").and_then(serde_json::Value::as_u64);
 
         match version {
             Some(1) => {
@@ -560,10 +559,108 @@ mod tests {
                     other => panic!("expected Skip, got {other:?}"),
                 }
                 assert_eq!(lf.config.iteration_var_name, "item");
-                assert_eq!(lf.config.gate_after_each, false);
+                assert!(!lf.config.gate_after_each);
                 assert_eq!(lf.traversal_counts.get(&EdgeKey::try_from("e1").unwrap()), Some(&1));
             }
-            other => panic!("expected Loop frame, got {other:?}"),
+            other @ Frame::Subgraph(_) => panic!("expected Loop frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn subgraph_frame_roundtrips_via_serializable() {
+        use crate::engine::frames::{Frame, ResolvedSubgraphInput, SubgraphFrame};
+        use surge_core::agent_config::TemplateVar;
+
+        let original = SubgraphFrame {
+            outer_node: NodeKey::try_from("sg_outer").unwrap(),
+            inner_subgraph: SubgraphKey::try_from("review_block").unwrap(),
+            bound_inputs: vec![ResolvedSubgraphInput {
+                inner_var: TemplateVar("plan".into()),
+                value: serde_json::json!({"path": "/tmp/plan.md"}),
+            }],
+            return_to: NodeKey::try_from("after").unwrap(),
+        };
+
+        let serialised: SerializableFrame = Frame::Subgraph(original.clone()).into();
+        let back: Frame = serialised.try_into().expect("reverse conversion");
+        match back {
+            Frame::Subgraph(sf) => {
+                assert_eq!(sf.outer_node, original.outer_node);
+                assert_eq!(sf.inner_subgraph, original.inner_subgraph);
+                assert_eq!(sf.return_to, original.return_to);
+                assert_eq!(sf.bound_inputs.len(), 1);
+                assert_eq!(sf.bound_inputs[0].inner_var.0, "plan");
+            }
+            other @ Frame::Loop(_) => panic!("expected Subgraph frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loop_frame_with_artifact_iterable_roundtrips() {
+        use crate::engine::frames::{Frame, LoopFrame};
+
+        let original = LoopFrame {
+            loop_node: NodeKey::try_from("loop_artifact").unwrap(),
+            config: LoopConfig {
+                iterates_over: IterableSource::Artifact {
+                    node: NodeKey::try_from("planner").unwrap(),
+                    name: "plan.toml".into(),
+                    jsonpath: "tasks".into(),
+                },
+                body: SubgraphKey::try_from("body").unwrap(),
+                iteration_var_name: "task".into(),
+                exit_condition: ExitCondition::AllItems,
+                on_iteration_failure: FailurePolicy::Abort,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            },
+            items: vec![],
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: NodeKey::try_from("after").unwrap(),
+            traversal_counts: HashMap::new(),
+        };
+
+        let serialised: SerializableFrame = Frame::Loop(original.clone()).into();
+        let back: Frame = serialised.try_into().expect("reverse conversion");
+        match back {
+            Frame::Loop(lf) => {
+                assert_eq!(lf.loop_node, original.loop_node);
+                match lf.config.iterates_over {
+                    IterableSource::Artifact { node, name, jsonpath } => {
+                        assert_eq!(node.as_ref(), "planner");
+                        assert_eq!(name, "plan.toml");
+                        assert_eq!(jsonpath, "tasks");
+                    }
+                    other @ IterableSource::Static(_) => panic!("expected Artifact, got {other:?}"),
+                }
+            }
+            other @ Frame::Subgraph(_) => panic!("expected Loop frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v1_blob_with_pending_human_input_upgrades_to_v2() {
+        let v1_json = r#"{
+            "schema_version": 1,
+            "cursor": { "node": "agent_1", "attempt": 1 },
+            "at_seq": 50,
+            "stage_boundary_seq": 49,
+            "pending_human_input": {
+                "node": "agent_1",
+                "call_id": "call-abc-123",
+                "prompt": "Should I continue?",
+                "requested_seq": 48
+            }
+        }"#;
+        let snap = EngineSnapshot::deserialize(v1_json.as_bytes())
+            .expect("v1 with pending_human_input deserialises");
+        assert_eq!(snap.schema_version, 2);
+        assert!(snap.frames.is_empty());
+        let pending = snap.pending_human_input.expect("pending_human_input preserved");
+        assert_eq!(pending.node, "agent_1");
+        assert_eq!(pending.call_id.as_deref(), Some("call-abc-123"));
+        assert_eq!(pending.prompt, "Should I continue?");
+        assert_eq!(pending.requested_seq, 48);
     }
 }
