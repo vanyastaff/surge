@@ -67,7 +67,7 @@ impl Engine {
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
-        use crate::engine::validate::validate_for_m5;
+        use crate::engine::validate::validate_for_m6;
         use surge_core::approvals::ApprovalPolicy;
         use surge_core::content_hash::ContentHash;
         use surge_core::run_event::{
@@ -77,7 +77,7 @@ impl Engine {
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
-        validate_for_m5(&graph)?;
+        validate_for_m6(&graph)?;
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
