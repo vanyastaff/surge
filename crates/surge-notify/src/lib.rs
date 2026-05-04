@@ -12,4 +12,20 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 
-// Modules added incrementally in Phase 7.
+pub mod deliverer;
+pub mod desktop;
+pub mod email;
+pub mod multiplexer;
+pub mod render;
+pub mod slack;
+pub mod telegram;
+pub mod webhook;
+
+pub use deliverer::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
+pub use desktop::DesktopDeliverer;
+pub use email::{EmailCredentials, EmailDeliverer, EmailSecretResolver};
+pub use multiplexer::MultiplexingNotifier;
+pub use render::{RenderContext, render};
+pub use slack::{SlackCredentials, SlackDeliverer, SlackSecretResolver};
+pub use telegram::{TelegramCredentials, TelegramDeliverer, TelegramSecretResolver};
+pub use webhook::WebhookDeliverer;

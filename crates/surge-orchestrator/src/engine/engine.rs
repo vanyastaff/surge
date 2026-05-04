@@ -19,6 +19,7 @@ pub struct Engine {
     bridge: Arc<dyn BridgeFacade>,
     storage: Arc<surge_persistence::runs::Storage>,
     tool_dispatcher: Arc<dyn ToolDispatcher>,
+    notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
     config: Arc<EngineConfig>,
     /// Active runs indexed by `RunId`. Each entry holds the per-run resolution
     /// senders + cancellation token so engine-level methods (resolve, stop)
@@ -41,17 +42,36 @@ pub(crate) struct ActiveRun {
 }
 
 impl Engine {
-    /// Create a new `Engine` wired to the given bridge, storage, and tool dispatcher.
+    /// Construct an engine with a default no-op `NotifyDeliverer` (the
+    /// default `MultiplexingNotifier` returns `ChannelNotConfigured` for
+    /// every channel, matching the M5 "log-only" stub behaviour).
+    /// Use `new_with_notifier` for production wiring.
     pub fn new(
         bridge: Arc<dyn BridgeFacade>,
         storage: Arc<surge_persistence::runs::Storage>,
         tool_dispatcher: Arc<dyn ToolDispatcher>,
         config: EngineConfig,
     ) -> Self {
+        let notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer> =
+            Arc::new(surge_notify::MultiplexingNotifier::new());
+        Self::new_with_notifier(bridge, storage, tool_dispatcher, notify_deliverer, config)
+    }
+
+    /// M6 constructor that wires a real notify deliverer (replacing the
+    /// no-op default). Production CLI / daemon use this.
+    #[must_use]
+    pub fn new_with_notifier(
+        bridge: Arc<dyn BridgeFacade>,
+        storage: Arc<surge_persistence::runs::Storage>,
+        tool_dispatcher: Arc<dyn ToolDispatcher>,
+        notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
+        config: EngineConfig,
+    ) -> Self {
         Self {
             bridge,
             storage,
             tool_dispatcher,
+            notify_deliverer,
             config: Arc::new(config),
             runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
@@ -138,6 +158,7 @@ impl Engine {
             writer,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
+            notify_deliverer: self.notify_deliverer.clone(),
             graph,
             worktree_path,
             run_config,
@@ -238,6 +259,7 @@ impl Engine {
             writer,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
+            notify_deliverer: self.notify_deliverer.clone(),
             graph: replayed.graph,
             worktree_path,
             run_config: EngineRunConfig::default(),
