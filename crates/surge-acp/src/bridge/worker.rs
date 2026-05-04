@@ -251,22 +251,11 @@ async fn handle_tool_call(
         .unwrap_or_default();
     let args_redacted = secrets.redact_json(&args_json);
 
-    // Register the call_id in per-session pending-replies bookkeeping so that
-    // a subsequent `BridgeCommand::ReplyToTool` can validate the (session,
-    // call_id) pair and emit `BridgeEvent::ToolResult`. Inserted for **all**
-    // tool calls (injected and non-injected) so the reply API treats them
-    // uniformly. ACP itself has no client→agent tool-result protocol method;
-    // this map is purely Surge-internal observability state.
-    let injected = tool_name == REPORT_STAGE_OUTCOME || tool_name == REQUEST_HUMAN_INPUT;
-    state.borrow_mut().open_tool_calls.insert(
-        call_id.clone(),
-        OpenToolCall {
-            tool_name: tool_name.clone(),
-            mcp_id: None,
-            injected,
-        },
-    );
-
+    // `report_stage_outcome` is fire-and-forget at the engine layer:
+    // `BridgeEvent::OutcomeReported` does NOT carry `call_id`, so the engine
+    // has no handle to reply with. Therefore we deliberately do not register
+    // it in `open_tool_calls` — registering would just leak an entry until
+    // session close.
     if tool_name == REPORT_STAGE_OUTCOME {
         match parse_outcome_args(&args_json) {
             Ok((outcome, summary, artifacts)) => {
@@ -287,9 +276,22 @@ async fn handle_tool_call(
         return;
     }
 
+    // `request_human_input` does carry `call_id` in its dedicated event, and
+    // the engine replies via `reply_to_tool` after the human resolves. Track
+    // the call_id ONLY on a successful parse — on parse failure we emit an
+    // `Error` event with no call_id, so the engine never sees this id and
+    // can't clear it; registering would just leak an entry until session close.
     if tool_name == REQUEST_HUMAN_INPUT {
         match parse_human_input_args(&args_json) {
             Ok((question, context)) => {
+                state.borrow_mut().open_tool_calls.insert(
+                    call_id.clone(),
+                    OpenToolCall {
+                        tool_name: tool_name.clone(),
+                        mcp_id: None,
+                        injected: true,
+                    },
+                );
                 let _ = event_tx.send(BridgeEvent::HumanInputRequested {
                     session: *session_id,
                     call_id,
@@ -307,13 +309,24 @@ async fn handle_tool_call(
         return;
     }
 
-    // Generic (non-injected) tool call — emit `ToolCall` and let the engine
-    // dispatch + call back via `reply_to_tool`. The engine's reply emits the
-    // matching `ToolResult` event (see `reply_to_tool_impl`).
+    // Generic (non-injected) tool call. Register the call_id in per-session
+    // bookkeeping and emit `BridgeEvent::ToolCall`; the engine dispatches
+    // and calls back via `reply_to_tool`, which removes the entry and emits
+    // the matching `ToolResult` event. ACP itself has no client→agent
+    // tool-result protocol method — this map is Surge-internal observability
+    // state only.
     //
     // M3 used to auto-emit a `ToolResult { Unsupported }` here; M5.1 removes
     // that so the engine's actual dispatcher result reaches observers without
     // racing against a synthetic Unsupported.
+    state.borrow_mut().open_tool_calls.insert(
+        call_id.clone(),
+        OpenToolCall {
+            tool_name: tool_name.clone(),
+            mcp_id: None,
+            injected: false,
+        },
+    );
     let decision = sandbox.allows_tool(&tool_name, None);
     let _ = event_tx.send(BridgeEvent::ToolCall {
         session: *session_id,
