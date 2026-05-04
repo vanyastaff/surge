@@ -40,6 +40,11 @@ pub(crate) struct RunTaskParams {
     pub resume_cursor: Option<Cursor>,
     /// Resume from existing memory; if None, start fresh.
     pub resume_memory: Option<RunMemory>,
+    /// Resume from an existing frame stack; if None, start with an empty stack.
+    pub resume_frames: Option<Vec<crate::engine::frames::Frame>>,
+    /// Resume from existing root traversal counts; if None, start fresh.
+    pub resume_root_traversal_counts:
+        Option<std::collections::HashMap<surge_core::keys::EdgeKey, u32>>,
     /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
     /// Engine's `resolve_human_input` finds the sender and fires it.
     pub gate_resolutions: std::sync::Arc<
@@ -67,6 +72,12 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         attempt: 1,
     });
     let mut memory = params.resume_memory.clone().unwrap_or_default();
+    let frames: Vec<crate::engine::frames::Frame> =
+        params.resume_frames.clone().unwrap_or_default();
+    let _root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> = params
+        .resume_root_traversal_counts
+        .clone()
+        .unwrap_or_default();
 
     loop {
         if params.cancel.is_cancelled() {
@@ -84,7 +95,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             return outcome;
         }
 
-        let node = if let Some(n) = params.graph.nodes.get(&cursor.node) {
+        let node = if let Some(n) = lookup_in_active_frame(&params.graph, &cursor.node, &frames) {
             n.clone()
         } else {
             let err = format!("cursor at unknown node {}", cursor.node);
@@ -139,13 +150,24 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             .await
             .map(StageOutcome::Routed),
             NodeConfig::Terminal(cfg) => {
-                let r = execute_terminal_stage(TerminalStageParams {
-                    node: &cursor.node,
-                    terminal_config: cfg,
-                    writer: &params.writer,
-                })
-                .await;
-                r.map(StageOutcome::Terminal)
+                use crate::engine::frames::TerminalSignal;
+                match crate::engine::frames::on_terminal_decision(&frames, &cursor) {
+                    TerminalSignal::OuterComplete => {
+                        let r = execute_terminal_stage(TerminalStageParams {
+                            node: &cursor.node,
+                            terminal_config: cfg,
+                            writer: &params.writer,
+                        })
+                        .await;
+                        r.map(StageOutcome::Terminal)
+                    },
+                    TerminalSignal::LoopIterDone => {
+                        unimplemented!("M6 phase 5: execute_loop_iteration_done")
+                    },
+                    TerminalSignal::SubgraphDone => {
+                        unimplemented!("M6 phase 6: on_subgraph_done")
+                    },
+                }
             },
             NodeConfig::HumanGate(cfg) => {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -279,6 +301,25 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
 enum StageOutcome {
     Routed(OutcomeKey),
     Terminal(TerminalOutcome),
+}
+
+fn lookup_in_active_frame<'a>(
+    graph: &'a surge_core::graph::Graph,
+    node_key: &surge_core::keys::NodeKey,
+    frames: &[crate::engine::frames::Frame],
+) -> Option<&'a surge_core::node::Node> {
+    use crate::engine::frames::Frame;
+    match frames.last() {
+        None => graph.nodes.get(node_key),
+        Some(Frame::Loop(lf)) => graph
+            .subgraphs
+            .get(&lf.config.body)
+            .and_then(|sg| sg.nodes.get(node_key)),
+        Some(Frame::Subgraph(sf)) => graph
+            .subgraphs
+            .get(&sf.inner_subgraph)
+            .and_then(|sg| sg.nodes.get(node_key)),
+    }
 }
 
 async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {

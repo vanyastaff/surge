@@ -145,6 +145,8 @@ impl Engine {
             cancel,
             resume_cursor: None,
             resume_memory: None,
+            resume_frames: None,
+            resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
         };
@@ -243,6 +245,8 @@ impl Engine {
             cancel,
             resume_cursor: Some(replayed.cursor),
             resume_memory: Some(replayed.memory),
+            resume_frames: None,
+            resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
         };
