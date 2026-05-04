@@ -21,6 +21,7 @@ use surge_core::keys::OutcomeKey;
 use surge_core::node::NodeConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_core::run_state::{Cursor, OutcomeRecord, RunMemory};
+use surge_notify::NotifyDeliverer;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -30,6 +31,7 @@ pub(crate) struct RunTaskParams {
     pub writer: RunWriter,
     pub bridge: Arc<dyn BridgeFacade>,
     pub tool_dispatcher: Arc<dyn ToolDispatcher>,
+    pub notify_deliverer: Arc<dyn NotifyDeliverer>,
     pub graph: Graph,
     pub worktree_path: PathBuf,
     pub run_config: EngineRunConfig,
@@ -145,7 +147,11 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             NodeConfig::Notify(cfg) => execute_notify_stage(NotifyStageParams {
                 node: &cursor.node,
                 notify_config: cfg,
+                declared_outcomes: &node.declared_outcomes,
                 writer: &params.writer,
+                run_memory: &memory,
+                run_id: params.run_id,
+                deliverer: params.notify_deliverer.clone(),
             })
             .await
             .map(StageOutcome::Routed),
