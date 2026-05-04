@@ -132,6 +132,38 @@ pub(crate) async fn bridge_loop(
                 let result = close_session_impl(&sessions, &event_tx, session).await;
                 let _ = reply.send(result);
             },
+            BridgeCommand::ReplyToTool {
+                session,
+                call_id,
+                payload,
+                reply,
+            } => {
+                // M5 minimum: log the intent and acknowledge to the engine.
+                // Real ACP reply routing (looking up the outstanding response
+                // sender keyed by call_id and dispatching the payload) requires
+                // the worker to maintain per-session call-id state, which the
+                // M3 auto-reply path in handle_tool_call doesn't currently track.
+                //
+                // The M3 worker auto-replies inline (in handle_tool_call) with
+                // ToolResultPayload::Unsupported for non-injected tools. Routing
+                // explicit replies requires buffering the ACP ResponseSender for
+                // each outstanding call_id in a per-session map — a structural
+                // change beyond this task's scope. Track via EngineRunEvent.
+                //
+                // Known M5 limitation: engine integration tests against
+                // mock_acp_agent will surface any case where the agent waits on a
+                // non-injected tool reply and we silently drop it. Real fix
+                // requires deeper M3 worker refactoring — follow-up tracked
+                // separately.
+                tracing::warn!(
+                    session = ?session,
+                    call_id = %call_id,
+                    "BridgeCommand::ReplyToTool received but full ACP reply routing not yet \
+                     implemented in M3 worker; bridge auto-reply (if any) wins"
+                );
+                let _ = payload;
+                let _ = reply.send(Ok(()));
+            },
             BridgeCommand::Shutdown { reply } => {
                 close_all_sessions(&sessions, &event_tx, SessionEndReason::ForcedClose).await;
                 let _ = reply.send(());

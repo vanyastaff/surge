@@ -1352,12 +1352,12 @@ async fn test_qa_max_iterations_failure() {
             issues: Some(format!("Tests failing on iteration {}", iteration)),
         };
         tx.send(event)
-            .expect(&format!("Failed to send event {}", iteration));
+            .unwrap_or_else(|_| panic!("Failed to send event {}", iteration));
 
         let recv = rx
             .recv()
             .await
-            .expect(&format!("Failed to receive event {}", iteration));
+            .unwrap_or_else(|_| panic!("Failed to receive event {}", iteration));
         if let SurgeEvent::QaVerdictReceived {
             iteration: recv_iter,
             verdict,

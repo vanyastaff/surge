@@ -77,7 +77,7 @@ impl Scenario {
         });
 
         let Some(value) = value else {
-            return Self::Echo;
+            return Self::ReportDone;
         };
 
         if let Some(k) = value.strip_prefix("report_outcome=") {

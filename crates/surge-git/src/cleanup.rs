@@ -408,7 +408,7 @@ mod tests {
         let lm = LifecycleManager::with_audit(GitManager::new(path).unwrap(), audit);
         let report = lm.full_cleanup().unwrap();
         assert_eq!(report.removed_worktrees.len(), 1);
-        assert!(report.removed_branches.len() >= 1);
+        assert!(!report.removed_branches.is_empty());
 
         // Verify audit log has entries for both operations
         let audit_verify = CleanupAudit::new(&log_path).unwrap();

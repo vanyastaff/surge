@@ -221,6 +221,26 @@ pub enum EventPayload {
         new_run: RunId,
         fork_at_seq: u64,
     },
+
+    // Human input — added in M5. Three variants to support both the
+    // tool-driven `request_human_input` path and HumanGate-driven pauses.
+    HumanInputRequested {
+        node: NodeKey,
+        session: Option<SessionId>,
+        call_id: Option<String>,
+        prompt: String,
+        schema: Option<serde_json::Value>,
+    },
+    HumanInputResolved {
+        node: NodeKey,
+        call_id: Option<String>,
+        response: serde_json::Value,
+    },
+    HumanInputTimedOut {
+        node: NodeKey,
+        call_id: Option<String>,
+        elapsed_seconds: u32,
+    },
 }
 
 impl EventPayload {
@@ -278,6 +298,9 @@ impl EventPayload {
             Self::HookExecuted { .. } => "HookExecuted",
             Self::OutcomeRejectedByHook { .. } => "OutcomeRejectedByHook",
             Self::TokensConsumed { .. } => "TokensConsumed",
+            Self::HumanInputRequested { .. } => "HumanInputRequested",
+            Self::HumanInputResolved { .. } => "HumanInputResolved",
+            Self::HumanInputTimedOut { .. } => "HumanInputTimedOut",
             Self::ForkCreated { .. } => "ForkCreated",
         }
     }
@@ -605,5 +628,46 @@ mod tests {
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn human_input_requested_roundtrip() {
+        let payload = EventPayload::HumanInputRequested {
+            node: NodeKey::try_from("plan_1").unwrap(),
+            session: Some(SessionId::new()),
+            call_id: Some("call-42".into()),
+            prompt: "Approve the plan?".into(),
+            schema: Some(serde_json::json!({"type":"string"})),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "HumanInputRequested");
+    }
+
+    #[test]
+    fn human_input_resolved_roundtrip() {
+        let payload = EventPayload::HumanInputResolved {
+            node: NodeKey::try_from("plan_1").unwrap(),
+            call_id: Some("call-42".into()),
+            response: serde_json::json!({"decision":"approve"}),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "HumanInputResolved");
+    }
+
+    #[test]
+    fn human_input_timed_out_roundtrip() {
+        let payload = EventPayload::HumanInputTimedOut {
+            node: NodeKey::try_from("plan_1").unwrap(),
+            call_id: None,
+            elapsed_seconds: 300,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "HumanInputTimedOut");
     }
 }

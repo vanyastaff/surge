@@ -4,7 +4,9 @@
 use surge_core::SessionId;
 use tokio::sync::oneshot;
 
-use super::error::{BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
+use super::error::{
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+};
 use super::session::{MessageContent, SessionConfig, SessionState};
 
 /// Internal command payload sent over the mpsc channel from
@@ -48,6 +50,18 @@ pub enum BridgeCommand {
     Shutdown {
         /// Reply channel; worker sends `()` once the shutdown is complete.
         reply: oneshot::Sender<()>,
+    },
+    /// Send a reply to an outstanding tool call — see `AcpBridge::reply_to_tool`.
+    ReplyToTool {
+        /// Target session.
+        session: SessionId,
+        /// ACP-supplied call id from the matching `BridgeEvent::ToolCall`,
+        /// `OutcomeReported`, or `HumanInputRequested` event.
+        call_id: String,
+        /// Result payload to send back to the agent.
+        payload: super::event::ToolResultPayload,
+        /// Reply channel carrying `()` on success or a `ReplyToToolError`.
+        reply: oneshot::Sender<Result<(), ReplyToToolError>>,
     },
     /// Test-only: inject a panic into the worker thread to exercise the
     /// `WorkerDead` recovery path. Gated by `#[cfg(any(test, feature = "test-helpers"))]`

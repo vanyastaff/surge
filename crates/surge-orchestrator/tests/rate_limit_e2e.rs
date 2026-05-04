@@ -269,7 +269,7 @@ fn test_next_retry_time_calculation() {
 
         // Should be approximately 90 seconds (allowing for small timing differences)
         assert!(
-            secs_until_retry >= 89 && secs_until_retry <= 91,
+            (89..=91).contains(&secs_until_retry),
             "Expected ~90 seconds, got {}",
             secs_until_retry
         );

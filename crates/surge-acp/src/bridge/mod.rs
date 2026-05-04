@@ -59,3 +59,20 @@ pub(crate) mod tokens;
 
 pub mod acp_bridge;
 pub use acp_bridge::AcpBridge;
+
+pub mod facade;
+pub use facade::BridgeFacade;
+
+#[cfg(test)]
+mod facade_smoke {
+    use super::*;
+
+    /// Compile-time assertion that `AcpBridge` implements `BridgeFacade`.
+    /// Existence of the trait + impl is what we're locking in here; behavior
+    /// is exercised in tests/facade_contract.rs.
+    #[test]
+    fn acp_bridge_impls_facade() {
+        fn assert_impl<T: facade::BridgeFacade>() {}
+        assert_impl::<AcpBridge>();
+    }
+}

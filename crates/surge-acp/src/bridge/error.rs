@@ -113,6 +113,20 @@ pub enum CloseSessionError {
     Bridge(#[source] BridgeError),
 }
 
+/// Errors from `AcpBridge::reply_to_tool`.
+#[derive(Debug, Error)]
+pub enum ReplyToToolError {
+    /// Bridge transport failed (channel send/receive).
+    #[error("bridge: {0}")]
+    Bridge(#[source] BridgeError),
+    /// The session was unknown or already ended.
+    #[error("session not found or already ended")]
+    SessionGone,
+    /// The call_id doesn't match an outstanding tool call in this session.
+    #[error("no outstanding tool call with id {0}")]
+    UnknownCallId(String),
+}
+
 /// Wrapper for errors originating in the underlying ACP SDK.
 #[derive(Debug, Error)]
 pub enum AcpError {
@@ -163,6 +177,7 @@ mod tests {
         bound::<OpenSessionError>();
         bound::<SendMessageError>();
         bound::<CloseSessionError>();
+        bound::<ReplyToToolError>();
         bound::<AcpError>();
     }
 }

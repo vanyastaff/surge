@@ -1,6 +1,6 @@
 ---
 source: crates/surge-acp/src/bridge/tools.rs
-expression: t.input_schema
+expression: sorted
 ---
 {
   "properties": {
