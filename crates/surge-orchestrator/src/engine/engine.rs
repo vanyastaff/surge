@@ -338,6 +338,25 @@ impl Engine {
         }
     }
 
+    /// Snapshot the in-process active-run map as a `Vec<RunSummary>`.
+    /// Used by `LocalEngineFacade::list_runs`. M7 simplification: the
+    /// engine doesn't track per-run `started_at`, so we return
+    /// `chrono::Utc::now()` for every entry. The daemon facade has a
+    /// richer view; M8+ may add real per-run start timestamps to
+    /// `ActiveRun`.
+    pub async fn snapshot_active_runs(&self) -> Vec<crate::engine::handle::RunSummary> {
+        use crate::engine::handle::{RunStatus, RunSummary};
+        let runs = self.runs.read().await;
+        runs.keys()
+            .map(|id| RunSummary {
+                run_id: *id,
+                status: RunStatus::Active,
+                started_at: chrono::Utc::now(),
+                last_event_seq: None,
+            })
+            .collect()
+    }
+
     /// Cancel an in-flight run. Signals the cancellation token so the run task
     /// will emit `RunAborted` and exit. Returns [`EngineError::RunNotFound`] if
     /// no run with `run_id` is currently active.
