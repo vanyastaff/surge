@@ -1,0 +1,321 @@
+//! `NodeKind::Loop` stage execution — frame-push, iteration boundary,
+//! exit-condition handling. Single-threaded per spec §6.3-6.4.
+
+use crate::engine::frames::{
+    Frame, LoopFrame, MAX_LOOP_ITEMS_RESOLVED, initial_attempts_remaining,
+};
+use crate::engine::stage::StageError;
+use std::collections::HashMap;
+use surge_core::graph::Graph;
+use surge_core::keys::{NodeKey, OutcomeKey};
+use surge_core::loop_config::{IterableSource, LoopConfig};
+use surge_core::run_event::{EventPayload, VersionedEventPayload};
+use surge_core::run_state::RunMemory;
+use surge_persistence::runs::run_writer::RunWriter;
+
+/// Parameters for `execute_loop_entry`.
+pub struct LoopStageParams<'a> {
+    /// `NodeKey` of the Loop node being entered.
+    pub node: &'a NodeKey,
+    /// Loop configuration from the node.
+    pub loop_config: &'a LoopConfig,
+    /// Frozen pipeline graph (used for body subgraph lookup).
+    pub graph: &'a Graph,
+    /// In-progress run memory (artifacts / outcomes used to resolve `IterableSource::Artifact`).
+    pub run_memory: &'a RunMemory,
+    /// Run writer for persisting events.
+    pub writer: &'a RunWriter,
+    /// Mutable frame stack — frame pushed on non-empty entry.
+    pub frames: &'a mut Vec<Frame>,
+    /// Outer-graph node to advance to when the loop completes.
+    /// Caller computes via routing's `edge_target_after_outcome_or_default`.
+    pub return_to: NodeKey,
+}
+
+/// Outcome of executing a Loop entry stage.
+#[derive(Debug)]
+pub enum LoopEntryEffect {
+    /// Empty iterable — frame NOT pushed; run loop routes via this outcome.
+    Skipped(OutcomeKey),
+    /// Frame pushed; run loop must advance cursor to this body-subgraph start.
+    Entered(NodeKey),
+}
+
+/// Resolve the iterable + push a `LoopFrame` if non-empty. See task description.
+pub async fn execute_loop_entry(p: LoopStageParams<'_>) -> Result<LoopEntryEffect, StageError> {
+    let body_subgraph = p
+        .graph
+        .subgraphs
+        .get(&p.loop_config.body)
+        .ok_or_else(|| StageError::LoopBodyMissing(p.loop_config.body.clone()))?;
+
+    let items = resolve_iterable(&p.loop_config.iterates_over, p.run_memory)?;
+
+    if items.len() > MAX_LOOP_ITEMS_RESOLVED {
+        return Err(StageError::LoopItemsTooLarge {
+            count: u32::try_from(items.len()).unwrap_or(u32::MAX),
+            // MAX_LOOP_ITEMS_RESOLVED = 1000 always fits in u32.
+            #[allow(clippy::cast_possible_truncation)]
+            max: MAX_LOOP_ITEMS_RESOLVED as u32,
+        });
+    }
+
+    if items.is_empty() {
+        let outcome = OutcomeKey::try_from("loop_empty")
+            .map_err(|e| StageError::Internal(format!("'loop_empty' key: {e}")))?;
+        p.writer
+            .append_event(VersionedEventPayload::new(EventPayload::LoopCompleted {
+                loop_id: p.node.clone(),
+                completed_iterations: 0,
+                final_outcome: outcome.clone(),
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        return Ok(LoopEntryEffect::Skipped(outcome));
+    }
+
+    let body_start = body_subgraph.start.clone();
+
+    p.frames.push(Frame::Loop(LoopFrame {
+        loop_node: p.node.clone(),
+        config: p.loop_config.clone(),
+        items: items.clone(),
+        current_index: 0,
+        attempts_remaining: initial_attempts_remaining(&p.loop_config.on_iteration_failure),
+        return_to: p.return_to,
+        traversal_counts: HashMap::new(),
+    }));
+
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::LoopIterationStarted {
+                loop_id: p.node.clone(),
+                item: items[0].clone(),
+                index: 0,
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    Ok(LoopEntryEffect::Entered(body_start))
+}
+
+fn resolve_iterable(
+    src: &IterableSource,
+    memory: &RunMemory,
+) -> Result<Vec<toml::Value>, StageError> {
+    match src {
+        IterableSource::Static(items) => Ok(items.clone()),
+        IterableSource::Artifact {
+            node: _,
+            name: _,
+            jsonpath: _,
+        } => {
+            let _ = memory;
+            // M6 P5.2 will implement Artifact resolution.
+            Err(StageError::Internal(
+                "IterableSource::Artifact resolution not yet implemented (M6 P5.2)".into(),
+            ))
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_core::graph::{GraphMetadata, SCHEMA_VERSION, Subgraph};
+    use surge_core::keys::{NodeKey, SubgraphKey};
+    use surge_core::loop_config::{ExitCondition, FailurePolicy, ParallelismMode};
+    use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
+    use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+    use surge_persistence::runs::Storage;
+
+    fn graph_with_loop_body(items: Vec<toml::Value>) -> (Graph, LoopConfig, NodeKey) {
+        let loop_key = NodeKey::try_from("loop_1").unwrap();
+        let body_key = SubgraphKey::try_from("body").unwrap();
+        let body_start = NodeKey::try_from("body_start").unwrap();
+
+        let body_node = Node {
+            id: body_start.clone(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        };
+
+        let cfg = LoopConfig {
+            iterates_over: IterableSource::Static(items),
+            body: body_key.clone(),
+            iteration_var_name: "item".into(),
+            exit_condition: ExitCondition::AllItems,
+            on_iteration_failure: FailurePolicy::Abort,
+            parallelism: ParallelismMode::Sequential,
+            gate_after_each: false,
+        };
+
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            loop_key.clone(),
+            Node {
+                id: loop_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("completed").unwrap(),
+                    description: "ok".into(),
+                    edge_kind_hint: surge_core::edge::EdgeKind::Forward,
+                    is_terminal: false,
+                }],
+                config: NodeConfig::Loop(cfg.clone()),
+            },
+        );
+
+        let mut body_nodes = std::collections::BTreeMap::new();
+        body_nodes.insert(body_start.clone(), body_node);
+
+        let mut subgraphs = std::collections::BTreeMap::new();
+        subgraphs.insert(
+            body_key,
+            Subgraph {
+                start: body_start,
+                nodes: body_nodes,
+                edges: vec![],
+            },
+        );
+
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "t".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: loop_key.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs,
+        };
+
+        (graph, cfg, loop_key)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_iterable_skips_frame_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let (graph, cfg, loop_key) = graph_with_loop_body(vec![]);
+        let memory = RunMemory::default();
+        let mut frames: Vec<Frame> = vec![];
+
+        let effect = execute_loop_entry(LoopStageParams {
+            node: &loop_key,
+            loop_config: &cfg,
+            graph: &graph,
+            run_memory: &memory,
+            writer: &writer,
+            frames: &mut frames,
+            return_to: NodeKey::try_from("after").unwrap(),
+        })
+        .await
+        .unwrap();
+
+        match effect {
+            LoopEntryEffect::Skipped(o) => assert_eq!(o.as_ref(), "loop_empty"),
+            LoopEntryEffect::Entered(_) => panic!("expected Skipped for empty iterable"),
+        }
+        assert!(frames.is_empty(), "frame stack should remain empty");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn three_items_pushes_frame_and_advances_to_body_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let items = vec![
+            toml::Value::Integer(1),
+            toml::Value::Integer(2),
+            toml::Value::Integer(3),
+        ];
+        let (graph, cfg, loop_key) = graph_with_loop_body(items);
+        let memory = RunMemory::default();
+        let mut frames: Vec<Frame> = vec![];
+
+        let effect = execute_loop_entry(LoopStageParams {
+            node: &loop_key,
+            loop_config: &cfg,
+            graph: &graph,
+            run_memory: &memory,
+            writer: &writer,
+            frames: &mut frames,
+            return_to: NodeKey::try_from("after").unwrap(),
+        })
+        .await
+        .unwrap();
+
+        match effect {
+            LoopEntryEffect::Entered(node) => {
+                assert_eq!(node, NodeKey::try_from("body_start").unwrap());
+            },
+            LoopEntryEffect::Skipped(_) => panic!("expected Entered for non-empty iterable"),
+        }
+        assert_eq!(frames.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn items_above_resolved_cap_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        // Note: surge-core validation rejects Static lists > MAX_LOOP_ITEMS_STATIC
+        // at TOML load — so we bypass core validation by constructing the
+        // graph in-memory and calling execute_loop_entry directly. This
+        // exercises the engine-side defensive cap (MAX_LOOP_ITEMS_RESOLVED).
+        #[allow(clippy::cast_possible_wrap)]
+        let items: Vec<toml::Value> = (0..=MAX_LOOP_ITEMS_RESOLVED)
+            .map(|i| toml::Value::Integer(i as i64))
+            .collect();
+        let (graph, cfg, loop_key) = graph_with_loop_body(items);
+        let memory = RunMemory::default();
+        let mut frames: Vec<Frame> = vec![];
+
+        let result = execute_loop_entry(LoopStageParams {
+            node: &loop_key,
+            loop_config: &cfg,
+            graph: &graph,
+            run_memory: &memory,
+            writer: &writer,
+            frames: &mut frames,
+            return_to: NodeKey::try_from("after").unwrap(),
+        })
+        .await;
+
+        match result {
+            Err(StageError::LoopItemsTooLarge { count, max }) => {
+                // MAX_LOOP_ITEMS_RESOLVED = 1000 always fits in u32.
+                #[allow(clippy::cast_possible_truncation)]
+                let expected_count = MAX_LOOP_ITEMS_RESOLVED as u32 + 1;
+                #[allow(clippy::cast_possible_truncation)]
+                let expected_max = MAX_LOOP_ITEMS_RESOLVED as u32;
+                assert_eq!(count, expected_count);
+                assert_eq!(max, expected_max);
+            },
+            other => panic!("expected LoopItemsTooLarge, got {other:?}"),
+        }
+    }
+}

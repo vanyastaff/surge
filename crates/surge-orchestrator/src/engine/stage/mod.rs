@@ -4,6 +4,7 @@ pub mod agent;
 pub mod bindings;
 pub mod branch;
 pub mod human_gate;
+pub mod loop_stage;
 pub mod notify;
 pub mod terminal;
 
@@ -49,6 +50,27 @@ pub enum StageError {
     /// An unexpected internal condition occurred within the stage executor.
     #[error("internal: {0}")]
     Internal(String),
+
+    /// Loop body subgraph not found in `Graph::subgraphs`.
+    #[error("loop body subgraph not found: {0}")]
+    LoopBodyMissing(surge_core::keys::SubgraphKey),
+
+    /// Loop iterable resolved to more items than `MAX_LOOP_ITEMS_RESOLVED`.
+    #[error("loop iterable too large: {count}/{max}")]
+    LoopItemsTooLarge {
+        /// Actual number of items resolved.
+        count: u32,
+        /// Maximum permitted (`MAX_LOOP_ITEMS_RESOLVED`).
+        max: u32,
+    },
+
+    /// Subgraph reference not found in `Graph::subgraphs`. (Reserved for Task 6.1.)
+    #[error("subgraph reference not found: {0}")]
+    SubgraphMissing(surge_core::keys::SubgraphKey),
+
+    /// Notify channel delivery failed and `on_failure: Fail` is configured. (Reserved for Phase 8.)
+    #[error("notify delivery error: {0}")]
+    NotifyDelivery(String),
 }
 
 impl From<StageError> for EngineError {
