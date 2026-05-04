@@ -1741,4 +1741,109 @@ mod tests {
             crate::validation::ValidationErrorKind::McpServerUndeclared { .. }
         )));
     }
+
+    #[test]
+    fn validate_with_run_config_happy_path_returns_no_mcp_errors() {
+        use crate::agent_config::{AgentConfig, NodeLimits, ToolOverride};
+        use crate::approvals::ApprovalPolicy;
+        use crate::mcp_config::{McpServerRef, McpTransportConfig};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::{NodeKey, ProfileKey};
+        use crate::run_event::RunConfig;
+        use crate::sandbox::SandboxMode;
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::{BTreeMap, HashMap};
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let stage_key = NodeKey::try_from("research").unwrap();
+        let terminal_key = NodeKey::try_from("end").unwrap();
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            stage_key.clone(),
+            Node {
+                id: stage_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Agent(AgentConfig {
+                    profile: ProfileKey::try_from("researcher@1.0").unwrap(),
+                    prompt_overrides: None,
+                    tool_overrides: Some(ToolOverride {
+                        mcp_add: vec!["playwright".into()],
+                        mcp_remove: vec![],
+                        skills_add: vec![],
+                        skills_remove: vec![],
+                        shell_allowlist_add: vec![],
+                    }),
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: vec![],
+                    rules_overrides: None,
+                    limits: NodeLimits::default(),
+                    hooks: vec![],
+                    custom_fields: BTreeMap::new(),
+                }),
+            },
+        );
+        nodes.insert(
+            terminal_key.clone(),
+            Node {
+                id: terminal_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "test".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+            },
+            start: stage_key,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let run_cfg = RunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: vec![McpServerRef {
+                name: "playwright".into(),
+                transport: McpTransportConfig::Stdio {
+                    command: PathBuf::from("/usr/local/bin/mcp-playwright"),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                allowed_tools: None,
+                call_timeout: Duration::from_secs(60),
+                restart_on_crash: true,
+            }],
+        };
+
+        let errors = crate::validation::validate_with_run_config(&graph, &run_cfg);
+        // The graph has no edges (no routing) — graph-level validation may
+        // still produce structural errors/warnings. Assert that NONE of the
+        // M7 MCP-specific kinds are present (allowlist resolves cleanly).
+        assert!(
+            !errors.iter().any(|e| matches!(
+                e.kind,
+                crate::validation::ValidationErrorKind::McpServerUndeclared { .. }
+                    | crate::validation::ValidationErrorKind::McpServerNameEmpty
+                    | crate::validation::ValidationErrorKind::McpCommandPathUnsafe { .. }
+            )),
+            "happy path should not surface any MCP-specific errors; got: {errors:?}"
+        );
+    }
 }
