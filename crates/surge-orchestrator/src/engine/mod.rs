@@ -14,6 +14,7 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod frames;
 pub mod handle;
 pub mod predicates;
 pub mod replay;
@@ -28,4 +29,5 @@ pub mod validate;
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use engine::Engine;
 pub use error::EngineError;
+pub use frames::{Frame, LoopFrame, SubgraphFrame};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome};
