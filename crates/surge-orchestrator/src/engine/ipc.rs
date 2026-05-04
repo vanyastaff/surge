@@ -275,6 +275,142 @@ pub enum GlobalDaemonEvent {
     DaemonShuttingDown,
 }
 
+// ============================================================================
+// Framing helpers
+// ============================================================================
+
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+
+/// Errors produced by the IPC framing layer.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum FramingError {
+    /// Underlying I/O error reading or writing the socket.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    /// Failed to encode or decode a frame as JSON.
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+    /// A frame exceeded the maximum allowed size.
+    #[error("frame too large ({0} bytes; cap is {1})")]
+    FrameTooLarge(usize, usize),
+}
+
+/// Maximum size of a single IPC frame in bytes. Larger frames (e.g.,
+/// a Graph TOML payload over 8 MB) are rejected. Adjust if real
+/// workloads bump up against this.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// Serialize and write a single frame followed by `\n`. Compact JSON
+/// (no embedded newlines).
+pub async fn write_frame<W, T>(writer: &mut W, frame: &T) -> Result<(), FramingError>
+where
+    W: AsyncWrite + Unpin,
+    T: serde::Serialize,
+{
+    let mut bytes = serde_json::to_vec(frame)?;
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(bytes.len(), MAX_FRAME_BYTES));
+    }
+    bytes.push(b'\n');
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+/// Read one line from `reader` and parse it as a [`DaemonRequest`].
+/// Returns `Ok(None)` on EOF (clean disconnect).
+pub async fn read_request_frame<R>(
+    reader: &mut BufReader<R>,
+) -> Result<Option<DaemonRequest>, FramingError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut line = String::new();
+    let n = reader.read_line(&mut line).await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if line.len() > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
+    }
+    Ok(Some(serde_json::from_str(line.trim_end())?))
+}
+
+/// Read one line and parse as a [`DaemonResponse`].
+pub async fn read_response_frame<R>(
+    reader: &mut BufReader<R>,
+) -> Result<Option<DaemonResponse>, FramingError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut line = String::new();
+    let n = reader.read_line(&mut line).await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if line.len() > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
+    }
+    Ok(Some(serde_json::from_str(line.trim_end())?))
+}
+
+/// Read one line and parse as a [`DaemonEvent`] (notification frame).
+pub async fn read_event_frame<R>(
+    reader: &mut BufReader<R>,
+) -> Result<Option<DaemonEvent>, FramingError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut line = String::new();
+    let n = reader.read_line(&mut line).await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if line.len() > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
+    }
+    Ok(Some(serde_json::from_str(line.trim_end())?))
+}
+
+/// Either a [`DaemonResponse`] or a [`DaemonEvent`], since they share
+/// a wire stream (server → client). Used by the daemon-side client
+/// task that has to route both kinds.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum InboundServerFrame {
+    /// A response to an earlier client request, identified by `request_id`.
+    Response(DaemonResponse),
+    /// A daemon-pushed notification (no `request_id`).
+    Event(DaemonEvent),
+}
+
+/// Read one server-bound frame and discriminate. Tries
+/// [`DaemonResponse`] first; on parse failure, falls back to
+/// [`DaemonEvent`].
+pub async fn read_inbound_server_frame<R>(
+    reader: &mut BufReader<R>,
+) -> Result<Option<InboundServerFrame>, FramingError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut line = String::new();
+    let n = reader.read_line(&mut line).await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if line.len() > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
+    }
+    let trimmed = line.trim_end();
+    // Both share serde discriminator tags — try response first.
+    if let Ok(r) = serde_json::from_str::<DaemonResponse>(trimmed) {
+        return Ok(Some(InboundServerFrame::Response(r)));
+    }
+    let ev: DaemonEvent = serde_json::from_str(trimmed)?;
+    Ok(Some(InboundServerFrame::Event(ev)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +453,42 @@ mod tests {
             DaemonEvent::Global(GlobalDaemonEvent::DaemonShuttingDown) => {}
             _ => panic!("roundtrip failed"),
         }
+    }
+
+    #[tokio::test]
+    async fn write_and_read_frame_roundtrip() {
+        use tokio::io::{BufReader, BufWriter};
+
+        // Write a frame into an in-memory Vec<u8> buffer.
+        let buf: Vec<u8> = Vec::new();
+        let mut writer = BufWriter::new(buf);
+        let req = DaemonRequest::Ping { request_id: 100 };
+        crate::engine::ipc::write_frame(&mut writer, &req)
+            .await
+            .unwrap();
+        // BufWriter wraps Vec<u8>; flush was already called inside write_frame.
+        let bytes = writer.into_inner();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.ends_with('\n'), "frame must end with newline");
+
+        // Round-trip: parse it back via read_request_frame.
+        let cursor = std::io::Cursor::new(bytes);
+        let mut cursor_reader = BufReader::new(cursor);
+        let parsed = crate::engine::ipc::read_request_frame(&mut cursor_reader)
+            .await
+            .unwrap();
+        assert!(matches!(
+            parsed,
+            Some(DaemonRequest::Ping { request_id: 100 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_request_frame_returns_none_on_eof() {
+        use tokio::io::BufReader;
+        let empty: &[u8] = &[];
+        let mut reader = BufReader::new(empty);
+        let parsed = crate::engine::ipc::read_request_frame(&mut reader).await.unwrap();
+        assert!(parsed.is_none());
     }
 }
