@@ -57,6 +57,20 @@ pub struct ToolDispatchContext<'a> {
     pub run_memory: &'a RunMemory,
 }
 
+/// Declaration metadata for a single tool the dispatcher offers to
+/// agent stages. Used by `RoutingToolDispatcher` (M7 Phase 8) to
+/// assemble the session's tool list at session-open time.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct DeclaredTool {
+    /// Tool name as the agent will see it.
+    pub name: String,
+    /// Human-readable description shown to the agent.
+    pub description: Option<String>,
+    /// JSON Schema for the tool's input arguments.
+    pub input_schema: serde_json::Value,
+}
+
 /// Routes non-special ACP tool calls to implementations. Engine calls
 /// `dispatch` for every `ToolCall` whose name is not `report_stage_outcome`
 /// or `request_human_input` (those are engine-handled).
@@ -64,6 +78,15 @@ pub struct ToolDispatchContext<'a> {
 pub trait ToolDispatcher: Send + Sync {
     /// Dispatch a single tool call and return the result payload.
     async fn dispatch(&self, ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload;
+
+    /// Tools this dispatcher declares to agent stages. Default returns
+    /// empty; the production `WorktreeToolDispatcher` overrides to
+    /// expose its built-in catalog (read_file, write_file, shell_exec,
+    /// etc.). Used by `RoutingToolDispatcher` to assemble the
+    /// session-level tool list.
+    fn declared_tools(&self) -> Vec<DeclaredTool> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +128,23 @@ mod tests {
             ToolResultPayload::Unsupported { message } => assert!(message.contains("read_file")),
             other => panic!("expected Unsupported, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_declared_tools_is_empty() {
+        let d = NoOp;
+        assert!(d.declared_tools().is_empty());
+    }
+
+    #[tokio::test]
+    async fn worktree_dispatcher_declares_its_tools() {
+        use std::path::PathBuf;
+        let d = crate::engine::tools::worktree::WorktreeToolDispatcher::new(PathBuf::from("/tmp"));
+        let tools = d.declared_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        // The Worktree dispatcher must declare every tool name its dispatch
+        // handles; verify a few obvious ones are present.
+        assert!(names.contains(&"read_file") || names.contains(&"write_file") || names.contains(&"shell_exec"),
+            "expected at least one of read_file/write_file/shell_exec in declared_tools, got: {names:?}");
     }
 }

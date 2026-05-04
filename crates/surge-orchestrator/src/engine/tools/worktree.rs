@@ -319,6 +319,90 @@ impl ToolDispatcher for WorktreeToolDispatcher {
             },
         }
     }
+
+    fn declared_tools(&self) -> Vec<crate::engine::tools::DeclaredTool> {
+        use crate::engine::tools::DeclaredTool;
+        use serde_json::json;
+        vec![
+            DeclaredTool {
+                name: "read_file".into(),
+                description: Some(
+                    "Read the contents of a file inside the run's worktree. \
+                     Use `binary: true` to receive base64-encoded bytes."
+                        .into(),
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path from the worktree root."
+                        },
+                        "binary": {
+                            "type": "boolean",
+                            "description": "If true, return base64-encoded bytes instead of UTF-8 text."
+                        },
+                    },
+                    "required": ["path"],
+                }),
+            },
+            DeclaredTool {
+                name: "write_file".into(),
+                description: Some(
+                    "Write text content to a file inside the run's worktree. \
+                     Supports create, overwrite, and append modes."
+                        .into(),
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path from the worktree root."
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Text content to write."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["create", "overwrite", "append"],
+                            "description": "Write mode: create (fail if exists), overwrite (default), or append."
+                        },
+                    },
+                    "required": ["path", "content"],
+                }),
+            },
+            DeclaredTool {
+                name: "shell_exec".into(),
+                description: Some(
+                    "Execute a shell command inside the run's worktree. \
+                     stdout and stderr are captured and returned; output longer \
+                     than 64 KiB is tail-truncated."
+                        .into(),
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to run."
+                        },
+                        "cwd_relative": {
+                            "type": "string",
+                            "description": "Optional working directory relative to the worktree root. Defaults to the worktree root."
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Timeout in seconds. Defaults to 300."
+                        },
+                    },
+                    "required": ["command"],
+                }),
+            },
+        ]
+    }
 }
 
 #[cfg(test)]
