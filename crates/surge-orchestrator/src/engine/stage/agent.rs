@@ -4,7 +4,7 @@
 //! message, drives `BridgeEvent` until `OutcomeReported` is received (success)
 //! or `SessionEnded` fires first (failure).
 //! Phase 6.3: tool dispatch for non-injected tools + token usage persistence.
-//! Phase 6.4 handles prompt + binding resolution.
+//! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -71,7 +71,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     use surge_acp::bridge::event::BridgeEvent;
     use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 
-    // Build minimal SessionConfig. Phase 6.4 wires bindings + real prompt.
+    // Build SessionConfig. Bindings + prompt are resolved below (Phase 6.4).
     let sandbox = build_sandbox(p.agent_config.sandbox_override.as_ref());
     let session_config = SessionConfig {
         agent_kind: AgentKind::Mock { args: vec![] },
@@ -104,11 +104,33 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
-    // Send the prompt. Phase 6.4 will replace this empty stub with the real
-    // binding-resolved prompt.
-    let empty_msg = MessageContent::Text(String::new());
+    use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
+
+    let resolved_bindings = resolve_bindings(
+        &p.agent_config.bindings,
+        p.run_memory,
+        p.worktree_path,
+    )
+    .await
+    .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
+
+    let prompt_template = p
+        .agent_config
+        .prompt_overrides
+        .as_ref()
+        .and_then(|po| po.system.as_deref())
+        .or_else(|| {
+            p.agent_config
+                .prompt_overrides
+                .as_ref()
+                .and_then(|po| po.append_system.as_deref())
+        })
+        .unwrap_or("");
+    let prompt_text = substitute_template(prompt_template, &resolved_bindings);
+
+    let prompt_msg = MessageContent::Text(prompt_text);
     p.bridge
-        .send_message(session_id, empty_msg)
+        .send_message(session_id, prompt_msg)
         .await
         .map_err(|e| StageError::Bridge(format!("send_message: {e}")))?;
 

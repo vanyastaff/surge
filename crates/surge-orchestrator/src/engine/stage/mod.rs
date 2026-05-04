@@ -1,6 +1,7 @@
 //! Stage execution dispatch.
 
 pub mod agent;
+pub mod bindings;
 pub mod branch;
 pub mod human_gate;
 pub mod terminal;
