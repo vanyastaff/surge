@@ -17,7 +17,7 @@ use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::ArtifactSource;
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
-use surge_core::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey};
 use surge_core::node::{Node, NodeConfig, Position};
@@ -26,8 +26,8 @@ use surge_core::subgraph_config::{SubgraphConfig, SubgraphOutput};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
-use surge_persistence::runs::seq::EventSeq;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
 
 fn build_subgraph_graph() -> Graph {
     let sg_node_key = NodeKey::try_from("sg_node").unwrap();

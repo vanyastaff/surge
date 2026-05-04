@@ -18,17 +18,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
-use surge_core::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey};
-use surge_core::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode};
+use surge_core::loop_config::{
+    ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+};
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::run_event::EventPayload;
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
-use surge_persistence::runs::seq::EventSeq;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
 
 fn build_5_item_loop_graph() -> Graph {
     // Loop over 5 static items with exit_condition = MaxIterations { n: 5 }.

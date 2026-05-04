@@ -15,7 +15,9 @@ use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
 use surge_core::node::{Node, NodeConfig, Position};
-use surge_core::notify_config::{NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate};
+use surge_core::notify_config::{
+    NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate,
+};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_notify::{MultiplexingNotifier, WebhookDeliverer};
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
@@ -107,10 +109,8 @@ async fn notify_webhook_posts_body_containing_run_id() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
     let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()));
-    let notifier = Arc::new(
-        MultiplexingNotifier::new()
-            .with_webhook(Arc::new(WebhookDeliverer::new())),
-    );
+    let notifier =
+        Arc::new(MultiplexingNotifier::new().with_webhook(Arc::new(WebhookDeliverer::new())));
 
     let engine = Engine::new_with_notifier(
         bridge,
@@ -140,7 +140,10 @@ async fn notify_webhook_posts_body_containing_run_id() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     let bodies = captured_bodies.lock().unwrap().clone();
-    assert!(!bodies.is_empty(), "expected at least one captured POST body");
+    assert!(
+        !bodies.is_empty(),
+        "expected at least one captured POST body"
+    );
 
     let run_id_str = run_id.to_string();
     assert!(
