@@ -1,0 +1,25 @@
+[package]
+name = "surge-notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+surge-core.workspace = true
+
+# Channel impls
+notify-rust.workspace = true
+reqwest.workspace = true
+lettre.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tiny_http.workspace = true
+tempfile.workspace = true
