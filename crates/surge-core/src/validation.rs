@@ -71,6 +71,10 @@ pub enum ValidationErrorKind {
     NotifyFailMissingUndeliverable {
         node: NodeKey,
     },
+    /// A `LoopConfig::iterates_over::Static` carries more than
+    /// `MAX_LOOP_ITEMS_STATIC` (1000) items. Bound at graph-load time
+    /// to prevent unbounded memory growth in the engine's frame stack.
+    LoopStaticTooLarge { node: NodeKey, count: usize, max: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +120,8 @@ impl ValidationErrorKind {
             | Self::SubgraphRefMissing { .. }
             | Self::SubgraphReferenceCycle { .. }
             | Self::NodeKeyCollision { .. }
-            | Self::NotifyMissingDelivered { .. } => Severity::Error,
+            | Self::NotifyMissingDelivered { .. }
+            | Self::LoopStaticTooLarge { .. } => Severity::Error,
         }
     }
 }
@@ -142,6 +147,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w1_escalate_target(graph, &mut findings);
     warning_w2_orphan_subgraphs(graph, &mut findings);
     warning_w3_notify_outcomes(graph, &mut findings);
+    validate_loop_static_cap(graph, &mut findings);
 
     let has_error = findings
         .iter()
@@ -645,6 +651,53 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
     }
 }
 
+fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
+    use crate::loop_config::{IterableSource, MAX_LOOP_ITEMS_STATIC};
+    for node in graph.nodes.values() {
+        let NodeConfig::Loop(cfg) = &node.config else { continue; };
+        let IterableSource::Static(items) = &cfg.iterates_over else { continue; };
+        if items.len() > MAX_LOOP_ITEMS_STATIC {
+            errors.push(ValidationError {
+                location: ErrorLocation::Node { id: node.id.clone() },
+                kind: ValidationErrorKind::LoopStaticTooLarge {
+                    node: node.id.clone(),
+                    count: items.len(),
+                    max: MAX_LOOP_ITEMS_STATIC,
+                },
+                message: format!(
+                    "loop node `{}` static iterable has {} items (max {})",
+                    node.id.as_str(),
+                    items.len(),
+                    MAX_LOOP_ITEMS_STATIC,
+                ),
+            });
+        }
+    }
+    // Also recurse into subgraphs — Loop nodes can live inside subgraphs.
+    for sg in graph.subgraphs.values() {
+        for node in sg.nodes.values() {
+            let NodeConfig::Loop(cfg) = &node.config else { continue; };
+            let IterableSource::Static(items) = &cfg.iterates_over else { continue; };
+            if items.len() > MAX_LOOP_ITEMS_STATIC {
+                errors.push(ValidationError {
+                    location: ErrorLocation::Node { id: node.id.clone() },
+                    kind: ValidationErrorKind::LoopStaticTooLarge {
+                        node: node.id.clone(),
+                        count: items.len(),
+                        max: MAX_LOOP_ITEMS_STATIC,
+                    },
+                    message: format!(
+                        "loop node `{}` static iterable has {} items (max {})",
+                        node.id.as_str(),
+                        items.len(),
+                        MAX_LOOP_ITEMS_STATIC,
+                    ),
+                });
+            }
+        }
+    }
+}
+
 fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
     let delivered =
         OutcomeKey::try_from("delivered").expect("'delivered' is valid OutcomeKey");
@@ -949,6 +1002,107 @@ mod tests {
             ValidationErrorKind::StartNodeMissing.severity(),
             Severity::Error
         );
+    }
+
+    mod m6_loop_static_cap_tests {
+        use super::*;
+        use crate::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+        use crate::keys::{NodeKey, OutcomeKey, SubgraphKey};
+        use crate::node::{Node, NodeConfig, OutcomeDecl, Position};
+        use crate::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode, MAX_LOOP_ITEMS_STATIC};
+        use crate::edge::EdgeKind;
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        fn graph_with_loop_node(items: Vec<toml::Value>) -> Graph {
+            let loop_key = NodeKey::try_from("loop_1").unwrap();
+            let body_key = SubgraphKey::try_from("body").unwrap();
+            let body_start = NodeKey::try_from("body_start").unwrap();
+
+            let loop_node = Node {
+                id: loop_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("completed").unwrap(),
+                    description: "done".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                }],
+                config: NodeConfig::Loop(LoopConfig {
+                    iterates_over: IterableSource::Static(items),
+                    body: body_key.clone(),
+                    iteration_var_name: "item".into(),
+                    exit_condition: ExitCondition::AllItems,
+                    on_iteration_failure: FailurePolicy::Abort,
+                    parallelism: ParallelismMode::Sequential,
+                    gate_after_each: false,
+                }),
+            };
+
+            let body_node = Node {
+                id: body_start.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            };
+
+            let mut nodes = BTreeMap::new();
+            nodes.insert(loop_key.clone(), loop_node);
+
+            let mut body_nodes = BTreeMap::new();
+            body_nodes.insert(body_start.clone(), body_node);
+
+            let mut subgraphs = BTreeMap::new();
+            subgraphs.insert(body_key, Subgraph {
+                start: body_start,
+                nodes: body_nodes,
+                edges: vec![],
+            });
+
+            Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "t".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                },
+                start: loop_key,
+                nodes,
+                edges: vec![],
+                subgraphs,
+            }
+        }
+
+        #[test]
+        fn loop_static_size_at_cap_is_ok() {
+            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC).map(|i| toml::Value::Integer(i as i64)).collect();
+            let g = graph_with_loop_node(items);
+            let result = validate(&g);
+            // The minimal graph also triggers other structural errors (e.g., no Terminal at outer level).
+            // Filter to only LoopStaticTooLarge findings.
+            let findings = result.unwrap_or_else(|e| e);
+            assert!(
+                !findings.iter().any(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. })),
+                "1000 items should not trigger LoopStaticTooLarge: {findings:?}"
+            );
+        }
+
+        #[test]
+        fn loop_static_size_above_cap_is_rejected() {
+            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC + 1).map(|i| toml::Value::Integer(i as i64)).collect();
+            let g = graph_with_loop_node(items);
+            let result = validate(&g);
+            let errors = result.expect_err("validation should fail");
+            let cap_errors: Vec<_> = errors.iter()
+                .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
+                .collect();
+            assert!(!cap_errors.is_empty(), "expected LoopStaticTooLarge, got {errors:?}");
+        }
     }
 
     mod m6_notify_validation_tests {
