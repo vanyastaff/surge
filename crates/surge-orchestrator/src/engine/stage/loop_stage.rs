@@ -152,6 +152,243 @@ async fn resolve_iterable(
     }
 }
 
+/// Called by `run_task::execute` when the cursor reaches a `Terminal`
+/// node and the top frame is a `LoopFrame` (`TerminalSignal::LoopIterDone`).
+/// Decides whether to advance to the next iteration, retry the same
+/// iteration (per `FailurePolicy`), or pop the frame and return to the
+/// outer cursor.
+#[allow(clippy::too_many_lines)]
+pub async fn on_loop_iteration_done(
+    just_completed_outcome: &OutcomeKey,
+    graph: &Graph,
+    frames: &mut Vec<Frame>,
+    cursor: &mut surge_core::run_state::Cursor,
+    writer: &RunWriter,
+) -> Result<(), StageError> {
+    let Some(Frame::Loop(lf)) = frames.last_mut() else {
+        return Err(StageError::Internal(
+            "on_loop_iteration_done called without Loop frame on top".into(),
+        ));
+    };
+
+    // Persist the per-iteration completion event.
+    writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::LoopIterationCompleted {
+                loop_id: lf.loop_node.clone(),
+                index: lf.current_index,
+                outcome: just_completed_outcome.clone(),
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    // 1. Iteration-failure handling.
+    if is_failure_outcome(just_completed_outcome) {
+        match lf.config.on_iteration_failure.clone() {
+            surge_core::loop_config::FailurePolicy::Abort => {
+                let loop_node = lf.loop_node.clone();
+                let completed_iterations = lf.current_index + 1;
+                let return_to = lf.return_to.clone();
+                exit_loop(
+                    loop_node,
+                    completed_iterations,
+                    return_to,
+                    frames,
+                    cursor,
+                    "aborted",
+                    writer,
+                )
+                .await?;
+                return Ok(());
+            },
+            surge_core::loop_config::FailurePolicy::Skip => {
+                // fall through to advance-index
+            },
+            surge_core::loop_config::FailurePolicy::Retry { .. } if lf.attempts_remaining > 0 => {
+                lf.attempts_remaining -= 1;
+                let body_start = body_subgraph_start(graph, lf)?;
+                let item = lf.items[lf.current_index as usize].clone();
+                let loop_id = lf.loop_node.clone();
+                let index = lf.current_index;
+                cursor.node = body_start;
+                cursor.attempt += 1;
+                writer
+                    .append_event(VersionedEventPayload::new(
+                        EventPayload::LoopIterationStarted {
+                            loop_id,
+                            item,
+                            index,
+                        },
+                    ))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+                return Ok(());
+            },
+            surge_core::loop_config::FailurePolicy::Retry { .. } => {
+                // attempts exhausted — treat as Abort
+                let loop_node = lf.loop_node.clone();
+                let completed_iterations = lf.current_index + 1;
+                let return_to = lf.return_to.clone();
+                exit_loop(
+                    loop_node,
+                    completed_iterations,
+                    return_to,
+                    frames,
+                    cursor,
+                    "aborted",
+                    writer,
+                )
+                .await?;
+                return Ok(());
+            },
+            surge_core::loop_config::FailurePolicy::Replan => {
+                tracing::warn!(
+                    loop_id = %lf.loop_node,
+                    "FailurePolicy::Replan not implemented in M6 — treating as Abort (Replan needs bootstrap from M8)"
+                );
+                let loop_node = lf.loop_node.clone();
+                let completed_iterations = lf.current_index + 1;
+                let return_to = lf.return_to.clone();
+                exit_loop(
+                    loop_node,
+                    completed_iterations,
+                    return_to,
+                    frames,
+                    cursor,
+                    "aborted",
+                    writer,
+                )
+                .await?;
+                return Ok(());
+            },
+        }
+    }
+
+    // 2. Exit-condition check (only reached on success or Skip path).
+    {
+        let Some(Frame::Loop(lf)) = frames.last() else {
+            unreachable!("frame was on stack at failure check")
+        };
+        if exit_condition_met(lf, just_completed_outcome) {
+            let loop_node = lf.loop_node.clone();
+            let completed_iterations = lf.current_index + 1;
+            let return_to = lf.return_to.clone();
+            exit_loop(
+                loop_node,
+                completed_iterations,
+                return_to,
+                frames,
+                cursor,
+                "completed",
+                writer,
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
+    // 3. Advance to next iteration.
+    let Some(Frame::Loop(lf)) = frames.last_mut() else {
+        unreachable!("frame was on stack at exit-condition check")
+    };
+    lf.current_index += 1;
+
+    #[allow(clippy::cast_possible_truncation)] // items bounded by MAX_LOOP_ITEMS_RESOLVED (1000)
+    if lf.current_index >= lf.items.len() as u32 {
+        let loop_node = lf.loop_node.clone();
+        let completed_iterations = lf.current_index + 1;
+        let return_to = lf.return_to.clone();
+        exit_loop(
+            loop_node,
+            completed_iterations,
+            return_to,
+            frames,
+            cursor,
+            "completed",
+            writer,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let body_start = body_subgraph_start(graph, lf)?;
+    let item = lf.items[lf.current_index as usize].clone();
+    let loop_id = lf.loop_node.clone();
+    let index = lf.current_index;
+    cursor.node = body_start;
+    cursor.attempt = 1;
+
+    writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::LoopIterationStarted {
+                loop_id,
+                item,
+                index,
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Returns `true` for outcomes that count as iteration failures for
+/// `FailurePolicy` purposes. Conservative literal match — authors who
+/// want richer failure semantics declare an explicit `Branch` node
+/// before the loop.
+fn is_failure_outcome(outcome: &OutcomeKey) -> bool {
+    matches!(outcome.as_ref(), "failed" | "fail" | "error")
+}
+
+fn exit_condition_met(lf: &LoopFrame, just_completed: &OutcomeKey) -> bool {
+    use surge_core::loop_config::ExitCondition;
+    match &lf.config.exit_condition {
+        #[allow(clippy::cast_possible_truncation)]
+        // items bounded by MAX_LOOP_ITEMS_RESOLVED (1000)
+        ExitCondition::AllItems => lf.current_index + 1 >= lf.items.len() as u32,
+        ExitCondition::UntilOutcome {
+            from_node: _,
+            outcome,
+        } => just_completed == outcome,
+        ExitCondition::MaxIterations { n } => lf.current_index + 1 >= *n,
+    }
+}
+
+async fn exit_loop(
+    loop_node: NodeKey,
+    completed_iterations: u32,
+    return_to: NodeKey,
+    frames: &mut Vec<Frame>,
+    cursor: &mut surge_core::run_state::Cursor,
+    final_outcome_str: &str,
+    writer: &RunWriter,
+) -> Result<(), StageError> {
+    let final_outcome = OutcomeKey::try_from(final_outcome_str)
+        .map_err(|e| StageError::Internal(format!("'{final_outcome_str}' outcome key: {e}")))?;
+    writer
+        .append_event(VersionedEventPayload::new(EventPayload::LoopCompleted {
+            loop_id: loop_node,
+            completed_iterations,
+            final_outcome,
+        }))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    frames.pop();
+    cursor.node = return_to;
+    cursor.attempt = 1;
+    Ok(())
+}
+
+fn body_subgraph_start(graph: &Graph, lf: &LoopFrame) -> Result<NodeKey, StageError> {
+    Ok(graph
+        .subgraphs
+        .get(&lf.config.body)
+        .ok_or_else(|| StageError::LoopBodyMissing(lf.config.body.clone()))?
+        .start
+        .clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +586,85 @@ mod tests {
             },
             other => panic!("expected LoopItemsTooLarge, got {other:?}"),
         }
+    }
+
+    use surge_core::run_state::Cursor;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn iteration_advance_increments_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let items = vec![toml::Value::Integer(1), toml::Value::Integer(2)];
+        let (graph, cfg, loop_key) = graph_with_loop_body(items.clone());
+        let return_to = NodeKey::try_from("after").unwrap();
+        let mut frames: Vec<Frame> = vec![Frame::Loop(LoopFrame {
+            loop_node: loop_key.clone(),
+            config: cfg,
+            items,
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: return_to.clone(),
+            traversal_counts: HashMap::new(),
+        })];
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("body_start").unwrap(),
+            attempt: 1,
+        };
+
+        let just_completed = OutcomeKey::try_from("done").unwrap();
+        on_loop_iteration_done(&just_completed, &graph, &mut frames, &mut cursor, &writer)
+            .await
+            .unwrap();
+
+        let Frame::Loop(lf) = &frames[0] else {
+            panic!("expected Loop frame")
+        };
+        assert_eq!(lf.current_index, 1, "advanced to next iteration");
+        assert_eq!(
+            cursor.node,
+            NodeKey::try_from("body_start").unwrap(),
+            "cursor reset to body start"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn iteration_done_at_last_index_pops_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let items = vec![toml::Value::Integer(1)];
+        let (graph, cfg, loop_key) = graph_with_loop_body(items.clone());
+        let return_to = NodeKey::try_from("after").unwrap();
+        let mut frames: Vec<Frame> = vec![Frame::Loop(LoopFrame {
+            loop_node: loop_key,
+            config: cfg,
+            items,
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: return_to.clone(),
+            traversal_counts: HashMap::new(),
+        })];
+        let mut cursor = Cursor {
+            node: NodeKey::try_from("body_start").unwrap(),
+            attempt: 1,
+        };
+
+        let just_completed = OutcomeKey::try_from("done").unwrap();
+        on_loop_iteration_done(&just_completed, &graph, &mut frames, &mut cursor, &writer)
+            .await
+            .unwrap();
+
+        assert!(frames.is_empty(), "frame popped after last iteration");
+        assert_eq!(cursor.node, return_to, "cursor restored to return_to");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
