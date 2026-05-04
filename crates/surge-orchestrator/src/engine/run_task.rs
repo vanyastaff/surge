@@ -162,7 +162,31 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                         r.map(StageOutcome::Terminal)
                     },
                     TerminalSignal::LoopIterDone => {
-                        unimplemented!("M6 phase 5: execute_loop_iteration_done")
+                        // The most recent OutcomeReported event drives the iteration's outcome.
+                        let just_completed = memory
+                            .outcomes
+                            .get(&cursor.node)
+                            .and_then(|recs| recs.last())
+                            .map_or_else(
+                                || {
+                                    surge_core::keys::OutcomeKey::try_from("completed")
+                                        .expect("'completed' is valid OutcomeKey")
+                                },
+                                |r| r.outcome.clone(),
+                            );
+
+                        if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
+                            &just_completed,
+                            &params.graph,
+                            &mut frames,
+                            &mut cursor,
+                            &params.writer,
+                        )
+                        .await
+                        {
+                            return failed(&params, format!("loop iter done: {e}")).await;
+                        }
+                        continue;
                     },
                     TerminalSignal::SubgraphDone => {
                         unimplemented!("M6 phase 6: on_subgraph_done")
@@ -188,8 +212,51 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 params.gate_resolutions.lock().await.remove(&cursor.node);
                 r.map(StageOutcome::Routed)
             },
-            NodeConfig::Loop(_) | NodeConfig::Subgraph(_) => Err(StageError::Internal(format!(
-                "node kind {:?} not supported in M5",
+            NodeConfig::Loop(cfg) => {
+                // Compute return_to (outer-graph node to advance to when loop completes).
+                let completed_outcome = match surge_core::keys::OutcomeKey::try_from("completed") {
+                    Ok(o) => o,
+                    Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
+                };
+                let return_to = match crate::engine::routing::edge_target_after_outcome_or_default(
+                    &params.graph,
+                    &cursor.node,
+                    &completed_outcome,
+                ) {
+                    Ok(n) => n,
+                    Err(e) => return failed(&params, format!("loop return_to: {e}")).await,
+                };
+
+                let effect = match crate::engine::stage::loop_stage::execute_loop_entry(
+                    crate::engine::stage::loop_stage::LoopStageParams {
+                        node: &cursor.node,
+                        loop_config: cfg,
+                        graph: &params.graph,
+                        run_memory: &memory,
+                        writer: &params.writer,
+                        frames: &mut frames,
+                        return_to,
+                    },
+                )
+                .await
+                {
+                    Ok(e) => e,
+                    Err(e) => return failed(&params, format!("loop entry: {e}")).await,
+                };
+
+                match effect {
+                    crate::engine::stage::loop_stage::LoopEntryEffect::Skipped(outcome) => {
+                        Ok(StageOutcome::Routed(outcome))
+                    },
+                    crate::engine::stage::loop_stage::LoopEntryEffect::Entered(body_start) => {
+                        cursor.node = body_start;
+                        cursor.attempt = 1;
+                        continue; // Skip the routing block below — we're in a fresh frame's body.
+                    },
+                }
+            },
+            NodeConfig::Subgraph(_) => Err(StageError::Internal(format!(
+                "node kind {:?} not supported until M6 P6.3",
                 node.kind()
             ))),
         };

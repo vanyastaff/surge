@@ -125,6 +125,26 @@ pub fn next_node_after_with_counters(
     Ok(edge_to)
 }
 
+/// Find the outgoing edge target for `(node, outcome)`. If no edge
+/// matches, error out. Used at frame-push time to compute `return_to`
+/// for Loop/Subgraph frames — they need to know where to advance the
+/// outer cursor when the inner subgraph terminates.
+pub fn edge_target_after_outcome_or_default(
+    graph: &Graph,
+    node: &NodeKey,
+    outcome: &OutcomeKey,
+) -> Result<NodeKey, RoutingError> {
+    graph
+        .edges
+        .iter()
+        .find(|e| &e.from.node == node && &e.from.outcome == outcome)
+        .map(|e| e.to.clone())
+        .ok_or_else(|| RoutingError::NoMatchingEdge {
+            from: node.clone(),
+            outcome: outcome.clone(),
+        })
+}
+
 fn active_edge_set<'a>(graph: &'a Graph, frames: &[crate::engine::frames::Frame]) -> &'a [Edge] {
     use crate::engine::frames::Frame;
     match frames.last() {
