@@ -29,6 +29,7 @@ impl Node {
 }
 
 /// Closed enum of supported node types. Adding a variant requires editing core.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {

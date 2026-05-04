@@ -77,7 +77,7 @@ x = 400.0
 y = 0.0
 
 [[nodes.completion_notify.declared_outcomes]]
-id = "done"
+id = "delivered"
 description = "Notification sent"
 edge_kind_hint = "forward"
 is_terminal = false
@@ -140,7 +140,7 @@ kind = "forward"
 
 [edges.from]
 node = "completion_notify"
-outcome = "done"
+outcome = "delivered"
 
 [edges.policy]
 on_max_exceeded = "escalate"

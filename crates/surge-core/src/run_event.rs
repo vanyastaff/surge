@@ -5,7 +5,8 @@ use crate::content_hash::ContentHash;
 use crate::graph::Graph;
 use crate::hooks::HookFailureMode;
 use crate::id::{RunId, SessionId};
-use crate::keys::{EdgeKey, NodeKey, OutcomeKey, TemplateKey};
+use crate::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey, TemplateKey};
+use crate::notify_config::NotifyChannelKind;
 use crate::sandbox::SandboxMode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,7 @@ impl VersionedEventPayload {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventPayload {
@@ -241,6 +243,40 @@ pub enum EventPayload {
         call_id: Option<String>,
         elapsed_seconds: u32,
     },
+
+    // M6: Subgraph and Notify lifecycle.
+    /// Engine entered a `NodeKind::Subgraph` — pushed a `SubgraphFrame`
+    /// onto the per-run frame stack and advanced the cursor to the
+    /// inner subgraph's start.
+    SubgraphEntered {
+        /// `NodeKey` of the outer Subgraph node.
+        outer: NodeKey,
+        /// `SubgraphKey` of the inner subgraph being executed.
+        inner: SubgraphKey,
+    },
+    /// Engine popped a `SubgraphFrame` after the inner subgraph reached
+    /// a terminal node. `outcome` is the outer outcome projected from
+    /// `SubgraphConfig::outputs`.
+    SubgraphExited {
+        /// `NodeKey` of the outer Subgraph node.
+        outer: NodeKey,
+        /// `SubgraphKey` of the inner subgraph that just finished.
+        inner: SubgraphKey,
+        /// Outer outcome the inner artifact projected to.
+        outcome: OutcomeKey,
+    },
+    /// Notify stage attempted delivery of a notification.
+    /// One per stage attempt; emitted before `OutcomeReported`.
+    NotifyDelivered {
+        /// `NodeKey` of the Notify node.
+        node: NodeKey,
+        /// Channel-kind tag (no secrets / no transport details).
+        channel_kind: NotifyChannelKind,
+        /// `true` if delivery succeeded.
+        success: bool,
+        /// Error message if delivery failed; `None` on success.
+        error: Option<String>,
+    },
 }
 
 impl EventPayload {
@@ -302,6 +338,9 @@ impl EventPayload {
             Self::HumanInputResolved { .. } => "HumanInputResolved",
             Self::HumanInputTimedOut { .. } => "HumanInputTimedOut",
             Self::ForkCreated { .. } => "ForkCreated",
+            Self::SubgraphEntered { .. } => "SubgraphEntered",
+            Self::SubgraphExited { .. } => "SubgraphExited",
+            Self::NotifyDelivered { .. } => "NotifyDelivered",
         }
     }
 }
@@ -669,5 +708,58 @@ mod tests {
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
         assert_eq!(payload.discriminant_str(), "HumanInputTimedOut");
+    }
+
+    #[test]
+    fn subgraph_entered_roundtrips_via_bincode() {
+        let payload = EventPayload::SubgraphEntered {
+            outer: NodeKey::try_from("review_outer").unwrap(),
+            inner: SubgraphKey::try_from("review_block").unwrap(),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn subgraph_exited_roundtrips_via_bincode() {
+        let payload = EventPayload::SubgraphExited {
+            outer: NodeKey::try_from("review_outer").unwrap(),
+            inner: SubgraphKey::try_from("review_block").unwrap(),
+            outcome: OutcomeKey::try_from("approved").unwrap(),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn notify_delivered_roundtrips_via_bincode() {
+        let payload = EventPayload::NotifyDelivered {
+            node: NodeKey::try_from("notify_done").unwrap(),
+            channel_kind: NotifyChannelKind::Webhook,
+            success: true,
+            error: None,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn discriminant_str_covers_new_variants() {
+        let p1 = EventPayload::SubgraphEntered {
+            outer: NodeKey::try_from("a").unwrap(),
+            inner: SubgraphKey::try_from("b").unwrap(),
+        };
+        assert_eq!(p1.discriminant_str(), "SubgraphEntered");
+
+        let p2 = EventPayload::NotifyDelivered {
+            node: NodeKey::try_from("a").unwrap(),
+            channel_kind: NotifyChannelKind::Desktop,
+            success: false,
+            error: Some("test".into()),
+        };
+        assert_eq!(p2.discriminant_str(), "NotifyDelivered");
     }
 }

@@ -61,6 +61,13 @@ pub enum ParallelismMode {
     Sequential,
 }
 
+/// Maximum number of items in `IterableSource::Static`. Larger static
+/// lists are rejected at TOML load (graph validation) to bound memory
+/// in the engine's `LoopFrame::items`. The engine enforces a parallel
+/// cap on resolved artifact-derived iterables (`MAX_LOOP_ITEMS_RESOLVED`,
+/// also 1000, enforced engine-side at frame-push time).
+pub const MAX_LOOP_ITEMS_STATIC: usize = 1000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

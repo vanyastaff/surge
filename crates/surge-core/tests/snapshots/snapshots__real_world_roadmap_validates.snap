@@ -23,7 +23,7 @@ Graph {
             },
             declared_outcomes: [
                 OutcomeDecl {
-                    id: OutcomeKey("done"),
+                    id: OutcomeKey("delivered"),
                     description: "Notification sent",
                     edge_kind_hint: Forward,
                     is_terminal: false,
@@ -154,7 +154,7 @@ Graph {
             id: EdgeKey("e_notify_to_end"),
             from: PortRef {
                 node: NodeKey("completion_notify"),
-                outcome: OutcomeKey("done"),
+                outcome: OutcomeKey("delivered"),
             },
             to: NodeKey("end"),
             kind: Forward,

@@ -9,6 +9,7 @@ members = [
     "crates/surge-orchestrator",
     "crates/surge-cli",
     "crates/surge-ui",
+    "crates/surge-notify",
 ]
 
 [workspace.package]
@@ -80,6 +81,15 @@ dirs = "5"
 # HTTP client (remote registry fetching)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
+# Async trait support
+async-trait = "0.1"
+
+# Notification channels (surge-notify)
+notify-rust = "4"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+tiny_http = "0.12"
+owo-colors = "4"
+
 # Secret scanning
 regex = "1"
 
@@ -102,3 +112,4 @@ surge-spec = { path = "crates/surge-spec" }
 surge-git = { path = "crates/surge-git" }
 surge-persistence = { path = "crates/surge-persistence" }
 surge-orchestrator = { path = "crates/surge-orchestrator" }
+surge-notify = { path = "crates/surge-notify" }
