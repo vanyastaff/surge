@@ -56,6 +56,8 @@ gate_after_each = false
 
 [nodes.milestone_loop.config.iterates_over]
 type = "artifact"
+
+[nodes.milestone_loop.config.iterates_over.value]
 node = "roadmap_agent"
 name = "milestones.json"
 jsonpath = "$.milestones[*]"
@@ -158,6 +160,8 @@ gate_after_each = false
 
 [subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
 type = "artifact"
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over.value]
 node = "task_planner"
 name = "tasks.json"
 jsonpath = "$.tasks[*]"
@@ -234,6 +238,8 @@ gate_after_each = false
 
 [subgraphs.task_body.nodes.step_loop.config.iterates_over]
 type = "artifact"
+
+[subgraphs.task_body.nodes.step_loop.config.iterates_over.value]
 node = "step_planner"
 name = "steps.json"
 jsonpath = "$.steps[*]"

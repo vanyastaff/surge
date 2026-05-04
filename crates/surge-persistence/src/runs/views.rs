@@ -39,8 +39,13 @@ pub fn maintain(
     };
     match payload {
         StageEntered { node, attempt } => {
+            // INSERT OR IGNORE — Loop body nodes re-enter the same (node_id, attempt)
+            // on each iteration (M6). The first entry's data is preserved; subsequent
+            // iterations for the same node are elided from this view. A full per-iteration
+            // analytics row requires adding a `loop_iteration` column to the primary key
+            // (deferred to M7 schema migration).
             tx.execute(
-                "INSERT INTO stage_executions (node_id, attempt, started_seq, started_at)
+                "INSERT OR IGNORE INTO stage_executions (node_id, attempt, started_seq, started_at)
                  VALUES (?, ?, ?, ?)",
                 rusqlite::params![
                     node.as_str(),
