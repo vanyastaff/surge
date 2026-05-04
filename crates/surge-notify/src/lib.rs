@@ -13,9 +13,11 @@
 #![allow(clippy::missing_panics_doc)]
 
 pub mod deliverer;
+pub mod desktop;
 pub mod multiplexer;
 pub mod render;
 
 pub use deliverer::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
+pub use desktop::DesktopDeliverer;
 pub use multiplexer::MultiplexingNotifier;
 pub use render::{RenderContext, render};
