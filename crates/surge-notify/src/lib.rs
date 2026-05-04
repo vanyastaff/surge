@@ -13,5 +13,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 pub mod deliverer;
+pub mod render;
 
 pub use deliverer::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
+pub use render::{RenderContext, render};
