@@ -26,3 +26,7 @@ base64 = "0.22"
 [dev-dependencies]
 tempfile = { workspace = true }
 chrono = { workspace = true }
+anyhow = { workspace = true }
+
+[[example]]
+name = "engine_in_daemon"

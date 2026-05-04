@@ -49,6 +49,16 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --exclude surge-ui --verbose
 
+      - name: Build mock_acp_agent for engine integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build -p surge-acp --bin mock_acp_agent
+
+      - name: Run M5 engine integration tests (--ignored)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p surge-orchestrator --tests -- --ignored
+        timeout-minutes: 10
+        continue-on-error: true  # known M5 limitation: some tests hang on bridge worker reply routing (M5.1)
+
   clippy:
     name: Clippy
     runs-on: ${{ matrix.os }}
