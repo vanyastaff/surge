@@ -181,3 +181,30 @@
 3. **UX CLI** — первое впечатление. Команды должны быть интуитивными
 4. **Тесты** — интеграционные тесты с реальными агентами в CI
 5. **Документация** — README, getting started, examples с первого дня
+
+---
+
+## Engine M-series progress (internal)
+
+The engine refactor uses a separate M-series numbering aligned with the
+`surge-orchestrator` crate milestones. Status as of 2026-05-04:
+
+| Milestone | Scope | Status |
+|---|---|---|
+| M1–M4 | Foundation, persistence, ACP bridge, routing | Shipped |
+| M5 | Sequential pipeline, human gates, snapshots, resume | Shipped |
+| M6 | Loop execution, subgraph execution, Notify delivery, `surge-notify` crate | **Shipped** |
+| M7 | Parallel loop body execution, `loop_iteration` PK column, resume from loop/subgraph frames | Planned |
+| M8 | Multi-edge fanout (parallel branches), fan-in merge, full `AgentPool` | Planned |
+| M9+ | Remote agents (TCP/WebSocket), plugin system, GUI integration | Future |
+
+### M6 surface shipped in this PR
+
+- `NodeKind::Loop` — sequential iteration over static or artifact-derived items,
+  `ExitCondition::{AllItems,MaxIterations,UntilOutcome}`, `FailurePolicy::{Abort,Skip,Retry}`.
+- `NodeKind::Subgraph` — scoped inner graph with input bindings and output projection.
+- `NodeKind::Notify` — five delivery channels via `surge-notify`:
+  Desktop, Webhook, Slack, Email, Telegram.
+- `EdgePolicy::max_traversals` cap with `ExceededAction::{Escalate,Fail}`.
+- `validate_for_m6` — rejects multi-edge fanout (deferred to M8).
+- 5 integration tests + 6 `#[ignore]`d stubs for M7/M8 scenarios.
