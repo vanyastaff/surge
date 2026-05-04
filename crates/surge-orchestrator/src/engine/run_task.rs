@@ -162,10 +162,74 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                         r.map(StageOutcome::Terminal)
                     },
                     TerminalSignal::LoopIterDone => {
-                        unimplemented!("M6 phase 5: execute_loop_iteration_done")
+                        // The most recent OutcomeReported event drives the iteration's outcome.
+                        let just_completed = memory
+                            .outcomes
+                            .get(&cursor.node)
+                            .and_then(|recs| recs.last())
+                            .map_or_else(
+                                || {
+                                    surge_core::keys::OutcomeKey::try_from("completed")
+                                        .expect("'completed' is valid OutcomeKey")
+                                },
+                                |r| r.outcome.clone(),
+                            );
+
+                        if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
+                            &just_completed,
+                            &params.graph,
+                            &mut frames,
+                            &mut cursor,
+                            &params.writer,
+                        )
+                        .await
+                        {
+                            return failed(&params, format!("loop iter done: {e}")).await;
+                        }
+                        continue;
                     },
                     TerminalSignal::SubgraphDone => {
-                        unimplemented!("M6 phase 6: on_subgraph_done")
+                        // Look up the outer SubgraphConfig::outputs by walking back to the
+                        // outer node referenced by the top frame.
+                        let outputs = match frames.last() {
+                            Some(crate::engine::frames::Frame::Subgraph(sf)) => {
+                                match params.graph.nodes.get(&sf.outer_node).map(|n| &n.config) {
+                                    Some(surge_core::node::NodeConfig::Subgraph(cfg)) => {
+                                        cfg.outputs.clone()
+                                    },
+                                    _ => {
+                                        return failed(
+                                            &params,
+                                            format!(
+                                                "outer subgraph node {} missing or wrong kind",
+                                                sf.outer_node
+                                            ),
+                                        )
+                                        .await;
+                                    },
+                                }
+                            },
+                            _ => {
+                                return failed(
+                                    &params,
+                                    "SubgraphDone signal but no Subgraph frame on top".into(),
+                                )
+                                .await;
+                            },
+                        };
+
+                        if let Err(e) = crate::engine::stage::subgraph_stage::on_subgraph_done(
+                            &outputs,
+                            &memory,
+                            &mut frames,
+                            &mut cursor,
+                            &params.writer,
+                        )
+                        .await
+                        {
+                            return failed(&params, format!("subgraph done: {e}")).await;
+                        }
+                        continue;
                     },
                 }
             },
@@ -188,10 +252,84 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 params.gate_resolutions.lock().await.remove(&cursor.node);
                 r.map(StageOutcome::Routed)
             },
-            NodeConfig::Loop(_) | NodeConfig::Subgraph(_) => Err(StageError::Internal(format!(
-                "node kind {:?} not supported in M5",
-                node.kind()
-            ))),
+            NodeConfig::Loop(cfg) => {
+                // Compute return_to (outer-graph node to advance to when loop completes).
+                let completed_outcome = match surge_core::keys::OutcomeKey::try_from("completed") {
+                    Ok(o) => o,
+                    Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
+                };
+                let return_to = match crate::engine::routing::edge_target_after_outcome_or_default(
+                    &params.graph,
+                    &cursor.node,
+                    &completed_outcome,
+                ) {
+                    Ok(n) => n,
+                    Err(e) => return failed(&params, format!("loop return_to: {e}")).await,
+                };
+
+                let effect = match crate::engine::stage::loop_stage::execute_loop_entry(
+                    crate::engine::stage::loop_stage::LoopStageParams {
+                        node: &cursor.node,
+                        loop_config: cfg,
+                        graph: &params.graph,
+                        run_memory: &memory,
+                        writer: &params.writer,
+                        frames: &mut frames,
+                        return_to,
+                    },
+                )
+                .await
+                {
+                    Ok(e) => e,
+                    Err(e) => return failed(&params, format!("loop entry: {e}")).await,
+                };
+
+                match effect {
+                    crate::engine::stage::loop_stage::LoopEntryEffect::Skipped(outcome) => {
+                        Ok(StageOutcome::Routed(outcome))
+                    },
+                    crate::engine::stage::loop_stage::LoopEntryEffect::Entered(body_start) => {
+                        cursor.node = body_start;
+                        cursor.attempt = 1;
+                        continue; // Skip the routing block below — we're in a fresh frame's body.
+                    },
+                }
+            },
+            NodeConfig::Subgraph(cfg) => {
+                let completed_outcome = match surge_core::keys::OutcomeKey::try_from("completed") {
+                    Ok(o) => o,
+                    Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
+                };
+                let return_to = match crate::engine::routing::edge_target_after_outcome_or_default(
+                    &params.graph,
+                    &cursor.node,
+                    &completed_outcome,
+                ) {
+                    Ok(n) => n,
+                    Err(e) => return failed(&params, format!("subgraph return_to: {e}")).await,
+                };
+
+                let effect = match crate::engine::stage::subgraph_stage::execute_subgraph_entry(
+                    crate::engine::stage::subgraph_stage::SubgraphStageParams {
+                        node: &cursor.node,
+                        subgraph_config: cfg,
+                        graph: &params.graph,
+                        run_memory: &memory,
+                        writer: &params.writer,
+                        frames: &mut frames,
+                        return_to,
+                    },
+                )
+                .await
+                {
+                    Ok(e) => e,
+                    Err(e) => return failed(&params, format!("subgraph entry: {e}")).await,
+                };
+
+                cursor.node = effect.inner_start;
+                cursor.attempt = 1;
+                continue; // Skip routing block — we're now in the inner subgraph's body.
+            },
         };
 
         let outcome: OutcomeKey = match stage_result {

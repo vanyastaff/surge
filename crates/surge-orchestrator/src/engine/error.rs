@@ -42,6 +42,14 @@ pub enum EngineError {
     /// An unexpected internal condition occurred.
     #[error("internal engine error: {0}")]
     Internal(String),
+
+    /// A Loop node references a body subgraph that is not in `graph.subgraphs`.
+    #[error("loop body reference {0} not found in graph.subgraphs")]
+    LoopBodyMissing(surge_core::keys::SubgraphKey),
+
+    /// A Subgraph node references an inner subgraph that is not in `graph.subgraphs`.
+    #[error("subgraph reference {0} not found in graph.subgraphs")]
+    SubgraphMissing(surge_core::keys::SubgraphKey),
 }
 
 #[cfg(test)]
