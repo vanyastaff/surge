@@ -9,7 +9,8 @@ use tokio::task::JoinHandle;
 
 /// Terminal outcome of a run's execution.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunOutcome {
     /// The run reached a `TerminalKind::Success` node.
     Completed {
@@ -33,7 +34,8 @@ pub enum RunOutcome {
 /// Each variant corresponds 1:1 to an [`EventPayload`] that was successfully
 /// written to the event log (and therefore is durable).
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineRunEvent {
     /// A new event was persisted. Carries the payload + assigned seq.
     Persisted {

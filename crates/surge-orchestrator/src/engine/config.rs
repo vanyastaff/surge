@@ -25,13 +25,15 @@ pub enum SnapshotPolicy {
 }
 
 /// Per-run configuration; passed to `Engine::start_run` and `Engine::resume_run`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineRunConfig {
     /// Default human-input timeout if a `HumanGate` doesn't override.
     /// Default 5 minutes.
+    #[serde(with = "humantime_serde")]
     pub human_input_timeout: Duration,
     /// Per-stage timeout cap. `None` = use `AgentConfig::limits.timeout_seconds`
     /// for agent stages. Reserved for M6 daemon-level overrides.
+    #[serde(default, with = "humantime_serde::option")]
     pub stage_timeout_override: Option<Duration>,
 }
 
