@@ -298,11 +298,26 @@ impl Engine {
         }
     }
 
-    /// Cancel an in-flight run. Phase 11 implements the body.
-    pub async fn stop_run(&self, _run_id: RunId, _reason: String) -> Result<(), EngineError> {
-        Err(EngineError::Internal(
-            "Engine::stop_run not yet implemented (Phase 11)".into(),
-        ))
+    /// Cancel an in-flight run. Signals the cancellation token so the run task
+    /// will emit `RunAborted` and exit. Returns [`EngineError::RunNotFound`] if
+    /// no run with `run_id` is currently active.
+    pub async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError> {
+        let cancel = {
+            let runs = self.runs.read().await;
+            runs.get(&run_id).map(|a| a.cancel.clone())
+        };
+
+        match cancel {
+            Some(cancel) => {
+                tracing::info!(run_id = %run_id, reason = %reason, "stop_run requested");
+                cancel.cancel();
+                // Wait briefly for the task to wind down — best-effort.
+                // The task itself will emit RunAborted and exit.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Ok(())
+            }
+            None => Err(EngineError::RunNotFound(run_id)),
+        }
     }
 }
 
