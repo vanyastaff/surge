@@ -9,8 +9,11 @@ use surge_persistence::runs::seq::EventSeq;
 
 /// In-memory engine state reconstructed from storage.
 pub struct ReplayedState {
+    /// Cursor to resume from (from snapshot, or `graph.start` if none).
     pub cursor: Cursor,
+    /// Run memory rebuilt by replaying all events from seq 1 onwards.
     pub memory: RunMemory,
+    /// Graph extracted from the `PipelineMaterialized` event.
     pub graph: surge_core::graph::Graph,
     /// Set when the event log already contains a terminal event
     /// (`RunCompleted`, `RunFailed`, or `RunAborted`). When `Some`, the

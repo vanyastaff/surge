@@ -11,8 +11,11 @@ use surge_core::run_state::RunMemory;
 /// One ACP tool call observed via the bridge facade.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
+    /// Opaque identifier from the ACP protocol; used to route the result back.
     pub call_id: String,
+    /// Registered tool name (e.g. `"read_file"`, `"shell_exec"`).
     pub tool: String,
+    /// Raw JSON arguments supplied by the agent.
     pub arguments: serde_json::Value,
 }
 
@@ -23,25 +26,43 @@ pub struct ToolCall {
 /// Engine wraps/unwraps at the boundary in `stage::agent`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolResultPayload {
-    Ok { content: serde_json::Value },
-    Error { message: String },
-    Unsupported { message: String },
+    /// The tool completed successfully; `content` is the JSON result.
+    Ok {
+        /// JSON payload returned to the agent.
+        content: serde_json::Value,
+    },
+    /// The tool failed; `message` describes the error.
+    Error {
+        /// Human-readable error description returned to the agent.
+        message: String,
+    },
+    /// The tool name is not recognized by this dispatcher.
+    Unsupported {
+        /// Reason string explaining which tool was not found.
+        message: String,
+    },
+    /// The tool call was cancelled (e.g. the run was aborted mid-call).
     Cancelled,
 }
 
 /// Per-call context handed to the dispatcher.
 pub struct ToolDispatchContext<'a> {
+    /// Identifier of the current run.
     pub run_id: RunId,
+    /// Identifier of the ACP session that issued the tool call.
     pub session_id: SessionId,
+    /// Absolute path to the isolated git worktree for this run.
     pub worktree_root: &'a Path,
+    /// Accumulated run memory (artifacts, outcomes, costs).
     pub run_memory: &'a RunMemory,
 }
 
 /// Routes non-special ACP tool calls to implementations. Engine calls
-/// `dispatch` for every ToolCall whose name is not `report_stage_outcome`
+/// `dispatch` for every `ToolCall` whose name is not `report_stage_outcome`
 /// or `request_human_input` (those are engine-handled).
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync {
+    /// Dispatch a single tool call and return the result payload.
     async fn dispatch(
         &self,
         ctx: &ToolDispatchContext<'_>,

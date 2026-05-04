@@ -2,8 +2,10 @@
 
 use std::time::Duration;
 
+/// Top-level engine configuration, shared across all runs.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
+    /// Controls when the engine persists a snapshot to storage.
     pub snapshot_policy: SnapshotPolicy,
 }
 
@@ -15,18 +17,20 @@ impl Default for EngineConfig {
     }
 }
 
+/// Controls when the engine writes a snapshot blob to storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotPolicy {
     /// Snapshot after every successful stage. M5 default and only variant.
     StageBoundary,
 }
 
+/// Per-run configuration; passed to `Engine::start_run` and `Engine::resume_run`.
 #[derive(Debug, Clone)]
 pub struct EngineRunConfig {
-    /// Default human-input timeout if a HumanGate doesn't override.
+    /// Default human-input timeout if a `HumanGate` doesn't override.
     /// Default 5 minutes.
     pub human_input_timeout: Duration,
-    /// Per-stage timeout cap. None = use AgentConfig::limits.timeout_seconds
+    /// Per-stage timeout cap. `None` = use `AgentConfig::limits.timeout_seconds`
     /// for agent stages. Reserved for M6 daemon-level overrides.
     pub stage_timeout_override: Option<Duration>,
 }

@@ -7,12 +7,19 @@ use surge_core::notify_config::NotifyConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_persistence::runs::run_writer::RunWriter;
 
+/// Parameters for executing a single `NodeKind::Notify` stage.
 pub struct NotifyStageParams<'a> {
+    /// Key of the notify node being executed.
     pub node: &'a NodeKey,
+    /// Notify node configuration (channel, template, on-failure action).
     pub notify_config: &'a NotifyConfig,
+    /// Run writer for persisting the `OutcomeReported` event.
     pub writer: &'a RunWriter,
 }
 
+/// Execute a single `NodeKind::Notify` stage (M5 stub: log-only).
+///
+/// Always returns the `"delivered"` outcome. Real channel delivery is M6+.
 pub async fn execute_notify_stage(p: NotifyStageParams<'_>) -> StageResult {
     tracing::info!(node = %p.node, "notify stage (M5 stub: log-only)");
     let outcome = OutcomeKey::try_from("delivered")

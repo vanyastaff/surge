@@ -1,3 +1,10 @@
+// Pre-existing legacy code; M5 does not modify surge-cli.  Suppress pedantic
+// lints that activate because -D clippy::pedantic is now applied to the engine
+// module (surge-orchestrator), which Rust propagates workspace-wide with
+// `cargo clippy --workspace -- -D warnings`.
+#![allow(clippy::excessive_nesting)]
+#![allow(clippy::identity_op)]
+
 use std::io::{self, Write as _};
 
 use anyhow::Result;

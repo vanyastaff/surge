@@ -6,6 +6,7 @@ use crate::engine::handle::{EngineRunEvent, RunOutcome};
 use crate::engine::routing::next_node_after;
 use crate::engine::stage::agent::{execute_agent_stage, AgentStageParams};
 use crate::engine::stage::branch::{execute_branch_stage, BranchStageParams};
+use crate::engine::stage::human_gate::{execute_human_gate_stage, HumanGateStageParams};
 use crate::engine::stage::notify::{execute_notify_stage, NotifyStageParams};
 use crate::engine::stage::terminal::{execute_terminal_stage, TerminalOutcome, TerminalStageParams};
 use crate::engine::stage::StageError;
@@ -46,6 +47,7 @@ pub(crate) struct RunTaskParams {
     pub tool_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
     let mut cursor = params
         .resume_cursor
@@ -68,12 +70,11 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             return RunOutcome::Aborted { reason };
         }
 
-        let node = match params.graph.nodes.get(&cursor.node) {
-            Some(n) => n.clone(),
-            None => {
-                let err = format!("cursor at unknown node {}", cursor.node);
-                return failed(&params, err).await;
-            }
+        let node = if let Some(n) = params.graph.nodes.get(&cursor.node) {
+            n.clone()
+        } else {
+            let err = format!("cursor at unknown node {}", cursor.node);
+            return failed(&params, err).await;
         };
 
         // Emit StageEntered.
@@ -134,7 +135,6 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             NodeConfig::HumanGate(cfg) => {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 params.gate_resolutions.lock().await.insert(cursor.node.clone(), tx);
-                use crate::engine::stage::human_gate::{execute_human_gate_stage, HumanGateStageParams};
                 let r = execute_human_gate_stage(HumanGateStageParams {
                     node: &cursor.node,
                     gate_config: cfg,

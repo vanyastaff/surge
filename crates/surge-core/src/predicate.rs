@@ -82,22 +82,12 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    #[derive(Default)]
     struct MockCtx {
         outcomes: HashMap<NodeKey, OutcomeKey>,
         artifacts: HashMap<String, u64>,
         env: HashMap<String, String>,
         files: Vec<PathBuf>,
-    }
-
-    impl Default for MockCtx {
-        fn default() -> Self {
-            Self {
-                outcomes: HashMap::new(),
-                artifacts: HashMap::new(),
-                env: HashMap::new(),
-                files: Vec::new(),
-            }
-        }
     }
 
     impl PredicateContext for MockCtx {

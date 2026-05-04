@@ -5,12 +5,25 @@ use surge_core::graph::Graph;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use thiserror::Error;
 
+/// Errors that can occur when determining the next node after a stage outcome.
 #[derive(Debug, Error, PartialEq)]
 pub enum RoutingError {
+    /// No edge in the graph matches the `(from_node, outcome)` pair.
     #[error("no edge from node {from} matches outcome {outcome}")]
-    NoMatchingEdge { from: NodeKey, outcome: OutcomeKey },
+    NoMatchingEdge {
+        /// Source node key.
+        from: NodeKey,
+        /// Outcome key that produced no match.
+        outcome: OutcomeKey,
+    },
+    /// More than one edge matches — parallel fan-out requires M6.
     #[error("multiple edges from node {from} match outcome {outcome} (parallel fan-out — M6)")]
-    MultipleMatches { from: NodeKey, outcome: OutcomeKey },
+    MultipleMatches {
+        /// Source node key.
+        from: NodeKey,
+        /// Outcome key that matched multiple edges.
+        outcome: OutcomeKey,
+    },
 }
 
 /// Find the next node after `current` produces `outcome`.

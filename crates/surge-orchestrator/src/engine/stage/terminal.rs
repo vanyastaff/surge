@@ -6,18 +6,35 @@ use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_persistence::runs::run_writer::RunWriter;
 
+/// Outcome produced by a `NodeKind::Terminal` stage.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TerminalOutcome {
-    Completed { node: NodeKey },
-    Failed { error: String },
+    /// The run completed successfully at this terminal node.
+    Completed {
+        /// Key of the terminal node that ended the run.
+        node: NodeKey,
+    },
+    /// The run terminated with a failure.
+    Failed {
+        /// Human-readable description of the failure.
+        error: String,
+    },
 }
 
+/// Parameters for executing a single `NodeKind::Terminal` stage.
 pub struct TerminalStageParams<'a> {
+    /// Key of the terminal node being executed.
     pub node: &'a NodeKey,
+    /// Terminal node configuration (kind + optional message).
     pub terminal_config: &'a TerminalConfig,
+    /// Run writer for persisting the run-level terminal event.
     pub writer: &'a RunWriter,
 }
 
+/// Execute a single `NodeKind::Terminal` stage.
+///
+/// Emits `RunCompleted` (success) or `RunFailed` (failure / aborted) and
+/// returns the corresponding [`TerminalOutcome`].
 pub async fn execute_terminal_stage(p: TerminalStageParams<'_>) -> Result<TerminalOutcome, StageError> {
     match &p.terminal_config.kind {
         TerminalKind::Success => {
@@ -74,7 +91,7 @@ mod tests {
         .unwrap();
         match outcome {
             TerminalOutcome::Completed { node: n } => assert_eq!(n.as_ref(), "end"),
-            other => panic!("expected Completed, got {other:?}"),
+            other @ TerminalOutcome::Failed { .. } => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -101,7 +118,7 @@ mod tests {
         .unwrap();
         match outcome {
             TerminalOutcome::Failed { error } => assert_eq!(error, "oops"),
-            other => panic!("expected Failed, got {other:?}"),
+            other @ TerminalOutcome::Completed { .. } => panic!("expected Failed, got {other:?}"),
         }
     }
 }

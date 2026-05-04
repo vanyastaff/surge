@@ -3,6 +3,7 @@
 //! Since surge-ui is a GPUI-based desktop application, full automated UI testing
 //! is not feasible. These tests verify the integration points between the UI
 //! components and the gate approval system.
+#![allow(clippy::ptr_arg)]
 //!
 //! For full manual E2E testing, see: MANUAL_TESTING_GUIDE.md
 

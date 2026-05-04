@@ -10,14 +10,24 @@ use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 
+/// Parameters for executing a single `NodeKind::Branch` stage.
 pub struct BranchStageParams<'a> {
+    /// Key of the branch node being evaluated.
     pub node: &'a NodeKey,
+    /// Branch configuration: predicate arms and default outcome.
     pub branch_config: &'a BranchConfig,
+    /// Run writer for persisting `OutcomeReported` events.
     pub writer: &'a RunWriter,
+    /// Accumulated run memory used to evaluate predicates.
     pub run_memory: &'a RunMemory,
+    /// Absolute path to the isolated git worktree (used for `FileExists` predicates).
     pub worktree_root: &'a Path,
 }
 
+/// Execute a single `NodeKind::Branch` stage.
+///
+/// Evaluates each predicate arm in order; the first matching arm's outcome is
+/// returned. If no arm matches, the `default_outcome` is returned.
 pub async fn execute_branch_stage(p: BranchStageParams<'_>) -> StageResult {
     let ctx = EnginePredicateContext {
         run_memory: p.run_memory,

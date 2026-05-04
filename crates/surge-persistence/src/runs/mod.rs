@@ -38,6 +38,8 @@
     clippy::unused_async,
     // Block nesting in async match arms / writer task is acceptable.
     clippy::excessive_nesting,
+    // views.rs exhaustive match + wildcard fallback: both arms are intentional.
+    clippy::match_same_arms,
 )]
 
 pub mod clock;

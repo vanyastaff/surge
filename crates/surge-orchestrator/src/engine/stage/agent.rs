@@ -6,19 +6,26 @@
 //! Phase 6.3: tool dispatch for non-injected tools + token usage persistence.
 //! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use surge_acp::bridge::event::BridgeEvent;
+use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
 use surge_core::agent_config::AgentConfig;
+use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
+use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 use surge_persistence::runs::run_writer::RunWriter;
 
 use crate::engine::sandbox_factory::build_sandbox;
+use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 use crate::engine::stage::{StageError, StageResult};
+use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload};
 
 /// Parameters for executing a single agent stage.
 pub struct AgentStageParams<'a> {
@@ -72,9 +79,8 @@ pub struct AgentStageParams<'a> {
 /// Returns [`StageError::AgentCrashed`] if the session ends without reporting
 /// an outcome.
 /// Returns [`StageError::Storage`] if event persistence fails.
+#[allow(clippy::too_many_lines)]
 pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
-    use surge_acp::bridge::event::BridgeEvent;
-    use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 
     // Build SessionConfig. Bindings + prompt are resolved below (Phase 6.4).
     let sandbox = build_sandbox(p.agent_config.sandbox_override.as_ref());
@@ -87,7 +93,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         tools: vec![],
         sandbox,
         permission_policy: PermissionPolicy::default(),
-        bindings: Default::default(),
+        bindings: BTreeMap::default(),
     };
 
     // Subscribe to events BEFORE opening the session, so we don't miss the
@@ -108,8 +114,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
-
-    use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 
     let resolved_bindings = resolve_bindings(
         &p.agent_config.bindings,
@@ -196,9 +200,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             BridgeEvent::ToolCall { call_id, tool, args_redacted_json, meta, .. }
                 if !meta.injected =>
             {
-                use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload};
-                use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
-                use surge_core::content_hash::ContentHash;
 
                 // Parse args from JSON for the dispatcher.
                 let arguments: serde_json::Value =
@@ -233,10 +234,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     EngineResultPayload::Ok { content } => {
                         ContentHash::compute(content.to_string().as_bytes())
                     }
-                    EngineResultPayload::Error { message } => {
-                        ContentHash::compute(message.as_bytes())
-                    }
-                    EngineResultPayload::Unsupported { message } => {
+                    EngineResultPayload::Error { message }
+                    | EngineResultPayload::Unsupported { message } => {
                         ContentHash::compute(message.as_bytes())
                     }
                     EngineResultPayload::Cancelled => ContentHash::compute(b"cancelled"),
@@ -282,7 +281,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .map_err(|e| StageError::Storage(e.to_string()))?;
             }
             BridgeEvent::HumanInputRequested { call_id, question, context, .. } => {
-                use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
 
                 let prompt = match &context {
                     Some(ctx) => format!("{question}\n\n{ctx}"),
@@ -308,53 +306,50 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         Ok(v) => Some(v),
                         Err(_) => None, // sender dropped (run aborted)
                     },
-                    _ = tokio::time::sleep(p.human_input_timeout) => None,
+                    () = tokio::time::sleep(p.human_input_timeout) => None,
                 };
 
                 p.tool_resolutions.lock().await.remove(&call_id);
 
-                match resolved {
-                    Some(response) => {
-                        p.writer
-                            .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
-                                node: p.node.clone(),
-                                call_id: Some(call_id.clone()),
-                                response: response.clone(),
-                            }))
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                        p.bridge
-                            .reply_to_tool(
-                                session_id,
-                                call_id,
-                                AcpResultPayload::Ok { result_json: response.to_string() },
-                            )
-                            .await
-                            .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
-                    }
-                    None => {
-                        p.writer
-                            .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
-                                node: p.node.clone(),
-                                call_id: Some(call_id.clone()),
-                                elapsed_seconds: p.human_input_timeout.as_secs() as u32,
-                            }))
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                        p.bridge
-                            .reply_to_tool(
-                                session_id,
-                                call_id,
-                                AcpResultPayload::Error { message: "human input timed out".into() },
-                            )
-                            .await
-                            .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
-                        // M5 fail-fast: timeout halts the stage.
-                        return Err(StageError::HumanGateRejected);
-                    }
+                if let Some(response) = resolved {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
+                            node: p.node.clone(),
+                            call_id: Some(call_id.clone()),
+                            response: response.clone(),
+                        }))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    p.bridge
+                        .reply_to_tool(
+                            session_id,
+                            call_id,
+                            AcpResultPayload::Ok { result_json: response.to_string() },
+                        )
+                        .await
+                        .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                } else {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
+                            node: p.node.clone(),
+                            call_id: Some(call_id.clone()),
+                            elapsed_seconds: u32::try_from(p.human_input_timeout.as_secs()).unwrap_or(u32::MAX),
+                        }))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    p.bridge
+                        .reply_to_tool(
+                            session_id,
+                            call_id,
+                            AcpResultPayload::Error { message: "human input timed out".into() },
+                        )
+                        .await
+                        .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                    // M5 fail-fast: timeout halts the stage.
+                    return Err(StageError::HumanGateRejected);
                 }
             }
-            _ => continue,
+            _ => {}
         }
     };
 
@@ -374,19 +369,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     Ok(outcome)
 }
 
-fn event_session_id(
-    event: &surge_acp::bridge::event::BridgeEvent,
-) -> Option<surge_core::id::SessionId> {
-    use surge_acp::bridge::event::BridgeEvent;
+fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     match event {
-        BridgeEvent::SessionEstablished { session, .. } => Some(*session),
-        BridgeEvent::AgentMessage { session, .. } => Some(*session),
-        BridgeEvent::TokenUsage { session, .. } => Some(*session),
-        BridgeEvent::ToolCall { session, .. } => Some(*session),
-        BridgeEvent::ToolResult { session, .. } => Some(*session),
-        BridgeEvent::OutcomeReported { session, .. } => Some(*session),
-        BridgeEvent::HumanInputRequested { session, .. } => Some(*session),
-        BridgeEvent::SessionEnded { session, .. } => Some(*session),
+        BridgeEvent::SessionEstablished { session, .. }
+        | BridgeEvent::AgentMessage { session, .. }
+        | BridgeEvent::TokenUsage { session, .. }
+        | BridgeEvent::ToolCall { session, .. }
+        | BridgeEvent::ToolResult { session, .. }
+        | BridgeEvent::OutcomeReported { session, .. }
+        | BridgeEvent::HumanInputRequested { session, .. }
+        | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
     }
 }

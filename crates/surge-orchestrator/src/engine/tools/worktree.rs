@@ -6,6 +6,10 @@ use crate::engine::tools::{
 use async_trait::async_trait;
 use std::path::PathBuf;
 
+/// Maximum bytes of stdout/stderr to capture per shell command.
+/// Longer output is tail-truncated with a marker line.
+const TAIL_CAP: usize = 64 * 1024;
+
 fn truncate_with_marker(s: String, cap: usize) -> String {
     if s.len() <= cap {
         s
@@ -21,38 +25,41 @@ fn truncate_with_marker(s: String, cap: usize) -> String {
     }
 }
 
+/// Tool dispatcher that constrains all file and shell operations to the run's
+/// isolated git worktree. Prevents path-traversal attacks.
 pub struct WorktreeToolDispatcher {
     worktree_root: PathBuf,
 }
 
 impl WorktreeToolDispatcher {
+    /// Create a new dispatcher rooted at `worktree_root`.
+    ///
+    /// The path is canonicalized on construction; if canonicalization fails
+    /// (e.g. the directory doesn't exist yet) the original path is kept.
+    #[must_use]
     pub fn new(worktree_root: PathBuf) -> Self {
         let canonical = std::fs::canonicalize(&worktree_root).unwrap_or(worktree_root);
         Self { worktree_root: canonical }
     }
 
+    /// Return the canonicalized worktree root path.
+    #[must_use]
     pub fn worktree_root(&self) -> &std::path::Path {
         &self.worktree_root
     }
 
     async fn read_file(&self, call: &ToolCall) -> ToolResultPayload {
-        let args = match call.arguments.as_object() {
-            Some(o) => o,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "read_file: arguments must be an object".into(),
-                }
-            }
+        let Some(args) = call.arguments.as_object() else {
+            return ToolResultPayload::Error {
+                message: "read_file: arguments must be an object".into(),
+            };
         };
-        let rel_path = match args.get("path").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "read_file: missing 'path' arg".into(),
-                }
-            }
+        let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
+            return ToolResultPayload::Error {
+                message: "read_file: missing 'path' arg".into(),
+            };
         };
-        let binary = args.get("binary").and_then(|v| v.as_bool()).unwrap_or(false);
+        let binary = args.get("binary").and_then(serde_json::Value::as_bool).unwrap_or(false);
         let abs = self.worktree_root.join(rel_path);
         let canonical = match std::fs::canonicalize(&abs) {
             Ok(p) => p,
@@ -101,41 +108,29 @@ impl WorktreeToolDispatcher {
     }
 
     async fn write_file(&self, call: &ToolCall) -> ToolResultPayload {
-        let args = match call.arguments.as_object() {
-            Some(o) => o,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "write_file: arguments must be an object".into(),
-                }
-            }
+        let Some(args) = call.arguments.as_object() else {
+            return ToolResultPayload::Error {
+                message: "write_file: arguments must be an object".into(),
+            };
         };
-        let rel_path = match args.get("path").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "write_file: missing 'path' arg".into(),
-                }
-            }
+        let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
+            return ToolResultPayload::Error {
+                message: "write_file: missing 'path' arg".into(),
+            };
         };
-        let content = match args.get("content").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "write_file: missing 'content' arg".into(),
-                }
-            }
+        let Some(content) = args.get("content").and_then(|v| v.as_str()) else {
+            return ToolResultPayload::Error {
+                message: "write_file: missing 'content' arg".into(),
+            };
         };
         let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("overwrite");
         let abs = self.worktree_root.join(rel_path);
         // For write paths, the parent must canonicalize within worktree;
         // the leaf may not yet exist.
-        let parent = match abs.parent() {
-            Some(p) => p,
-            None => {
-                return ToolResultPayload::Error {
-                    message: format!("write_file: invalid path {}", abs.display()),
-                }
-            }
+        let Some(parent) = abs.parent() else {
+            return ToolResultPayload::Error {
+                message: format!("write_file: invalid path {}", abs.display()),
+            };
         };
         let canonical_parent = match std::fs::canonicalize(parent) {
             Ok(p) => p,
@@ -197,21 +192,15 @@ impl WorktreeToolDispatcher {
     }
 
     async fn shell_exec(&self, call: &ToolCall) -> ToolResultPayload {
-        let args = match call.arguments.as_object() {
-            Some(o) => o,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "shell_exec: arguments must be an object".into(),
-                }
-            }
+        let Some(args) = call.arguments.as_object() else {
+            return ToolResultPayload::Error {
+                message: "shell_exec: arguments must be an object".into(),
+            };
         };
-        let command = match args.get("command").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResultPayload::Error {
-                    message: "shell_exec: missing 'command' arg".into(),
-                }
-            }
+        let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
+            return ToolResultPayload::Error {
+                message: "shell_exec: missing 'command' arg".into(),
+            };
         };
         let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
             self.worktree_root.join(rel)
@@ -220,7 +209,7 @@ impl WorktreeToolDispatcher {
         };
         let timeout_secs = args
             .get("timeout_seconds")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(300);
 
         let mut cmd = if cfg!(windows) {
@@ -261,7 +250,6 @@ impl WorktreeToolDispatcher {
             }
         };
 
-        const TAIL_CAP: usize = 64 * 1024;
         let stdout = truncate_with_marker(String::from_utf8_lossy(&output.stdout).into_owned(), TAIL_CAP);
         let stderr = truncate_with_marker(String::from_utf8_lossy(&output.stderr).into_owned(), TAIL_CAP);
         let exit_code = output.status.code().unwrap_or(-1);

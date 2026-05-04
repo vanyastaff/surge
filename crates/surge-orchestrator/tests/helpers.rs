@@ -143,6 +143,7 @@ pub fn discover_agents() -> AgentDiscovery {
 ///
 /// Returns true if at least one agent (Claude, Copilot, Codex, or Gemini) is found.
 #[must_use]
+#[allow(dead_code)]
 pub fn has_any_agent() -> bool {
     let mut discovery = discover_agents();
     let registry = Registry::builtin();

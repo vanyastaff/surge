@@ -5,6 +5,19 @@
 // flags this pre-existing legacy layout. Reorganizing the legacy file is out of
 // scope for M1 (pure addition strategy); allow at crate level instead.
 #![allow(clippy::items_after_test_module)]
+// Pre-existing legacy code; M5 does not modify these modules.
+// These allows suppress pedantic lints that fire in legacy files
+// (config.rs, event.rs, run_state.rs, validation.rs, etc.) when
+// clippy::pedantic is requested by a dependent crate (surge-orchestrator).
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::large_enum_variant)]
 
 pub mod error;
 

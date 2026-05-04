@@ -7,6 +7,7 @@
 //! - Budget warnings trigger at configured thresholds
 //!
 //! These tests use programmatically created test data to avoid requiring a real ACP agent.
+#![allow(clippy::identity_op)]
 
 use std::path::PathBuf;
 use surge_core::id::{SpecId, SubtaskId, TaskId};

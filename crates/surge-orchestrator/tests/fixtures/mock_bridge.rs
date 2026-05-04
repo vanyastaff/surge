@@ -52,6 +52,7 @@ impl MockBridge {
 
     /// Pin the `SessionId` that the next `open_session` call will return.
     /// The id is consumed (cleared) after one use.
+    #[allow(dead_code)]
     pub async fn pin_next_session_id(&self, id: SessionId) {
         *self.pinned_session_id.lock().await = Some(id);
     }

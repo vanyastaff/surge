@@ -13,12 +13,14 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
 
+/// Central orchestration engine. Drives one or more concurrent runs, each
+/// executing a frozen [`Graph`] through ACP sessions and persistence writes.
 pub struct Engine {
     bridge: Arc<dyn BridgeFacade>,
     storage: Arc<surge_persistence::runs::Storage>,
     tool_dispatcher: Arc<dyn ToolDispatcher>,
     config: Arc<EngineConfig>,
-    /// Active runs indexed by RunId. Each entry holds the per-run resolution
+    /// Active runs indexed by `RunId`. Each entry holds the per-run resolution
     /// senders + cancellation token so engine-level methods (resolve, stop)
     /// can route into the right task.
     runs: Arc<tokio::sync::RwLock<HashMap<RunId, ActiveRun>>>,
@@ -31,6 +33,7 @@ pub(crate) struct ActiveRun {
 }
 
 impl Engine {
+    /// Create a new `Engine` wired to the given bridge, storage, and tool dispatcher.
     pub fn new(
         bridge: Arc<dyn BridgeFacade>,
         storage: Arc<surge_persistence::runs::Storage>,
@@ -256,44 +259,40 @@ impl Engine {
             .get(&run_id)
             .ok_or(EngineError::RunNotFound(run_id))?;
 
-        match call_id {
-            Some(call_id_str) => {
-                // Tool-driven resolution.
-                let mut tools = active.tool_resolutions.lock().await;
-                let tx = tools
-                    .remove(&call_id_str)
-                    .ok_or_else(|| EngineError::Internal(format!("no pending tool call '{call_id_str}'")))?;
-                tx.send(response)
-                    .map_err(|_| EngineError::Internal("tool resolution receiver dropped".into()))?;
-                Ok(())
-            }
-            None => {
-                // HumanGate resolution. Look up by extracting outcome from response.
-                let outcome_str = response
-                    .get("outcome")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| EngineError::Internal("HumanGate resolution missing 'outcome' field".into()))?;
-                let outcome = surge_core::keys::OutcomeKey::try_from(outcome_str)
-                    .map_err(|e| EngineError::Internal(format!("invalid outcome: {e}")))?;
+        if let Some(call_id_str) = call_id {
+            // Tool-driven resolution.
+            let mut tools = active.tool_resolutions.lock().await;
+            let tx = tools
+                .remove(&call_id_str)
+                .ok_or_else(|| EngineError::Internal(format!("no pending tool call '{call_id_str}'")))?;
+            tx.send(response)
+                .map_err(|_| EngineError::Internal("tool resolution receiver dropped".into()))?;
+            Ok(())
+        } else {
+            // HumanGate resolution. Look up by extracting outcome from response.
+            let outcome_str = response
+                .get("outcome")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| EngineError::Internal("HumanGate resolution missing 'outcome' field".into()))?;
+            let outcome = surge_core::keys::OutcomeKey::try_from(outcome_str)
+                .map_err(|e| EngineError::Internal(format!("invalid outcome: {e}")))?;
 
-                // M5 simplification: only one HumanGate active per run at a
-                // time, so take the first entry from the map.
-                let mut gates = active.gate_resolutions.lock().await;
-                let key = gates.keys().next().cloned();
-                match key {
-                    Some(k) => {
-                        let tx = gates
-                            .remove(&k)
-                            .expect("just looked up");
-                        tx.send(crate::engine::stage::human_gate::HumanGateResolution {
-                            outcome,
-                            response,
-                        })
-                        .map_err(|_| EngineError::Internal("gate resolution receiver dropped".into()))?;
-                        Ok(())
-                    }
-                    None => Err(EngineError::Internal("no pending HumanGate to resolve".into())),
-                }
+            // M5 simplification: only one HumanGate active per run at a
+            // time, so take the first entry from the map.
+            let mut gates = active.gate_resolutions.lock().await;
+            let key = gates.keys().next().cloned();
+            if let Some(k) = key {
+                let tx = gates
+                    .remove(&k)
+                    .expect("just looked up");
+                tx.send(crate::engine::stage::human_gate::HumanGateResolution {
+                    outcome,
+                    response,
+                })
+                .map_err(|_| EngineError::Internal("gate resolution receiver dropped".into()))?;
+                Ok(())
+            } else {
+                Err(EngineError::Internal("no pending HumanGate to resolve".into()))
             }
         }
     }

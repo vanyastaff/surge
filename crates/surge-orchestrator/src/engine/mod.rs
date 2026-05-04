@@ -4,6 +4,12 @@
 //! for the full design contract. M5 ships sequential-pipeline-only support;
 //! parallel/loops/subgraphs are M6 scope and rejected at run-start.
 
+#![warn(missing_docs)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+
 // Submodules added incrementally as later phases land.
 pub mod predicates;
 pub mod sandbox_factory;

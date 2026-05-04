@@ -1,24 +1,29 @@
-//! Resolve `Binding[]` from an AgentConfig into a template-substituted prompt.
+//! Resolve `Binding[]` from an `AgentConfig` into a template-substituted prompt.
 //!
 //! M5 supports:
-//! - ArtifactSource::RunArtifact: looks up by name in RunMemory.artifacts
-//! - ArtifactSource::NodeOutput: looks up the latest artifact produced by a node
-//! - ArtifactSource::Static: literal content
+//! - `ArtifactSource::RunArtifact`: looks up by name in `RunMemory::artifacts`
+//! - `ArtifactSource::NodeOutput`: looks up the latest artifact produced by a node
+//! - `ArtifactSource::Static`: literal content
 //!
-//! ArtifactSource::GlobPattern is M6+ — returns an error.
+//! `ArtifactSource::GlobPattern` is M6+ — returns an error.
 
 use std::path::Path;
 use surge_core::agent_config::{ArtifactSource, Binding, TemplateVar};
 use surge_core::run_state::RunMemory;
 
+/// Errors returned by [`resolve_bindings`].
 #[derive(Debug, thiserror::Error)]
 pub enum BindingError {
+    /// The referenced artifact name is not present in `RunMemory`.
     #[error("unknown artifact name: {0}")]
     UnknownArtifact(String),
+    /// The referenced node has not produced any artifacts yet.
     #[error("node {0} produced no artifacts")]
     NoArtifactsForNode(String),
+    /// `GlobPattern` bindings are not supported until M6.
     #[error("GlobPattern bindings are M6+; not supported in M5")]
     GlobUnsupported,
+    /// Reading the artifact file from disk failed.
     #[error("io error reading artifact {0}: {1}")]
     Io(String, std::io::Error),
 }

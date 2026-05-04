@@ -5,12 +5,15 @@ use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::predicate::PredicateContext;
 use surge_core::run_state::RunMemory;
 
+/// Engine implementation of [`PredicateContext`] backed by live [`RunMemory`].
 pub struct EnginePredicateContext<'a> {
+    /// Accumulated run memory: outcomes, artifacts, costs.
     pub run_memory: &'a RunMemory,
+    /// Absolute path to the isolated git worktree for this run.
     pub worktree_root: &'a Path,
 }
 
-impl<'a> PredicateContext for EnginePredicateContext<'a> {
+impl PredicateContext for EnginePredicateContext<'_> {
     fn outcome_of(&self, node: &NodeKey) -> Option<&OutcomeKey> {
         self.run_memory
             .outcomes
@@ -51,12 +54,12 @@ mod tests {
         let node = NodeKey::try_from("plan").unwrap();
         mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
             outcome: OutcomeKey::try_from("first").unwrap(),
-            summary: "".into(),
+            summary: String::new(),
             seq: 1,
         });
         mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
             outcome: OutcomeKey::try_from("second").unwrap(),
-            summary: "".into(),
+            summary: String::new(),
             seq: 2,
         });
         let ctx = EnginePredicateContext {
@@ -64,7 +67,7 @@ mod tests {
             worktree_root: Path::new("/tmp"),
         };
         assert_eq!(
-            ctx.outcome_of(&node).map(|o| o.as_ref()),
+            ctx.outcome_of(&node).map(std::convert::AsRef::as_ref),
             Some("second")
         );
     }
@@ -88,7 +91,7 @@ mod tests {
         let node = NodeKey::try_from("plan").unwrap();
         mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
             outcome: OutcomeKey::try_from("done").unwrap(),
-            summary: "".into(),
+            summary: String::new(),
             seq: 1,
         });
         let ctx = EnginePredicateContext {

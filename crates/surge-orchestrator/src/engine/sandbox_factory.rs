@@ -7,7 +7,7 @@ use surge_acp::bridge::sandbox::{AlwaysAllowSandbox, Sandbox};
 use surge_core::sandbox::SandboxConfig;
 
 /// Build a sandbox for an agent stage. `cfg = None` is the same as default
-/// `SandboxMode::WorkspaceWrite` (which in M5 still maps to AlwaysAllow).
+/// `SandboxMode::WorkspaceWrite` (which in M5 still maps to `AlwaysAllow`).
 #[must_use]
 pub fn build_sandbox(cfg: Option<&SandboxConfig>) -> Box<dyn Sandbox> {
     let _ = cfg; // M5: ignored. M4 will dispatch on cfg.mode.

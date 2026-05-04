@@ -79,5 +79,5 @@ async fn request_human_input_timeout_halts_run() {
 
     // Just exercise construction; real test body deferred to M5.1.
     let _engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
-    assert!(true, "engine constructed successfully");
+    // Construction succeeded — the let binding above is the assertion.
 }

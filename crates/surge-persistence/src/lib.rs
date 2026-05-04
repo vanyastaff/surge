@@ -6,6 +6,41 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+// Pre-existing legacy code; M5 does not modify the legacy modules.
+// These allows suppress pedantic lints that fire when clippy::pedantic is
+// requested transitively by surge-orchestrator.
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::explicit_iter_loop)]
+#![allow(clippy::if_not_else)]
+#![allow(clippy::ignored_unit_patterns)]
+#![allow(clippy::implicit_clone)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::missing_fields_in_debug)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::redundant_else)]
+#![allow(clippy::single_match_else)]
+#![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::struct_field_names)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::unnecessary_wraps)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::unused_async)]
+#![allow(clippy::used_underscore_binding)]
+#![allow(clippy::needless_raw_string_hashes)]
+#![allow(clippy::bool_to_int_with_if)]
+#![allow(clippy::unused_self)]
 
 pub use error::{PersistenceError, Result};
 

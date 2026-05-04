@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn loop_node_rejected_as_unsupported() {
-        use surge_core::loop_config::{ExitCondition, IterableSource, LoopConfig};
+        use surge_core::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode};
         use surge_core::keys::SubgraphKey;
 
         let key = NodeKey::try_from("loop1").unwrap();
@@ -122,8 +122,8 @@ mod tests {
                     body: SubgraphKey::try_from("body").unwrap(),
                     iteration_var_name: "item".into(),
                     exit_condition: ExitCondition::AllItems,
-                    on_iteration_failure: Default::default(),
-                    parallelism: Default::default(),
+                    on_iteration_failure: FailurePolicy::default(),
+                    parallelism: ParallelismMode::default(),
                     gate_after_each: false,
                 }),
             },

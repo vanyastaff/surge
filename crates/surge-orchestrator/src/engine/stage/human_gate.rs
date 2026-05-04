@@ -1,6 +1,6 @@
 //! `NodeKind::HumanGate` execution.
 //!
-//! M5 model: pause the run, emit HumanInputRequested, wait for either an
+//! M5 model: pause the run, emit `HumanInputRequested`, wait for either an
 //! external `Engine::resolve_human_input` call or the configured timeout.
 //! On timeout, apply `HumanGateConfig::on_timeout` (Reject / Escalate /
 //! Continue). M5 treats Escalate as Reject (no escalation channels) and
@@ -15,30 +15,41 @@ use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::oneshot;
 
+/// Parameters for executing a single `NodeKind::HumanGate` stage.
 pub struct HumanGateStageParams<'a> {
+    /// Key of the human-gate node being executed.
     pub node: &'a NodeKey,
+    /// Gate configuration: delivery channels, timeout, options.
     pub gate_config: &'a HumanGateConfig,
+    /// Run writer for persisting `HumanInputRequested` / `HumanInputResolved` events.
     pub writer: &'a RunWriter,
+    /// Accumulated run memory (currently unused in M5 rendering).
     pub run_memory: &'a RunMemory,
-    /// Receiver fed by `Engine::resolve_human_input`. None ⇒ test path.
+    /// Receiver fed by `Engine::resolve_human_input`. `None` ⇒ test path (timeout immediately).
     pub resolution_rx: Option<oneshot::Receiver<HumanGateResolution>>,
-    /// Default timeout from EngineRunConfig if the gate doesn't set one.
+    /// Default timeout sourced from `EngineRunConfig` if the gate doesn't override.
     pub default_timeout: Duration,
 }
 
+/// Resolution provided by an external caller (operator or automated test).
 #[derive(Debug, Clone)]
 pub struct HumanGateResolution {
+    /// The outcome key chosen by the operator.
     pub outcome: OutcomeKey,
+    /// Full JSON response payload (must contain an `"outcome"` field).
     pub response: serde_json::Value,
 }
 
+/// Execute a single `NodeKind::HumanGate` stage.
+///
+/// Emits `HumanInputRequested`, then waits for either an external
+/// `Engine::resolve_human_input` call or the configured timeout.
 pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResult {
     let summary = render_summary(&p.gate_config.summary, p.run_memory);
     let timeout = p
         .gate_config
         .timeout_seconds
-        .map(|s| Duration::from_secs(u64::from(s)))
-        .unwrap_or(p.default_timeout);
+        .map_or(p.default_timeout, |s| Duration::from_secs(u64::from(s)));
 
     let schema = build_options_schema(&p.gate_config.options);
 
@@ -53,51 +64,45 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
-    let outcome = match p.resolution_rx {
-        Some(rx) => {
-            tokio::select! {
-                resolved = rx => match resolved {
-                    Ok(res) => {
-                        p.writer
-                            .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
-                                node: p.node.clone(),
-                                call_id: None,
-                                response: res.response.clone(),
-                            }))
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                        Some(res.outcome)
-                    }
-                    Err(_) => None,
-                },
-                _ = tokio::time::sleep(timeout) => None,
-            }
+    let outcome = if let Some(rx) = p.resolution_rx {
+        tokio::select! {
+            resolved = rx => match resolved {
+                Ok(res) => {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
+                            node: p.node.clone(),
+                            call_id: None,
+                            response: res.response.clone(),
+                        }))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    Some(res.outcome)
+                }
+                Err(_) => None,
+            },
+            () = tokio::time::sleep(timeout) => None,
         }
-        None => {
-            tokio::time::sleep(timeout).await;
-            None
-        }
+    } else {
+        tokio::time::sleep(timeout).await;
+        None
     };
 
-    let final_outcome = match outcome {
-        Some(o) => o,
-        None => {
-            p.writer
-                .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
-                    node: p.node.clone(),
-                    call_id: None,
-                    elapsed_seconds: timeout.as_secs() as u32,
-                }))
-                .await
-                .map_err(|e| StageError::Storage(e.to_string()))?;
-            match p.gate_config.on_timeout {
-                TimeoutAction::Reject | TimeoutAction::Escalate => {
-                    return Err(StageError::HumanGateRejected);
-                }
-                TimeoutAction::Continue => {
-                    // M5 has no default_outcome on HumanGateConfig; documented gap.
-                    return Err(StageError::HumanGateContinueWithoutDefault);
-                }
+    let Some(final_outcome) = outcome else {
+        p.writer
+            .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
+                node: p.node.clone(),
+                call_id: None,
+                elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        match p.gate_config.on_timeout {
+            TimeoutAction::Reject | TimeoutAction::Escalate => {
+                return Err(StageError::HumanGateRejected);
+            }
+            TimeoutAction::Continue => {
+                // M5 has no default_outcome on HumanGateConfig; documented gap.
+                return Err(StageError::HumanGateContinueWithoutDefault);
             }
         }
     };

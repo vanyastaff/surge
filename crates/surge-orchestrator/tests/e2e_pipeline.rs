@@ -3,6 +3,7 @@
 //! Verifies the full orchestrator pipeline with real agents, including:
 //! - Spec validation
 //! - Git worktree creation
+#![allow(clippy::excessive_nesting)]
 //! - Agent session management
 //! - Subtask execution
 //! - QA review
