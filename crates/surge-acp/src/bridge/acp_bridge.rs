@@ -157,8 +157,27 @@ impl AcpBridge {
     /// - Reply to `request_human_input` with the human's actual answer
     /// - Reply to `report_stage_outcome` with `Ok` after persisting the outcome
     ///
-    /// If the session has ended or the `call_id` is unknown, returns the
-    /// appropriate `ReplyToToolError` variant.
+    /// On success: removes the `call_id` from the session's pending-replies
+    /// map and broadcasts `BridgeEvent::ToolResult { session, call_id, payload }`
+    /// for observability subscribers (engine event-log persisters, telemetry).
+    ///
+    /// **ACP wire-level caveat.** ACP v1 (SDK 0.10.4) has no client→agent
+    /// "tool result" RPC method; `SessionUpdate::ToolCall` is a one-way
+    /// agent→client notification. This method therefore does NOT deliver the
+    /// payload to the agent subprocess at the wire level — it's purely
+    /// internal Surge bookkeeping that closes the call-id loop and surfaces
+    /// the engine's result to observers. If a future Surge milestone needs
+    /// out-of-band tool delivery to the agent, the natural extension point
+    /// is `connection.ext_notification(...)` with a vendor-specific method.
+    ///
+    /// # Errors
+    /// - [`ReplyToToolError::SessionGone`] — no session with this id is
+    ///   currently open in the bridge.
+    /// - [`ReplyToToolError::UnknownCallId`] — the session is open but the
+    ///   `call_id` does not match any pending tool call (e.g. already replied,
+    ///   or the agent never fired this id).
+    /// - [`ReplyToToolError::Bridge`] — the worker thread is dead or the
+    ///   command channel is closed.
     pub async fn reply_to_tool(
         &self,
         session: SessionId,

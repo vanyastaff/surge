@@ -138,31 +138,8 @@ pub(crate) async fn bridge_loop(
                 payload,
                 reply,
             } => {
-                // M5 minimum: log the intent and acknowledge to the engine.
-                // Real ACP reply routing (looking up the outstanding response
-                // sender keyed by call_id and dispatching the payload) requires
-                // the worker to maintain per-session call-id state, which the
-                // M3 auto-reply path in handle_tool_call doesn't currently track.
-                //
-                // The M3 worker auto-replies inline (in handle_tool_call) with
-                // ToolResultPayload::Unsupported for non-injected tools. Routing
-                // explicit replies requires buffering the ACP ResponseSender for
-                // each outstanding call_id in a per-session map — a structural
-                // change beyond this task's scope. Track via EngineRunEvent.
-                //
-                // Known M5 limitation: engine integration tests against
-                // mock_acp_agent will surface any case where the agent waits on a
-                // non-injected tool reply and we silently drop it. Real fix
-                // requires deeper M3 worker refactoring — follow-up tracked
-                // separately.
-                tracing::warn!(
-                    session = ?session,
-                    call_id = %call_id,
-                    "BridgeCommand::ReplyToTool received but full ACP reply routing not yet \
-                     implemented in M3 worker; bridge auto-reply (if any) wins"
-                );
-                let _ = payload;
-                let _ = reply.send(Ok(()));
+                let result = reply_to_tool_impl(&sessions, &event_tx, session, call_id, payload);
+                let _ = reply.send(result);
             },
             BridgeCommand::Shutdown { reply } => {
                 close_all_sessions(&sessions, &event_tx, SessionEndReason::ForcedClose).await;
@@ -255,15 +232,13 @@ fn content_block_to_string(b: &agent_client_protocol::ContentBlock) -> String {
 async fn handle_tool_call(
     session_id: &SessionId,
     event_tx: &broadcast::Sender<BridgeEvent>,
-    // Reserved for Phase 10: when generic tool dispatch lands, track
-    // open tool calls in `state.open_tool_calls` for correlation with
-    // tool/result notifications.
-    _state: &Rc<RefCell<SessionStateInner>>,
+    state: &Rc<RefCell<SessionStateInner>>,
     sandbox: &dyn super::sandbox::Sandbox,
     secrets: &Arc<crate::shared::secrets::SecretsRedactor>,
     tool_call: agent_client_protocol::ToolCall,
 ) {
-    use crate::bridge::event::{ToolCallMeta, ToolResultPayload};
+    use crate::bridge::event::ToolCallMeta;
+    use crate::bridge::session_inner::OpenToolCall;
     use crate::bridge::tools::{REPORT_STAGE_OUTCOME, REQUEST_HUMAN_INPUT};
 
     // SDK 0.10.2 ToolCall shape:
@@ -276,6 +251,11 @@ async fn handle_tool_call(
         .unwrap_or_default();
     let args_redacted = secrets.redact_json(&args_json);
 
+    // `report_stage_outcome` is fire-and-forget at the engine layer:
+    // `BridgeEvent::OutcomeReported` does NOT carry `call_id`, so the engine
+    // has no handle to reply with. Therefore we deliberately do not register
+    // it in `open_tool_calls` — registering would just leak an entry until
+    // session close.
     if tool_name == REPORT_STAGE_OUTCOME {
         match parse_outcome_args(&args_json) {
             Ok((outcome, summary, artifacts)) => {
@@ -296,9 +276,22 @@ async fn handle_tool_call(
         return;
     }
 
+    // `request_human_input` does carry `call_id` in its dedicated event, and
+    // the engine replies via `reply_to_tool` after the human resolves. Track
+    // the call_id ONLY on a successful parse — on parse failure we emit an
+    // `Error` event with no call_id, so the engine never sees this id and
+    // can't clear it; registering would just leak an entry until session close.
     if tool_name == REQUEST_HUMAN_INPUT {
         match parse_human_input_args(&args_json) {
             Ok((question, context)) => {
+                state.borrow_mut().open_tool_calls.insert(
+                    call_id.clone(),
+                    OpenToolCall {
+                        tool_name: tool_name.clone(),
+                        mcp_id: None,
+                        injected: true,
+                    },
+                );
                 let _ = event_tx.send(BridgeEvent::HumanInputRequested {
                     session: *session_id,
                     call_id,
@@ -316,23 +309,35 @@ async fn handle_tool_call(
         return;
     }
 
-    // Generic tool call — emit ToolCall + auto-reply Unsupported (M3 stub per spec §5.3).
+    // Generic (non-injected) tool call. Register the call_id in per-session
+    // bookkeeping and emit `BridgeEvent::ToolCall`; the engine dispatches
+    // and calls back via `reply_to_tool`, which removes the entry and emits
+    // the matching `ToolResult` event. ACP itself has no client→agent
+    // tool-result protocol method — this map is Surge-internal observability
+    // state only.
+    //
+    // M3 used to auto-emit a `ToolResult { Unsupported }` here; M5.1 removes
+    // that so the engine's actual dispatcher result reaches observers without
+    // racing against a synthetic Unsupported.
+    state.borrow_mut().open_tool_calls.insert(
+        call_id.clone(),
+        OpenToolCall {
+            tool_name: tool_name.clone(),
+            mcp_id: None,
+            injected: false,
+        },
+    );
     let decision = sandbox.allows_tool(&tool_name, None);
     let _ = event_tx.send(BridgeEvent::ToolCall {
         session: *session_id,
-        call_id: call_id.clone(),
-        tool: tool_name.clone(),
+        call_id,
+        tool: tool_name,
         args_redacted_json: args_redacted,
         sandbox_decision: decision,
         meta: ToolCallMeta {
             mcp_id: None,
             injected: false,
         },
-    });
-    let _ = event_tx.send(BridgeEvent::ToolResult {
-        session: *session_id,
-        call_id,
-        payload: ToolResultPayload::Unsupported,
     });
 }
 
@@ -882,6 +887,68 @@ pub(crate) fn flush_pending_token_usage(
         });
         state.borrow_mut().last_token_usage_emitted = true;
     }
+}
+
+/// Handle `BridgeCommand::ReplyToTool` — engine-driven tool reply routing.
+///
+/// Looks up the session and the `call_id` in the per-session
+/// `open_tool_calls` map (populated by `handle_tool_call` when the agent
+/// fired the matching `SessionUpdate::ToolCall` notification). On a hit:
+/// removes the entry and broadcasts `BridgeEvent::ToolResult` carrying the
+/// engine-supplied payload. On a miss: returns `SessionGone` (unknown
+/// session) or `UnknownCallId` (session present but call_id not pending).
+///
+/// **ACP semantics caveat.** The ACP protocol (v1, SDK 0.10.4) has no
+/// client→agent "tool result" RPC method — `SessionUpdate::ToolCall` is a
+/// one-way agent→client notification. Surge's `reply_to_tool` therefore
+/// does *not* deliver the payload to the agent subprocess at the wire
+/// level; the agent has already moved on. The reply API exists so that the
+/// engine can correlate dispatcher results with the originating tool-call
+/// event for run-event persistence and observability subscribers. If a
+/// future Surge milestone needs out-of-band tool delivery to the agent,
+/// the natural extension point is `connection.ext_notification(...)` with
+/// a vendor-specific method — not covered by M5.1.
+///
+/// Synchronous (no async work needed) since broadcast emission is
+/// non-blocking. Kept as a free function to mirror the `*_impl` pattern of
+/// the other worker arms.
+fn reply_to_tool_impl(
+    sessions: &SessionMap,
+    event_tx: &broadcast::Sender<BridgeEvent>,
+    session: SessionId,
+    call_id: String,
+    payload: super::event::ToolResultPayload,
+) -> Result<(), super::error::ReplyToToolError> {
+    use super::error::ReplyToToolError;
+
+    // Look up the session entry and clone the inner-state Rc out from under
+    // the immutable borrow before mutating, so we never hold both borrows of
+    // the sessions map at once.
+    let inner = {
+        let map = sessions.borrow();
+        let Some(s) = map.get(&session) else {
+            return Err(ReplyToToolError::SessionGone);
+        };
+        s.inner.clone()
+    };
+
+    // Remove the call_id from open_tool_calls. If absent, this is either an
+    // engine bug (replying twice) or a stale call_id; surface as
+    // UnknownCallId so the caller can decide.
+    let removed = inner.borrow_mut().open_tool_calls.remove(&call_id);
+    if removed.is_none() {
+        return Err(ReplyToToolError::UnknownCallId(call_id));
+    }
+
+    // Broadcast the result for observability subscribers (engine
+    // execute_agent_stage, run-event persisters, telemetry).
+    let _ = event_tx.send(BridgeEvent::ToolResult {
+        session,
+        call_id,
+        payload,
+    });
+
+    Ok(())
 }
 
 /// Send a message to an existing ACP session.

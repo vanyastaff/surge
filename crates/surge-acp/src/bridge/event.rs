@@ -56,8 +56,10 @@ pub enum BridgeEvent {
         model: String,
     },
 
-    /// Generic tool call (not the engine-injected ones). Bridge auto-replies
-    /// `Unsupported` in M3; M5 will install a real dispatcher (spec §5.3).
+    /// Generic tool call (not the engine-injected ones). The bridge tracks
+    /// the `call_id` in its per-session pending-replies map and waits for the
+    /// engine to call `AcpBridge::reply_to_tool` with a dispatcher result;
+    /// the matching `ToolResult` event is broadcast on reply (M5.1).
     ToolCall {
         /// Session that invoked the tool.
         session: SessionId,
@@ -73,7 +75,11 @@ pub enum BridgeEvent {
         meta: ToolCallMeta,
     },
 
-    /// Result going back to the agent.
+    /// Result emitted by the bridge after the engine calls
+    /// `AcpBridge::reply_to_tool` for an outstanding `call_id`. Pure
+    /// observability event — ACP itself has no client→agent tool-result
+    /// protocol method, so the agent does not receive this payload at the
+    /// wire level. See `AcpBridge::reply_to_tool` for the contract.
     ToolResult {
         /// Session that owns this tool result.
         session: SessionId,
@@ -200,7 +206,8 @@ pub enum ToolResultPayload {
         /// Error message returned to the agent.
         message: String,
     },
-    /// M3 stub for non-injected tools. M5 replaces with real dispatch.
+    /// Engine indicated the tool is not supported. Used as a fallback when
+    /// the dispatcher has no handler for the requested tool.
     Unsupported,
 }
 
