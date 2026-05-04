@@ -1,35 +1,18 @@
 //! Integration test: 3-stage Plan → Execute → QA pipeline against a real
 //! `AcpBridge` driving `mock_acp_agent` subprocess. Acceptance #6.
 //!
-//! `#[ignore]`d by default — run with `cargo test -p surge-orchestrator
-//! --test engine_e2e_linear_pipeline -- --ignored`.
+//! `#[ignore]`d by default — run with:
 //!
-//! # Known M5 limitation — HANG_TIMEOUT failure mode
+//! ```bash
+//! cargo build -p surge-acp --bin mock_acp_agent
+//! cargo test -p surge-orchestrator --test engine_e2e_linear_pipeline -- --ignored
+//! ```
 //!
-//! This test hangs at the 60-second timeout rather than completing. Root cause:
-//!
-//! 1. `engine::stage::agent::execute_agent_stage` hardcodes
-//!    `AgentKind::Mock { args: vec![] }` — it is not possible to pass
-//!    `--scenario report_done` to mock_acp_agent without modifying the engine.
-//!
-//! 2. `mock_acp_agent` launched with no `--scenario` flag defaults to the
-//!    `echo` scenario, which emits `AgentMessageChunk` notifications but never
-//!    calls `report_stage_outcome`. The engine's `execute_agent_stage` event
-//!    loop therefore blocks forever waiting for `BridgeEvent::OutcomeReported`.
-//!
-//! Fix (M5+): one of:
-//!   a. Engine exposes `AgentKind` override per-stage (breaking change to `Graph`).
-//!   b. `AgentKind::Mock` in `execute_agent_stage` reads a per-test env var that
-//!      injects extra args (e.g. `SURGE_TEST_MOCK_EXTRA_ARGS=--scenario report_done`).
-//!   c. `mock_acp_agent` changes its default scenario from `echo` to `report_done`
-//!      (simplest — no engine change required).
-//!
-//! Option (c) is the smallest diff: changing the `Scenario::parse` fallback in
-//! `crates/surge-acp/src/bin/mock_acp_agent.rs` from `Self::Echo` to
-//! `Self::ReportDone` would make this test pass immediately.
-//!
-//! The test body is complete and structurally correct; it will pass as soon as
-//! the default mock scenario becomes `report_done`.
+//! Engine constructs `SessionConfig::agent_kind = AgentKind::Mock { args: vec![] }`
+//! and the bridge spawns `mock_acp_agent` with no scenario flag. The mock's
+//! default scenario is `report_done` (set in `mock_acp_agent::Scenario::parse`),
+//! so the agent auto-emits `report_stage_outcome { outcome: "done" }` after
+//! every prompt, advancing the pipeline through plan → execute → qa → end.
 
 mod fixtures;
 
@@ -58,12 +41,24 @@ use surge_persistence::runs::Storage;
 /// Cargo to the exact binary path. Outside of `cargo test` (e.g. manual `cargo
 /// run --test`), fall back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent[.exe]`.
 fn mock_agent_path() -> PathBuf {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_mock_acp_agent") {
-        return PathBuf::from(path);
-    }
-    let target = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".into());
+    // Cargo sets CARGO_BIN_EXE_<name> only for the binary's own crate's tests,
+    // not for cross-crate consumers — so we always fall through to discovery.
     let bin = if cfg!(windows) { "mock_acp_agent.exe" } else { "mock_acp_agent" };
-    PathBuf::from(target).join("debug").join(bin)
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        return PathBuf::from(target).join("debug").join(bin);
+    }
+    // Walk up from this test crate's manifest dir to the workspace root
+    // (where Cargo.lock lives), then target/debug/<bin>.
+    let mut cur = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        if cur.join("Cargo.lock").exists() {
+            return cur.join("target").join("debug").join(bin);
+        }
+        if !cur.pop() {
+            // Last resort: relative path (will fail-loud below).
+            return PathBuf::from("target").join("debug").join(bin);
+        }
+    }
 }
 
 /// Build an agent `Node` for use in the 3-stage graph.
