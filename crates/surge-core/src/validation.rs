@@ -79,6 +79,13 @@ pub enum ValidationErrorKind {
         count: usize,
         max: usize,
     },
+    /// A stage's `ToolOverride::mcp_add` references a server name not
+    /// declared in `RunConfig::mcp_servers`.
+    McpServerUndeclared { stage: String, server: String },
+    /// `McpServerRef::name` is empty.
+    McpServerNameEmpty,
+    /// `McpTransportConfig::Stdio::command` contains `..` segments.
+    McpCommandPathUnsafe { command: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,7 +132,10 @@ impl ValidationErrorKind {
             | Self::SubgraphReferenceCycle { .. }
             | Self::NodeKeyCollision { .. }
             | Self::NotifyMissingDelivered { .. }
-            | Self::LoopStaticTooLarge { .. } => Severity::Error,
+            | Self::LoopStaticTooLarge { .. }
+            | Self::McpServerUndeclared { .. }
+            | Self::McpServerNameEmpty
+            | Self::McpCommandPathUnsafe { .. } => Severity::Error,
         }
     }
 }
@@ -771,6 +781,78 @@ fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
             check_node(node, out);
         }
     }
+}
+
+/// Validate per-stage `ToolOverride::mcp_add` references resolve in
+/// the run-level registry. Returns errors for unresolved names.
+#[must_use]
+pub fn validate_mcp_references(
+    stage_name: &str,
+    stage_cfg: &crate::agent_config::AgentConfig,
+    registry: &[crate::mcp_config::McpServerRef],
+) -> Vec<ValidationError> {
+    let mut out = Vec::new();
+    let Some(overrides) = &stage_cfg.tool_overrides else {
+        return out;
+    };
+    let known: std::collections::HashSet<&str> =
+        registry.iter().map(|r| r.name.as_str()).collect();
+    for name in &overrides.mcp_add {
+        if !known.contains(name.as_str()) {
+            out.push(ValidationError {
+                kind: ValidationErrorKind::McpServerUndeclared {
+                    stage: stage_name.to_string(),
+                    server: name.clone(),
+                },
+                location: ErrorLocation::Graph,
+                message: format!(
+                    "stage `{stage_name}` references MCP server `{name}` \
+                     which is not declared in the run-level registry"
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// Validate a single `McpServerRef` for safety / well-formedness.
+#[must_use]
+pub fn validate_mcp_server_ref(
+    r: &crate::mcp_config::McpServerRef,
+) -> Vec<ValidationError> {
+    let mut out = Vec::new();
+    if r.name.is_empty() {
+        out.push(ValidationError {
+            kind: ValidationErrorKind::McpServerNameEmpty,
+            location: ErrorLocation::Graph,
+            message: "MCP server `name` must not be empty".into(),
+        });
+    }
+    match &r.transport {
+        crate::mcp_config::McpTransportConfig::Stdio { command, .. } => {
+            // Reject `..` traversal segments. Pure-name (no slash) and
+            // absolute paths are fine; only `..` as a path component is
+            // rejected. Adding a new transport variant will cause a
+            // compile-time exhaustiveness error here, forcing the validator
+            // to explicitly handle it.
+            let s = command.to_string_lossy();
+            if s.split(['/', '\\']).any(|seg| seg == "..") {
+                out.push(ValidationError {
+                    kind: ValidationErrorKind::McpCommandPathUnsafe {
+                        command: s.into_owned(),
+                    },
+                    location: ErrorLocation::Graph,
+                    message: format!(
+                        "MCP server `{}` command `{}` contains `..` path \
+                         traversal segments",
+                        r.name,
+                        command.display()
+                    ),
+                });
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1449,5 +1531,93 @@ mod tests {
                 "Notify-in-subgraph missing delivered must be caught: {errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn mcp_server_undeclared_in_tool_override_is_error() {
+        use crate::agent_config::{AgentConfig, NodeLimits, ToolOverride};
+        use crate::keys::ProfileKey;
+        use std::collections::BTreeMap;
+
+        let stage_cfg = AgentConfig {
+            profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+            prompt_overrides: None,
+            tool_overrides: Some(ToolOverride {
+                mcp_add: vec!["undeclared_server".into()],
+                mcp_remove: vec![],
+                skills_add: vec![],
+                skills_remove: vec![],
+                shell_allowlist_add: vec![],
+            }),
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: vec![],
+            rules_overrides: None,
+            limits: NodeLimits::default(),
+            hooks: vec![],
+            custom_fields: BTreeMap::new(),
+        };
+        let registry: Vec<crate::mcp_config::McpServerRef> = vec![]; // empty registry
+        let errors = crate::validation::validate_mcp_references(
+            "stage_x",
+            &stage_cfg,
+            &registry,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0].kind,
+            crate::validation::ValidationErrorKind::McpServerUndeclared { .. }
+        ));
+    }
+
+    #[test]
+    fn empty_server_name_is_error() {
+        use crate::mcp_config::{McpServerRef, McpTransportConfig};
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let r = McpServerRef {
+            name: "".into(),
+            transport: McpTransportConfig::Stdio {
+                command: PathBuf::from("nope"),
+                args: vec![],
+                env: HashMap::new(),
+            },
+            allowed_tools: None,
+            call_timeout: Duration::from_secs(60),
+            restart_on_crash: true,
+        };
+        let errors = crate::validation::validate_mcp_server_ref(&r);
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0].kind,
+            crate::validation::ValidationErrorKind::McpServerNameEmpty
+        ));
+    }
+
+    #[test]
+    fn command_path_with_dotdot_segment_is_error() {
+        use crate::mcp_config::{McpServerRef, McpTransportConfig};
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let r = McpServerRef {
+            name: "evil".into(),
+            transport: McpTransportConfig::Stdio {
+                command: PathBuf::from("../../../usr/bin/yes"),
+                args: vec![],
+                env: HashMap::new(),
+            },
+            allowed_tools: None,
+            call_timeout: Duration::from_secs(60),
+            restart_on_crash: true,
+        };
+        let errors = crate::validation::validate_mcp_server_ref(&r);
+        assert!(errors.iter().any(|e| matches!(
+            e.kind,
+            crate::validation::ValidationErrorKind::McpCommandPathUnsafe { .. }
+        )));
     }
 }
