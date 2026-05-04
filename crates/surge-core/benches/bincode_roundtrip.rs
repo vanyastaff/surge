@@ -15,6 +15,7 @@ fn event_serde_roundtrip(c: &mut Criterion) {
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
+            mcp_servers: Vec::new(),
         },
     };
     c.bench_function("event_serde_roundtrip", |b| {

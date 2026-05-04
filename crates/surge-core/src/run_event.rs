@@ -384,6 +384,11 @@ pub struct RunConfig {
     pub approval_default: ApprovalPolicy,
     #[serde(default)]
     pub auto_pr: bool,
+    /// Run-level registry of MCP servers available to agent stages.
+    /// Per-stage `ToolOverride::mcp_add` references these by name.
+    /// Empty by default — no MCP delegation.
+    #[serde(default)]
+    pub mcp_servers: Vec<crate::mcp_config::McpServerRef>,
 }
 
 #[cfg(test)]
@@ -400,6 +405,7 @@ mod tests {
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: true,
+                mcp_servers: Vec::new(),
             },
         };
         let bytes = payload.to_bincode().unwrap();
@@ -761,5 +767,50 @@ mod tests {
             error: Some("test".into()),
         };
         assert_eq!(p2.discriminant_str(), "NotifyDelivered");
+    }
+
+    #[test]
+    fn run_config_with_mcp_servers_roundtrips() {
+        use crate::mcp_config::{McpServerRef, McpTransportConfig};
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let cfg = RunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: vec![McpServerRef {
+                name: "playwright".into(),
+                transport: McpTransportConfig::Stdio {
+                    command: PathBuf::from("mcp-playwright"),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                allowed_tools: None,
+                call_timeout: Duration::from_secs(60),
+                restart_on_crash: true,
+            }],
+        };
+        let payload = EventPayload::RunStarted {
+            pipeline_template: None,
+            project_path: PathBuf::from("/work"),
+            initial_prompt: "x".into(),
+            config: cfg.clone(),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn run_config_default_mcp_servers_empty() {
+        let s = r#"
+            sandbox_default = "workspace-write"
+            approval_default = "on-request"
+        "#;
+        let cfg: RunConfig = toml::from_str(s).unwrap();
+        assert!(cfg.mcp_servers.is_empty());
+        assert!(!cfg.auto_pr);
     }
 }

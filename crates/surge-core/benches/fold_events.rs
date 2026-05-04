@@ -31,6 +31,7 @@ fn build_typical_event_log(n: usize) -> Vec<RunEvent> {
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,
+                mcp_servers: Vec::new(),
             },
         },
     ));

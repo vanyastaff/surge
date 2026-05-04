@@ -118,6 +118,7 @@ impl Engine {
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
+            mcp_servers: Vec::new(),
         };
         let graph_bytes = serde_json::to_vec(&graph)
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
