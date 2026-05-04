@@ -6,6 +6,7 @@ use crate::engine::config::{EngineConfig, EngineRunConfig};
 use crate::engine::error::EngineError;
 use crate::engine::handle::RunHandle;
 use crate::engine::tools::ToolDispatcher;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
@@ -17,6 +18,16 @@ pub struct Engine {
     storage: Arc<surge_persistence::runs::Storage>,
     tool_dispatcher: Arc<dyn ToolDispatcher>,
     config: Arc<EngineConfig>,
+    /// Active runs indexed by RunId. Each entry holds the per-run resolution
+    /// senders + cancellation token so engine-level methods (resolve, stop)
+    /// can route into the right task.
+    runs: Arc<tokio::sync::RwLock<HashMap<RunId, ActiveRun>>>,
+}
+
+pub(crate) struct ActiveRun {
+    pub cancel: tokio_util::sync::CancellationToken,
+    pub gate_resolutions: Arc<tokio::sync::Mutex<HashMap<surge_core::keys::NodeKey, tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>>>>,
+    pub tool_resolutions: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
 }
 
 impl Engine {
@@ -31,6 +42,7 @@ impl Engine {
             storage,
             tool_dispatcher,
             config: Arc::new(config),
+            runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -93,6 +105,15 @@ impl Engine {
         let (event_tx, event_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
 
+        let gate_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let active = ActiveRun {
+            cancel: cancel.clone(),
+            gate_resolutions: gate_resolutions.clone(),
+            tool_resolutions: tool_resolutions.clone(),
+        };
+        self.runs.write().await.insert(run_id, active);
+
         let params = RunTaskParams {
             run_id,
             writer,
@@ -105,10 +126,16 @@ impl Engine {
             cancel,
             resume_cursor: None,
             resume_memory: None,
-            gate_resolutions: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            gate_resolutions,
+            tool_resolutions,
         };
 
-        let join = tokio::spawn(execute(params));
+        let runs_for_cleanup = self.runs.clone();
+        let join = tokio::spawn(async move {
+            let outcome = execute(params).await;
+            runs_for_cleanup.write().await.remove(&run_id);
+            outcome
+        });
 
         Ok(RunHandle {
             run_id,
@@ -128,16 +155,58 @@ impl Engine {
         ))
     }
 
-    /// Provide answer to a paused run waiting on human input. Phase 9 impl.
+    /// Provide answer to a paused run waiting on human input.
     pub async fn resolve_human_input(
         &self,
-        _run_id: RunId,
-        _call_id: Option<String>,
-        _response: serde_json::Value,
+        run_id: RunId,
+        call_id: Option<String>,
+        response: serde_json::Value,
     ) -> Result<(), EngineError> {
-        Err(EngineError::Internal(
-            "Engine::resolve_human_input not yet implemented (Phase 9)".into(),
-        ))
+        let runs = self.runs.read().await;
+        let active = runs
+            .get(&run_id)
+            .ok_or(EngineError::RunNotFound(run_id))?;
+
+        match call_id {
+            Some(call_id_str) => {
+                // Tool-driven resolution.
+                let mut tools = active.tool_resolutions.lock().await;
+                let tx = tools
+                    .remove(&call_id_str)
+                    .ok_or_else(|| EngineError::Internal(format!("no pending tool call '{call_id_str}'")))?;
+                tx.send(response)
+                    .map_err(|_| EngineError::Internal("tool resolution receiver dropped".into()))?;
+                Ok(())
+            }
+            None => {
+                // HumanGate resolution. Look up by extracting outcome from response.
+                let outcome_str = response
+                    .get("outcome")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| EngineError::Internal("HumanGate resolution missing 'outcome' field".into()))?;
+                let outcome = surge_core::keys::OutcomeKey::try_from(outcome_str)
+                    .map_err(|e| EngineError::Internal(format!("invalid outcome: {e}")))?;
+
+                // M5 simplification: only one HumanGate active per run at a
+                // time, so take the first entry from the map.
+                let mut gates = active.gate_resolutions.lock().await;
+                let key = gates.keys().next().cloned();
+                match key {
+                    Some(k) => {
+                        let tx = gates
+                            .remove(&k)
+                            .expect("just looked up");
+                        tx.send(crate::engine::stage::human_gate::HumanGateResolution {
+                            outcome,
+                            response,
+                        })
+                        .map_err(|_| EngineError::Internal("gate resolution receiver dropped".into()))?;
+                        Ok(())
+                    }
+                    None => Err(EngineError::Internal("no pending HumanGate to resolve".into())),
+                }
+            }
+        }
     }
 
     /// Cancel an in-flight run. Phase 11 implements the body.

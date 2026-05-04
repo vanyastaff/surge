@@ -39,8 +39,11 @@ pub(crate) struct RunTaskParams {
     pub resume_memory: Option<RunMemory>,
     /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
     /// Engine's `resolve_human_input` finds the sender and fires it.
-    /// Phase 9 wires the registry; for now Just plumb the field through.
     pub gate_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<surge_core::keys::NodeKey, tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>>>>,
+    /// Map of `call_id → oneshot::Sender<serde_json::Value>`.
+    /// Engine's `resolve_human_input` finds the sender and fires it for
+    /// tool-driven `request_human_input` calls from agent stages.
+    pub tool_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
 }
 
 pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
@@ -97,6 +100,8 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     tool_dispatcher: &params.tool_dispatcher,
                     run_memory: &memory,
                     run_id: params.run_id,
+                    tool_resolutions: &params.tool_resolutions,
+                    human_input_timeout: params.run_config.human_input_timeout,
                 })
                 .await;
                 r.map(StageOutcome::Routed)

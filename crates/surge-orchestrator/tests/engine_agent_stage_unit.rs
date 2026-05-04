@@ -78,6 +78,7 @@ async fn agent_stage_loops_until_outcome_reported() {
     let memory = surge_core::run_state::RunMemory::default();
     let cfg = agent_cfg();
     let node = NodeKey::try_from("plan_1").unwrap();
+    let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let result = execute_agent_stage(AgentStageParams {
         node: &node,
         agent_config: &cfg,
@@ -87,6 +88,8 @@ async fn agent_stage_loops_until_outcome_reported() {
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
         run_id,
+        tool_resolutions: &tool_resolutions,
+        human_input_timeout: std::time::Duration::from_secs(5),
     })
     .await
     .unwrap();

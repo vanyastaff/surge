@@ -38,6 +38,11 @@ pub struct AgentStageParams<'a> {
     pub run_memory: &'a surge_core::run_state::RunMemory,
     /// Identifier of the current run, forwarded to tool dispatch context.
     pub run_id: surge_core::id::RunId,
+    /// Map of `call_id → oneshot::Sender<serde_json::Value>` for routing
+    /// `Engine::resolve_human_input` replies to the waiting agent stage.
+    pub tool_resolutions: &'a std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    /// Timeout for `request_human_input` calls. Sourced from `EngineRunConfig`.
+    pub human_input_timeout: std::time::Duration,
 }
 
 /// Execute a single agent stage.
@@ -275,6 +280,79 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+            }
+            BridgeEvent::HumanInputRequested { call_id, question, context, .. } => {
+                use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
+
+                let prompt = match &context {
+                    Some(ctx) => format!("{question}\n\n{ctx}"),
+                    None => question.clone(),
+                };
+
+                p.writer
+                    .append_event(VersionedEventPayload::new(EventPayload::HumanInputRequested {
+                        node: p.node.clone(),
+                        session: Some(session_id),
+                        call_id: Some(call_id.clone()),
+                        prompt,
+                        schema: None,
+                    }))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                p.tool_resolutions.lock().await.insert(call_id.clone(), tx);
+
+                let resolved = tokio::select! {
+                    response = rx => match response {
+                        Ok(v) => Some(v),
+                        Err(_) => None, // sender dropped (run aborted)
+                    },
+                    _ = tokio::time::sleep(p.human_input_timeout) => None,
+                };
+
+                p.tool_resolutions.lock().await.remove(&call_id);
+
+                match resolved {
+                    Some(response) => {
+                        p.writer
+                            .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
+                                node: p.node.clone(),
+                                call_id: Some(call_id.clone()),
+                                response: response.clone(),
+                            }))
+                            .await
+                            .map_err(|e| StageError::Storage(e.to_string()))?;
+                        p.bridge
+                            .reply_to_tool(
+                                session_id,
+                                call_id,
+                                AcpResultPayload::Ok { result_json: response.to_string() },
+                            )
+                            .await
+                            .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                    }
+                    None => {
+                        p.writer
+                            .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
+                                node: p.node.clone(),
+                                call_id: Some(call_id.clone()),
+                                elapsed_seconds: p.human_input_timeout.as_secs() as u32,
+                            }))
+                            .await
+                            .map_err(|e| StageError::Storage(e.to_string()))?;
+                        p.bridge
+                            .reply_to_tool(
+                                session_id,
+                                call_id,
+                                AcpResultPayload::Error { message: "human input timed out".into() },
+                            )
+                            .await
+                            .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                        // M5 fail-fast: timeout halts the stage.
+                        return Err(StageError::HumanGateRejected);
+                    }
+                }
             }
             _ => continue,
         }
