@@ -12,4 +12,6 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 
-// Modules added incrementally in Phase 7.
+pub mod deliverer;
+
+pub use deliverer::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
