@@ -81,6 +81,13 @@ pub struct RunSummary {
     /// Current high-level status.
     pub status: RunStatus,
     /// Wall-clock time the run was registered with the engine.
+    ///
+    /// In M7's `LocalEngineFacade::list_runs`, this is a placeholder
+    /// set to "now" at the time `list_runs` is called — the engine
+    /// does not yet track per-run start time. The daemon facade
+    /// (Phase 5) returns the real registration time. M8+ may unify
+    /// by adding a real `started_at: DateTime<Utc>` field to
+    /// `Engine::ActiveRun`.
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// Highest seq the engine has persisted for this run, if any.
     pub last_event_seq: Option<u64>,
