@@ -229,8 +229,7 @@ fn linear_pipeline_completes_end_to_end() {
         // engine drops its clone. Dropping AcpBridge from within an async
         // context blocks the tokio thread (Drop::join on the bridge OS
         // thread); calling shutdown() explicitly avoids that.
-        let bridge_owned =
-            Arc::new(AcpBridge::with_defaults().expect("AcpBridge::with_defaults"));
+        let bridge_owned = Arc::new(AcpBridge::with_defaults().expect("AcpBridge::with_defaults"));
         let bridge: Arc<dyn BridgeFacade> = bridge_owned.clone();
 
         let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
