@@ -216,13 +216,26 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             }))
             .await;
 
-        // Snapshot at stage boundary — wired in Phase 10 via snapshot::write_at_boundary.
-        // For now, no-op; tests in Phase 10 cover the snapshot write.
-
-        cursor = Cursor {
-            node: next,
-            attempt: 1,
+        // Snapshot at stage boundary (per spec §2.6, §12).
+        let next_cursor = Cursor { node: next.clone(), attempt: 1 };
+        let current_seq = match params.writer.current_seq().await {
+            Ok(s) => s,
+            Err(e) => return failed(&params, format!("current_seq: {e}")).await,
         };
+        let snapshot = crate::engine::snapshot::EngineSnapshot::new(
+            &next_cursor,
+            current_seq.as_u64(),
+            current_seq.as_u64(),
+        );
+        let blob = match serde_json::to_vec(&snapshot) {
+            Ok(b) => b,
+            Err(e) => return failed(&params, format!("snapshot serialize: {e}")).await,
+        };
+        if let Err(e) = params.writer.write_graph_snapshot(current_seq, blob).await {
+            return failed(&params, format!("write_graph_snapshot: {e}")).await;
+        }
+
+        cursor = next_cursor;
     }
 }
 
