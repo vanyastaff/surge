@@ -2,8 +2,9 @@
 //!
 //! Phase 6.2: event loop — opens an ACP session, sends a placeholder empty
 //! message, drives `BridgeEvent` until `OutcomeReported` is received (success)
-//! or `SessionEnded` fires first (failure). Phase 6.3 handles tool dispatch
-//! for non-injected tools. Phase 6.4 handles prompt + binding resolution.
+//! or `SessionEnded` fires first (failure).
+//! Phase 6.3: tool dispatch for non-injected tools + token usage persistence.
+//! Phase 6.4 handles prompt + binding resolution.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -31,6 +32,12 @@ pub struct AgentStageParams<'a> {
     pub writer: &'a RunWriter,
     /// Isolated git worktree path for this run.
     pub worktree_path: &'a Path,
+    /// Dispatcher for non-injected ACP tool calls (wired in Phase 6.3).
+    pub tool_dispatcher: &'a Arc<dyn crate::engine::tools::ToolDispatcher>,
+    /// Accumulated run memory (artifacts, outcomes, costs) passed to tool dispatch context.
+    pub run_memory: &'a surge_core::run_state::RunMemory,
+    /// Identifier of the current run, forwarded to tool dispatch context.
+    pub run_id: surge_core::id::RunId,
 }
 
 /// Execute a single agent stage.
@@ -38,7 +45,22 @@ pub struct AgentStageParams<'a> {
 /// Phase 6.2: opens a session, sends an empty placeholder message, then drives
 /// the `BridgeEvent` loop until `BridgeEvent::OutcomeReported` arrives
 /// (success) or `BridgeEvent::SessionEnded` fires without a prior outcome
-/// (failure). Phase 6.3 wires tool dispatch; Phase 6.4 wires prompt/bindings.
+/// (failure).
+///
+/// Phase 6.3: dispatches non-injected `BridgeEvent::ToolCall` events through
+/// the `ToolDispatcher`, persists `ToolCalled`/`ToolResultReceived` events, and
+/// replies to the agent via `bridge.reply_to_tool`. Also persists
+/// `TokensConsumed` events from `BridgeEvent::TokenUsage`.
+///
+/// # Known M5 limitation — artifact events
+/// `BridgeEvent::OutcomeReported` carries `artifacts_produced: Vec<String>`,
+/// but there is no separate `BridgeEvent::ArtifactProduced` variant in M3.
+/// Artifacts are therefore noted in the `OutcomeReported` event but are NOT
+/// stored as individual `EventPayload::ArtifactProduced` events in this phase.
+/// TODO(M5): emit `EventPayload::ArtifactProduced` for each path in
+///   `artifacts_produced` when handling `BridgeEvent::OutcomeReported`.
+///
+/// Phase 6.4 wires prompt/bindings.
 ///
 /// # Errors
 /// Returns [`StageError::Bridge`] if any bridge call fails.
@@ -144,7 +166,94 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     "session ended before OutcomeReported: {reason:?}"
                 )));
             }
-            // Tool dispatch + token usage + artifact handling come in 6.3.
+            BridgeEvent::ToolCall { call_id, tool, args_redacted_json, meta, .. }
+                if !meta.injected =>
+            {
+                use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload};
+                use surge_acp::bridge::event::ToolResultPayload as AcpResultPayload;
+                use surge_core::content_hash::ContentHash;
+
+                // Parse args from JSON for the dispatcher.
+                let arguments: serde_json::Value =
+                    serde_json::from_str(&args_redacted_json).unwrap_or(serde_json::Value::Null);
+
+                let call = ToolCall {
+                    call_id: call_id.clone(),
+                    tool: tool.clone(),
+                    arguments,
+                };
+                let ctx = ToolDispatchContext {
+                    run_id: p.run_id,
+                    session_id,
+                    worktree_root: p.worktree_path,
+                    run_memory: p.run_memory,
+                };
+                let engine_result = p.tool_dispatcher.dispatch(&ctx, &call).await;
+
+                // Persist ToolCalled + ToolResultReceived.
+                let args_redacted_hash = ContentHash::compute(args_redacted_json.as_bytes());
+                p.writer
+                    .append_event(VersionedEventPayload::new(EventPayload::ToolCalled {
+                        session: session_id,
+                        tool: tool.clone(),
+                        args_redacted: args_redacted_hash,
+                    }))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                let success = matches!(engine_result, EngineResultPayload::Ok { .. });
+                let result_hash = match &engine_result {
+                    EngineResultPayload::Ok { content } => {
+                        ContentHash::compute(content.to_string().as_bytes())
+                    }
+                    EngineResultPayload::Error { message } => {
+                        ContentHash::compute(message.as_bytes())
+                    }
+                    EngineResultPayload::Unsupported { message } => {
+                        ContentHash::compute(message.as_bytes())
+                    }
+                    EngineResultPayload::Cancelled => ContentHash::compute(b"cancelled"),
+                };
+                p.writer
+                    .append_event(VersionedEventPayload::new(EventPayload::ToolResultReceived {
+                        session: session_id,
+                        success,
+                        result: result_hash,
+                    }))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                // Convert engine payload → ACP payload and reply.
+                let acp_result = match engine_result {
+                    EngineResultPayload::Ok { content } => {
+                        AcpResultPayload::Ok { result_json: content.to_string() }
+                    }
+                    EngineResultPayload::Error { message } => AcpResultPayload::Error { message },
+                    EngineResultPayload::Unsupported { message: _ } => AcpResultPayload::Unsupported,
+                    EngineResultPayload::Cancelled => {
+                        AcpResultPayload::Error { message: "cancelled".into() }
+                    }
+                };
+                p.bridge
+                    .reply_to_tool(session_id, call_id, acp_result)
+                    .await
+                    .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+            }
+            BridgeEvent::TokenUsage { prompt_tokens, output_tokens, cache_hits, model, .. } => {
+                // cost_usd is not carried by BridgeEvent::TokenUsage in M3 —
+                // a future layer can compute it from token counts + model name.
+                p.writer
+                    .append_event(VersionedEventPayload::new(EventPayload::TokensConsumed {
+                        session: session_id,
+                        prompt_tokens,
+                        output_tokens,
+                        cache_hits,
+                        model,
+                        cost_usd: None,
+                    }))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+            }
             _ => continue,
         }
     };

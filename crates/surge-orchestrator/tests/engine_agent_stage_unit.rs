@@ -11,7 +11,21 @@ use surge_core::agent_config::AgentConfig;
 use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
 use surge_orchestrator::engine::stage::agent::{execute_agent_stage, AgentStageParams};
+use surge_orchestrator::engine::tools::{ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload};
 use surge_persistence::runs::Storage;
+
+struct UnusedDispatcher;
+
+#[async_trait::async_trait]
+impl ToolDispatcher for UnusedDispatcher {
+    async fn dispatch(
+        &self,
+        _ctx: &ToolDispatchContext<'_>,
+        call: &ToolCall,
+    ) -> ToolResultPayload {
+        ToolResultPayload::Unsupported { message: format!("unused: {}", call.tool) }
+    }
+}
 
 fn agent_cfg() -> AgentConfig {
     AgentConfig {
@@ -60,6 +74,8 @@ async fn agent_stage_loops_until_outcome_reported() {
         mock_for_pump.pump_scripted_events().await;
     });
 
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let memory = surge_core::run_state::RunMemory::default();
     let cfg = agent_cfg();
     let node = NodeKey::try_from("plan_1").unwrap();
     let result = execute_agent_stage(AgentStageParams {
@@ -68,6 +84,9 @@ async fn agent_stage_loops_until_outcome_reported() {
         bridge: &bridge,
         writer: &writer,
         worktree_path: dir.path(),
+        tool_dispatcher: &dispatcher,
+        run_memory: &memory,
+        run_id,
     })
     .await
     .unwrap();
