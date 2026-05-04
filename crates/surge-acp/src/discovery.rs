@@ -15,7 +15,7 @@
 //!
 //! The discovery system integrates with the [`Registry`](crate::registry::Registry)
 //! to provide intelligent agent matching. Discovery accepts registry entries from
-//! any source (builtin, remote, or config) and returns [`DetectedAgent`](crate::registry::DetectedAgent)
+//! any source (builtin, remote, or config) and returns [`DetectedAgent`]
 //! instances with full metadata when agents are found on the system.
 //!
 //! ```ignore

@@ -55,6 +55,8 @@ gate_after_each = false
 
 [nodes.milestone_loop.config.iterates_over]
 type = "artifact"
+
+[nodes.milestone_loop.config.iterates_over.value]
 node = "roadmap_agent"
 name = "milestones.json"
 jsonpath = "$.milestones[*]"

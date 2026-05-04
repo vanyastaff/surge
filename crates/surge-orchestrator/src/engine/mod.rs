@@ -1,8 +1,24 @@
 //! Engine — drives a frozen `Graph` through ACP sessions and persistence.
 //!
 //! See `docs/superpowers/specs/2026-05-03-surge-orchestrator-engine-m5-design.md`
-//! for the full design contract. M5 ships sequential-pipeline-only support;
-//! parallel/loops/subgraphs are M6 scope and rejected at run-start.
+//! for the full design contract. M5 ships sequential-pipeline-only support.
+//! M6 adds loop execution, subgraph execution, and `Notify` delivery.
+//!
+//! # M6 Surface
+//!
+//! | Module | Purpose |
+//! |---|---|
+//! | [`frames`] | `LoopFrame` / `SubgraphFrame` stack, [`TerminalSignal`] routing |
+//! | [`stage::loop_stage`] | `execute_loop_entry`, `on_loop_iteration_done` |
+//! | [`stage::subgraph_stage`] | `execute_subgraph_entry`, `on_subgraph_done` |
+//! | [`stage::notify`] | `execute_notify_stage` with [`surge_notify::NotifyDeliverer`] |
+//! | [`routing`] | `next_node_after_with_counters` — edge `max_traversals` cap |
+//! | [`validate`] | `validate_for_m6` — rejects multi-edge fanout (M8+) |
+//!
+//! # Constructor variants
+//!
+//! - [`Engine::new`]: default no-op `NotifyDeliverer` (log-only).
+//! - [`Engine::new_with_notifier`]: production wiring with a real [`surge_notify::MultiplexingNotifier`].
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]

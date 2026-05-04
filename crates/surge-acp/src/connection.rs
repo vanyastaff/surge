@@ -139,7 +139,7 @@ impl AgentConnection {
     /// All async operations on `AgentConnection` (and the returned
     /// `ClientSideConnection`) must run inside a `tokio::task::LocalSet`
     /// because the ACP SDK uses `spawn_local` internally.
-    /// Use [`AgentPool`] which handles this automatically.
+    /// Use `AgentPool` (M8+) which handles this automatically.
     pub async fn spawn(
         name: String,
         config: &AgentConfig,

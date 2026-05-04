@@ -2,7 +2,7 @@
 //!
 //! [`AgentTransport`] decouples the ACP connection setup from the underlying
 //! I/O channel. Adding a new transport (TCP, WebSocket) requires only a new
-//! implementor — [`AgentConnection`] and [`AgentPool`] need no changes.
+//! implementor — [`AgentConnection`](super::connection::AgentConnection) and `AgentPool` (M8+) need no changes.
 //!
 //! # Current transports
 //!
@@ -32,7 +32,7 @@ pub struct AgentIo {
     pub reader: Box<dyn futures::AsyncRead + Unpin>,
     /// Child process handle — present only for local-process transports.
     ///
-    /// [`AgentConnection`] uses this for graceful shutdown and kill.
+    /// [`AgentConnection`](super::connection::AgentConnection) uses this for graceful shutdown and kill.
     pub child: Option<Child>,
 }
 
