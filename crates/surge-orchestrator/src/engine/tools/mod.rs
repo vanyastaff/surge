@@ -81,7 +81,7 @@ pub trait ToolDispatcher: Send + Sync {
 
     /// Tools this dispatcher declares to agent stages. Default returns
     /// empty; the production `WorktreeToolDispatcher` overrides to
-    /// expose its built-in catalog (read_file, write_file, shell_exec,
+    /// expose its built-in catalog (`read_file`, `write_file`, `shell_exec`,
     /// etc.). Used by `RoutingToolDispatcher` to assemble the
     /// session-level tool list.
     fn declared_tools(&self) -> Vec<DeclaredTool> {
@@ -141,10 +141,9 @@ mod tests {
         use std::path::PathBuf;
         let d = crate::engine::tools::worktree::WorktreeToolDispatcher::new(PathBuf::from("/tmp"));
         let tools = d.declared_tools();
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        // The Worktree dispatcher must declare every tool name its dispatch
-        // handles; verify a few obvious ones are present.
-        assert!(names.contains(&"read_file") || names.contains(&"write_file") || names.contains(&"shell_exec"),
-            "expected at least one of read_file/write_file/shell_exec in declared_tools, got: {names:?}");
+        let names: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let expected: std::collections::HashSet<&str> =
+            ["read_file", "write_file", "shell_exec"].into_iter().collect();
+        assert_eq!(names, expected, "declared_tools must match dispatch's match arms");
     }
 }
