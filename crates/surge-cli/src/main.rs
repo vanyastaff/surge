@@ -190,6 +190,12 @@ enum Commands {
         #[command(subcommand)]
         command: AnalyticsCommands,
     },
+
+    /// New M6 engine commands — runs flow.toml graphs in-process.
+    Engine {
+        #[command(subcommand)]
+        command: commands::engine::EngineCommands,
+    },
 }
 
 /// Set up signal handlers for graceful shutdown.
@@ -309,7 +315,7 @@ async fn main() -> Result<()> {
     // Check for orphaned worktrees at startup (skip for certain commands)
     let should_check_orphans = !matches!(
         cli.command,
-        Commands::Init | Commands::Clean { .. } | Commands::Config { .. }
+        Commands::Init | Commands::Clean { .. } | Commands::Config { .. } | Commands::Engine { .. }
     );
 
     if should_check_orphans {
@@ -503,6 +509,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Analytics { command } => {
             commands::analytics::run(command)?;
+        },
+
+        Commands::Engine { command } => {
+            commands::engine::run(command).await?;
         },
 
         Commands::Init => {
