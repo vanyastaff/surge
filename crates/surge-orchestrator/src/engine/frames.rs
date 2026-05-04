@@ -157,7 +157,10 @@ mod tests {
 
     #[test]
     fn initial_attempts_returns_max_for_retry() {
-        assert_eq!(initial_attempts_remaining(&FailurePolicy::Retry { max: 3 }), 3);
+        assert_eq!(
+            initial_attempts_remaining(&FailurePolicy::Retry { max: 3 }),
+            3
+        );
     }
 
     #[test]

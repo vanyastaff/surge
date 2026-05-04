@@ -18,7 +18,7 @@
 > **Scope deliberately split.** An earlier draft (also dated 2026-05-04)
 > bundled this milestone with daemon mode and MCP server delegation — total
 > ~10 weeks of solo evening work, four independent subsystems. Per
-> [M6 review feedback](#) (2026-05-04), that monolith is split: M6 ships
+> M6 review feedback (2026-05-04), that monolith is split: M6 ships
 > frame mechanics + Notify + CLI integration in-process; M7 ships daemon
 > mode + MCP delegation; M8 picks up the previously-M7 retry / bootstrap /
 > HumanGate-channels work that the earlier M5 spec §19 had grouped under

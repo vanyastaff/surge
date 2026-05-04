@@ -201,7 +201,7 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                         .map(|(k, v)| (k.to_string(), v))
                         .collect(),
                 })
-            }
+            },
             crate::engine::frames::Frame::Subgraph(sf) => {
                 Self::Subgraph(SerializableSubgraphFrame {
                     outer_node: sf.outer_node.to_string(),
@@ -216,7 +216,7 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                         .collect(),
                     return_to: sf.return_to.to_string(),
                 })
-            }
+            },
         }
     }
 }
@@ -230,7 +230,9 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
 
     fn try_from(s: SerializableFrame) -> Result<Self, Self::Error> {
         use surge_core::keys::{EdgeKey, SubgraphKey};
-        use surge_core::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode};
+        use surge_core::loop_config::{
+            ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+        };
 
         match s {
             SerializableFrame::Loop(lf) => {
@@ -246,8 +248,9 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
                 // Reconstruct IterableSource. For Static, items are already
                 // captured in items_json; iterable_source_json is null.
                 let iterates_over: IterableSource = if let Some(blob) = lf.iterable_source_json {
-                    serde_json::from_str(&blob)
-                        .map_err(|e| SnapshotError::InvalidJson(format!("iterable_source_json: {e}")))?
+                    serde_json::from_str(&blob).map_err(|e| {
+                        SnapshotError::InvalidJson(format!("iterable_source_json: {e}"))
+                    })?
                 } else {
                     let items: Vec<toml::Value> = lf
                         .items_json
@@ -259,10 +262,13 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
                 };
 
                 let exit_condition: ExitCondition = serde_json::from_str(&lf.exit_condition_json)
-                    .map_err(|e| SnapshotError::InvalidJson(format!("exit_condition_json: {e}")))?;
+                    .map_err(|e| {
+                    SnapshotError::InvalidJson(format!("exit_condition_json: {e}"))
+                })?;
                 let on_iteration_failure: FailurePolicy =
-                    serde_json::from_str(&lf.on_iteration_failure_json)
-                        .map_err(|e| SnapshotError::InvalidJson(format!("on_iteration_failure_json: {e}")))?;
+                    serde_json::from_str(&lf.on_iteration_failure_json).map_err(|e| {
+                        SnapshotError::InvalidJson(format!("on_iteration_failure_json: {e}"))
+                    })?;
                 let parallelism: ParallelismMode = serde_json::from_str(&lf.parallelism_json)
                     .map_err(|e| SnapshotError::InvalidJson(format!("parallelism_json: {e}")))?;
 
@@ -298,7 +304,7 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
                     return_to,
                     traversal_counts,
                 }))
-            }
+            },
             SerializableFrame::Subgraph(sf) => {
                 use crate::engine::frames::{Frame, ResolvedSubgraphInput, SubgraphFrame};
                 use surge_core::agent_config::TemplateVar;
@@ -326,7 +332,7 @@ impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
                     bound_inputs,
                     return_to,
                 }))
-            }
+            },
         }
     }
 }
@@ -347,11 +353,11 @@ fn json_to_toml_value(v: serde_json::Value) -> toml::Value {
             } else {
                 toml::Value::String(n.to_string())
             }
-        }
+        },
         serde_json::Value::String(s) => toml::Value::String(s),
         serde_json::Value::Array(arr) => {
             toml::Value::Array(arr.into_iter().map(json_to_toml_value).collect())
-        }
+        },
         serde_json::Value::Object(obj) => toml::Value::Table(
             obj.into_iter()
                 .map(|(k, v)| (k, json_to_toml_value(v)))
@@ -384,9 +390,11 @@ impl EngineSnapshot {
     /// Deserialise from a JSON blob. Reads `schema_version` first and routes
     /// to either v1 back-compat path or direct v2 deserialisation.
     pub fn deserialize(blob: &[u8]) -> Result<Self, SnapshotError> {
-        let value: serde_json::Value = serde_json::from_slice(blob)
-            .map_err(|e| SnapshotError::InvalidJson(e.to_string()))?;
-        let version = value.get("schema_version").and_then(serde_json::Value::as_u64);
+        let value: serde_json::Value =
+            serde_json::from_slice(blob).map_err(|e| SnapshotError::InvalidJson(e.to_string()))?;
+        let version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64);
 
         match version {
             Some(1) => {
@@ -409,7 +417,7 @@ impl EngineSnapshot {
                     stage_boundary_seq: v1.stage_boundary_seq,
                     pending_human_input: v1.pending_human_input,
                 })
-            }
+            },
             Some(2) => serde_json::from_value(value)
                 .map_err(|e| SnapshotError::InvalidJson(format!("v2 parse: {e}"))),
             other => Err(SnapshotError::UnsupportedSchema(other)),
@@ -535,9 +543,7 @@ mod tests {
             current_index: 0,
             attempts_remaining: 0,
             return_to: NodeKey::try_from("after").unwrap(),
-            traversal_counts: HashMap::from_iter([
-                (EdgeKey::try_from("e1").unwrap(), 1),
-            ]),
+            traversal_counts: HashMap::from_iter([(EdgeKey::try_from("e1").unwrap(), 1)]),
         };
 
         let serialised: SerializableFrame = Frame::Loop(original.clone()).into();
@@ -560,8 +566,11 @@ mod tests {
                 }
                 assert_eq!(lf.config.iteration_var_name, "item");
                 assert!(!lf.config.gate_after_each);
-                assert_eq!(lf.traversal_counts.get(&EdgeKey::try_from("e1").unwrap()), Some(&1));
-            }
+                assert_eq!(
+                    lf.traversal_counts.get(&EdgeKey::try_from("e1").unwrap()),
+                    Some(&1)
+                );
+            },
             other @ Frame::Subgraph(_) => panic!("expected Loop frame, got {other:?}"),
         }
     }
@@ -590,7 +599,7 @@ mod tests {
                 assert_eq!(sf.return_to, original.return_to);
                 assert_eq!(sf.bound_inputs.len(), 1);
                 assert_eq!(sf.bound_inputs[0].inner_var.0, "plan");
-            }
+            },
             other @ Frame::Loop(_) => panic!("expected Subgraph frame, got {other:?}"),
         }
     }
@@ -627,14 +636,18 @@ mod tests {
             Frame::Loop(lf) => {
                 assert_eq!(lf.loop_node, original.loop_node);
                 match lf.config.iterates_over {
-                    IterableSource::Artifact { node, name, jsonpath } => {
+                    IterableSource::Artifact {
+                        node,
+                        name,
+                        jsonpath,
+                    } => {
                         assert_eq!(node.as_ref(), "planner");
                         assert_eq!(name, "plan.toml");
                         assert_eq!(jsonpath, "tasks");
-                    }
+                    },
                     other @ IterableSource::Static(_) => panic!("expected Artifact, got {other:?}"),
                 }
-            }
+            },
             other @ Frame::Subgraph(_) => panic!("expected Loop frame, got {other:?}"),
         }
     }
@@ -657,7 +670,9 @@ mod tests {
             .expect("v1 with pending_human_input deserialises");
         assert_eq!(snap.schema_version, 2);
         assert!(snap.frames.is_empty());
-        let pending = snap.pending_human_input.expect("pending_human_input preserved");
+        let pending = snap
+            .pending_human_input
+            .expect("pending_human_input preserved");
         assert_eq!(pending.node, "agent_1");
         assert_eq!(pending.call_id.as_deref(), Some("call-abc-123"));
         assert_eq!(pending.prompt, "Should I continue?");

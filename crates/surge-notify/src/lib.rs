@@ -1,7 +1,7 @@
 //! `surge-notify` — pluggable channel delivery for `NodeKind::Notify`.
 //!
-//! The crate exposes the [`NotifyDeliverer`] trait and a default
-//! [`MultiplexingNotifier`] that dispatches on [`NotifyChannel`] variant
+//! The crate exposes the `NotifyDeliverer` trait and a default
+//! `MultiplexingNotifier` that dispatches on `NotifyChannel` variant
 //! to one of five built-in channel impls (Desktop, Webhook, Slack,
 //! Email, Telegram). See `docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m6-design.md`
 //! §10 for the design contract.

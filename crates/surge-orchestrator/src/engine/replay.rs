@@ -38,7 +38,7 @@ pub async fn replay(
 
     let snap_cursor: Option<Cursor> = match snap {
         Some((_seq, blob)) => {
-            let snapshot: EngineSnapshot = serde_json::from_slice(&blob)
+            let snapshot = EngineSnapshot::deserialize(&blob)
                 .map_err(|e| EngineError::Internal(format!("snapshot deserialize: {e}")))?;
             let cursor = snapshot
                 .cursor

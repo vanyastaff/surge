@@ -74,7 +74,11 @@ pub enum ValidationErrorKind {
     /// A `LoopConfig::iterates_over::Static` carries more than
     /// `MAX_LOOP_ITEMS_STATIC` (1000) items. Bound at graph-load time
     /// to prevent unbounded memory growth in the engine's frame stack.
-    LoopStaticTooLarge { node: NodeKey, count: usize, max: usize },
+    LoopStaticTooLarge {
+        node: NodeKey,
+        count: usize,
+        max: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -654,11 +658,17 @@ fn warning_w2_orphan_subgraphs(graph: &Graph, out: &mut Vec<ValidationError>) {
 fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
     use crate::loop_config::{IterableSource, MAX_LOOP_ITEMS_STATIC};
     for node in graph.nodes.values() {
-        let NodeConfig::Loop(cfg) = &node.config else { continue; };
-        let IterableSource::Static(items) = &cfg.iterates_over else { continue; };
+        let NodeConfig::Loop(cfg) = &node.config else {
+            continue;
+        };
+        let IterableSource::Static(items) = &cfg.iterates_over else {
+            continue;
+        };
         if items.len() > MAX_LOOP_ITEMS_STATIC {
             errors.push(ValidationError {
-                location: ErrorLocation::Node { id: node.id.clone() },
+                location: ErrorLocation::Node {
+                    id: node.id.clone(),
+                },
                 kind: ValidationErrorKind::LoopStaticTooLarge {
                     node: node.id.clone(),
                     count: items.len(),
@@ -676,11 +686,17 @@ fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
     // Also recurse into subgraphs — Loop nodes can live inside subgraphs.
     for sg in graph.subgraphs.values() {
         for node in sg.nodes.values() {
-            let NodeConfig::Loop(cfg) = &node.config else { continue; };
-            let IterableSource::Static(items) = &cfg.iterates_over else { continue; };
+            let NodeConfig::Loop(cfg) = &node.config else {
+                continue;
+            };
+            let IterableSource::Static(items) = &cfg.iterates_over else {
+                continue;
+            };
             if items.len() > MAX_LOOP_ITEMS_STATIC {
                 errors.push(ValidationError {
-                    location: ErrorLocation::Node { id: node.id.clone() },
+                    location: ErrorLocation::Node {
+                        id: node.id.clone(),
+                    },
                     kind: ValidationErrorKind::LoopStaticTooLarge {
                         node: node.id.clone(),
                         count: items.len(),
@@ -699,8 +715,7 @@ fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
 }
 
 fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
-    let delivered =
-        OutcomeKey::try_from("delivered").expect("'delivered' is valid OutcomeKey");
+    let delivered = OutcomeKey::try_from("delivered").expect("'delivered' is valid OutcomeKey");
     let undeliverable =
         OutcomeKey::try_from("undeliverable").expect("'undeliverable' is valid OutcomeKey");
 
@@ -713,8 +728,12 @@ fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
         let has_delivered = node.declared_outcomes.iter().any(|o| o.id == delivered);
         if !has_delivered {
             out.push(ValidationError {
-                kind: ValidationErrorKind::NotifyMissingDelivered { node: node.id.clone() },
-                location: ErrorLocation::Node { id: node.id.clone() },
+                kind: ValidationErrorKind::NotifyMissingDelivered {
+                    node: node.id.clone(),
+                },
+                location: ErrorLocation::Node {
+                    id: node.id.clone(),
+                },
                 message: format!(
                     "notify node `{}` must declare a `delivered` outcome",
                     node.id.as_str()
@@ -723,14 +742,15 @@ fn warning_w3_notify_outcomes(graph: &Graph, out: &mut Vec<ValidationError>) {
         }
 
         if matches!(cfg.on_failure, NotifyFailureAction::Fail) {
-            let has_undeliverable =
-                node.declared_outcomes.iter().any(|o| o.id == undeliverable);
+            let has_undeliverable = node.declared_outcomes.iter().any(|o| o.id == undeliverable);
             if !has_undeliverable {
                 out.push(ValidationError {
                     kind: ValidationErrorKind::NotifyFailMissingUndeliverable {
                         node: node.id.clone(),
                     },
-                    location: ErrorLocation::Node { id: node.id.clone() },
+                    location: ErrorLocation::Node {
+                        id: node.id.clone(),
+                    },
                     message: format!(
                         "notify node `{}` uses on_failure: Fail but does not declare \
                          an `undeliverable` outcome; failed deliveries will halt the run",
@@ -1018,11 +1038,14 @@ mod tests {
 
     mod m6_loop_static_cap_tests {
         use super::*;
-        use crate::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
-        use crate::keys::{NodeKey, OutcomeKey, SubgraphKey};
-        use crate::node::{Node, NodeConfig, OutcomeDecl, Position};
-        use crate::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode, MAX_LOOP_ITEMS_STATIC};
         use crate::edge::EdgeKind;
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
+        use crate::keys::{NodeKey, OutcomeKey, SubgraphKey};
+        use crate::loop_config::{
+            ExitCondition, FailurePolicy, IterableSource, LoopConfig, MAX_LOOP_ITEMS_STATIC,
+            ParallelismMode,
+        };
+        use crate::node::{Node, NodeConfig, OutcomeDecl, Position};
         use crate::terminal_config::{TerminalConfig, TerminalKind};
         use std::collections::BTreeMap;
 
@@ -1068,11 +1091,14 @@ mod tests {
             body_nodes.insert(body_start.clone(), body_node);
 
             let mut subgraphs = BTreeMap::new();
-            subgraphs.insert(body_key, Subgraph {
-                start: body_start,
-                nodes: body_nodes,
-                edges: vec![],
-            });
+            subgraphs.insert(
+                body_key,
+                Subgraph {
+                    start: body_start,
+                    nodes: body_nodes,
+                    edges: vec![],
+                },
+            );
 
             Graph {
                 schema_version: SCHEMA_VERSION,
@@ -1092,28 +1118,38 @@ mod tests {
 
         #[test]
         fn loop_static_size_at_cap_is_ok() {
-            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC).map(|i| toml::Value::Integer(i as i64)).collect();
+            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC)
+                .map(|i| toml::Value::Integer(i as i64))
+                .collect();
             let g = graph_with_loop_node(items);
             let result = validate(&g);
             // The minimal graph also triggers other structural errors (e.g., no Terminal at outer level).
             // Filter to only LoopStaticTooLarge findings.
             let findings = result.unwrap_or_else(|e| e);
             assert!(
-                !findings.iter().any(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. })),
+                !findings
+                    .iter()
+                    .any(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. })),
                 "1000 items should not trigger LoopStaticTooLarge: {findings:?}"
             );
         }
 
         #[test]
         fn loop_static_size_above_cap_is_rejected() {
-            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC + 1).map(|i| toml::Value::Integer(i as i64)).collect();
+            let items: Vec<toml::Value> = (0..MAX_LOOP_ITEMS_STATIC + 1)
+                .map(|i| toml::Value::Integer(i as i64))
+                .collect();
             let g = graph_with_loop_node(items);
             let result = validate(&g);
             let errors = result.expect_err("validation should fail");
-            let cap_errors: Vec<_> = errors.iter()
+            let cap_errors: Vec<_> = errors
+                .iter()
                 .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
                 .collect();
-            assert!(!cap_errors.is_empty(), "expected LoopStaticTooLarge, got {errors:?}");
+            assert!(
+                !cap_errors.is_empty(),
+                "expected LoopStaticTooLarge, got {errors:?}"
+            );
         }
 
         #[test]
@@ -1181,16 +1217,22 @@ mod tests {
             inner_body_nodes.insert(inner_terminal.clone(), inner_t_node);
 
             let mut subgraphs = BTreeMap::new();
-            subgraphs.insert(outer_body, crate::graph::Subgraph {
-                start: inner_loop.clone(),
-                nodes: outer_body_nodes,
-                edges: vec![],
-            });
-            subgraphs.insert(inner_body, crate::graph::Subgraph {
-                start: inner_terminal,
-                nodes: inner_body_nodes,
-                edges: vec![],
-            });
+            subgraphs.insert(
+                outer_body,
+                crate::graph::Subgraph {
+                    start: inner_loop.clone(),
+                    nodes: outer_body_nodes,
+                    edges: vec![],
+                },
+            );
+            subgraphs.insert(
+                inner_body,
+                crate::graph::Subgraph {
+                    start: inner_terminal,
+                    nodes: inner_body_nodes,
+                    edges: vec![],
+                },
+            );
 
             let g = Graph {
                 schema_version: SCHEMA_VERSION,
@@ -1209,10 +1251,14 @@ mod tests {
 
             let result = validate(&g);
             let errors = result.expect_err("must fail");
-            let cap_errors: Vec<_> = errors.iter()
+            let cap_errors: Vec<_> = errors
+                .iter()
                 .filter(|f| matches!(f.kind, ValidationErrorKind::LoopStaticTooLarge { .. }))
                 .collect();
-            assert!(!cap_errors.is_empty(), "Loop in subgraph above cap must be rejected: {errors:?}");
+            assert!(
+                !cap_errors.is_empty(),
+                "Loop in subgraph above cap must be rejected: {errors:?}"
+            );
         }
     }
 
@@ -1227,10 +1273,7 @@ mod tests {
         };
         use std::collections::BTreeMap;
 
-        fn notify_node_with_outcomes(
-            outcomes: Vec<&str>,
-            on_failure: NotifyFailureAction,
-        ) -> Node {
+        fn notify_node_with_outcomes(outcomes: Vec<&str>, on_failure: NotifyFailureAction) -> Node {
             let key = NodeKey::try_from("notify_1").unwrap();
             Node {
                 id: key.clone(),
@@ -1293,25 +1336,22 @@ mod tests {
 
         #[test]
         fn notify_with_delivered_only_continue_is_ok() {
-            let n =
-                notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Continue);
+            let n = notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Continue);
             let g = graph_with_node(n);
             let result = validate(&g);
             // ok branch returns Vec<ValidationError> (warnings only); should be empty.
             let warnings = result.unwrap_or_else(|errs| errs);
             assert!(
-                !warnings.iter().any(|w| matches!(
-                    w.kind,
-                    ValidationErrorKind::NotifyMissingDelivered { .. }
-                )),
+                !warnings
+                    .iter()
+                    .any(|w| matches!(w.kind, ValidationErrorKind::NotifyMissingDelivered { .. })),
                 "delivered-only-Continue should not produce NotifyMissingDelivered, got {warnings:?}"
             );
         }
 
         #[test]
         fn notify_fail_without_undeliverable_is_warning() {
-            let n =
-                notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Fail);
+            let n = notify_node_with_outcomes(vec!["delivered"], NotifyFailureAction::Fail);
             let g = graph_with_node(n);
             // The minimal graph has no edges or Terminal node, so other structural
             // rules fire as errors. Use unwrap_or_else to get all findings regardless.
@@ -1330,7 +1370,7 @@ mod tests {
 
         #[test]
         fn notify_in_subgraph_missing_delivered_is_error() {
-            use crate::graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
+            use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
             use crate::keys::SubgraphKey;
 
             let inner_notify = NodeKey::try_from("inner_notify").unwrap();
@@ -1376,11 +1416,14 @@ mod tests {
             inner_nodes.insert(inner_notify.clone(), inner_notify_node);
 
             let mut subgraphs = BTreeMap::new();
-            subgraphs.insert(inner_body, Subgraph {
-                start: inner_notify,
-                nodes: inner_nodes,
-                edges: vec![],
-            });
+            subgraphs.insert(
+                inner_body,
+                Subgraph {
+                    start: inner_notify,
+                    nodes: inner_nodes,
+                    edges: vec![],
+                },
+            );
 
             let g = Graph {
                 schema_version: SCHEMA_VERSION,
@@ -1400,7 +1443,9 @@ mod tests {
             let result = validate(&g);
             let errors = result.expect_err("must fail");
             assert!(
-                errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::NotifyMissingDelivered { .. })),
+                errors
+                    .iter()
+                    .any(|e| matches!(e.kind, ValidationErrorKind::NotifyMissingDelivered { .. })),
                 "Notify-in-subgraph missing delivered must be caught: {errors:?}"
             );
         }
