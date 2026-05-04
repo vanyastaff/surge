@@ -49,7 +49,7 @@ pub async fn execute_loop_entry(p: LoopStageParams<'_>) -> Result<LoopEntryEffec
         .get(&p.loop_config.body)
         .ok_or_else(|| StageError::LoopBodyMissing(p.loop_config.body.clone()))?;
 
-    let items = resolve_iterable(&p.loop_config.iterates_over, p.run_memory)?;
+    let items = resolve_iterable(&p.loop_config.iterates_over, p.run_memory).await?;
 
     if items.len() > MAX_LOOP_ITEMS_RESOLVED {
         return Err(StageError::LoopItemsTooLarge {
@@ -100,7 +100,7 @@ pub async fn execute_loop_entry(p: LoopStageParams<'_>) -> Result<LoopEntryEffec
     Ok(LoopEntryEffect::Entered(body_start))
 }
 
-fn resolve_iterable(
+async fn resolve_iterable(
     src: &IterableSource,
     memory: &RunMemory,
 ) -> Result<Vec<toml::Value>, StageError> {
@@ -108,14 +108,46 @@ fn resolve_iterable(
         IterableSource::Static(items) => Ok(items.clone()),
         IterableSource::Artifact {
             node: _,
-            name: _,
-            jsonpath: _,
+            name,
+            jsonpath,
         } => {
-            let _ = memory;
-            // M6 P5.2 will implement Artifact resolution.
-            Err(StageError::Internal(
-                "IterableSource::Artifact resolution not yet implemented (M6 P5.2)".into(),
-            ))
+            let artifact = memory.artifacts.get(name).ok_or_else(|| {
+                StageError::Internal(format!("artifact '{name}' not in RunMemory"))
+            })?;
+
+            let bytes = tokio::fs::read(&artifact.path).await.map_err(|e| {
+                StageError::Internal(format!("read artifact {}: {e}", artifact.path.display()))
+            })?;
+
+            // M6 supports TOML artifacts with a simple dotted path.
+            // (JSON support could be added later; current vibe-flow artifacts
+            // are TOML by convention — see CLAUDE.md.)
+            let content = std::str::from_utf8(&bytes).map_err(|e| {
+                StageError::Internal(format!(
+                    "artifact {} not utf8: {e}",
+                    artifact.path.display()
+                ))
+            })?;
+            let parsed: toml::Value = toml::from_str(content).map_err(|e| {
+                StageError::Internal(format!("toml parse {}: {e}", artifact.path.display()))
+            })?;
+
+            // Walk the dotted path.
+            let mut cursor = &parsed;
+            for segment in jsonpath.split('.') {
+                cursor = cursor.get(segment).ok_or_else(|| {
+                    StageError::Internal(format!(
+                        "path segment '{segment}' not found in {jsonpath}"
+                    ))
+                })?;
+            }
+
+            match cursor {
+                toml::Value::Array(arr) => Ok(arr.clone()),
+                other => Err(StageError::Internal(format!(
+                    "path {jsonpath} resolved to non-array: {other:?}"
+                ))),
+            }
         },
     }
 }
@@ -317,5 +349,41 @@ mod tests {
             },
             other => panic!("expected LoopItemsTooLarge, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn artifact_iterable_resolves_dotted_path() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write an artifact with a TOML array under "tasks".
+        let artifact_content = r#"
+tasks = ["task1", "task2", "task3"]
+"#;
+        let artifact_path = dir.path().join("plan.toml");
+        std::fs::write(&artifact_path, artifact_content).unwrap();
+
+        // Build RunMemory with the artifact registered.
+        let mut memory = RunMemory::default();
+        memory.artifacts.insert(
+            "plan.toml".into(),
+            surge_core::run_state::ArtifactRef {
+                hash: surge_core::content_hash::ContentHash::compute(artifact_content.as_bytes()),
+                path: artifact_path,
+                name: "plan.toml".into(),
+                produced_by: NodeKey::try_from("planner").unwrap(),
+                produced_at_seq: 1,
+            },
+        );
+
+        let src = IterableSource::Artifact {
+            node: NodeKey::try_from("planner").unwrap(),
+            name: "plan.toml".into(),
+            jsonpath: "tasks".into(),
+        };
+
+        let items = resolve_iterable(&src, &memory).await.unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], toml::Value::String("task1".into()));
+        assert_eq!(items[2], toml::Value::String("task3".into()));
     }
 }
