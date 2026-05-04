@@ -15,6 +15,7 @@ surge-spec = { workspace = true }
 surge-git = { workspace = true }
 surge-orchestrator = { workspace = true }
 surge-persistence = { workspace = true }
+surge-notify = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -24,6 +25,11 @@ agent-client-protocol = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+owo-colors = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+assert_cmd = "2"
+predicates = "3"
