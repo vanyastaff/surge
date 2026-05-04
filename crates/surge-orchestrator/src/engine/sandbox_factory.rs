@@ -42,7 +42,10 @@ mod tests {
             SandboxMode::FullAccess,
             SandboxMode::Custom,
         ] {
-            let cfg = SandboxConfig { mode, ..Default::default() };
+            let cfg = SandboxConfig {
+                mode,
+                ..Default::default()
+            };
             let _ = build_sandbox(Some(&cfg));
         }
     }

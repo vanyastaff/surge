@@ -6,8 +6,8 @@ mod fixtures;
 async fn resolve_human_input_returns_run_not_found_for_unknown_run() {
     use std::sync::Arc;
     use surge_acp::bridge::facade::BridgeFacade;
-    use surge_orchestrator::engine::{Engine, EngineConfig, EngineError};
     use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
+    use surge_orchestrator::engine::{Engine, EngineConfig, EngineError};
     use surge_persistence::runs::Storage;
 
     let dir = tempfile::tempdir().unwrap();

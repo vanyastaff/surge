@@ -4,8 +4,8 @@ mod fixtures;
 
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineError};
 use surge_persistence::runs::Storage;
 

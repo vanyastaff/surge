@@ -18,8 +18,8 @@ pub fn validate_for_m5(graph: &Graph) -> Result<(), EngineError> {
         match node.kind() {
             NodeKind::Loop | NodeKind::Subgraph => {
                 return Err(EngineError::UnsupportedNodeKind { kind: node.kind() });
-            }
-            _ => {}
+            },
+            _ => {},
         }
         if &node.id != key {
             return Err(EngineError::GraphInvalid(format!(
@@ -50,11 +50,11 @@ pub fn validate_for_m5(graph: &Graph) -> Result<(), EngineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
     use surge_core::keys::NodeKey;
     use surge_core::node::{Node, NodeConfig, Position};
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-    use std::collections::BTreeMap;
 
     fn graph_with_one_terminal(start: &str) -> Graph {
         let key = NodeKey::try_from(start).unwrap();
@@ -106,8 +106,10 @@ mod tests {
 
     #[test]
     fn loop_node_rejected_as_unsupported() {
-        use surge_core::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode};
         use surge_core::keys::SubgraphKey;
+        use surge_core::loop_config::{
+            ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+        };
 
         let key = NodeKey::try_from("loop1").unwrap();
         let mut nodes = BTreeMap::new();
@@ -145,7 +147,9 @@ mod tests {
         let err = validate_for_m5(&g).unwrap_err();
         assert!(matches!(
             err,
-            EngineError::UnsupportedNodeKind { kind: NodeKind::Loop }
+            EngineError::UnsupportedNodeKind {
+                kind: NodeKind::Loop
+            }
         ));
     }
 }

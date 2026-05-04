@@ -36,13 +36,17 @@ pub trait PredicateContext {
 pub fn evaluate(predicate: &Predicate, ctx: &dyn PredicateContext) -> bool {
     match predicate {
         Predicate::FileExists { path } => ctx.file_exists(Path::new(path)),
-        Predicate::ArtifactSize { artifact, op, value } => ctx
+        Predicate::ArtifactSize {
+            artifact,
+            op,
+            value,
+        } => ctx
             .artifact_size(artifact)
             .map(|actual| compare_u64(actual, *op, *value))
             .unwrap_or(false),
         Predicate::OutcomeMatches { node, outcome } => {
             ctx.outcome_of(node).is_some_and(|o| o == outcome)
-        }
+        },
         Predicate::EnvVar { name, op, value } => ctx
             .env_var(name)
             .map(|actual| compare_str(&actual, *op, value))
@@ -109,14 +113,18 @@ mod tests {
     fn file_exists_true_when_present() {
         let mut ctx = MockCtx::default();
         ctx.files.push(PathBuf::from("Cargo.toml"));
-        let p = Predicate::FileExists { path: "Cargo.toml".into() };
+        let p = Predicate::FileExists {
+            path: "Cargo.toml".into(),
+        };
         assert!(evaluate(&p, &ctx));
     }
 
     #[test]
     fn file_exists_false_when_absent() {
         let ctx = MockCtx::default();
-        let p = Predicate::FileExists { path: "missing.toml".into() };
+        let p = Predicate::FileExists {
+            path: "missing.toml".into(),
+        };
         assert!(!evaluate(&p, &ctx));
     }
 
@@ -168,7 +176,8 @@ mod tests {
     fn outcome_matches_positive() {
         let mut ctx = MockCtx::default();
         let n = NodeKey::try_from("plan").unwrap();
-        ctx.outcomes.insert(n.clone(), OutcomeKey::try_from("done").unwrap());
+        ctx.outcomes
+            .insert(n.clone(), OutcomeKey::try_from("done").unwrap());
         let p = Predicate::OutcomeMatches {
             node: n,
             outcome: OutcomeKey::try_from("done").unwrap(),
@@ -214,8 +223,12 @@ mod tests {
         let ctx = MockCtx::default();
         let p = Predicate::And {
             and: vec![
-                Predicate::FileExists { path: "missing1".into() },
-                Predicate::FileExists { path: "missing2".into() },
+                Predicate::FileExists {
+                    path: "missing1".into(),
+                },
+                Predicate::FileExists {
+                    path: "missing2".into(),
+                },
             ],
         };
         assert!(!evaluate(&p, &ctx));
@@ -227,8 +240,12 @@ mod tests {
         ctx.files.push(PathBuf::from("present"));
         let p = Predicate::Or {
             or: vec![
-                Predicate::FileExists { path: "present".into() },
-                Predicate::FileExists { path: "absent".into() },
+                Predicate::FileExists {
+                    path: "present".into(),
+                },
+                Predicate::FileExists {
+                    path: "absent".into(),
+                },
             ],
         };
         assert!(evaluate(&p, &ctx));
@@ -238,7 +255,9 @@ mod tests {
     fn not_inverts_inner() {
         let ctx = MockCtx::default();
         let p = Predicate::Not {
-            not: Box::new(Predicate::FileExists { path: "missing".into() }),
+            not: Box::new(Predicate::FileExists {
+                path: "missing".into(),
+            }),
         };
         assert!(evaluate(&p, &ctx));
     }

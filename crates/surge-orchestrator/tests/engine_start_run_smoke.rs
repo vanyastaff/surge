@@ -10,8 +10,8 @@ use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::runs::Storage;
 
@@ -71,7 +71,7 @@ async fn start_run_smoke_completes_terminal_node() {
     match outcome {
         RunOutcome::Completed { terminal } => {
             assert_eq!(terminal.as_ref(), "end");
-        }
+        },
         other => panic!("expected Completed, got {other:?}"),
     }
 }

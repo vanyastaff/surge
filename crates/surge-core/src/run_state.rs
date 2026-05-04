@@ -347,10 +347,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
-        (
-            state @ RunState::Pipeline { .. },
-            EventPayload::HumanInputResolved { .. },
-        ) => {
+        (state @ RunState::Pipeline { .. }, EventPayload::HumanInputResolved { .. }) => {
             if let RunState::Pipeline {
                 graph,
                 cursor,
@@ -368,10 +365,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
-        (
-            state @ RunState::Pipeline { .. },
-            EventPayload::HumanInputTimedOut { .. },
-        ) => {
+        (state @ RunState::Pipeline { .. }, EventPayload::HumanInputTimedOut { .. }) => {
             // Timeout clears the pending field; engine writes a follow-up
             // StageFailed/RunFailed if appropriate. Fold itself stays in
             // Pipeline; the terminal transition is driven by the
@@ -850,9 +844,7 @@ mod tests {
                 pending_human_input: None,
                 ..
             } => {},
-            other => panic!(
-                "expected Pipeline with cleared pending_human_input, got {other:?}"
-            ),
+            other => panic!("expected Pipeline with cleared pending_human_input, got {other:?}"),
         }
     }
 }

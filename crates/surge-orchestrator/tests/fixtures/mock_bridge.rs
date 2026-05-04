@@ -14,16 +14,24 @@ use surge_acp::bridge::event::{BridgeEvent, ToolResultPayload};
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{MessageContent, SessionConfig, SessionState};
 use surge_core::SessionId;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 /// Calls recorded against `MockBridge`, in order received.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // fields exist for test assertion via pattern matching
 pub enum RecordedCall {
     OpenSession,
-    SendMessage { session: SessionId },
-    ReplyToTool { session: SessionId, call_id: String, payload: ToolResultPayload },
-    SessionState { session: SessionId },
+    SendMessage {
+        session: SessionId,
+    },
+    ReplyToTool {
+        session: SessionId,
+        call_id: String,
+        payload: ToolResultPayload,
+    },
+    SessionState {
+        session: SessionId,
+    },
     CloseSession(SessionId),
     Subscribe,
 }
@@ -82,11 +90,11 @@ impl Default for MockBridge {
 
 #[async_trait]
 impl BridgeFacade for MockBridge {
-    async fn open_session(
-        &self,
-        _config: SessionConfig,
-    ) -> Result<SessionId, OpenSessionError> {
-        self.recorded_calls.lock().await.push(RecordedCall::OpenSession);
+    async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+        self.recorded_calls
+            .lock()
+            .await
+            .push(RecordedCall::OpenSession);
         let pinned = self.pinned_session_id.lock().await.take();
         Ok(pinned.unwrap_or_else(SessionId::new))
     }
@@ -96,7 +104,10 @@ impl BridgeFacade for MockBridge {
         session: SessionId,
         _content: MessageContent,
     ) -> Result<(), SendMessageError> {
-        self.recorded_calls.lock().await.push(RecordedCall::SendMessage { session });
+        self.recorded_calls
+            .lock()
+            .await
+            .push(RecordedCall::SendMessage { session });
         Ok(())
     }
 
@@ -109,24 +120,28 @@ impl BridgeFacade for MockBridge {
         self.recorded_calls
             .lock()
             .await
-            .push(RecordedCall::ReplyToTool { session, call_id, payload });
+            .push(RecordedCall::ReplyToTool {
+                session,
+                call_id,
+                payload,
+            });
         Ok(())
     }
 
-    async fn session_state(
-        &self,
-        session: SessionId,
-    ) -> Result<SessionState, BridgeError> {
-        self.recorded_calls.lock().await.push(RecordedCall::SessionState { session });
+    async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError> {
+        self.recorded_calls
+            .lock()
+            .await
+            .push(RecordedCall::SessionState { session });
         // Best-effort default; tests that need a specific state should override.
         Err(BridgeError::WorkerDead)
     }
 
-    async fn close_session(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CloseSessionError> {
-        self.recorded_calls.lock().await.push(RecordedCall::CloseSession(session));
+    async fn close_session(&self, session: SessionId) -> Result<(), CloseSessionError> {
+        self.recorded_calls
+            .lock()
+            .await
+            .push(RecordedCall::CloseSession(session));
         Ok(())
     }
 
@@ -182,7 +197,9 @@ mod tests {
             .reply_to_tool(
                 session,
                 "call-1".into(),
-                ToolResultPayload::Ok { result_json: "{}".into() },
+                ToolResultPayload::Ok {
+                    result_json: "{}".into(),
+                },
             )
             .await;
         let calls = m.recorded_calls.lock().await;

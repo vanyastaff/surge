@@ -165,7 +165,7 @@ pub fn maintain(
         | OutcomeRejectedByHook { .. }
         | ForkCreated { .. } => {},
         // M5 HumanInput variants — not aggregated into materialized views.
-        _ => {}
+        _ => {},
     }
     Ok(())
 }

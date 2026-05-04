@@ -4,8 +4,8 @@ pub mod agent;
 pub mod bindings;
 pub mod branch;
 pub mod human_gate;
-pub mod terminal;
 pub mod notify;
+pub mod terminal;
 
 use crate::engine::error::EngineError;
 use surge_core::keys::OutcomeKey;

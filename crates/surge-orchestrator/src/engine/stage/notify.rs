@@ -39,7 +39,9 @@ pub async fn execute_notify_stage(p: NotifyStageParams<'_>) -> StageResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::notify_config::{NotifyChannel, NotifyFailureAction, NotifySeverity, NotifyTemplate};
+    use surge_core::notify_config::{
+        NotifyChannel, NotifyFailureAction, NotifySeverity, NotifyTemplate,
+    };
     use surge_persistence::runs::Storage;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

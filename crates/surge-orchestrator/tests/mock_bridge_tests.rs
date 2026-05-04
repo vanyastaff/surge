@@ -4,16 +4,16 @@
 mod fixtures;
 
 use fixtures::mock_bridge::MockBridge;
-use surge_acp::bridge::event::{BridgeEvent, SessionEndReason, ToolResultPayload};
-use surge_acp::bridge::facade::BridgeFacade;
-use surge_acp::bridge::session::SessionConfig;
-use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
-use surge_acp::bridge::session::AgentKind;
-use surge_acp::client::PermissionPolicy;
-use surge_core::{OutcomeKey, SessionId};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use surge_acp::bridge::event::{BridgeEvent, SessionEndReason, ToolResultPayload};
+use surge_acp::bridge::facade::BridgeFacade;
+use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
+use surge_acp::bridge::session::AgentKind;
+use surge_acp::bridge::session::SessionConfig;
+use surge_acp::client::PermissionPolicy;
+use surge_core::{OutcomeKey, SessionId};
 
 fn minimal_session_config() -> SessionConfig {
     SessionConfig {
@@ -48,14 +48,16 @@ async fn records_reply_to_tool() {
         .reply_to_tool(
             session,
             "call-1".into(),
-            ToolResultPayload::Ok { result_json: "{}".into() },
+            ToolResultPayload::Ok {
+                result_json: "{}".into(),
+            },
         )
         .await;
     let calls = m.recorded_calls.lock().await;
     match &calls[0] {
         fixtures::mock_bridge::RecordedCall::ReplyToTool { call_id, .. } => {
             assert_eq!(call_id, "call-1")
-        }
+        },
         other => panic!("expected ReplyToTool, got {other:?}"),
     }
 }

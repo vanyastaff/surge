@@ -12,8 +12,8 @@ use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::runs::Storage;
 
@@ -72,7 +72,10 @@ async fn single_terminal_run_has_no_stage_boundary_snapshots() {
 
     // Single-stage runs have zero stage boundaries.
     let snapshot_count = count_snapshots(&storage, run_id).await;
-    assert_eq!(snapshot_count, 0, "single-stage run should have 0 snapshots");
+    assert_eq!(
+        snapshot_count, 0,
+        "single-stage run should have 0 snapshots"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -226,7 +229,12 @@ async fn resume_after_completion_is_idempotent() {
 
     let run_id = RunId::new();
     let h = engine
-        .start_run(run_id, graph, dir.path().to_path_buf(), EngineRunConfig::default())
+        .start_run(
+            run_id,
+            graph,
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
         .await
         .unwrap();
     let _ = h.await_completion().await.unwrap();

@@ -63,11 +63,7 @@ pub struct ToolDispatchContext<'a> {
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync {
     /// Dispatch a single tool call and return the result payload.
-    async fn dispatch(
-        &self,
-        ctx: &ToolDispatchContext<'_>,
-        call: &ToolCall,
-    ) -> ToolResultPayload;
+    async fn dispatch(&self, ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload;
 }
 
 #[cfg(test)]

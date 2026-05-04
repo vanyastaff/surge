@@ -23,10 +23,7 @@ pub enum PathGuardError {
 /// `SurgeClient::new` and `bridge::session::open_session_impl` for the precedent).
 /// This function canonicalizes `path` here so that symlinks-to-outside are rejected
 /// even if the agent constructed the path via legitimate-looking components.
-pub fn ensure_in_worktree(
-    worktree_root: &Path,
-    path: &Path,
-) -> Result<PathBuf, PathGuardError> {
+pub fn ensure_in_worktree(worktree_root: &Path, path: &Path) -> Result<PathBuf, PathGuardError> {
     if !path.is_absolute() {
         return Err(PathGuardError::NotAbsolute {
             path: path.to_path_buf(),

@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::id::RunId;
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineError};
 use surge_persistence::runs::Storage;
 
@@ -46,7 +46,11 @@ fn mock_agent_path() -> PathBuf {
     let target = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| workspace_root.join("target"));
-    let bin = if cfg!(windows) { "mock_acp_agent.exe" } else { "mock_acp_agent" };
+    let bin = if cfg!(windows) {
+        "mock_acp_agent.exe"
+    } else {
+        "mock_acp_agent"
+    };
     target.join("debug").join(bin)
 }
 
@@ -80,8 +84,7 @@ async fn request_human_input_resolved_completes_run() {
 
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
-    let bridge: Arc<dyn BridgeFacade> =
-        Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
     let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());

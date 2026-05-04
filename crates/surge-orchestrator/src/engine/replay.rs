@@ -89,15 +89,15 @@ pub async fn replay(
 
     // Detect whether the run already reached a terminal state.
     let already_terminal = all_events.iter().find_map(|e| match &e.payload.payload {
-        EventPayload::RunCompleted { terminal_node } => {
-            Some(RunOutcome::Completed { terminal: terminal_node.clone() })
-        },
-        EventPayload::RunFailed { error } => {
-            Some(RunOutcome::Failed { error: error.clone() })
-        },
-        EventPayload::RunAborted { reason } => {
-            Some(RunOutcome::Aborted { reason: reason.clone() })
-        },
+        EventPayload::RunCompleted { terminal_node } => Some(RunOutcome::Completed {
+            terminal: terminal_node.clone(),
+        }),
+        EventPayload::RunFailed { error } => Some(RunOutcome::Failed {
+            error: error.clone(),
+        }),
+        EventPayload::RunAborted { reason } => Some(RunOutcome::Aborted {
+            reason: reason.clone(),
+        }),
         _ => None,
     });
 

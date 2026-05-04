@@ -56,9 +56,11 @@ mod tests {
             "worktree path does not exist: /missing"
         );
         assert!(
-            EngineError::UnsupportedNodeKind { kind: NodeKind::Loop }
-                .to_string()
-                .contains("Loop")
+            EngineError::UnsupportedNodeKind {
+                kind: NodeKind::Loop
+            }
+            .to_string()
+            .contains("Loop")
         );
     }
 }

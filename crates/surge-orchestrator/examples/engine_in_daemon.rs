@@ -20,8 +20,8 @@ use surge_core::id::{RunId, SessionId};
 use surge_core::keys::NodeKey;
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
 use surge_persistence::runs::Storage;
 use tokio::sync::broadcast;
@@ -34,11 +34,7 @@ impl BridgeFacade for NoOpBridge {
     async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
         Ok(SessionId::new())
     }
-    async fn send_message(
-        &self,
-        _: SessionId,
-        _: MessageContent,
-    ) -> Result<(), SendMessageError> {
+    async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {
         Ok(())
     }
     async fn reply_to_tool(
@@ -98,8 +94,8 @@ async fn main() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let storage = Storage::open(dir.path()).await?;
     let bridge: Arc<dyn BridgeFacade> = Arc::new(NoOpBridge);
-    let dispatcher = Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf()))
-        as Arc<dyn ToolDispatcher>;
+    let dispatcher =
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
 
     let engine = Engine::new(bridge, storage, dispatcher, EngineConfig::default());
 
@@ -107,7 +103,12 @@ async fn main() -> anyhow::Result<()> {
         let g = terminal_only_graph(&format!("daemon-run-{i}"));
         let run_id = RunId::new();
         let h = engine
-            .start_run(run_id, g, dir.path().to_path_buf(), EngineRunConfig::default())
+            .start_run(
+                run_id,
+                g,
+                dir.path().to_path_buf(),
+                EngineRunConfig::default(),
+            )
             .await?;
         let outcome = h.await_completion().await?;
         println!("run {i} → {outcome:?}");

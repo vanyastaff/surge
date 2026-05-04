@@ -2,6 +2,7 @@
 //! `BridgeFacade` trait surface for an open→close scenario. Catches signature
 //! drift if either implementation diverges.
 
+use std::str::FromStr;
 use surge_acp::bridge::acp_bridge::AcpBridge;
 use surge_acp::bridge::error::{
     BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
@@ -12,7 +13,6 @@ use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig, SessionState};
 use surge_acp::client::PermissionPolicy;
 use surge_core::{OutcomeKey, SessionId};
-use std::str::FromStr;
 use tokio::sync::broadcast;
 
 // Minimal mock that just compiles against the trait — exercise of the
@@ -25,11 +25,7 @@ impl BridgeFacade for MinimalMock {
     async fn open_session(&self, _: SessionConfig) -> Result<SessionId, OpenSessionError> {
         Ok(SessionId::new())
     }
-    async fn send_message(
-        &self,
-        _: SessionId,
-        _: MessageContent,
-    ) -> Result<(), SendMessageError> {
+    async fn send_message(&self, _: SessionId, _: MessageContent) -> Result<(), SendMessageError> {
         Ok(())
     }
     async fn reply_to_tool(

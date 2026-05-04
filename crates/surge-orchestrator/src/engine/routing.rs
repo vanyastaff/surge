@@ -56,10 +56,10 @@ pub fn next_node_after(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
     use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
     use surge_core::keys::EdgeKey;
-    use std::collections::BTreeMap;
 
     fn graph_with_edges(edges: Vec<Edge>) -> Graph {
         Graph {

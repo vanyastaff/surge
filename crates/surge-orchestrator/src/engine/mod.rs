@@ -11,21 +11,21 @@
 #![allow(clippy::missing_panics_doc)]
 
 // Submodules added incrementally as later phases land.
-pub mod predicates;
-pub mod sandbox_factory;
-pub mod tools;
-pub mod error;
 pub mod config;
-pub mod handle;
 pub mod engine;
-pub mod snapshot;
-pub mod routing;
+pub mod error;
+pub mod handle;
+pub mod predicates;
 pub mod replay;
+pub mod routing;
 pub mod run_task;
-pub mod validate;
+pub mod sandbox_factory;
+pub mod snapshot;
 pub mod stage;
+pub mod tools;
+pub mod validate;
 
+pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use engine::Engine;
 pub use error::EngineError;
-pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
-pub use handle::{RunHandle, RunOutcome, EngineRunEvent};
+pub use handle::{EngineRunEvent, RunHandle, RunOutcome};

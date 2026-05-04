@@ -49,7 +49,7 @@ pub async fn resolve_bindings(
                     .get(name)
                     .ok_or_else(|| BindingError::UnknownArtifact(name.clone()))?;
                 read_artifact_text(&aref.path, worktree_root, &aref.name).await?
-            }
+            },
             ArtifactSource::NodeOutput { node, artifact } => {
                 let arefs = memory
                     .artifacts_by_node
@@ -60,7 +60,7 @@ pub async fn resolve_bindings(
                     .find(|a| &a.name == artifact)
                     .ok_or_else(|| BindingError::UnknownArtifact(artifact.clone()))?;
                 read_artifact_text(&aref.path, worktree_root, &aref.name).await?
-            }
+            },
             ArtifactSource::Static { content } => content.clone(),
             ArtifactSource::GlobPattern { .. } => return Err(BindingError::GlobUnsupported),
         };
@@ -103,7 +103,9 @@ mod tests {
     #[tokio::test]
     async fn static_binding_resolves_immediately() {
         let bindings = vec![Binding {
-            source: ArtifactSource::Static { content: "hello".into() },
+            source: ArtifactSource::Static {
+                content: "hello".into(),
+            },
             target: TemplateVar("greeting".into()),
         }];
         let mem = RunMemory::default();
@@ -138,7 +140,9 @@ mod tests {
         }];
         let mem = RunMemory::default();
         let dir = tempfile::tempdir().unwrap();
-        let err = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap_err();
+        let err = resolve_bindings(&bindings, &mem, dir.path())
+            .await
+            .unwrap_err();
         assert!(matches!(err, BindingError::GlobUnsupported));
     }
 }

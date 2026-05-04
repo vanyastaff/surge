@@ -30,8 +30,8 @@ use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
 use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::runs::Storage;
 
@@ -43,7 +43,11 @@ use surge_persistence::runs::Storage;
 fn mock_agent_path() -> PathBuf {
     // Cargo sets CARGO_BIN_EXE_<name> only for the binary's own crate's tests,
     // not for cross-crate consumers — so we always fall through to discovery.
-    let bin = if cfg!(windows) { "mock_acp_agent.exe" } else { "mock_acp_agent" };
+    let bin = if cfg!(windows) {
+        "mock_acp_agent.exe"
+    } else {
+        "mock_acp_agent"
+    };
     if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
         return PathBuf::from(target).join("debug").join(bin);
     }
@@ -199,7 +203,12 @@ async fn linear_pipeline_completes_end_to_end() {
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
 
-    let engine = Engine::new(bridge.clone(), storage.clone(), dispatcher, EngineConfig::default());
+    let engine = Engine::new(
+        bridge.clone(),
+        storage.clone(),
+        dispatcher,
+        EngineConfig::default(),
+    );
 
     let run_id = RunId::new();
     let handle = engine

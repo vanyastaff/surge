@@ -11,8 +11,8 @@ use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::runs::Storage;
 

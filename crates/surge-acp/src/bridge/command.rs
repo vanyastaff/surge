@@ -4,7 +4,9 @@
 use surge_core::SessionId;
 use tokio::sync::oneshot;
 
-use super::error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError};
+use super::error::{
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+};
 use super::session::{MessageContent, SessionConfig, SessionState};
 
 /// Internal command payload sent over the mpsc channel from

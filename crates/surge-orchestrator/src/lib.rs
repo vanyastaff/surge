@@ -54,6 +54,7 @@ pub mod budget;
 pub mod circuit_breaker;
 pub mod conflict;
 pub mod context;
+pub mod engine;
 pub mod executor;
 pub mod gates;
 pub mod parallel;
@@ -64,7 +65,6 @@ pub mod project;
 pub mod qa;
 pub mod retry;
 pub mod schedule;
-pub mod engine;
 
 pub use budget::{BudgetStatus, BudgetTracker};
 pub use parallel::ParallelExecutor;

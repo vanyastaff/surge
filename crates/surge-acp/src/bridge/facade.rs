@@ -13,9 +13,11 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use crate::bridge::acp_bridge::AcpBridge;
-use crate::bridge::error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError};
-use crate::bridge::event::ToolResultPayload;
+use crate::bridge::error::{
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+};
 use crate::bridge::event::BridgeEvent;
+use crate::bridge::event::ToolResultPayload;
 use crate::bridge::session::{MessageContent, SessionConfig, SessionState};
 use surge_core::SessionId;
 
@@ -23,10 +25,7 @@ use surge_core::SessionId;
 #[async_trait]
 pub trait BridgeFacade: Send + Sync {
     /// Open a new ACP session with the given configuration.
-    async fn open_session(
-        &self,
-        config: SessionConfig,
-    ) -> Result<SessionId, OpenSessionError>;
+    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError>;
 
     /// Send a user-role message to an open session.
     async fn send_message(
@@ -36,16 +35,10 @@ pub trait BridgeFacade: Send + Sync {
     ) -> Result<(), SendMessageError>;
 
     /// Read a session's bridge-observable state (open / closed / crashed).
-    async fn session_state(
-        &self,
-        session: SessionId,
-    ) -> Result<SessionState, BridgeError>;
+    async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError>;
 
     /// Close a session gracefully.
-    async fn close_session(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CloseSessionError>;
+    async fn close_session(&self, session: SessionId) -> Result<(), CloseSessionError>;
 
     /// Reply to an outstanding tool call. M5 engine uses this to dispatch
     /// non-injected tools and to deliver the human's answer to
@@ -64,10 +57,7 @@ pub trait BridgeFacade: Send + Sync {
 
 #[async_trait]
 impl BridgeFacade for AcpBridge {
-    async fn open_session(
-        &self,
-        config: SessionConfig,
-    ) -> Result<SessionId, OpenSessionError> {
+    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
         AcpBridge::open_session(self, config).await
     }
 
@@ -79,17 +69,11 @@ impl BridgeFacade for AcpBridge {
         AcpBridge::send_message(self, session, content).await
     }
 
-    async fn session_state(
-        &self,
-        session: SessionId,
-    ) -> Result<SessionState, BridgeError> {
+    async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError> {
         AcpBridge::session_state(self, session).await
     }
 
-    async fn close_session(
-        &self,
-        session: SessionId,
-    ) -> Result<(), CloseSessionError> {
+    async fn close_session(&self, session: SessionId) -> Result<(), CloseSessionError> {
         AcpBridge::close_session(self, session).await
     }
 

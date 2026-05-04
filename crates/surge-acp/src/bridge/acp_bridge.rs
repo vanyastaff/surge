@@ -8,7 +8,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::warn;
 
 use super::command::BridgeCommand;
-use super::error::{BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError};
+use super::error::{
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+};
 use super::event::BridgeEvent;
 use super::session::{MessageContent, SessionConfig, SessionState};
 use super::worker::bridge_loop;

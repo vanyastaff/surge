@@ -80,7 +80,9 @@ mod tests {
 
         let cfg = BranchConfig {
             predicates: vec![BranchArm {
-                condition: Predicate::FileExists { path: "Cargo.toml".into() },
+                condition: Predicate::FileExists {
+                    path: "Cargo.toml".into(),
+                },
                 outcome: OutcomeKey::try_from("rust").unwrap(),
             }],
             default_outcome: OutcomeKey::try_from("generic").unwrap(),
@@ -111,7 +113,9 @@ mod tests {
 
         let cfg = BranchConfig {
             predicates: vec![BranchArm {
-                condition: Predicate::FileExists { path: "missing".into() },
+                condition: Predicate::FileExists {
+                    path: "missing".into(),
+                },
                 outcome: OutcomeKey::try_from("rust").unwrap(),
             }],
             default_outcome: OutcomeKey::try_from("generic").unwrap(),

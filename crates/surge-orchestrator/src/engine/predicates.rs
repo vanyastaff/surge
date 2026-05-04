@@ -52,16 +52,22 @@ mod tests {
     fn outcome_of_returns_latest() {
         let mut mem = RunMemory::default();
         let node = NodeKey::try_from("plan").unwrap();
-        mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
-            outcome: OutcomeKey::try_from("first").unwrap(),
-            summary: String::new(),
-            seq: 1,
-        });
-        mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
-            outcome: OutcomeKey::try_from("second").unwrap(),
-            summary: String::new(),
-            seq: 2,
-        });
+        mem.outcomes
+            .entry(node.clone())
+            .or_default()
+            .push(OutcomeRecord {
+                outcome: OutcomeKey::try_from("first").unwrap(),
+                summary: String::new(),
+                seq: 1,
+            });
+        mem.outcomes
+            .entry(node.clone())
+            .or_default()
+            .push(OutcomeRecord {
+                outcome: OutcomeKey::try_from("second").unwrap(),
+                summary: String::new(),
+                seq: 2,
+            });
         let ctx = EnginePredicateContext {
             run_memory: &mem,
             worktree_root: Path::new("/tmp"),
@@ -89,11 +95,14 @@ mod tests {
     fn evaluate_outcome_matches_via_engine_ctx() {
         let mut mem = RunMemory::default();
         let node = NodeKey::try_from("plan").unwrap();
-        mem.outcomes.entry(node.clone()).or_default().push(OutcomeRecord {
-            outcome: OutcomeKey::try_from("done").unwrap(),
-            summary: String::new(),
-            seq: 1,
-        });
+        mem.outcomes
+            .entry(node.clone())
+            .or_default()
+            .push(OutcomeRecord {
+                outcome: OutcomeKey::try_from("done").unwrap(),
+                summary: String::new(),
+                seq: 1,
+            });
         let ctx = EnginePredicateContext {
             run_memory: &mem,
             worktree_root: Path::new("/tmp"),
