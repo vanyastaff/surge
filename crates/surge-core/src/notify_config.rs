@@ -51,6 +51,7 @@ pub enum NotifyFailureAction {
 /// [`crate::run_event::EventPayload::NotifyDelivered`] so the event
 /// log records *which kind* of channel was attempted without leaking
 /// secrets or transport-specific data.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifyChannelKind {
