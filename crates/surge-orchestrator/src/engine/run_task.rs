@@ -3,7 +3,6 @@
 
 use crate::engine::config::EngineRunConfig;
 use crate::engine::handle::{EngineRunEvent, RunOutcome};
-use crate::engine::routing::next_node_after;
 use crate::engine::stage::StageError;
 use crate::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use crate::engine::stage::branch::{BranchStageParams, execute_branch_stage};
@@ -72,12 +71,13 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         attempt: 1,
     });
     let mut memory = params.resume_memory.clone().unwrap_or_default();
-    let frames: Vec<crate::engine::frames::Frame> =
+    let mut frames: Vec<crate::engine::frames::Frame> =
         params.resume_frames.clone().unwrap_or_default();
-    let _root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> = params
-        .resume_root_traversal_counts
-        .clone()
-        .unwrap_or_default();
+    let mut root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> =
+        params
+            .resume_root_traversal_counts
+            .clone()
+            .unwrap_or_default();
 
     loop {
         if params.cancel.is_cancelled() {
@@ -234,8 +234,61 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             });
 
         // Route to next node.
-        let next = match next_node_after(&params.graph, &cursor.node, &outcome) {
+        let next = match crate::engine::routing::next_node_after_with_counters(
+            &params.graph,
+            &cursor.node,
+            &outcome,
+            &mut frames,
+            &mut root_traversal_counts,
+        ) {
             Ok(n) => n,
+            Err(crate::engine::routing::RoutingError::ExceededTraversal {
+                edge,
+                action,
+                count: _,
+                max: _,
+            }) => {
+                use surge_core::edge::ExceededAction;
+                match action {
+                    ExceededAction::Escalate => {
+                        // Synthesise a max_traversals_exceeded outcome and re-route.
+                        let synthetic =
+                            match surge_core::keys::OutcomeKey::try_from("max_traversals_exceeded")
+                            {
+                                Ok(o) => o,
+                                Err(e) => {
+                                    return failed(&params, format!("synthetic outcome: {e}"))
+                                        .await;
+                                },
+                            };
+                        match crate::engine::routing::next_node_after_with_counters(
+                            &params.graph,
+                            &cursor.node,
+                            &synthetic,
+                            &mut frames,
+                            &mut root_traversal_counts,
+                        ) {
+                            Ok(n) => n,
+                            Err(_) => {
+                                return failed(
+                                    &params,
+                                    format!(
+                                        "max_traversals exceeded on edge {edge} and no escalate route declared"
+                                    ),
+                                )
+                                .await;
+                            },
+                        }
+                    },
+                    ExceededAction::Fail => {
+                        return failed(
+                            &params,
+                            format!("max_traversals exceeded on edge {edge} (action: Fail)"),
+                        )
+                        .await;
+                    },
+                }
+            },
             Err(e) => return failed(&params, format!("routing: {e}")).await,
         };
 
