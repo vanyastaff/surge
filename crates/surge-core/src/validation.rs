@@ -89,11 +89,34 @@ impl ValidationErrorKind {
     #[must_use]
     pub fn severity(&self) -> Severity {
         match self {
+            // Warnings — informational, do not block the run.
             Self::EscalateTargetNotHumanOrNotify
             | Self::OrphanSubgraph { .. }
             | Self::NotifyFailMissingUndeliverable { .. } => Severity::Warning,
-            Self::NotifyMissingDelivered { .. } => Severity::Error,
-            _ => Severity::Error,
+
+            // Errors — graph is structurally invalid or will misbehave at runtime.
+            Self::StartNodeMissing
+            | Self::EdgeFromUnknownNode
+            | Self::EdgeToUnknownNode
+            | Self::EdgeFromUndeclaredOutcome
+            | Self::DuplicateEdgeFromSamePort
+            | Self::OutcomeWithNoEdge
+            | Self::UnreachableNode
+            | Self::NoTerminalReachable
+            | Self::InvalidProfileRef
+            | Self::HumanGateWithoutOptions
+            | Self::BranchWithoutArms
+            | Self::LoopIterableInvalid
+            | Self::LoopBodyMissingStart
+            | Self::SubgraphInvalid
+            | Self::TerminalOutcomeHasEdge
+            | Self::BacktrackTargetUnreachable
+            | Self::SchemaVersionMismatch
+            | Self::KeyFormatViolation { .. }
+            | Self::SubgraphRefMissing { .. }
+            | Self::SubgraphReferenceCycle { .. }
+            | Self::NodeKeyCollision { .. }
+            | Self::NotifyMissingDelivered { .. } => Severity::Error,
         }
     }
 }
