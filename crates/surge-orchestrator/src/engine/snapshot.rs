@@ -225,6 +225,142 @@ fn toml_value_to_json(v: toml::Value) -> serde_json::Value {
     serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)
 }
 
+impl TryFrom<SerializableFrame> for crate::engine::frames::Frame {
+    type Error = SnapshotError;
+
+    fn try_from(s: SerializableFrame) -> Result<Self, Self::Error> {
+        use surge_core::keys::{EdgeKey, SubgraphKey};
+        use surge_core::loop_config::{ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode};
+
+        match s {
+            SerializableFrame::Loop(lf) => {
+                use crate::engine::frames::{Frame, LoopFrame};
+
+                let loop_node = NodeKey::try_from(lf.loop_node.as_str())
+                    .map_err(|e| SnapshotError::InvalidNodeKey(format!("loop_node: {e}")))?;
+                let return_to = NodeKey::try_from(lf.return_to.as_str())
+                    .map_err(|e| SnapshotError::InvalidNodeKey(format!("return_to: {e}")))?;
+                let body = SubgraphKey::try_from(lf.body.as_str())
+                    .map_err(|e| SnapshotError::InvalidJson(format!("body: {e}")))?;
+
+                // Reconstruct IterableSource. For Static, items are already
+                // captured in items_json; iterable_source_json is null.
+                let iterates_over: IterableSource = match lf.iterable_source_json {
+                    Some(blob) => serde_json::from_str(&blob)
+                        .map_err(|e| SnapshotError::InvalidJson(format!("iterable_source_json: {e}")))?,
+                    None => {
+                        let items: Vec<toml::Value> = lf
+                            .items_json
+                            .iter()
+                            .cloned()
+                            .map(json_to_toml_value)
+                            .collect();
+                        IterableSource::Static(items)
+                    }
+                };
+
+                let exit_condition: ExitCondition = serde_json::from_str(&lf.exit_condition_json)
+                    .map_err(|e| SnapshotError::InvalidJson(format!("exit_condition_json: {e}")))?;
+                let on_iteration_failure: FailurePolicy =
+                    serde_json::from_str(&lf.on_iteration_failure_json)
+                        .map_err(|e| SnapshotError::InvalidJson(format!("on_iteration_failure_json: {e}")))?;
+                let parallelism: ParallelismMode = serde_json::from_str(&lf.parallelism_json)
+                    .map_err(|e| SnapshotError::InvalidJson(format!("parallelism_json: {e}")))?;
+
+                let config = LoopConfig {
+                    iterates_over,
+                    body,
+                    iteration_var_name: lf.iteration_var_name,
+                    exit_condition,
+                    on_iteration_failure,
+                    parallelism,
+                    gate_after_each: lf.gate_after_each,
+                };
+
+                let items: Vec<toml::Value> =
+                    lf.items_json.into_iter().map(json_to_toml_value).collect();
+
+                let traversal_counts = lf
+                    .traversal_counts
+                    .into_iter()
+                    .map(|(k, v)| {
+                        EdgeKey::try_from(k.as_str())
+                            .map(|ek| (ek, v))
+                            .map_err(|e| SnapshotError::InvalidJson(format!("edge_key {k}: {e}")))
+                    })
+                    .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+
+                Ok(Frame::Loop(LoopFrame {
+                    loop_node,
+                    config,
+                    items,
+                    current_index: lf.current_index,
+                    attempts_remaining: lf.attempts_remaining,
+                    return_to,
+                    traversal_counts,
+                }))
+            }
+            SerializableFrame::Subgraph(sf) => {
+                use crate::engine::frames::{Frame, ResolvedSubgraphInput, SubgraphFrame};
+                use surge_core::agent_config::TemplateVar;
+                use surge_core::keys::SubgraphKey;
+
+                let outer_node = NodeKey::try_from(sf.outer_node.as_str())
+                    .map_err(|e| SnapshotError::InvalidNodeKey(format!("outer_node: {e}")))?;
+                let inner_subgraph = SubgraphKey::try_from(sf.inner_subgraph.as_str())
+                    .map_err(|e| SnapshotError::InvalidJson(format!("inner_subgraph: {e}")))?;
+                let return_to = NodeKey::try_from(sf.return_to.as_str())
+                    .map_err(|e| SnapshotError::InvalidNodeKey(format!("return_to: {e}")))?;
+
+                let bound_inputs = sf
+                    .bound_inputs
+                    .into_iter()
+                    .map(|i| ResolvedSubgraphInput {
+                        inner_var: TemplateVar(i.inner_var),
+                        value: i.value,
+                    })
+                    .collect();
+
+                Ok(Frame::Subgraph(SubgraphFrame {
+                    outer_node,
+                    inner_subgraph,
+                    bound_inputs,
+                    return_to,
+                }))
+            }
+        }
+    }
+}
+
+/// Convert a `serde_json::Value` to the closest `toml::Value` equivalent.
+///
+/// TOML has no `null` type; JSON nulls become an empty string. All other
+/// conversions are lossless for the value types that appear in loop item lists.
+fn json_to_toml_value(v: serde_json::Value) -> toml::Value {
+    match v {
+        serde_json::Value::Null => toml::Value::String(String::new()),
+        serde_json::Value::Bool(b) => toml::Value::Boolean(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                toml::Value::Float(f)
+            } else {
+                toml::Value::String(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => toml::Value::String(s),
+        serde_json::Value::Array(arr) => {
+            toml::Value::Array(arr.into_iter().map(json_to_toml_value).collect())
+        }
+        serde_json::Value::Object(obj) => toml::Value::Table(
+            obj.into_iter()
+                .map(|(k, v)| (k, json_to_toml_value(v)))
+                .collect(),
+        ),
+    }
+}
+
 impl EngineSnapshot {
     /// Current schema version. Bump on any breaking layout change.
     /// Version 2 (M6) — adds `frames` (Loop/Subgraph nesting) and
@@ -287,7 +423,7 @@ mod tests {
     use super::*;
     use crate::engine::frames::{Frame, LoopFrame};
     use std::collections::HashMap;
-    use surge_core::keys::SubgraphKey;
+    use surge_core::keys::{EdgeKey, SubgraphKey};
     use surge_core::loop_config::{
         ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
     };
@@ -379,5 +515,55 @@ mod tests {
         assert!(snap.frames.is_empty());
         assert!(snap.root_traversal_counts.is_empty());
         assert_eq!(snap.cursor.node, "plan_1");
+    }
+
+    #[test]
+    fn loop_frame_roundtrips_via_serializable() {
+        use crate::engine::frames::{Frame, LoopFrame};
+
+        let original = LoopFrame {
+            loop_node: NodeKey::try_from("loop_1").unwrap(),
+            config: LoopConfig {
+                iterates_over: IterableSource::Static(vec![toml::Value::String("a".into())]),
+                body: SubgraphKey::try_from("body").unwrap(),
+                iteration_var_name: "item".into(),
+                exit_condition: ExitCondition::MaxIterations { n: 5 },
+                on_iteration_failure: FailurePolicy::Skip,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            },
+            items: vec![toml::Value::String("a".into())],
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: NodeKey::try_from("after").unwrap(),
+            traversal_counts: HashMap::from_iter([
+                (EdgeKey::try_from("e1").unwrap(), 1),
+            ]),
+        };
+
+        let serialised: SerializableFrame = Frame::Loop(original.clone()).into();
+        let back: Frame = serialised.try_into().expect("reverse conversion");
+        match back {
+            Frame::Loop(lf) => {
+                assert_eq!(lf.loop_node, original.loop_node);
+                assert_eq!(lf.current_index, original.current_index);
+                assert_eq!(lf.return_to, original.return_to);
+                assert_eq!(lf.items.len(), 1);
+                assert_eq!(lf.attempts_remaining, original.attempts_remaining);
+                // Config check: at least the discriminating fields.
+                match lf.config.exit_condition {
+                    ExitCondition::MaxIterations { n } => assert_eq!(n, 5),
+                    other => panic!("expected MaxIterations, got {other:?}"),
+                }
+                match lf.config.on_iteration_failure {
+                    FailurePolicy::Skip => (),
+                    other => panic!("expected Skip, got {other:?}"),
+                }
+                assert_eq!(lf.config.iteration_var_name, "item");
+                assert_eq!(lf.config.gate_after_each, false);
+                assert_eq!(lf.traversal_counts.get(&EdgeKey::try_from("e1").unwrap()), Some(&1));
+            }
+            other => panic!("expected Loop frame, got {other:?}"),
+        }
     }
 }
