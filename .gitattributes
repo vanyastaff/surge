@@ -1,0 +1,42 @@
+# Normalize line endings to LF on commit, regardless of platform.
+# This makes the repository consistent across Linux, macOS, and Windows
+# (where developers may have core.autocrlf=true). Rustfmt produces LF,
+# so without this file Windows checkouts re-introduce CRLF and create
+# noisy diffs after `cargo fmt`.
+
+# Default: auto-detect text files, store with LF in repo
+* text=auto eol=lf
+
+# Rust sources and project config
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.lock  text eol=lf
+
+# Documentation and data formats
+*.md    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sql   text eol=lf
+*.snap  text eol=lf
+
+# Unix shell scripts: must be LF or they break on Linux/macOS
+*.sh    text eol=lf
+
+# Windows scripts: must be CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Common binary formats — never normalize
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.svg   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.wasm  binary
