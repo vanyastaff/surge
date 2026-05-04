@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use surge_acp::bridge::event::BridgeEvent;
@@ -19,13 +18,16 @@ use surge_acp::client::PermissionPolicy;
 use surge_core::agent_config::AgentConfig;
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
+use surge_core::node::OutcomeDecl;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 use surge_persistence::runs::run_writer::RunWriter;
 
 use crate::engine::sandbox_factory::build_sandbox;
 use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 use crate::engine::stage::{StageError, StageResult};
-use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload};
+use crate::engine::tools::{
+    ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
+};
 
 /// Parameters for executing a single agent stage.
 pub struct AgentStageParams<'a> {
@@ -33,6 +35,9 @@ pub struct AgentStageParams<'a> {
     pub node: &'a NodeKey,
     /// Agent node configuration from the spec graph.
     pub agent_config: &'a AgentConfig,
+    /// Declared outcomes from the node — used to populate `SessionConfig::declared_outcomes`.
+    /// Must be non-empty; `SessionConfig::validate()` enforces this at session-open time.
+    pub declared_outcomes: &'a [OutcomeDecl],
     /// Bridge facade for ACP session lifecycle.
     pub bridge: &'a Arc<dyn BridgeFacade>,
     /// Run writer (events emitted here in Phase 6.2+).
@@ -47,7 +52,11 @@ pub struct AgentStageParams<'a> {
     pub run_id: surge_core::id::RunId,
     /// Map of `call_id → oneshot::Sender<serde_json::Value>` for routing
     /// `Engine::resolve_human_input` replies to the waiting agent stage.
-    pub tool_resolutions: &'a std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub tool_resolutions: &'a std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>,
+        >,
+    >,
     /// Timeout for `request_human_input` calls. Sourced from `EngineRunConfig`.
     pub human_input_timeout: std::time::Duration,
 }
@@ -81,19 +90,77 @@ pub struct AgentStageParams<'a> {
 /// Returns [`StageError::Storage`] if event persistence fails.
 #[allow(clippy::too_many_lines)]
 pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
+    // Phase 6.4: resolve bindings and prompt BEFORE building SessionConfig so
+    // we can wire them into the config (not just the first message).
+    let resolved_bindings =
+        resolve_bindings(&p.agent_config.bindings, p.run_memory, p.worktree_path)
+            .await
+            .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
 
-    // Build SessionConfig. Bindings + prompt are resolved below (Phase 6.4).
+    let prompt_template = p
+        .agent_config
+        .prompt_overrides
+        .as_ref()
+        .and_then(|po| po.system.as_deref())
+        .or_else(|| {
+            p.agent_config
+                .prompt_overrides
+                .as_ref()
+                .and_then(|po| po.append_system.as_deref())
+        })
+        .unwrap_or("");
+    let prompt_text = substitute_template(prompt_template, &resolved_bindings);
+
+    // Derive AgentKind from the profile string.
+    // M5 minimum: profiles matching "mock" or "mock@*" → AgentKind::Mock.
+    // All other profiles also map to Mock for now; full profile registry is M6+.
+    // TODO(M6): wire profile → binary path via a ProfileRegistry lookup.
+    let profile_str = p.agent_config.profile.as_ref();
+    let agent_kind = if profile_str == "mock" || profile_str.starts_with("mock@") {
+        AgentKind::Mock { args: vec![] }
+    } else {
+        // M5 fallback: treat all non-mock profiles as Mock so the engine can
+        // be tested without a real agent binary. M6 will add binary resolution.
+        AgentKind::Mock { args: vec![] }
+    };
+
+    // Derive declared outcomes from the node's OutcomeDecl list.
+    // Fall back to ["done"] when the node has no declared_outcomes so the
+    // session is always valid (SessionConfig::validate requires at least one).
+    let declared_outcomes: Vec<OutcomeKey> = if p.declared_outcomes.is_empty() {
+        vec![OutcomeKey::try_from("done").expect("'done' is a valid OutcomeKey")]
+    } else {
+        p.declared_outcomes.iter().map(|d| d.id.clone()).collect()
+    };
+
+    // Derive allows_escalation from approvals_override.
+    let allows_escalation = p
+        .agent_config
+        .approvals_override
+        .as_ref()
+        .is_some_and(|a| a.elevation && !a.elevation_channels.is_empty());
+
+    // Cap bindings at 8 entries × 64 bytes (SessionConfig::validate limit).
+    // Use the resolved binding values for correlation in BridgeEvent::SessionEstablished.
+    let session_bindings: BTreeMap<String, String> = resolved_bindings
+        .iter()
+        .take(8)
+        .filter(|(k, v)| k.0.len() <= 64 && v.len() <= 64)
+        .map(|(k, v)| (k.0.clone(), v.clone()))
+        .collect();
+
+    // Build SessionConfig from derived values.
     let sandbox = build_sandbox(p.agent_config.sandbox_override.as_ref());
     let session_config = SessionConfig {
-        agent_kind: AgentKind::Mock { args: vec![] },
+        agent_kind,
         working_dir: p.worktree_path.to_path_buf(),
-        system_prompt: String::new(),
-        declared_outcomes: vec![OutcomeKey::from_str("done").unwrap()],
-        allows_escalation: false,
+        system_prompt: prompt_text.clone(),
+        declared_outcomes,
+        allows_escalation,
         tools: vec![],
         sandbox,
         permission_policy: PermissionPolicy::default(),
-        bindings: BTreeMap::default(),
+        bindings: session_bindings,
     };
 
     // Subscribe to events BEFORE opening the session, so we don't miss the
@@ -115,28 +182,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
-    let resolved_bindings = resolve_bindings(
-        &p.agent_config.bindings,
-        p.run_memory,
-        p.worktree_path,
-    )
-    .await
-    .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
-
-    let prompt_template = p
-        .agent_config
-        .prompt_overrides
-        .as_ref()
-        .and_then(|po| po.system.as_deref())
-        .or_else(|| {
-            p.agent_config
-                .prompt_overrides
-                .as_ref()
-                .and_then(|po| po.append_system.as_deref())
-        })
-        .unwrap_or("");
-    let prompt_text = substitute_template(prompt_template, &resolved_bindings);
-
     let prompt_msg = MessageContent::Text(prompt_text);
     p.bridge
         .send_message(session_id, prompt_msg)
@@ -150,8 +195,10 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             Ok(ev) => ev,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                return Err(StageError::Bridge("event stream closed unexpectedly".into()));
-            }
+                return Err(StageError::Bridge(
+                    "event stream closed unexpectedly".into(),
+                ));
+            },
         };
 
         // Filter events for this session only.
@@ -160,7 +207,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         }
 
         match event {
-            BridgeEvent::OutcomeReported { outcome, summary, .. } => {
+            BridgeEvent::OutcomeReported {
+                outcome, summary, ..
+            } => {
                 p.writer
                     .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
                         node: p.node.clone(),
@@ -170,21 +219,21 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
                 break outcome;
-            }
+            },
             BridgeEvent::SessionEnded { reason, .. } => {
                 let disposition = match &reason {
                     surge_acp::bridge::event::SessionEndReason::Normal => {
                         SessionDisposition::Normal
-                    }
+                    },
                     surge_acp::bridge::event::SessionEndReason::AgentCrashed { .. } => {
                         SessionDisposition::AgentCrashed
-                    }
+                    },
                     surge_acp::bridge::event::SessionEndReason::Timeout { .. } => {
                         SessionDisposition::Timeout
-                    }
+                    },
                     surge_acp::bridge::event::SessionEndReason::ForcedClose => {
                         SessionDisposition::ForcedClose
-                    }
+                    },
                 };
                 p.writer
                     .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
@@ -196,11 +245,14 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 return Err(StageError::AgentCrashed(format!(
                     "session ended before OutcomeReported: {reason:?}"
                 )));
-            }
-            BridgeEvent::ToolCall { call_id, tool, args_redacted_json, meta, .. }
-                if !meta.injected =>
-            {
-
+            },
+            BridgeEvent::ToolCall {
+                call_id,
+                tool,
+                args_redacted_json,
+                meta,
+                ..
+            } if !meta.injected => {
                 // Parse args from JSON for the dispatcher.
                 let arguments: serde_json::Value =
                     serde_json::from_str(&args_redacted_json).unwrap_or(serde_json::Value::Null);
@@ -233,39 +285,49 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 let result_hash = match &engine_result {
                     EngineResultPayload::Ok { content } => {
                         ContentHash::compute(content.to_string().as_bytes())
-                    }
+                    },
                     EngineResultPayload::Error { message }
                     | EngineResultPayload::Unsupported { message } => {
                         ContentHash::compute(message.as_bytes())
-                    }
+                    },
                     EngineResultPayload::Cancelled => ContentHash::compute(b"cancelled"),
                 };
                 p.writer
-                    .append_event(VersionedEventPayload::new(EventPayload::ToolResultReceived {
-                        session: session_id,
-                        success,
-                        result: result_hash,
-                    }))
+                    .append_event(VersionedEventPayload::new(
+                        EventPayload::ToolResultReceived {
+                            session: session_id,
+                            success,
+                            result: result_hash,
+                        },
+                    ))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
 
                 // Convert engine payload → ACP payload and reply.
                 let acp_result = match engine_result {
-                    EngineResultPayload::Ok { content } => {
-                        AcpResultPayload::Ok { result_json: content.to_string() }
-                    }
+                    EngineResultPayload::Ok { content } => AcpResultPayload::Ok {
+                        result_json: content.to_string(),
+                    },
                     EngineResultPayload::Error { message } => AcpResultPayload::Error { message },
-                    EngineResultPayload::Unsupported { message: _ } => AcpResultPayload::Unsupported,
-                    EngineResultPayload::Cancelled => {
-                        AcpResultPayload::Error { message: "cancelled".into() }
-                    }
+                    EngineResultPayload::Unsupported { message: _ } => {
+                        AcpResultPayload::Unsupported
+                    },
+                    EngineResultPayload::Cancelled => AcpResultPayload::Error {
+                        message: "cancelled".into(),
+                    },
                 };
                 p.bridge
                     .reply_to_tool(session_id, call_id, acp_result)
                     .await
                     .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
-            }
-            BridgeEvent::TokenUsage { prompt_tokens, output_tokens, cache_hits, model, .. } => {
+            },
+            BridgeEvent::TokenUsage {
+                prompt_tokens,
+                output_tokens,
+                cache_hits,
+                model,
+                ..
+            } => {
                 // cost_usd is not carried by BridgeEvent::TokenUsage in M3 —
                 // a future layer can compute it from token counts + model name.
                 p.writer
@@ -279,22 +341,28 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
-            }
-            BridgeEvent::HumanInputRequested { call_id, question, context, .. } => {
-
+            },
+            BridgeEvent::HumanInputRequested {
+                call_id,
+                question,
+                context,
+                ..
+            } => {
                 let prompt = match &context {
                     Some(ctx) => format!("{question}\n\n{ctx}"),
                     None => question.clone(),
                 };
 
                 p.writer
-                    .append_event(VersionedEventPayload::new(EventPayload::HumanInputRequested {
-                        node: p.node.clone(),
-                        session: Some(session_id),
-                        call_id: Some(call_id.clone()),
-                        prompt,
-                        schema: None,
-                    }))
+                    .append_event(VersionedEventPayload::new(
+                        EventPayload::HumanInputRequested {
+                            node: p.node.clone(),
+                            session: Some(session_id),
+                            call_id: Some(call_id.clone()),
+                            prompt,
+                            schema: None,
+                        },
+                    ))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
 
@@ -313,43 +381,52 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
                 if let Some(response) = resolved {
                     p.writer
-                        .append_event(VersionedEventPayload::new(EventPayload::HumanInputResolved {
-                            node: p.node.clone(),
-                            call_id: Some(call_id.clone()),
-                            response: response.clone(),
-                        }))
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::HumanInputResolved {
+                                node: p.node.clone(),
+                                call_id: Some(call_id.clone()),
+                                response: response.clone(),
+                            },
+                        ))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
                     p.bridge
                         .reply_to_tool(
                             session_id,
                             call_id,
-                            AcpResultPayload::Ok { result_json: response.to_string() },
+                            AcpResultPayload::Ok {
+                                result_json: response.to_string(),
+                            },
                         )
                         .await
                         .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
                 } else {
                     p.writer
-                        .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
-                            node: p.node.clone(),
-                            call_id: Some(call_id.clone()),
-                            elapsed_seconds: u32::try_from(p.human_input_timeout.as_secs()).unwrap_or(u32::MAX),
-                        }))
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::HumanInputTimedOut {
+                                node: p.node.clone(),
+                                call_id: Some(call_id.clone()),
+                                elapsed_seconds: u32::try_from(p.human_input_timeout.as_secs())
+                                    .unwrap_or(u32::MAX),
+                            },
+                        ))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
                     p.bridge
                         .reply_to_tool(
                             session_id,
                             call_id,
-                            AcpResultPayload::Error { message: "human input timed out".into() },
+                            AcpResultPayload::Error {
+                                message: "human input timed out".into(),
+                            },
                         )
                         .await
                         .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
                     // M5 fail-fast: timeout halts the stage.
                     return Err(StageError::HumanGateRejected);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     };
 

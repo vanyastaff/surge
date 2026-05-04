@@ -14,10 +14,20 @@ pub enum TerminalOutcome {
         /// Key of the terminal node that ended the run.
         node: NodeKey,
     },
-    /// The run terminated with a failure.
+    /// The run terminated with an error (reached a `TerminalKind::Failure` node).
     Failed {
         /// Human-readable description of the failure.
         error: String,
+    },
+    /// The run halted gracefully (reached a `TerminalKind::Aborted` node).
+    ///
+    /// Distinct from `Failed`: aborted is an intentional graceful halt (e.g.
+    /// a user-requested cancellation baked into the graph), whereas `Failed`
+    /// is an unexpected error path. Emits `EventPayload::RunAborted` rather
+    /// than `RunFailed`.
+    Aborted {
+        /// Reason message from the terminal node's `message` field, or a default.
+        reason: String,
     },
 }
 
@@ -33,9 +43,17 @@ pub struct TerminalStageParams<'a> {
 
 /// Execute a single `NodeKind::Terminal` stage.
 ///
-/// Emits `RunCompleted` (success) or `RunFailed` (failure / aborted) and
-/// returns the corresponding [`TerminalOutcome`].
-pub async fn execute_terminal_stage(p: TerminalStageParams<'_>) -> Result<TerminalOutcome, StageError> {
+/// Emits `RunCompleted` for `TerminalKind::Success`,
+/// `RunFailed` for `TerminalKind::Failure`, and
+/// `RunAborted` for `TerminalKind::Aborted` (graceful halt).
+///
+/// `Aborted` is the "graceful halt" path — an intentional stop baked into
+/// the pipeline graph. `Failure` is the "error" path for unexpected terminal
+/// conditions. Both return distinct `TerminalOutcome` variants so the run-task
+/// loop can emit the correct `RunOutcome`.
+pub async fn execute_terminal_stage(
+    p: TerminalStageParams<'_>,
+) -> Result<TerminalOutcome, StageError> {
     match &p.terminal_config.kind {
         TerminalKind::Success => {
             p.writer
@@ -44,22 +62,38 @@ pub async fn execute_terminal_stage(p: TerminalStageParams<'_>) -> Result<Termin
                 }))
                 .await
                 .map_err(|e| StageError::Storage(e.to_string()))?;
-            Ok(TerminalOutcome::Completed { node: p.node.clone() })
-        }
-        TerminalKind::Failure { .. } | TerminalKind::Aborted => {
-            let reason = p
+            Ok(TerminalOutcome::Completed {
+                node: p.node.clone(),
+            })
+        },
+        TerminalKind::Failure { .. } => {
+            let error = p
                 .terminal_config
                 .message
                 .clone()
                 .unwrap_or_else(|| "terminal failure node".into());
             p.writer
                 .append_event(VersionedEventPayload::new(EventPayload::RunFailed {
-                    error: reason.clone(),
+                    error: error.clone(),
                 }))
                 .await
                 .map_err(|e| StageError::Storage(e.to_string()))?;
-            Ok(TerminalOutcome::Failed { error: reason })
-        }
+            Ok(TerminalOutcome::Failed { error })
+        },
+        TerminalKind::Aborted => {
+            let reason = p
+                .terminal_config
+                .message
+                .clone()
+                .unwrap_or_else(|| "terminal aborted node".into());
+            p.writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+                    reason: reason.clone(),
+                }))
+                .await
+                .map_err(|e| StageError::Storage(e.to_string()))?;
+            Ok(TerminalOutcome::Aborted { reason })
+        },
     }
 }
 
@@ -91,7 +125,7 @@ mod tests {
         .unwrap();
         match outcome {
             TerminalOutcome::Completed { node: n } => assert_eq!(n.as_ref(), "end"),
-            other @ TerminalOutcome::Failed { .. } => panic!("expected Completed, got {other:?}"),
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -118,7 +152,34 @@ mod tests {
         .unwrap();
         match outcome {
             TerminalOutcome::Failed { error } => assert_eq!(error, "oops"),
-            other @ TerminalOutcome::Completed { .. } => panic!("expected Failed, got {other:?}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborted_terminal_emits_run_aborted() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let writer = storage
+            .create_run(surge_core::id::RunId::new(), dir.path(), None)
+            .await
+            .unwrap();
+
+        let cfg = TerminalConfig {
+            kind: TerminalKind::Aborted,
+            message: Some("user cancelled".into()),
+        };
+        let node = NodeKey::try_from("abort").unwrap();
+        let outcome = execute_terminal_stage(TerminalStageParams {
+            node: &node,
+            terminal_config: &cfg,
+            writer: &writer,
+        })
+        .await
+        .unwrap();
+        match outcome {
+            TerminalOutcome::Aborted { reason } => assert_eq!(reason, "user cancelled"),
+            other => panic!("expected Aborted, got {other:?}"),
         }
     }
 }

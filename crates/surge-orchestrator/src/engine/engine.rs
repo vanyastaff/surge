@@ -28,8 +28,16 @@ pub struct Engine {
 
 pub(crate) struct ActiveRun {
     pub cancel: tokio_util::sync::CancellationToken,
-    pub gate_resolutions: Arc<tokio::sync::Mutex<HashMap<surge_core::keys::NodeKey, tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>>>>,
-    pub tool_resolutions: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub gate_resolutions: Arc<
+        tokio::sync::Mutex<
+            HashMap<
+                surge_core::keys::NodeKey,
+                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
+            >,
+        >,
+    >,
+    pub tool_resolutions:
+        Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
 }
 
 impl Engine {
@@ -58,16 +66,22 @@ impl Engine {
         run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
-        use crate::engine::run_task::{execute, RunTaskParams};
+        use crate::engine::run_task::{RunTaskParams, execute};
         use crate::engine::validate::validate_for_m5;
-        use surge_core::content_hash::ContentHash;
-        use surge_core::run_event::{EventPayload, RunConfig as CoreRunConfig, VersionedEventPayload};
-        use surge_core::sandbox::SandboxMode;
         use surge_core::approvals::ApprovalPolicy;
+        use surge_core::content_hash::ContentHash;
+        use surge_core::run_event::{
+            EventPayload, RunConfig as CoreRunConfig, VersionedEventPayload,
+        };
+        use surge_core::sandbox::SandboxMode;
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
         validate_for_m5(&graph)?;
+
+        if self.runs.read().await.contains_key(&run_id) {
+            return Err(EngineError::RunAlreadyActive(run_id));
+        }
 
         if !worktree_path.exists() {
             return Err(EngineError::WorktreeMissing(worktree_path));
@@ -108,8 +122,10 @@ impl Engine {
         let (event_tx, event_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
 
-        let gate_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let gate_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
@@ -160,7 +176,7 @@ impl Engine {
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::replay::replay;
-        use crate::engine::run_task::{execute, RunTaskParams};
+        use crate::engine::run_task::{RunTaskParams, execute};
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
@@ -203,12 +219,10 @@ impl Engine {
 
         let (event_tx, event_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
-        let gate_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        ));
-        let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        ));
+        let gate_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
 
         let active = ActiveRun {
             cancel: cancel.clone(),
@@ -255,16 +269,14 @@ impl Engine {
         response: serde_json::Value,
     ) -> Result<(), EngineError> {
         let runs = self.runs.read().await;
-        let active = runs
-            .get(&run_id)
-            .ok_or(EngineError::RunNotFound(run_id))?;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
 
         if let Some(call_id_str) = call_id {
             // Tool-driven resolution.
             let mut tools = active.tool_resolutions.lock().await;
-            let tx = tools
-                .remove(&call_id_str)
-                .ok_or_else(|| EngineError::Internal(format!("no pending tool call '{call_id_str}'")))?;
+            let tx = tools.remove(&call_id_str).ok_or_else(|| {
+                EngineError::Internal(format!("no pending tool call '{call_id_str}'"))
+            })?;
             tx.send(response)
                 .map_err(|_| EngineError::Internal("tool resolution receiver dropped".into()))?;
             Ok(())
@@ -273,7 +285,9 @@ impl Engine {
             let outcome_str = response
                 .get("outcome")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| EngineError::Internal("HumanGate resolution missing 'outcome' field".into()))?;
+                .ok_or_else(|| {
+                    EngineError::Internal("HumanGate resolution missing 'outcome' field".into())
+                })?;
             let outcome = surge_core::keys::OutcomeKey::try_from(outcome_str)
                 .map_err(|e| EngineError::Internal(format!("invalid outcome: {e}")))?;
 
@@ -282,9 +296,7 @@ impl Engine {
             let mut gates = active.gate_resolutions.lock().await;
             let key = gates.keys().next().cloned();
             if let Some(k) = key {
-                let tx = gates
-                    .remove(&k)
-                    .expect("just looked up");
+                let tx = gates.remove(&k).expect("just looked up");
                 tx.send(crate::engine::stage::human_gate::HumanGateResolution {
                     outcome,
                     response,
@@ -292,7 +304,9 @@ impl Engine {
                 .map_err(|_| EngineError::Internal("gate resolution receiver dropped".into()))?;
                 Ok(())
             } else {
-                Err(EngineError::Internal("no pending HumanGate to resolve".into()))
+                Err(EngineError::Internal(
+                    "no pending HumanGate to resolve".into(),
+                ))
             }
         }
     }
@@ -314,7 +328,7 @@ impl Engine {
                 // The task itself will emit RunAborted and exit.
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 Ok(())
-            }
+            },
             None => Err(EngineError::RunNotFound(run_id)),
         }
     }

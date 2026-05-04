@@ -1,8 +1,6 @@
 //! `WorktreeToolDispatcher` — file + shell tools rooted in the run's worktree.
 
-use crate::engine::tools::{
-    ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
-};
+use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload};
 use async_trait::async_trait;
 use std::path::PathBuf;
 
@@ -39,7 +37,9 @@ impl WorktreeToolDispatcher {
     #[must_use]
     pub fn new(worktree_root: PathBuf) -> Self {
         let canonical = std::fs::canonicalize(&worktree_root).unwrap_or(worktree_root);
-        Self { worktree_root: canonical }
+        Self {
+            worktree_root: canonical,
+        }
     }
 
     /// Return the canonicalized worktree root path.
@@ -59,15 +59,18 @@ impl WorktreeToolDispatcher {
                 message: "read_file: missing 'path' arg".into(),
             };
         };
-        let binary = args.get("binary").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let binary = args
+            .get("binary")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let abs = self.worktree_root.join(rel_path);
         let canonical = match std::fs::canonicalize(&abs) {
             Ok(p) => p,
             Err(e) => {
                 return ToolResultPayload::Error {
                     message: format!("read_file: cannot canonicalize {}: {e}", abs.display()),
-                }
-            }
+                };
+            },
         };
         if !canonical.starts_with(&self.worktree_root) {
             return ToolResultPayload::Error {
@@ -81,14 +84,14 @@ impl WorktreeToolDispatcher {
         if binary {
             match tokio::fs::read(&canonical).await {
                 Ok(bytes) => {
-                    use base64::{engine::general_purpose::STANDARD, Engine};
+                    use base64::{Engine, engine::general_purpose::STANDARD};
                     ToolResultPayload::Ok {
                         content: serde_json::json!({
                             "content_base64": STANDARD.encode(&bytes),
                             "byte_len": bytes.len(),
                         }),
                     }
-                }
+                },
                 Err(e) => ToolResultPayload::Error {
                     message: format!("read_file: {e}"),
                 },
@@ -123,7 +126,10 @@ impl WorktreeToolDispatcher {
                 message: "write_file: missing 'content' arg".into(),
             };
         };
-        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("overwrite");
+        let mode = args
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("overwrite");
         let abs = self.worktree_root.join(rel_path);
         // For write paths, the parent must canonicalize within worktree;
         // the leaf may not yet exist.
@@ -136,9 +142,12 @@ impl WorktreeToolDispatcher {
             Ok(p) => p,
             Err(e) => {
                 return ToolResultPayload::Error {
-                    message: format!("write_file: cannot canonicalize parent {}: {e}", parent.display()),
-                }
-            }
+                    message: format!(
+                        "write_file: cannot canonicalize parent {}: {e}",
+                        parent.display()
+                    ),
+                };
+            },
         };
         if !canonical_parent.starts_with(&self.worktree_root) {
             return ToolResultPayload::Error {
@@ -155,11 +164,14 @@ impl WorktreeToolDispatcher {
             "create" => {
                 if final_path.exists() {
                     return ToolResultPayload::Error {
-                        message: format!("write_file create: {} already exists", final_path.display()),
+                        message: format!(
+                            "write_file create: {} already exists",
+                            final_path.display()
+                        ),
                     };
                 }
                 tokio::fs::write(&final_path, content).await
-            }
+            },
             "overwrite" => tokio::fs::write(&final_path, content).await,
             "append" => {
                 use tokio::io::AsyncWriteExt;
@@ -172,12 +184,14 @@ impl WorktreeToolDispatcher {
                     Ok(mut f) => f.write_all(content.as_bytes()).await,
                     Err(e) => Err(e),
                 }
-            }
+            },
             other => {
                 return ToolResultPayload::Error {
-                    message: format!("write_file: unknown mode '{other}', expected create/overwrite/append"),
-                }
-            }
+                    message: format!(
+                        "write_file: unknown mode '{other}', expected create/overwrite/append"
+                    ),
+                };
+            },
         };
         match result {
             Ok(()) => ToolResultPayload::Ok {
@@ -203,7 +217,28 @@ impl WorktreeToolDispatcher {
             };
         };
         let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
-            self.worktree_root.join(rel)
+            let joined = self.worktree_root.join(rel);
+            let canonical = match std::fs::canonicalize(&joined) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResultPayload::Error {
+                        message: format!(
+                            "shell_exec: cannot canonicalize cwd_relative {}: {e}",
+                            joined.display()
+                        ),
+                    };
+                },
+            };
+            if !canonical.starts_with(&self.worktree_root) {
+                return ToolResultPayload::Error {
+                    message: format!(
+                        "shell_exec: cwd_relative {} escapes worktree {}",
+                        canonical.display(),
+                        self.worktree_root.display()
+                    ),
+                };
+            }
+            canonical
         } else {
             self.worktree_root.clone()
         };
@@ -230,8 +265,8 @@ impl WorktreeToolDispatcher {
             Err(e) => {
                 return ToolResultPayload::Error {
                     message: format!("shell_exec: spawn failed: {e}"),
-                }
-            }
+                };
+            },
         };
 
         let timeout = std::time::Duration::from_secs(timeout_secs);
@@ -241,17 +276,23 @@ impl WorktreeToolDispatcher {
             Ok(Err(e)) => {
                 return ToolResultPayload::Error {
                     message: format!("shell_exec: wait failed: {e}"),
-                }
-            }
+                };
+            },
             Err(_) => {
                 return ToolResultPayload::Error {
                     message: format!("shell_exec: timeout after {timeout_secs}s"),
-                }
-            }
+                };
+            },
         };
 
-        let stdout = truncate_with_marker(String::from_utf8_lossy(&output.stdout).into_owned(), TAIL_CAP);
-        let stderr = truncate_with_marker(String::from_utf8_lossy(&output.stderr).into_owned(), TAIL_CAP);
+        let stdout = truncate_with_marker(
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            TAIL_CAP,
+        );
+        let stderr = truncate_with_marker(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            TAIL_CAP,
+        );
         let exit_code = output.status.code().unwrap_or(-1);
 
         ToolResultPayload::Ok {
@@ -266,17 +307,15 @@ impl WorktreeToolDispatcher {
 
 #[async_trait]
 impl ToolDispatcher for WorktreeToolDispatcher {
-    async fn dispatch(
-        &self,
-        _ctx: &ToolDispatchContext<'_>,
-        call: &ToolCall,
-    ) -> ToolResultPayload {
+    async fn dispatch(&self, _ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
         match call.tool.as_str() {
             "read_file" => self.read_file(call).await,
             "write_file" => self.write_file(call).await,
             "shell_exec" => self.shell_exec(call).await,
             other => ToolResultPayload::Unsupported {
-                message: format!("WorktreeToolDispatcher: tool '{other}' not implemented (M5 supports read_file/write_file/shell_exec)"),
+                message: format!(
+                    "WorktreeToolDispatcher: tool '{other}' not implemented (M5 supports read_file/write_file/shell_exec)"
+                ),
             },
         }
     }
@@ -286,7 +325,10 @@ impl ToolDispatcher for WorktreeToolDispatcher {
 mod tests {
     use super::*;
 
-    fn ctx<'a>(root: &'a std::path::Path, mem: &'a surge_core::run_state::RunMemory) -> ToolDispatchContext<'a> {
+    fn ctx<'a>(
+        root: &'a std::path::Path,
+        mem: &'a surge_core::run_state::RunMemory,
+    ) -> ToolDispatchContext<'a> {
         ToolDispatchContext {
             run_id: surge_core::id::RunId::new(),
             session_id: surge_core::id::SessionId::new(),
@@ -311,7 +353,7 @@ mod tests {
         match result {
             ToolResultPayload::Ok { content } => {
                 assert_eq!(content["content_text"].as_str().unwrap(), "hello");
-            }
+            },
             other => panic!("expected Ok, got {other:?}"),
         }
     }
@@ -354,7 +396,10 @@ mod tests {
             let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
             assert!(matches!(result, ToolResultPayload::Ok { .. }));
         }
-        assert_eq!(std::fs::read_to_string(dir.path().join("out.txt")).unwrap(), "v2");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "v2"
+        );
     }
 
     #[tokio::test]
@@ -407,7 +452,7 @@ mod tests {
                 let stdout = content["stdout"].as_str().unwrap();
                 assert!(stdout.contains("hi"), "stdout was {stdout:?}");
                 assert_eq!(content["exit_code"].as_i64().unwrap(), 0);
-            }
+            },
             other => panic!("expected Ok, got {other:?}"),
         }
     }
@@ -432,8 +477,34 @@ mod tests {
         match result {
             ToolResultPayload::Ok { content } => {
                 assert_eq!(content["exit_code"].as_i64().unwrap(), 7);
-            }
+            },
             other => panic!("expected Ok, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn shell_exec_rejects_cwd_escaping_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let d = WorktreeToolDispatcher::new(dir.path().to_path_buf());
+        let mem = surge_core::run_state::RunMemory::default();
+        // Construct a relative path that resolves outside the worktree.
+        let escape_rel = format!(
+            "../{}",
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
+        let call = ToolCall {
+            call_id: "c1".into(),
+            tool: "shell_exec".into(),
+            arguments: serde_json::json!({
+                "command": "echo hi",
+                "cwd_relative": escape_rel,
+            }),
+        };
+        let result = d.dispatch(&ctx(d.worktree_root(), &mem), &call).await;
+        assert!(
+            matches!(result, ToolResultPayload::Error { .. }),
+            "expected Error for escaping cwd_relative, got {result:?}"
+        );
     }
 }

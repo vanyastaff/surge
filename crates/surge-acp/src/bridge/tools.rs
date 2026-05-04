@@ -209,10 +209,35 @@ mod tests {
         assert_eq!(t.category.mcp_id(), Some("ops"));
     }
 
+    /// Recursively sort all JSON object keys so the snapshot is
+    /// platform-independent regardless of `serde_json::Map` insertion order.
+    fn sort_json_keys(v: serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut sorted: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                let mut pairs: Vec<_> = map.into_iter().collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                for (k, v) in pairs {
+                    sorted.insert(k, sort_json_keys(v));
+                }
+                serde_json::Value::Object(sorted)
+            },
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.into_iter().map(sort_json_keys).collect())
+            },
+            other => other,
+        }
+    }
+
     #[test]
     fn report_stage_outcome_schema_snapshot() {
         let t = build_report_stage_outcome_tool(&[ok("done"), ok("blocked"), ok("escalate")]);
-        insta::assert_json_snapshot!("report_stage_outcome_schema", t.input_schema);
+        // Sort keys before snapshotting to ensure deterministic output across
+        // platforms (serde_json::Map insertion order is not guaranteed to be
+        // stable between Windows and Linux builds without the preserve_order
+        // feature).
+        let sorted = sort_json_keys(t.input_schema);
+        insta::assert_json_snapshot!("report_stage_outcome_schema", sorted);
     }
 
     proptest::proptest! {

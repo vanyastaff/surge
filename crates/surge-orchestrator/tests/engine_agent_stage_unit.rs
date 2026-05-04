@@ -10,20 +10,20 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::AgentConfig;
 use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
-use surge_orchestrator::engine::stage::agent::{execute_agent_stage, AgentStageParams};
-use surge_orchestrator::engine::tools::{ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload};
+use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
+use surge_orchestrator::engine::tools::{
+    ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
+};
 use surge_persistence::runs::Storage;
 
 struct UnusedDispatcher;
 
 #[async_trait::async_trait]
 impl ToolDispatcher for UnusedDispatcher {
-    async fn dispatch(
-        &self,
-        _ctx: &ToolDispatchContext<'_>,
-        call: &ToolCall,
-    ) -> ToolResultPayload {
-        ToolResultPayload::Unsupported { message: format!("unused: {}", call.tool) }
+    async fn dispatch(&self, _ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
+        ToolResultPayload::Unsupported {
+            message: format!("unused: {}", call.tool),
+        }
     }
 }
 
@@ -47,10 +47,7 @@ async fn agent_stage_loops_until_outcome_reported() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
-    let writer = storage
-        .create_run(run_id, dir.path(), None)
-        .await
-        .unwrap();
+    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -78,10 +75,12 @@ async fn agent_stage_loops_until_outcome_reported() {
     let memory = surge_core::run_state::RunMemory::default();
     let cfg = agent_cfg();
     let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let result = execute_agent_stage(AgentStageParams {
         node: &node,
         agent_config: &cfg,
+        declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
         worktree_path: dir.path(),

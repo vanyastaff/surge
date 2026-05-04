@@ -4,12 +4,14 @@
 use crate::engine::config::EngineRunConfig;
 use crate::engine::handle::{EngineRunEvent, RunOutcome};
 use crate::engine::routing::next_node_after;
-use crate::engine::stage::agent::{execute_agent_stage, AgentStageParams};
-use crate::engine::stage::branch::{execute_branch_stage, BranchStageParams};
-use crate::engine::stage::human_gate::{execute_human_gate_stage, HumanGateStageParams};
-use crate::engine::stage::notify::{execute_notify_stage, NotifyStageParams};
-use crate::engine::stage::terminal::{execute_terminal_stage, TerminalOutcome, TerminalStageParams};
 use crate::engine::stage::StageError;
+use crate::engine::stage::agent::{AgentStageParams, execute_agent_stage};
+use crate::engine::stage::branch::{BranchStageParams, execute_branch_stage};
+use crate::engine::stage::human_gate::{HumanGateStageParams, execute_human_gate_stage};
+use crate::engine::stage::notify::{NotifyStageParams, execute_notify_stage};
+use crate::engine::stage::terminal::{
+    TerminalOutcome, TerminalStageParams, execute_terminal_stage,
+};
 use crate::engine::tools::ToolDispatcher;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,22 +42,30 @@ pub(crate) struct RunTaskParams {
     pub resume_memory: Option<RunMemory>,
     /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
     /// Engine's `resolve_human_input` finds the sender and fires it.
-    pub gate_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<surge_core::keys::NodeKey, tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>>>>,
+    pub gate_resolutions: std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<
+                surge_core::keys::NodeKey,
+                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
+            >,
+        >,
+    >,
     /// Map of `call_id → oneshot::Sender<serde_json::Value>`.
     /// Engine's `resolve_human_input` finds the sender and fires it for
     /// tool-driven `request_human_input` calls from agent stages.
-    pub tool_resolutions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub tool_resolutions: std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>,
+        >,
+    >,
 }
 
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
-    let mut cursor = params
-        .resume_cursor
-        .clone()
-        .unwrap_or_else(|| Cursor {
-            node: params.graph.start.clone(),
-            attempt: 1,
-        });
+    let mut cursor = params.resume_cursor.clone().unwrap_or_else(|| Cursor {
+        node: params.graph.start.clone(),
+        attempt: 1,
+    });
     let mut memory = params.resume_memory.clone().unwrap_or_default();
 
     loop {
@@ -67,7 +77,11 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     reason: reason.clone(),
                 }))
                 .await;
-            return RunOutcome::Aborted { reason };
+            let outcome = RunOutcome::Aborted { reason };
+            let _ = params
+                .event_tx
+                .send(EngineRunEvent::Terminal(outcome.clone()));
+            return outcome;
         }
 
         let node = if let Some(n) = params.graph.nodes.get(&cursor.node) {
@@ -95,6 +109,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 let r = execute_agent_stage(AgentStageParams {
                     node: &cursor.node,
                     agent_config: cfg,
+                    declared_outcomes: &node.declared_outcomes,
                     bridge: &params.bridge,
                     writer: &params.writer,
                     worktree_path: &params.worktree_path,
@@ -106,7 +121,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 })
                 .await;
                 r.map(StageOutcome::Routed)
-            }
+            },
             NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
                 node: &cursor.node,
                 branch_config: cfg,
@@ -131,10 +146,14 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 })
                 .await;
                 r.map(StageOutcome::Terminal)
-            }
+            },
             NodeConfig::HumanGate(cfg) => {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                params.gate_resolutions.lock().await.insert(cursor.node.clone(), tx);
+                params
+                    .gate_resolutions
+                    .lock()
+                    .await
+                    .insert(cursor.node.clone(), tx);
                 let r = execute_human_gate_stage(HumanGateStageParams {
                     node: &cursor.node,
                     gate_config: cfg,
@@ -146,7 +165,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 .await;
                 params.gate_resolutions.lock().await.remove(&cursor.node);
                 r.map(StageOutcome::Routed)
-            }
+            },
             NodeConfig::Loop(_) | NodeConfig::Subgraph(_) => Err(StageError::Internal(format!(
                 "node kind {:?} not supported in M5",
                 node.kind()
@@ -156,14 +175,29 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         let outcome: OutcomeKey = match stage_result {
             Ok(StageOutcome::Routed(k)) => k,
             Ok(StageOutcome::Terminal(TerminalOutcome::Completed { node: n })) => {
-                return RunOutcome::Completed { terminal: n };
-            }
+                let outcome = RunOutcome::Completed { terminal: n };
+                let _ = params
+                    .event_tx
+                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                return outcome;
+            },
             Ok(StageOutcome::Terminal(TerminalOutcome::Failed { error })) => {
-                return RunOutcome::Failed { error };
-            }
+                let outcome = RunOutcome::Failed { error };
+                let _ = params
+                    .event_tx
+                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                return outcome;
+            },
+            Ok(StageOutcome::Terminal(TerminalOutcome::Aborted { reason })) => {
+                let outcome = RunOutcome::Aborted { reason };
+                let _ = params
+                    .event_tx
+                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                return outcome;
+            },
             Err(e) => {
                 return failed(&params, format!("stage error at {}: {e}", cursor.node)).await;
-            }
+            },
         };
 
         // Update memory with outcome (best-effort; storage's own seq is the source of truth).
@@ -217,7 +251,10 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             .await;
 
         // Snapshot at stage boundary (per spec §2.6, §12).
-        let next_cursor = Cursor { node: next.clone(), attempt: 1 };
+        let next_cursor = Cursor {
+            node: next.clone(),
+            attempt: 1,
+        };
         let current_seq = match params.writer.current_seq().await {
             Ok(s) => s,
             Err(e) => return failed(&params, format!("current_seq: {e}")).await,
@@ -258,4 +295,3 @@ async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
         }));
     RunOutcome::Failed { error }
 }
-

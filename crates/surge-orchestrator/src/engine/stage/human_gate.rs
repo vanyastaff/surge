@@ -51,16 +51,18 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
         .timeout_seconds
         .map_or(p.default_timeout, |s| Duration::from_secs(u64::from(s)));
 
-    let schema = build_options_schema(&p.gate_config.options);
+    let schema = build_options_schema(&p.gate_config.options, p.gate_config.allow_freetext);
 
     p.writer
-        .append_event(VersionedEventPayload::new(EventPayload::HumanInputRequested {
-            node: p.node.clone(),
-            session: None,
-            call_id: None,
-            prompt: summary,
-            schema: Some(schema),
-        }))
+        .append_event(VersionedEventPayload::new(
+            EventPayload::HumanInputRequested {
+                node: p.node.clone(),
+                session: None,
+                call_id: None,
+                prompt: summary,
+                schema: Some(schema),
+            },
+        ))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
@@ -89,21 +91,23 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
 
     let Some(final_outcome) = outcome else {
         p.writer
-            .append_event(VersionedEventPayload::new(EventPayload::HumanInputTimedOut {
-                node: p.node.clone(),
-                call_id: None,
-                elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
-            }))
+            .append_event(VersionedEventPayload::new(
+                EventPayload::HumanInputTimedOut {
+                    node: p.node.clone(),
+                    call_id: None,
+                    elapsed_seconds: u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX),
+                },
+            ))
             .await
             .map_err(|e| StageError::Storage(e.to_string()))?;
         match p.gate_config.on_timeout {
             TimeoutAction::Reject | TimeoutAction::Escalate => {
                 return Err(StageError::HumanGateRejected);
-            }
+            },
             TimeoutAction::Continue => {
                 // M5 has no default_outcome on HumanGateConfig; documented gap.
                 return Err(StageError::HumanGateContinueWithoutDefault);
-            }
+            },
         }
     };
 
@@ -119,25 +123,48 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
     Ok(final_outcome)
 }
 
-fn render_summary(template: &surge_core::human_gate_config::SummaryTemplate, _memory: &RunMemory) -> String {
+fn render_summary(
+    template: &surge_core::human_gate_config::SummaryTemplate,
+    _memory: &RunMemory,
+) -> String {
     // M5 rendering: just title + body, no template substitution. Future M6
     // adds template var resolution against memory.artifacts.
     format!("{}\n\n{}", template.title, template.body)
 }
 
-fn build_options_schema(options: &[surge_core::human_gate_config::ApprovalOption]) -> serde_json::Value {
+/// Build the JSON schema for human gate response options.
+///
+/// When `allow_freetext` is `false`, the `outcome` field is restricted to the
+/// declared enum values. When `true`, the `enum` constraint is omitted so the
+/// operator can supply any string (e.g. a free-text approval note).
+fn build_options_schema(
+    options: &[surge_core::human_gate_config::ApprovalOption],
+    allow_freetext: bool,
+) -> serde_json::Value {
     let outcomes: Vec<&str> = options.iter().map(|o| o.outcome.as_ref()).collect();
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "outcome": {
-                "type": "string",
-                "enum": outcomes,
+    if allow_freetext {
+        // No enum constraint: any string is accepted as outcome.
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "outcome": { "type": "string" },
+                "comment": { "type": "string" },
             },
-            "comment": { "type": "string" },
-        },
-        "required": ["outcome"],
-    })
+            "required": ["outcome"],
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "outcome": {
+                    "type": "string",
+                    "enum": outcomes,
+                },
+                "comment": { "type": "string" },
+            },
+            "required": ["outcome"],
+        })
+    }
 }
 
 #[cfg(test)]
@@ -149,7 +176,9 @@ mod tests {
 
     fn minimal_gate_config(timeout: Option<u32>, on_timeout: TimeoutAction) -> HumanGateConfig {
         HumanGateConfig {
-            delivery_channels: vec![ApprovalChannel::Telegram { chat_id_ref: "$DEFAULT".into() }],
+            delivery_channels: vec![ApprovalChannel::Telegram {
+                chat_id_ref: "$DEFAULT".into(),
+            }],
             timeout_seconds: timeout,
             on_timeout,
             summary: SummaryTemplate {
