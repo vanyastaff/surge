@@ -144,15 +144,104 @@ impl Engine {
         })
     }
 
-    /// Resume an existing run. Phase 10 implements the body.
+    /// Resume an existing run from its latest snapshot + event tail.
+    ///
+    /// Opens the persisted event log, replays snapshots and events to
+    /// reconstruct the last known cursor and memory, then resumes execution
+    /// from that point. Returns immediately if the run is already active in
+    /// this process.
     pub async fn resume_run(
         &self,
-        _run_id: RunId,
-        _worktree_path: PathBuf,
+        run_id: RunId,
+        worktree_path: PathBuf,
     ) -> Result<RunHandle, EngineError> {
-        Err(EngineError::Internal(
-            "Engine::resume_run not yet implemented (Phase 10)".into(),
-        ))
+        use crate::engine::handle::RunHandle;
+        use crate::engine::replay::replay;
+        use crate::engine::run_task::{execute, RunTaskParams};
+        use tokio::sync::broadcast;
+        use tokio_util::sync::CancellationToken;
+
+        if self.runs.read().await.contains_key(&run_id) {
+            return Err(EngineError::RunAlreadyActive(run_id));
+        }
+
+        let writer = self
+            .storage
+            .open_run_writer(run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        let reader = self
+            .storage
+            .open_run_reader(run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        let replayed = replay(&reader).await?;
+
+        // If the run already reached a terminal state, return a handle that
+        // resolves immediately without re-executing any stages.
+        if let Some(terminal_outcome) = replayed.already_terminal {
+            // Drop the writer; we won't be writing anything.
+            drop(writer);
+            let (event_tx, event_rx) = broadcast::channel(1);
+            // Immediately send the terminal event (best-effort; receiver may
+            // not be listening yet, which is fine — the future resolves).
+            let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal(
+                terminal_outcome.clone(),
+            ));
+            let join = tokio::spawn(async move { terminal_outcome });
+            return Ok(RunHandle {
+                run_id,
+                events: event_rx,
+                completion: join,
+            });
+        }
+
+        let (event_tx, event_rx) = broadcast::channel(256);
+        let cancel = CancellationToken::new();
+        let gate_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        ));
+        let tool_resolutions = std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        ));
+
+        let active = ActiveRun {
+            cancel: cancel.clone(),
+            gate_resolutions: gate_resolutions.clone(),
+            tool_resolutions: tool_resolutions.clone(),
+        };
+        self.runs.write().await.insert(run_id, active);
+
+        let params = RunTaskParams {
+            run_id,
+            writer,
+            bridge: self.bridge.clone(),
+            tool_dispatcher: self.tool_dispatcher.clone(),
+            graph: replayed.graph,
+            worktree_path,
+            run_config: EngineRunConfig::default(),
+            event_tx,
+            cancel,
+            resume_cursor: Some(replayed.cursor),
+            resume_memory: Some(replayed.memory),
+            gate_resolutions,
+            tool_resolutions,
+        };
+
+        let runs_for_cleanup = self.runs.clone();
+        let join = tokio::spawn(async move {
+            let outcome = execute(params).await;
+            runs_for_cleanup.write().await.remove(&run_id);
+            outcome
+        });
+
+        Ok(RunHandle {
+            run_id,
+            events: event_rx,
+            completion: join,
+        })
     }
 
     /// Provide answer to a paused run waiting on human input.

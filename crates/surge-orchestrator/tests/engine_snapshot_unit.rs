@@ -185,6 +185,64 @@ async fn three_node_branch_run_writes_two_snapshots() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_after_completion_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+    let dispatcher =
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+    let end = NodeKey::try_from("end").unwrap();
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        end.clone(),
+        Node {
+            id: end.clone(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        },
+    );
+    let graph = Graph {
+        schema_version: SCHEMA_VERSION,
+        metadata: GraphMetadata {
+            name: "rs".into(),
+            description: None,
+            template_origin: None,
+            created_at: chrono::Utc::now(),
+            author: None,
+        },
+        start: end,
+        nodes,
+        edges: vec![],
+        subgraphs: BTreeMap::new(),
+    };
+
+    let run_id = RunId::new();
+    let h = engine
+        .start_run(run_id, graph, dir.path().to_path_buf(), EngineRunConfig::default())
+        .await
+        .unwrap();
+    let _ = h.await_completion().await.unwrap();
+
+    // Resume should detect a terminal-state run and exit cleanly.
+    let r = engine
+        .resume_run(run_id, dir.path().to_path_buf())
+        .await
+        .unwrap();
+    let outcome = r.await_completion().await.unwrap();
+    match outcome {
+        RunOutcome::Completed { .. } => {},
+        other => panic!("expected Completed on resume, got {other:?}"),
+    }
+}
+
 /// Count how many graph snapshots were written for a completed run.
 async fn count_snapshots(storage: &Arc<Storage>, run_id: RunId) -> usize {
     let reader = storage
