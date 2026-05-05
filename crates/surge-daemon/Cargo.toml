@@ -25,6 +25,7 @@ tracing-subscriber.workspace = true
 
 interprocess.workspace = true
 sysinfo.workspace = true
+dirs.workspace = true
 
 surge-core.workspace = true
 surge-orchestrator.workspace = true
