@@ -13,6 +13,7 @@
 pub mod admission;
 pub mod broadcast;
 pub mod error;
+pub mod lifecycle;
 pub mod pidfile;
 pub mod server;
 
