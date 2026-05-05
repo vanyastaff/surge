@@ -35,6 +35,27 @@ pub struct McpServerRef {
 }
 
 impl McpServerRef {
+    /// Construct with explicit values for every field.
+    ///
+    /// Provided so external crates can create instances despite
+    /// `#[non_exhaustive]` being in effect.
+    #[must_use]
+    pub fn new(
+        name: String,
+        transport: McpTransportConfig,
+        allowed_tools: Option<Vec<String>>,
+        call_timeout: Duration,
+        restart_on_crash: bool,
+    ) -> Self {
+        Self {
+            name,
+            transport,
+            allowed_tools,
+            call_timeout,
+            restart_on_crash,
+        }
+    }
+
     fn default_call_timeout() -> Duration {
         Duration::from_secs(60)
     }
@@ -57,6 +78,17 @@ pub enum McpTransportConfig {
         #[serde(default)]
         env: HashMap<String, String>,
     },
+}
+
+impl McpTransportConfig {
+    /// Construct a `Stdio` variant with explicit values.
+    ///
+    /// Provided so external crates can create instances despite
+    /// `#[non_exhaustive]` being in effect.
+    #[must_use]
+    pub fn stdio(command: PathBuf, args: Vec<String>, env: HashMap<String, String>) -> Self {
+        Self::Stdio { command, args, env }
+    }
 }
 
 #[cfg(test)]
