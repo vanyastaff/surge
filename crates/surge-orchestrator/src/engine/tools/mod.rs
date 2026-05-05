@@ -1,7 +1,9 @@
 //! Tool dispatch for engine-driven agent stages.
 
 pub mod path_guard;
+pub mod routing;
 pub mod worktree;
+pub use routing::RoutingToolDispatcher;
 
 use async_trait::async_trait;
 use std::path::Path;

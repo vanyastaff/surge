@@ -49,6 +49,26 @@ pub enum McpContent {
     },
 }
 
+impl McpToolEntry {
+    /// Construct an entry. Prefer this over a struct literal so the
+    /// type can grow new fields with `#[non_exhaustive]` without
+    /// breaking external constructors.
+    #[must_use]
+    pub fn new(
+        server: String,
+        tool: String,
+        description: Option<String>,
+        input_schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            server,
+            tool,
+            description,
+            input_schema,
+        }
+    }
+}
+
 /// Engine-wide registry of MCP server connections. Holds one
 /// [`McpServerConnection`] per configured server. Connections are
 /// constructed in `Disconnected` state — first use of each server
