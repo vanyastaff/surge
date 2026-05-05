@@ -431,10 +431,25 @@ impl DaemonEngineFacade {
             .await
             .insert(run_id, event_tx);
 
-        let resp = self
+        let resp = match self
             .inner
             .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // RPC failed (write error, daemon dropped, etc.). Remove the
+                // orphaned per_run entry so subsequent event dispatch doesn't
+                // target a channel nobody listens to.
+                self.inner
+                    .event_dispatcher
+                    .per_run
+                    .lock()
+                    .await
+                    .remove(&run_id);
+                return Err(e);
+            },
+        };
         match resp {
             DaemonResponse::SubscribeOk { .. } => Ok(event_rx),
             DaemonResponse::Error { code, message, .. } => {
@@ -465,17 +480,19 @@ impl DaemonEngineFacade {
     /// channel locally (subscribers see Closed); sends Unsubscribe
     /// IPC to the daemon so it stops pumping events to this connection.
     pub async fn unsubscribe_from_run(&self, run_id: RunId) -> Result<(), EngineError> {
-        let resp = self
-            .inner
-            .rpc(|request_id| DaemonRequest::Unsubscribe { request_id, run_id })
-            .await?;
-        // Whether the daemon ack'd or errored, drop our local channel.
+        // Drop the local channel FIRST so subscribers see Closed immediately
+        // and we don't leak the entry if the IPC fails.
         self.inner
             .event_dispatcher
             .per_run
             .lock()
             .await
             .remove(&run_id);
+
+        let resp = self
+            .inner
+            .rpc(|request_id| DaemonRequest::Unsubscribe { request_id, run_id })
+            .await?;
         match resp {
             DaemonResponse::UnsubscribeOk { .. } => Ok(()),
             DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
