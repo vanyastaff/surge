@@ -295,11 +295,17 @@ async fn dispatch(
             let decision = admission.try_admit(run_id).await;
             match decision {
                 AdmissionDecision::Admitted => {
+                    // Safe: try_admit returned Admitted, so run_id is
+                    // in `active` (not queue). The other paths that
+                    // remove from pending_starts — drain.pop_queued
+                    // and StopRun.cancel_queued — both gate on the
+                    // run being in the FIFO queue, so neither can
+                    // touch this entry.
                     let pending = pending_starts
                         .lock()
                         .await
                         .remove(&run_id)
-                        .expect("just inserted; only the drain task removes other entries");
+                        .expect("just inserted; Admitted ⇒ no concurrent remover");
                     // Register the per-run broadcast BEFORE publishing
                     // RunAccepted so a client subscribed to global
                     // daemon events that races a Subscribe(run_id)
@@ -450,13 +456,59 @@ async fn dispatch(
             request_id,
             run_id,
             reason,
-        } => match facade.stop_run(run_id, reason).await {
-            Ok(()) => Some(DaemonResponse::StopRunOk { request_id }),
-            Err(e) => Some(DaemonResponse::Error {
-                request_id,
-                code: ErrorCode::EngineError,
-                message: format!("{e}"),
-            }),
+        } => {
+            // The engine only knows about runs that `Engine::start_run`
+            // has admitted; a queued run is invisible to
+            // `facade.stop_run`. Without a queue-aware branch, the
+            // user's cancellation would be silently lost: facade.stop_run
+            // returns RunNotFound, and worse, the drain task would
+            // later admit and start the run anyway.
+            //
+            // We use `admission.cancel_queued` (not pending_starts) as
+            // the source of truth. cancel_queued is atomic with the
+            // admission state, so a `true` result means the run was
+            // definitely in the FIFO at the call site (not in
+            // `active`). Once it returns true, the drain task can no
+            // longer see this run, so it's safe to also drop its
+            // stashed start params from pending_starts.
+            //
+            // Why NOT check pending_starts first: dispatch::StartRun
+            // inserts into pending_starts BEFORE calling try_admit,
+            // and only removes in the Admitted arm afterward. A
+            // concurrent StopRun that races that window would observe
+            // a `Some` entry for a run that admission has already put
+            // into `active` (not queue), would call cancel_queued and
+            // get `false`, and would leave both StopRun and StartRun
+            // in inconsistent state — the StartRun's `expect("just
+            // inserted...")` would then panic when it tried to remove
+            // the same entry.
+            //
+            // Races we accept (not panics):
+            //   * StopRun fires between drain.pop_queued and
+            //     drain.pending_starts.remove: cancel_queued returns
+            //     false, falls through to facade.stop_run, which sees
+            //     RunNotFound (engine doesn't know the run yet). User
+            //     can retry once the run is fully admitted.
+            //   * Two concurrent StopRuns for the same queued run:
+            //     one wins, the other falls through to facade.stop_run.
+            // No `broadcast.deregister` is needed — a queued run never
+            // reached `broadcast.register`.
+            if admission.cancel_queued(run_id).await {
+                pending_starts.lock().await.remove(&run_id);
+                broadcast.publish_global(GlobalDaemonEvent::RunFinished {
+                    run_id,
+                    outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted { reason },
+                });
+                return Some(DaemonResponse::StopRunOk { request_id });
+            }
+            match facade.stop_run(run_id, reason).await {
+                Ok(()) => Some(DaemonResponse::StopRunOk { request_id }),
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
         },
 
         DaemonRequest::ResolveHumanInput {
