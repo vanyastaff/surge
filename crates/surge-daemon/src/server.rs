@@ -242,15 +242,44 @@ async fn dispatch(
             worktree_path,
             run_config,
         } => {
+            // Insert into `pending_starts` BEFORE `try_admit`. If we did
+            // it after, an unrelated active run could complete in the
+            // gap, wake the drain task, which would `pop_queued` our
+            // run_id and find no `PendingStartRun` entry — silently
+            // dropping the request. By stashing first, the drain task
+            // sees a consistent view: any run_id it pops is guaranteed
+            // to have its parameters already recorded here. The
+            // `Admitted` arm below removes the entry it just inserted
+            // (the run is in `active`, not `queue`, so the drain task
+            // can never observe it).
+            pending_starts.lock().await.insert(
+                run_id,
+                PendingStartRun {
+                    graph,
+                    worktree_path,
+                    run_config,
+                    request_id,
+                },
+            );
             let decision = admission.try_admit(run_id).await;
             match decision {
                 AdmissionDecision::Admitted => {
+                    let pending = pending_starts
+                        .lock()
+                        .await
+                        .remove(&run_id)
+                        .expect("just inserted; only the drain task removes other entries");
                     broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     let publisher = broadcast.register(run_id).await;
                     let admission_for_completion = admission.clone();
                     let broadcast_for_completion = broadcast.clone();
                     match facade
-                        .start_run(run_id, *graph, worktree_path, run_config)
+                        .start_run(
+                            run_id,
+                            *pending.graph,
+                            pending.worktree_path,
+                            pending.run_config,
+                        )
                         .await
                     {
                         Ok(handle) => {
@@ -275,26 +304,21 @@ async fn dispatch(
                     }
                 },
                 AdmissionDecision::Queued { position } => {
-                    // Stash the StartRun parameters; the drain-queue task in
-                    // `run` will pick them up via `pop_queued` once a slot
-                    // frees and replay the same Admitted-arm logic
-                    // (broadcast.register, facade.start_run, spawn_forward_task).
+                    // `pending_starts` is already populated above; the
+                    // drain task in `run` will pick it up via
+                    // `pop_queued` once a slot frees, then replay the
+                    // same admitted-arm logic (broadcast.register,
+                    // facade.start_run, spawn_forward_task).
                     //
-                    // Known limitation: the original IPC connection that
-                    // received StartRunQueued is NOT auto-resubscribed to the
-                    // eventually-admitted run's events. Clients that want to
-                    // observe the admitted run should re-issue `Subscribe`
-                    // (or run `surge engine watch <run_id> --daemon`) once
-                    // they see `GlobalDaemonEvent::RunAccepted` for the id.
-                    pending_starts.lock().await.insert(
-                        run_id,
-                        PendingStartRun {
-                            graph,
-                            worktree_path,
-                            run_config,
-                            request_id,
-                        },
-                    );
+                    // Known limitation: the original IPC connection
+                    // that received `StartRunQueued` is NOT
+                    // auto-resubscribed to the eventually-admitted
+                    // run's events. Even re-issuing `Subscribe` after
+                    // observing `GlobalDaemonEvent::RunAccepted` is
+                    // racy today because the existing dispatch
+                    // publishes `RunAccepted` before
+                    // `BroadcastRegistry::register`; that ordering
+                    // race is out-of-scope for this PR.
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,

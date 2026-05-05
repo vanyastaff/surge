@@ -281,5 +281,9 @@ async fn queued_run_admitted_after_completion() {
     );
 
     shutdown.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
+    let join_result = tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("server did not shut down within 2s after cancellation");
+    let server_result = join_result.expect("server task panicked");
+    server_result.expect("server returned error");
 }
