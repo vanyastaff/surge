@@ -85,6 +85,7 @@ async fn ping_round_trip() {
     let socket = unique_socket_path(&temp, "smoke");
     let cfg = ServerConfig {
         max_active: 4,
+        max_queue: 16,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();

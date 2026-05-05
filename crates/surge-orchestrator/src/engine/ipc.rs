@@ -30,6 +30,12 @@ pub enum ErrorCode {
     RunNotActive,
     /// `AdmissionController` queue overflow.
     AdmissionFull,
+    /// `AdmissionController` rejected a `StartRun` because the FIFO
+    /// queue is at its configured cap. Distinct from `AdmissionFull`,
+    /// which is used by `ResumeRun` to signal that the active set is
+    /// at cap (resumes are never queued). Clients should back off and
+    /// retry rather than treating this as a hard failure.
+    QueueFull,
     /// Underlying storage error (sqlite I/O, etc.).
     StorageError,
     /// Engine-level error (graph validation, run lifecycle, etc.).

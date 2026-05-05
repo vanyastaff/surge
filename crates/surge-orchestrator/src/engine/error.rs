@@ -50,6 +50,17 @@ pub enum EngineError {
     #[error("run not currently active in daemon: {0}")]
     RunNotActive(RunId),
 
+    /// The daemon's `AdmissionController` rejected a `StartRun`
+    /// because both the active set and the FIFO queue are at their
+    /// configured caps. Carries the operator-facing message produced
+    /// by the daemon (e.g. `"queue is full (8/8)"`) so callers can
+    /// surface it verbatim.
+    ///
+    /// Distinct from `Internal` so callers can back off and retry the
+    /// `start_run` call without parsing strings.
+    #[error("daemon queue full: {0}")]
+    QueueFull(String),
+
     /// An unexpected internal condition occurred.
     #[error("internal engine error: {0}")]
     Internal(String),

@@ -98,6 +98,7 @@ async fn subscribe_unknown_run_returns_run_not_active() {
     let socket = unique_socket_path(&temp, "sub_unk");
     let cfg = ServerConfig {
         max_active: 4,
+        max_queue: 16,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
