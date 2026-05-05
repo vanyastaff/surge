@@ -488,6 +488,61 @@ impl DaemonEngineFacade {
         }
     }
 
+    /// Subscribe to daemon-level [`GlobalDaemonEvent`] notifications.
+    /// Returns a `broadcast::Receiver<GlobalDaemonEvent>` that yields
+    /// events the daemon publishes (e.g. `RunAccepted`, `RunFinished`,
+    /// `DaemonShuttingDown`) for the lifetime of this connection.
+    ///
+    /// Past events are NOT replayed — only events fired AFTER the
+    /// daemon registers the subscription arrive. The local broadcast
+    /// channel was created up-front in `DaemonClient::connect`; this
+    /// method simply hands out a fresh receiver and tells the daemon
+    /// to start fanning out global events to this connection's wire.
+    ///
+    /// Errors with `EngineError::Internal` if the IPC fails or an
+    /// unexpected response variant arrives.
+    pub async fn subscribe_global(
+        &self,
+    ) -> Result<broadcast::Receiver<GlobalDaemonEvent>, EngineError> {
+        // Subscribe to the local channel BEFORE sending the IPC so any
+        // global events arriving immediately after the daemon registers
+        // the subscription are delivered to the caller.
+        let rx = self.inner.event_dispatcher.global.subscribe();
+
+        let resp = self
+            .inner
+            .rpc(|request_id| DaemonRequest::SubscribeGlobal { request_id })
+            .await?;
+        match resp {
+            DaemonResponse::SubscribeGlobalOk { .. } => Ok(rx),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!(
+                "unexpected response to SubscribeGlobal: {other:?}"
+            ))),
+        }
+    }
+
+    /// Unsubscribe from daemon-level events. Sends `UnsubscribeGlobal`
+    /// IPC; the local `broadcast::Receiver` returned by
+    /// [`Self::subscribe_global`] naturally drops on the caller's
+    /// side and will see `Closed` on subsequent `recv` calls once the
+    /// last sender clone goes away (the local sender lives until the
+    /// connection drops, so existing receivers keep yielding past
+    /// events the daemon already pushed).
+    pub async fn unsubscribe_global(&self) -> Result<(), EngineError> {
+        let resp = self
+            .inner
+            .rpc(|request_id| DaemonRequest::UnsubscribeGlobal { request_id })
+            .await?;
+        match resp {
+            DaemonResponse::UnsubscribeGlobalOk { .. } => Ok(()),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!(
+                "unexpected response to UnsubscribeGlobal: {other:?}"
+            ))),
+        }
+    }
+
     /// Unsubscribe from a run's events. Drops the per-run broadcast
     /// channel locally (subscribers see Closed); sends Unsubscribe
     /// IPC to the daemon so it stops pumping events to this connection.
