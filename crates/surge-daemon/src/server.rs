@@ -145,6 +145,11 @@ struct ConnState {
     /// Per-run forwarder task handles. Populated by `Subscribe`;
     /// removed (and aborted) by `Unsubscribe` or connection teardown.
     forwarders: HashMap<RunId, tokio::task::JoinHandle<()>>,
+    /// Global-event forwarder task handle. Populated by `SubscribeGlobal`;
+    /// aborted by `UnsubscribeGlobal` or connection teardown. Only one
+    /// global subscription per connection — repeating `SubscribeGlobal`
+    /// replaces the existing forwarder.
+    global_forwarder: Option<tokio::task::JoinHandle<()>>,
 }
 
 async fn handle_connection(
@@ -161,6 +166,7 @@ async fn handle_connection(
     let state = Arc::new(Mutex::new(ConnState {
         subscriptions: HashSet::new(),
         forwarders: HashMap::new(),
+        global_forwarder: None,
     }));
 
     loop {
@@ -211,6 +217,9 @@ async fn handle_connection(
     // F5: Cleanup — abort any forwarder tasks the client left open.
     let mut s = state.lock().await;
     for (_, h) in s.forwarders.drain() {
+        h.abort();
+    }
+    if let Some(h) = s.global_forwarder.take() {
         h.abort();
     }
 
@@ -462,6 +471,28 @@ async fn dispatch(
             Some(DaemonResponse::UnsubscribeOk { request_id })
         },
 
+        DaemonRequest::SubscribeGlobal { request_id } => {
+            let rx = broadcast.subscribe_global();
+            let writer_for_task = writer.clone();
+            let handle = tokio::spawn(forward_global_to_client(rx, writer_for_task));
+            // Replace any pre-existing global forwarder on this connection
+            // (defensive — clients shouldn't double-subscribe, but if they
+            // do, we abort the old one rather than leak it).
+            let mut s = state.lock().await;
+            if let Some(old) = s.global_forwarder.replace(handle) {
+                old.abort();
+            }
+            Some(DaemonResponse::SubscribeGlobalOk { request_id })
+        },
+
+        DaemonRequest::UnsubscribeGlobal { request_id } => {
+            let mut s = state.lock().await;
+            if let Some(h) = s.global_forwarder.take() {
+                h.abort();
+            }
+            Some(DaemonResponse::UnsubscribeGlobalOk { request_id })
+        },
+
         DaemonRequest::Shutdown { request_id } => {
             // F4: actually cancel the shutdown token so the daemon exits.
             tracing::info!("Shutdown IPC received; cancelling shutdown token");
@@ -644,6 +675,35 @@ async fn forward_per_run_to_client(
                     dropped = n,
                     "per-run forwarder lagged"
                 );
+            },
+        }
+    }
+}
+
+/// Per-connection forwarder for daemon-level events: pumps the global
+/// broadcast → wire as [`DaemonEvent::Global`]. Exits when the
+/// broadcast closes (daemon shutdown) or the writer fails. Mirrors
+/// [`forward_per_run_to_client`] but for [`GlobalDaemonEvent`].
+async fn forward_global_to_client(
+    mut rx: tokio::sync::broadcast::Receiver<GlobalDaemonEvent>,
+    writer: Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let frame = DaemonEvent::Global(event);
+                let mut w = writer.lock().await;
+                if let Err(e) = write_frame(&mut *w, &frame).await {
+                    tracing::debug!(
+                        err = %e,
+                        "global subscriber write failed; ending forwarder"
+                    );
+                    break;
+                }
+            },
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(dropped = n, "global forwarder lagged");
             },
         }
     }

@@ -114,6 +114,21 @@ pub enum DaemonRequest {
         /// Identifier of the run to unsubscribe from.
         run_id: RunId,
     },
+    /// Subscribe to daemon-level [`GlobalDaemonEvent`] notifications. The
+    /// daemon will start sending [`DaemonEvent::Global`] frames for every
+    /// `GlobalDaemonEvent` published while this subscription is active,
+    /// until [`DaemonRequest::UnsubscribeGlobal`] arrives or the connection
+    /// closes. Past events are NOT replayed — the receiver only sees
+    /// events fired AFTER the daemon registers the subscription.
+    SubscribeGlobal {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+    },
+    /// Cancel a previous global subscription.
+    UnsubscribeGlobal {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+    },
     /// Begin a graceful daemon shutdown.
     Shutdown {
         /// Client-assigned identifier echoed in the response.
@@ -134,6 +149,8 @@ impl DaemonRequest {
             | Self::ListRuns { request_id }
             | Self::Subscribe { request_id, .. }
             | Self::Unsubscribe { request_id, .. }
+            | Self::SubscribeGlobal { request_id }
+            | Self::UnsubscribeGlobal { request_id }
             | Self::Shutdown { request_id } => *request_id,
         }
     }
@@ -200,6 +217,16 @@ pub enum DaemonResponse {
         /// Echoed `request_id` from the originating [`DaemonRequest::Unsubscribe`].
         request_id: RequestId,
     },
+    /// [`DaemonRequest::SubscribeGlobal`] accepted; global daemon events will follow.
+    SubscribeGlobalOk {
+        /// Echoed `request_id` from the originating [`DaemonRequest::SubscribeGlobal`].
+        request_id: RequestId,
+    },
+    /// [`DaemonRequest::UnsubscribeGlobal`] accepted.
+    UnsubscribeGlobalOk {
+        /// Echoed `request_id` from the originating [`DaemonRequest::UnsubscribeGlobal`].
+        request_id: RequestId,
+    },
     /// [`DaemonRequest::Shutdown`] accepted; daemon is draining.
     ShutdownOk {
         /// Echoed `request_id` from the originating [`DaemonRequest::Shutdown`].
@@ -231,6 +258,8 @@ impl DaemonResponse {
             | Self::ListRunsOk { request_id, .. }
             | Self::SubscribeOk { request_id }
             | Self::UnsubscribeOk { request_id }
+            | Self::SubscribeGlobalOk { request_id }
+            | Self::UnsubscribeGlobalOk { request_id }
             | Self::ShutdownOk { request_id }
             | Self::Error { request_id, .. } => *request_id,
         }
