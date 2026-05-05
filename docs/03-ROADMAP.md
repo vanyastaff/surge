@@ -194,9 +194,38 @@ The engine refactor uses a separate M-series numbering aligned with the
 | M1–M4 | Foundation, persistence, ACP bridge, routing | Shipped |
 | M5 | Sequential pipeline, human gates, snapshots, resume | Shipped |
 | M6 | Loop execution, subgraph execution, Notify delivery, `surge-notify` crate | **Shipped** |
-| M7 | Parallel loop body execution, `loop_iteration` PK column, resume from loop/subgraph frames | Planned |
-| M8 | Multi-edge fanout (parallel branches), fan-in merge, full `AgentPool` | Planned |
+| M7 | Daemon mode (long-running engine host with IPC), MCP server delegation via `rmcp`, `surge-daemon` + `surge-mcp` crates | **Shipped** |
+| M8 | Retry / bootstrap stages / HumanGate channels, AdmissionController aging, parallel-loop execution | Planned |
 | M9+ | Remote agents (TCP/WebSocket), plugin system, GUI integration | Future |
+
+### M7 surface shipped in this PR
+
+- `surge daemon start/stop/status/restart` — long-running daemon process,
+  PID + socket discovery under `~/.surge/daemon/`. Cross-platform: Unix
+  domain socket on Linux/macOS, named pipe on Windows.
+- `surge engine run|resume|stop|watch|ls --daemon` — out-of-process engine
+  hosting via local socket. Auto-spawns the daemon if not running.
+- `EngineFacade` trait with `LocalEngineFacade` (M6 default) and
+  `DaemonEngineFacade` (IPC client) impls.
+- `AdmissionController` (FIFO, default `max_active = 8`) and
+  `BroadcastRegistry` (multi-subscriber per-run + global daemon events)
+  inside the daemon.
+- `surge-mcp` crate exposing `McpRegistry` + `McpServerConnection` over
+  rmcp 1.6 stdio transport. State machine: Disconnected → Running →
+  Crashed (restart per `restart_on_crash` policy). Transport-vs-service
+  error classification on rmcp errors.
+- `RoutingToolDispatcher` fans out tool calls between engine built-ins
+  and MCP servers; sandbox-aware exposure at session-open time.
+- New validation rules in `surge-core::validation`:
+  `McpServerUndeclared`, `McpServerNameEmpty`, `McpCommandPathUnsafe`.
+- `RunConfig::mcp_servers: Vec<McpServerRef>` registry on the persisted
+  run config; `EngineRunConfig::mcp_servers` on the per-call shape so
+  the daemon receives the registry via IPC.
+- Snapshot v2 unchanged.
+- `EngineFacade` is `Send + Sync` and object-safe; tests can swap
+  `LocalEngineFacade` for fake impls without IPC.
+- `crates/surge-daemon/README.md` and `crates/surge-mcp/README.md` ship
+  with operator docs.
 
 ### M6 surface shipped in this PR
 

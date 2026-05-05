@@ -82,7 +82,7 @@ impl AdmissionController {
         None
     }
 
-    /// Like [`try_admit`], but rejects (returns `false`) instead of
+    /// Like [`Self::try_admit`], but rejects (returns `false`) instead of
     /// queueing when the cap is hit. Used by operations like
     /// `resume_run` that don't want to be deferred — the caller
     /// should propagate an error to the client and let them retry.

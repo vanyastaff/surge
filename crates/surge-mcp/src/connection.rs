@@ -81,11 +81,11 @@ pub struct McpServerConnection {
 }
 
 impl McpServerConnection {
-    /// Construct in [`Disconnected`](ConnState::Disconnected) state.
+    /// Construct in the disconnected state.
     ///
     /// The child process is not spawned until the first
     /// [`call_tool`](Self::call_tool) or [`list_tools`](Self::list_tools)
-    /// invocation triggers [`ensure_connected`](Self::ensure_connected).
+    /// invocation triggers a lazy connect.
     #[must_use]
     pub fn new(config: McpServerRef) -> Self {
         Self {
