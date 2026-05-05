@@ -64,6 +64,15 @@ pub(crate) struct RunTaskParams {
             std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>,
         >,
     >,
+    /// Optional MCP registry. When `Some`, agent stages wrap the
+    /// engine dispatcher with `RoutingToolDispatcher` to expose
+    /// configured MCP tools alongside engine built-ins.
+    pub mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
+    /// Run-level MCP server registry (mirror of
+    /// `RunConfig::mcp_servers`). Per-stage `ToolOverride::mcp_add`
+    /// references entries by name; agent stages use this to look
+    /// up timeouts and `allowed_tools` filters.
+    pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -131,6 +140,8 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     run_id: params.run_id,
                     tool_resolutions: &params.tool_resolutions,
                     human_input_timeout: params.run_config.human_input_timeout,
+                    mcp_registry: params.mcp_registry.clone(),
+                    mcp_servers: params.mcp_servers.clone(),
                 })
                 .await;
                 r.map(StageOutcome::Routed)

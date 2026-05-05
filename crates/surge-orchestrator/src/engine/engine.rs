@@ -171,6 +171,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -272,6 +274,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
+            mcp_registry: None,
+            mcp_servers: Vec::new(),
         };
 
         let runs_for_cleanup = self.runs.clone();

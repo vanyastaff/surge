@@ -89,6 +89,8 @@ async fn agent_stage_loops_until_outcome_reported() {
         run_id,
         tool_resolutions: &tool_resolutions,
         human_input_timeout: std::time::Duration::from_secs(5),
+        mcp_registry: None,
+        mcp_servers: Vec::new(),
     })
     .await
     .unwrap();

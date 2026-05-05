@@ -26,7 +26,7 @@ use crate::engine::sandbox_factory::build_sandbox;
 use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 use crate::engine::stage::{StageError, StageResult};
 use crate::engine::tools::{
-    ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
+    ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload as EngineResultPayload,
 };
 
 /// Parameters for executing a single agent stage.
@@ -59,6 +59,12 @@ pub struct AgentStageParams<'a> {
     >,
     /// Timeout for `request_human_input` calls. Sourced from `EngineRunConfig`.
     pub human_input_timeout: std::time::Duration,
+    /// Optional MCP registry. When `Some`, the stage wraps `tool_dispatcher`
+    /// with `RoutingToolDispatcher` to expose MCP tools to the agent.
+    pub mcp_registry: Option<std::sync::Arc<surge_mcp::McpRegistry>>,
+    /// Run-level server list. Each entry maps a server name to its timeout
+    /// and allowed-tools filter for this session's `RoutingToolDispatcher`.
+    pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
 }
 
 /// Execute a single agent stage.
@@ -149,15 +155,83 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .map(|(k, v)| (k.0.clone(), v.clone()))
         .collect();
 
+    // Build the effective sandbox config (needed both for session creation and
+    // for the MCP sandbox heuristic below).
+    let sandbox_cfg: surge_core::sandbox::SandboxConfig =
+        p.agent_config.sandbox_override.clone().unwrap_or_default();
+
+    // Build the session-scoped tool dispatcher. When an MCP registry is
+    // configured, wrap the engine dispatcher with RoutingToolDispatcher so the
+    // agent sees both engine built-ins and the per-stage MCP allowlist.
+    let session_dispatcher: Arc<dyn ToolDispatcher> = if let Some(ref reg) = p.mcp_registry {
+        // Per-stage MCP server allowlist from ToolOverride::mcp_add.
+        let allowed_servers: std::collections::HashSet<&str> = p
+            .agent_config
+            .tool_overrides
+            .as_ref()
+            .map(|o| o.mcp_add.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+
+        let all_mcp_tools = match reg.list_all_tools().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    err = %e,
+                    "MCP list_all_tools failed; proceeding with engine tools only"
+                );
+                Vec::new()
+            },
+        };
+
+        let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
+            .into_iter()
+            .filter(|t| {
+                allowed_servers.contains(t.server.as_str())
+                    && sandbox_allows_mcp_tool(&sandbox_cfg, &t.server, &t.tool)
+            })
+            .collect();
+
+        // Per-server timeout map from the run-level McpServerRef list.
+        let timeouts: std::collections::HashMap<String, std::time::Duration> = p
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.clone(), s.call_timeout))
+            .collect();
+
+        Arc::new(crate::engine::tools::RoutingToolDispatcher::new(
+            p.tool_dispatcher.clone(),
+            reg.clone(),
+            &filtered,
+            &timeouts,
+        )) as Arc<dyn ToolDispatcher>
+    } else {
+        p.tool_dispatcher.clone()
+    };
+
+    // Assemble the ACP tool list from the session dispatcher's declared catalog.
+    // Use ToolCategory::Builtin for all caller-supplied tools (both engine
+    // built-ins and MCP tools). Injected engine tools (report_stage_outcome,
+    // request_human_input) are added separately by the bridge.
+    let session_tools: Vec<surge_acp::bridge::tools::ToolDef> = session_dispatcher
+        .declared_tools()
+        .into_iter()
+        .map(|t| surge_acp::bridge::tools::ToolDef {
+            name: t.name,
+            description: t.description.unwrap_or_default(),
+            category: surge_acp::bridge::tools::ToolCategory::Builtin,
+            input_schema: t.input_schema,
+        })
+        .collect();
+
     // Build SessionConfig from derived values.
-    let sandbox = build_sandbox(p.agent_config.sandbox_override.as_ref());
+    let sandbox = build_sandbox(Some(&sandbox_cfg));
     let session_config = SessionConfig {
         agent_kind,
         working_dir: p.worktree_path.to_path_buf(),
         system_prompt: prompt_text.clone(),
         declared_outcomes,
         allows_escalation,
-        tools: vec![],
+        tools: session_tools,
         sandbox,
         permission_policy: PermissionPolicy::default(),
         bindings: session_bindings,
@@ -268,7 +342,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     worktree_root: p.worktree_path,
                     run_memory: p.run_memory,
                 };
-                let engine_result = p.tool_dispatcher.dispatch(&ctx, &call).await;
+                let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Persist ToolCalled + ToolResultReceived.
                 let args_redacted_hash = ContentHash::compute(args_redacted_json.as_bytes());
@@ -457,5 +531,25 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
         | BridgeEvent::HumanInputRequested { session, .. }
         | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
+    }
+}
+
+/// Conservative M7 heuristic for whether a sandbox tier permits an
+/// MCP server's tool. Will be replaced by M4 (sandbox milestone)
+/// proper enforcement.
+#[allow(clippy::needless_pass_by_value)]
+fn sandbox_allows_mcp_tool(
+    sandbox: &surge_core::sandbox::SandboxConfig,
+    _server: &str,
+    _tool: &str,
+) -> bool {
+    use surge_core::sandbox::SandboxMode;
+    match sandbox.mode {
+        SandboxMode::ReadOnly => false,
+        // All other modes allow MCP — refine in M4 when sandbox enforcement lands.
+        SandboxMode::WorkspaceWrite
+        | SandboxMode::WorkspaceNetwork
+        | SandboxMode::FullAccess
+        | SandboxMode::Custom => true,
     }
 }
