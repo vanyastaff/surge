@@ -28,6 +28,7 @@
 
 // Submodules added incrementally as later phases land.
 pub mod config;
+pub mod daemon_facade;
 pub mod engine;
 pub mod error;
 pub mod facade;
@@ -45,6 +46,7 @@ pub mod tools;
 pub mod validate;
 
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
+pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
 pub use engine::Engine;
 pub use error::EngineError;
 pub use facade::{EngineFacade, LocalEngineFacade};
