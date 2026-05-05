@@ -212,6 +212,7 @@ async fn stop_run_cancels_queued_run() {
     let socket = unique_socket_path(&temp, "stop_q");
     let cfg = ServerConfig {
         max_active: 1,
+        max_queue: 8,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();

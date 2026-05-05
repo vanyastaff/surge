@@ -295,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_queued_removes_from_fifo() {
-        let a = AdmissionController::new(1);
+        let a = AdmissionController::new(1, 4);
         let r1 = RunId::new();
         let r2 = RunId::new();
         let r3 = RunId::new();

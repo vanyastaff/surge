@@ -211,6 +211,7 @@ async fn list_runs_includes_queued_run_as_awaiting() {
     let socket = unique_socket_path(&temp, "ls_q");
     let cfg = ServerConfig {
         max_active: 1,
+        max_queue: 8,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
