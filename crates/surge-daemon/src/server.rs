@@ -13,15 +13,38 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_core::id::RunId;
+use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::EngineRunEvent;
 use surge_orchestrator::engine::ipc::{
-    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, read_request_frame,
-    write_frame,
+    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
+    read_request_frame, write_frame,
 };
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+/// Stashed `StartRun` parameters held by the daemon while admission has
+/// queued the run. The original IPC connection's writer is intentionally
+/// NOT kept — by the time the drain task admits this run the connection
+/// may already be gone, and clients that care about events for the
+/// eventually-admitted run should re-subscribe via `surge engine watch
+/// <run_id> --daemon`.
+struct PendingStartRun {
+    graph: Box<surge_core::graph::Graph>,
+    worktree_path: PathBuf,
+    run_config: EngineRunConfig,
+    /// Original `request_id` from the queued `StartRun`. Diagnostics only;
+    /// the `StartRunQueued` reply has already been written and no further
+    /// response is sent on that request.
+    #[allow(dead_code)]
+    request_id: RequestId,
+}
+
+/// Map from queued `RunId` → its stashed `StartRun` params. Populated by
+/// `dispatch::StartRun` when admission queues; drained by the
+/// drain-queue task in [`run`].
+type PendingStarts = Arc<Mutex<HashMap<RunId, PendingStartRun>>>;
 
 /// Top-level daemon-server config.
 pub struct ServerConfig {
@@ -42,6 +65,7 @@ pub async fn run(
 
     let admission = Arc::new(AdmissionController::new(cfg.max_active));
     let broadcast = Arc::new(BroadcastRegistry::new());
+    let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
     // F2: Unlink any stale socket file from a previous unclean exit.
     // On Windows, the named pipe doesn't live on the filesystem so this is a no-op.
@@ -61,6 +85,19 @@ pub async fn run(
 
     tracing::info!(socket = %cfg.socket_path.display(), "daemon listening");
 
+    // Drain task: when an active run completes (or any other admission
+    // state change happens) and there is a queued run, pop it from the
+    // FIFO and trigger the same Admitted-arm logic that
+    // `dispatch::StartRun` runs (broadcast.register, facade.start_run,
+    // spawn_forward_task, RunAccepted publication).
+    spawn_drain_task(
+        admission.clone(),
+        broadcast.clone(),
+        facade.clone(),
+        pending_starts.clone(),
+        shutdown.clone(),
+    );
+
     loop {
         tokio::select! {
             () = shutdown.cancelled() => {
@@ -73,6 +110,7 @@ pub async fn run(
                         let facade = facade.clone();
                         let admission = admission.clone();
                         let broadcast = broadcast.clone();
+                        let pending_starts = pending_starts.clone();
                         let shutdown_for_conn = shutdown.clone();
                         tokio::spawn(async move {
                             if let Err(e) = handle_connection(
@@ -80,6 +118,7 @@ pub async fn run(
                                 facade,
                                 admission,
                                 broadcast,
+                                pending_starts,
                                 shutdown_for_conn,
                             )
                             .await
@@ -113,6 +152,7 @@ async fn handle_connection(
     facade: Arc<dyn EngineFacade>,
     admission: Arc<AdmissionController>,
     broadcast: Arc<BroadcastRegistry>,
+    pending_starts: PendingStarts,
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
     let (read_half, write_half) = stream.split();
@@ -144,6 +184,7 @@ async fn handle_connection(
                             &*facade,
                             &admission,
                             &broadcast,
+                            &pending_starts,
                             &state,
                             &writer,
                             &shutdown,
@@ -177,11 +218,13 @@ async fn handle_connection(
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn dispatch(
     req: DaemonRequest,
     facade: &dyn EngineFacade,
     admission: &Arc<AdmissionController>,
     broadcast: &Arc<BroadcastRegistry>,
+    pending_starts: &PendingStarts,
     state: &Arc<Mutex<ConnState>>,
     writer: &Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
     shutdown: &CancellationToken,
@@ -232,13 +275,26 @@ async fn dispatch(
                     }
                 },
                 AdmissionDecision::Queued { position } => {
-                    // TODO M7: drain-queue task lands with Phase 9 or 10 polish.
-                    // Until that task exists, a queued run sits in the FIFO queue
-                    // and will only be admitted when an active run finishes AND
-                    // pop_queued() is called externally (e.g., a Phase 9 drain loop).
-                    // The client receives StartRunQueued and must poll or rely on
-                    // GlobalDaemonEvent::RunAccepted to know when its run eventually
-                    // starts.
+                    // Stash the StartRun parameters; the drain-queue task in
+                    // `run` will pick them up via `pop_queued` once a slot
+                    // frees and replay the same Admitted-arm logic
+                    // (broadcast.register, facade.start_run, spawn_forward_task).
+                    //
+                    // Known limitation: the original IPC connection that
+                    // received StartRunQueued is NOT auto-resubscribed to the
+                    // eventually-admitted run's events. Clients that want to
+                    // observe the admitted run should re-issue `Subscribe`
+                    // (or run `surge engine watch <run_id> --daemon`) once
+                    // they see `GlobalDaemonEvent::RunAccepted` for the id.
+                    pending_starts.lock().await.insert(
+                        run_id,
+                        PendingStartRun {
+                            graph,
+                            worktree_path,
+                            run_config,
+                            request_id,
+                        },
+                    );
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
@@ -377,6 +433,101 @@ async fn dispatch(
                 message: "unsupported request method".into(),
             })
         },
+    }
+}
+
+/// Spawn the drain-queue task. Wakes on every admission state change
+/// (run completion, etc.) and pops queued runs while a slot is free,
+/// triggering the same admitted-arm logic that a fresh `StartRun`
+/// would. Exits cleanly on `shutdown.cancelled()`.
+fn spawn_drain_task(
+    admission: Arc<AdmissionController>,
+    broadcast: Arc<BroadcastRegistry>,
+    facade: Arc<dyn EngineFacade>,
+    pending_starts: PendingStarts,
+    shutdown: CancellationToken,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    tracing::debug!("drain-queue task exiting (shutdown)");
+                    break;
+                }
+                () = admission.wait_changed() => {
+                    drain_one_pass(
+                        &admission,
+                        &broadcast,
+                        facade.as_ref(),
+                        &pending_starts,
+                    )
+                    .await;
+                }
+            }
+        }
+    });
+}
+
+/// Pop every queued run we currently have a slot for and admit it.
+/// Pulled into a helper for readability. Each iteration mirrors the
+/// `AdmissionDecision::Admitted` arm in `dispatch`.
+async fn drain_one_pass(
+    admission: &Arc<AdmissionController>,
+    broadcast: &Arc<BroadcastRegistry>,
+    facade: &dyn EngineFacade,
+    pending_starts: &PendingStarts,
+) {
+    while let Some(run_id) = admission.pop_queued().await {
+        let Some(pending) = pending_starts.lock().await.remove(&run_id) else {
+            // pop_queued returned an id we have no PendingStartRun for.
+            // Shouldn't happen unless queue/map fell out of sync, but be
+            // defensive: free the slot we just claimed via pop_queued
+            // (otherwise the active set leaks) and continue draining.
+            tracing::warn!(
+                run_id = %run_id,
+                "drain-queue: pop_queued returned id with no PendingStartRun; releasing slot"
+            );
+            admission.notify_completed(run_id).await;
+            continue;
+        };
+        broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
+        let publisher = broadcast.register(run_id).await;
+        let admission_for_completion = admission.clone();
+        let broadcast_for_completion = broadcast.clone();
+        match facade
+            .start_run(
+                run_id,
+                *pending.graph,
+                pending.worktree_path,
+                pending.run_config,
+            )
+            .await
+        {
+            Ok(handle) => {
+                spawn_forward_task(
+                    run_id,
+                    handle,
+                    publisher,
+                    admission_for_completion,
+                    broadcast_for_completion,
+                );
+            },
+            Err(e) => {
+                tracing::error!(
+                    run_id = %run_id,
+                    err = %e,
+                    "drain-queue: queued run failed to start; deregistering"
+                );
+                broadcast.deregister(run_id).await;
+                admission.notify_completed(run_id).await;
+                broadcast.publish_global(GlobalDaemonEvent::RunFinished {
+                    run_id,
+                    outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted {
+                        reason: format!("queued start failed: {e}"),
+                    },
+                });
+            },
+        }
     }
 }
 
