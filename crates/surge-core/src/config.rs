@@ -810,6 +810,62 @@ impl SurgeConfig {
         }
     }
 
+    /// Save config to a TOML file at the given path.
+    ///
+    /// Validates the config before writing, creates parent directories
+    /// if needed, and writes atomically via a same-directory temp
+    /// file + `rename` so a process crash mid-write can never leave
+    /// a partially-written / corrupted TOML on disk.
+    #[must_use = "save returns a Result that should be checked"]
+    pub fn save(&self, path: &Path) -> Result<(), crate::SurgeError> {
+        self.validate()?;
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| crate::SurgeError::Config(format!("Failed to serialize config: {e}")))?;
+        let parent = path.parent().ok_or_else(|| {
+            crate::SurgeError::Config(format!(
+                "Cannot save config to {}: path has no parent directory",
+                path.display()
+            ))
+        })?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            crate::SurgeError::Config(format!(
+                "Failed to create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+
+        // Same-directory temp file + atomic rename. On every platform
+        // we support, a successful `rename` within a single directory
+        // is atomic at the filesystem level: readers see either the
+        // old `path` contents or the new ones, never a partial mix.
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| {
+                crate::SurgeError::Config(format!(
+                    "Cannot save config to {}: path has no file name",
+                    path.display()
+                ))
+            })?
+            .to_string_lossy();
+        let tmp = parent.join(format!(".{file_name}.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, content).map_err(|e| {
+            crate::SurgeError::Config(format!(
+                "Failed to write temp config {}: {e}",
+                tmp.display()
+            ))
+        })?;
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            // Best-effort: clean up the temp file on rename failure.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(crate::SurgeError::Config(format!(
+                "Failed to rename {} -> {}: {e}",
+                tmp.display(),
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
     /// Load config by discovering surge.toml, or return default if not found.
     /// This combines discovery and default fallback in a single convenient method.
     pub fn load_or_default() -> Result<Self, crate::SurgeError> {

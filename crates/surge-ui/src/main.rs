@@ -45,6 +45,7 @@ fn main() {
 
     app.run(move |cx| {
         gpui_component::init(cx);
+        theme::init();
         SurgeApp::bind_actions(cx);
 
         cx.spawn(async move |cx| {

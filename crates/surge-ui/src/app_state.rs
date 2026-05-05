@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use gpui::EventEmitter;
 use surge_acp::{
     AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry,
 };
@@ -153,8 +154,27 @@ impl AppState {
         self.current_branch = detect_branch(path).unwrap_or_else(|| "main".to_string());
     }
 
-    /// Handle a SurgeEvent — update state accordingly.
-    pub fn handle_event(&mut self, event: SurgeEvent) {
+    /// Update config in-place and save to disk.
+    ///
+    /// Validates + persists BEFORE replacing the in-memory config so a
+    /// validation or IO failure leaves the UI holding the previous,
+    /// known-good state instead of an invalid one that was never
+    /// written. Requires `project_path` to be set — otherwise there is
+    /// no place to save and silently mutating in-memory only would
+    /// diverge from disk.
+    pub fn update_config(&mut self, config: SurgeConfig) -> Result<(), surge_core::SurgeError> {
+        let project_path = self.project_path.as_ref().ok_or_else(|| {
+            surge_core::SurgeError::Config(
+                "No project loaded; cannot save config without project_path".into(),
+            )
+        })?;
+        config.save(&project_path.join("surge.toml"))?;
+        self.config = Some(config);
+        Ok(())
+    }
+
+    /// Handle a SurgeEvent — update state and emit for UI subscribers.
+    pub fn handle_event(&mut self, event: SurgeEvent, cx: &mut gpui::Context<Self>) {
         // Keep last 100 events for recent activity.
         self.recent_events.push(event.clone());
         if self.recent_events.len() > 100 {
@@ -174,6 +194,8 @@ impl AppState {
             },
             _ => {},
         }
+
+        cx.emit(event);
     }
 
     // ── Computed accessors ──
@@ -207,6 +229,8 @@ impl AppState {
         self.tasks.iter().filter(|t| state_match(&t.state)).count()
     }
 }
+
+impl EventEmitter<SurgeEvent> for AppState {}
 
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {
