@@ -12,3 +12,5 @@
 #![allow(clippy::missing_panics_doc)]
 
 // Modules added incrementally in Phase 7+.
+pub mod error;
+pub use error::McpError;
