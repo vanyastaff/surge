@@ -463,6 +463,40 @@ where
     }
 }
 
+// ============================================================================
+// Cross-platform socket name resolution
+// ============================================================================
+
+/// Convert a filesystem path into the platform-appropriate
+/// `local_socket::Name`. On Unix the path is used directly as a
+/// filesystem socket path; on Windows the path's `file_name` is used
+/// as a namespaced pipe name (mapping to `\\.\pipe\<name>`).
+///
+/// This is the correct cross-platform handler for the daemon's
+/// IPC socket discovery. Both `surge-daemon::server` (listener)
+/// and `DaemonClient::connect` (client) call this function so the
+/// pipe name agrees on both ends.
+pub fn local_socket_name_from_path(
+    path: &std::path::Path,
+) -> std::io::Result<interprocess::local_socket::Name<'_>> {
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::{GenericFilePath, ToFsName};
+        path.to_fs_name::<GenericFilePath>()
+    }
+    #[cfg(windows)]
+    {
+        use interprocess::local_socket::{GenericNamespaced, ToNsName};
+        let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "socket path has no valid file name",
+            )
+        })?;
+        name.to_ns_name::<GenericNamespaced>()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

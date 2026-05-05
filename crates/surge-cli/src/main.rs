@@ -196,6 +196,12 @@ enum Commands {
         #[command(subcommand)]
         command: commands::engine::EngineCommands,
     },
+
+    /// Manage the long-running surge-daemon process.
+    Daemon {
+        #[command(subcommand)]
+        command: commands::daemon::DaemonCommands,
+    },
 }
 
 /// Set up signal handlers for graceful shutdown.
@@ -315,7 +321,11 @@ async fn main() -> Result<()> {
     // Check for orphaned worktrees at startup (skip for certain commands)
     let should_check_orphans = !matches!(
         cli.command,
-        Commands::Init | Commands::Clean { .. } | Commands::Config { .. } | Commands::Engine { .. }
+        Commands::Init
+            | Commands::Clean { .. }
+            | Commands::Config { .. }
+            | Commands::Engine { .. }
+            | Commands::Daemon { .. }
     );
 
     if should_check_orphans {
@@ -513,6 +523,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Engine { command } => {
             commands::engine::run(command).await?;
+        },
+
+        Commands::Daemon { command } => {
+            commands::daemon::run(command).await?;
         },
 
         Commands::Init => {

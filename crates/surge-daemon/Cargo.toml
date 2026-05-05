@@ -14,6 +14,8 @@ name = "surge-daemon"
 path = "src/main.rs"
 
 [dependencies]
+clap.workspace = true
+humantime = "2"
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

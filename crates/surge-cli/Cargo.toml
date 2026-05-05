@@ -28,6 +28,11 @@ serde_json = { workspace = true }
 owo-colors = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+surge-daemon = { workspace = true }
+which = "6"
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
