@@ -270,9 +270,18 @@ impl EngineFacade for DaemonEngineFacade {
                 worktree_path,
             })
             .await?;
-        if let DaemonResponse::Error { code, message, .. } = resp {
-            self.cleanup_run_channels(run_id).await;
-            return Err(map_error(code, &message));
+        match resp {
+            DaemonResponse::ResumeRunOk { .. } => {},
+            DaemonResponse::Error { code, message, .. } => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(map_error(code, &message));
+            },
+            other => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(EngineError::Internal(format!(
+                    "unexpected response: {other:?}"
+                )));
+            },
         }
 
         let sub = self
