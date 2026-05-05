@@ -7,23 +7,61 @@ surge-flavoured config, registry, restart policy, and crash detection.
 M7 supports stdio child-process transport only; HTTP/SSE deferred to
 M7+ when there's a real driver.
 
-## Configuring an MCP server
+## Status
 
-In your run-level config (TOML), declare each server with a
-`[mcp_servers.<name>]` table. Example:
+The crate is fully wired into the surge engine via M7 PR 5 + PR 6:
 
-```toml
-[mcp_servers.playwright]
-transport = { kind = "stdio", command = "/usr/local/bin/mcp-playwright" }
-allowed_tools = ["browser_navigate", "browser_screenshot"]
-call_timeout = "60s"
-restart_on_crash = true
+- `surge_core::mcp_config::McpServerRef` / `McpTransportConfig` —
+  serde-able config types.
+- `surge_orchestrator::engine::EngineRunConfig::mcp_servers` —
+  per-run registry, populated by the caller of
+  `Engine::start_run(...)`.
+- `Engine` builds an `Arc<McpRegistry>` per run from
+  `run_config.mcp_servers` when non-empty.
+- `RoutingToolDispatcher` exposes the configured MCP tools to agent
+  stages alongside engine built-ins, intersected with the stage's
+  `ToolOverride::mcp_add` allowlist + sandbox heuristic +
+  per-server `allowed_tools` whitelist.
 
-[mcp_servers.github]
-transport = { kind = "stdio", command = "npx", args = ["@github/mcp-server"] }
+**Caveat — no user-facing config loader yet.** As of M7, the CLI
+(`surge engine run --daemon`) does NOT read MCP server config from a
+file. The `EngineRunConfig::mcp_servers` field is populated by
+programmatic callers; user-facing config (`--mcp-config <file>`,
+`~/.surge/config.toml`) is M8+ scope. Until then, MCP delegation
+exercises through tests + library-level callers.
+
+## Configuring an MCP server (programmatic)
+
+```rust
+use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
+use surge_orchestrator::engine::EngineRunConfig;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
+
+let server = McpServerRef::new(
+    "playwright".into(),
+    McpTransportConfig::stdio(
+        PathBuf::from("/usr/local/bin/mcp-playwright"),
+        vec![],
+        HashMap::new(),
+    ),
+    Some(vec!["browser_navigate".into(), "browser_screenshot".into()]),
+    Duration::from_secs(60),
+    true, // restart_on_crash
+);
+
+let run_cfg = EngineRunConfig {
+    mcp_servers: vec![server],
+    ..EngineRunConfig::default()
+};
+
+// Pass run_cfg to Engine::start_run(...). The engine builds an
+// Arc<McpRegistry> from run_cfg.mcp_servers and threads it to
+// agent stages.
 ```
 
-Then in your agent stage (in `flow.toml`):
+In your agent stage's `flow.toml`:
 
 ```toml
 [nodes.research]
@@ -35,8 +73,7 @@ mcp_add = ["playwright"]
 ```
 
 The agent at `research` will see only `playwright`'s tools (filtered
-through `allowed_tools` if specified). `github` is configured but
-not exposed to this stage.
+through its `allowed_tools` whitelist if specified).
 
 ## Field reference
 
@@ -80,19 +117,19 @@ rejection):
 The transport-vs-service distinction uses a string-match heuristic on
 the rmcp error message — `"connection"`, `"transport"`, `"broken
 pipe"`, `"channel closed"`, `"i/o"`, `"unexpected end"`, `"disconnected"`,
-`"eof"` mark transport. False classification is safe (misclassified
-service forces an unnecessary reconnect; misclassified transport
-means the next call sees the same dead transport).
+`"eof"` mark transport.
 
-## Sharing across runs
+## Lifetime — per-run
 
-MCP servers are SHARED across all runs hosted by the same surge engine
-instance. A `playwright` server with browser state spawned by run A is
-the same server (same browser state) for run B. This is intentional —
-re-spawning per run would lose state and cost startup time.
+MCP server child processes are scoped to a single run. M7's
+`Engine::start_run` builds an `Arc<McpRegistry>` per run from
+`run_config.mcp_servers`. When the run terminates the registry is
+dropped and the child processes exit.
 
-If a use case needs per-run isolation (different browser per run, etc.),
-it's a future extension (`McpServerRef::isolation` field, M9+).
+This trades startup cost for isolation: a `playwright` server's
+browser state for run A is not visible to run B. M9+ may add an
+optional shared-server mode (`McpServerRef::isolation = Shared`)
+when warmth across runs becomes important.
 
 ## Common server installs
 

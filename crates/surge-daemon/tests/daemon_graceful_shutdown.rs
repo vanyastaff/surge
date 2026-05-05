@@ -8,6 +8,15 @@ use surge_orchestrator::engine::facade::EngineFacade;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+fn unique_socket_path(temp: &TempDir, prefix: &str) -> std::path::PathBuf {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    temp.path().join(format!("{prefix}_{pid}_{nanos}.sock"))
+}
+
 struct StubFacade;
 
 #[async_trait::async_trait]
@@ -66,7 +75,7 @@ impl EngineFacade for StubFacade {
 #[tokio::test]
 async fn shutdown_token_exits_within_500ms() {
     let temp = TempDir::new().unwrap();
-    let socket = temp.path().join("shutdown.sock");
+    let socket = unique_socket_path(&temp, "shutdown");
     let cfg = ServerConfig {
         max_active: 4,
         socket_path: socket,
@@ -80,9 +89,9 @@ async fn shutdown_token_exits_within_500ms() {
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
     shutdown.cancel();
-    let res = tokio::time::timeout(Duration::from_millis(500), handle).await;
-    assert!(
-        res.is_ok(),
-        "server failed to exit within 500ms after cancel"
-    );
+    let join_result = tokio::time::timeout(Duration::from_millis(500), handle)
+        .await
+        .expect("server did not exit within 500ms after cancel");
+    let server_result = join_result.expect("server task panicked");
+    server_result.expect("server returned error");
 }

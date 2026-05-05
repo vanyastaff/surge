@@ -11,6 +11,15 @@ use surge_orchestrator::engine::facade::EngineFacade;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+fn unique_socket_path(temp: &TempDir, prefix: &str) -> std::path::PathBuf {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    temp.path().join(format!("{prefix}_{pid}_{nanos}.sock"))
+}
+
 struct StubFacade;
 
 #[async_trait::async_trait]
@@ -73,7 +82,7 @@ impl EngineFacade for StubFacade {
 #[tokio::test]
 async fn ping_round_trip() {
     let temp = TempDir::new().unwrap();
-    let socket = temp.path().join("test.sock");
+    let socket = unique_socket_path(&temp, "smoke");
     let cfg = ServerConfig {
         max_active: 4,
         socket_path: socket.clone(),
@@ -94,5 +103,9 @@ async fn ping_round_trip() {
     assert!(runs.is_empty());
 
     shutdown.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
+    let join_result = tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("server did not shut down within 2s");
+    let server_result = join_result.expect("server task panicked");
+    server_result.expect("server returned error");
 }

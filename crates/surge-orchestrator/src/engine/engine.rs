@@ -148,7 +148,7 @@ impl Engine {
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
-            mcp_servers: Vec::new(),
+            mcp_servers: run_config.mcp_servers.clone(),
         };
         let graph_bytes = serde_json::to_vec(&graph)
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
@@ -301,11 +301,26 @@ impl Engine {
         };
         self.runs.write().await.insert(run_id, active);
 
-        // Resume reads RunConfig from the persisted event log; plumbing
-        // mcp_servers from the persisted RunConfig into a per-run registry
-        // is a follow-up task. For now we fall back to the engine-level
-        // registry (typically None) and an empty server list.
-        let resume_run_config = EngineRunConfig::default();
+        // Reconstruct EngineRunConfig from the persisted RunConfig so that
+        // mcp_servers survive a daemon restart + resume. Falls back to an
+        // empty list for runs that predate the mcp_servers field.
+        let mut resume_run_config = EngineRunConfig::default();
+        if let Some(persisted) = &replayed.run_config {
+            resume_run_config
+                .mcp_servers
+                .clone_from(&persisted.mcp_servers);
+        }
+
+        // Build a per-run McpRegistry exactly like start_run does.
+        let per_run_mcp_registry = if resume_run_config.mcp_servers.is_empty() {
+            self.mcp_registry.clone()
+        } else {
+            Some(Arc::new(surge_mcp::McpRegistry::from_config(
+                &resume_run_config.mcp_servers,
+            )))
+        };
+        let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();
+
         let params = RunTaskParams {
             run_id,
             writer,
@@ -323,8 +338,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
-            mcp_registry: self.mcp_registry.clone(),
-            mcp_servers: Vec::new(),
+            mcp_registry: per_run_mcp_registry,
+            mcp_servers: mcp_servers_for_resume,
         };
 
         let runs_for_cleanup = self.runs.clone();

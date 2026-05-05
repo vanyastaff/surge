@@ -74,4 +74,17 @@ async fn call_echo_round_trips() {
         .await
         .expect("call_tool");
     assert!(!result.is_error.unwrap_or(false));
+    // Verify the echoed text is in the result content.
+    let content_text: String = result
+        .content
+        .into_iter()
+        .filter_map(|c| match c.raw {
+            rmcp::model::RawContent::Text(t) => Some(t.text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        content_text.contains("hello"),
+        "echo response did not contain 'hello': {content_text:?}"
+    );
 }

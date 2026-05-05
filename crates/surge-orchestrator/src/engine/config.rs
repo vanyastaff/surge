@@ -36,16 +36,16 @@ pub struct EngineRunConfig {
     /// for agent stages. Reserved for M6 daemon-level overrides.
     #[serde(default, with = "humantime_serde::option")]
     pub stage_timeout_override: Option<Duration>,
-    /// Per-run MCP server registry. When non-empty, the engine builds an
-    /// `Arc<McpRegistry>` from these entries before dispatching to the run
-    /// task; agent stages then expose the configured MCP tools via
-    /// `RoutingToolDispatcher`. Defaults to empty (no MCP).
+    /// Per-run MCP server registry. When non-empty, [`Engine::start_run`]
+    /// builds an `Arc<surge_mcp::McpRegistry>` from these entries
+    /// before dispatching to the run task; agent stages then expose
+    /// the configured MCP tools via `RoutingToolDispatcher`. Defaults
+    /// to empty (no MCP).
     ///
-    /// The CLI populates this from a user-supplied config source (e.g.
-    /// `~/.surge/config.toml` or `--mcp-config` flag); for now the field
-    /// is additive and defaults to empty. Existing serialised
-    /// `EngineRunConfig` blobs without the field deserialize with an empty
-    /// list (via `#[serde(default)]`).
+    /// As of M7 there is no user-facing CLI config loader for this
+    /// field — programmatic callers populate it directly. A
+    /// `~/.surge/config.toml` loader and `--mcp-config <path>` CLI
+    /// flag are planned for M8+ scope.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerRef>,
 }

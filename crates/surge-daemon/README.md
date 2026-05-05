@@ -36,14 +36,15 @@ surge daemon restart
 ```
 ~/.surge/daemon/
 ├── daemon.pid     # PID of the running daemon
-├── daemon.sock    # Unix socket path (Linux/macOS); on Windows the
-│                  # file holds the named-pipe basename used at
-│                  # \\.\pipe\<basename>
+├── daemon.sock    # Unix domain socket file (Linux/macOS only).
+│                  # On Windows, no socket file exists — the named
+│                  # pipe is derived directly from the path's basename
+│                  # via local_socket_name_from_path.
 └── version        # Daemon binary version
 ```
 
 The daemon dir is created on `surge daemon start` and cleaned up
-(PID + socket files) on graceful exit.
+(PID file + Unix socket if any) on graceful exit.
 
 ## Configuration
 
