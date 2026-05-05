@@ -83,20 +83,12 @@ fn main() -> std::process::ExitCode {
                 },
             };
 
-        // F6: WorktreeToolDispatcher uses `self.worktree_root` (the constructor
-        // argument) for all path operations.  In the daemon, every run supplies
-        // its own isolated git worktree via `start_run`'s `worktree_path`
-        // argument, but the engine currently roots the dispatcher at the path
-        // provided here rather than at the per-run path.  This is an
-        // architectural gap: the dispatcher needs to be re-rooted per run
-        // (tracked as a follow-up TODO).  Passing `current_dir()` is the
-        // status-quo behaviour; it will produce incorrect paths for any run
-        // whose worktree differs from the daemon's cwd.
-        //
-        // TODO: per-run WorktreeToolDispatcher rooted at the run's worktree.
+        // The constructor argument is a historical hint; per-run worktree
+        // resolution happens in dispatch via ToolDispatchContext::worktree_root.
+        // A single dispatcher instance is safe to share across all runs.
         let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
             surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-                std::env::current_dir().unwrap_or_default(),
+                std::path::PathBuf::new(),
             ),
         );
 

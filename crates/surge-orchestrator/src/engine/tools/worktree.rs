@@ -2,7 +2,7 @@
 
 use crate::engine::tools::{ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload};
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Maximum bytes of stdout/stderr to capture per shell command.
 /// Longer output is tail-truncated with a marker line.
@@ -25,293 +25,315 @@ fn truncate_with_marker(s: String, cap: usize) -> String {
 
 /// Tool dispatcher that constrains all file and shell operations to the run's
 /// isolated git worktree. Prevents path-traversal attacks.
+///
+/// Per-call worktree resolution comes from [`ToolDispatchContext::worktree_root`]
+/// at dispatch time, so a single dispatcher instance is safe to share across
+/// multiple runs (daemon mode) or agent stages with different worktrees.
 pub struct WorktreeToolDispatcher {
+    /// Historical: the constructor accepted a worktree path, but `dispatch`
+    /// now reads `ctx.worktree_root` per call. Kept for backwards
+    /// compatibility with M6 construction sites that call
+    /// `WorktreeToolDispatcher::new(cwd)`.
     worktree_root: PathBuf,
 }
 
 impl WorktreeToolDispatcher {
-    /// Create a new dispatcher rooted at `worktree_root`.
+    /// Create a new dispatcher.
     ///
-    /// The path is canonicalized on construction; if canonicalization fails
-    /// (e.g. the directory doesn't exist yet) the original path is kept.
+    /// The `worktree_root` argument is accepted for backwards compatibility
+    /// with M6 callers but is no longer load-bearing: per-call worktree
+    /// resolution happens in [`dispatch`][`ToolDispatcher::dispatch`] via
+    /// [`ToolDispatchContext::worktree_root`].
     #[must_use]
     pub fn new(worktree_root: PathBuf) -> Self {
-        let canonical = std::fs::canonicalize(&worktree_root).unwrap_or(worktree_root);
-        Self {
-            worktree_root: canonical,
-        }
+        Self { worktree_root }
     }
 
-    /// Return the canonicalized worktree root path.
+    /// Return the path stored at construction time.
+    ///
+    /// This path is no longer used by `dispatch` (which reads
+    /// `ctx.worktree_root` instead). It is exposed so that callers
+    /// constructed before the F6 fix can still read back the path they
+    /// passed in.
     #[must_use]
-    pub fn worktree_root(&self) -> &std::path::Path {
+    pub fn worktree_root(&self) -> &Path {
         &self.worktree_root
     }
+}
 
-    async fn read_file(&self, call: &ToolCall) -> ToolResultPayload {
-        let Some(args) = call.arguments.as_object() else {
-            return ToolResultPayload::Error {
-                message: "read_file: arguments must be an object".into(),
-            };
+/// Canonicalize `worktree_root` so the `starts_with` path-guard check works
+/// correctly on Windows (where `fs::canonicalize` adds the `\\?\` prefix).
+/// Falls back to the original path if canonicalization fails.
+fn canonical_root(worktree_root: &Path) -> PathBuf {
+    std::fs::canonicalize(worktree_root).unwrap_or_else(|_| worktree_root.to_path_buf())
+}
+
+async fn read_file(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload {
+    let worktree_root = canonical_root(worktree_root);
+    let worktree_root = worktree_root.as_path();
+    let Some(args) = call.arguments.as_object() else {
+        return ToolResultPayload::Error {
+            message: "read_file: arguments must be an object".into(),
         };
-        let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
-            return ToolResultPayload::Error {
-                message: "read_file: missing 'path' arg".into(),
-            };
+    };
+    let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
+        return ToolResultPayload::Error {
+            message: "read_file: missing 'path' arg".into(),
         };
-        let binary = args
-            .get("binary")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let abs = self.worktree_root.join(rel_path);
-        let canonical = match std::fs::canonicalize(&abs) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResultPayload::Error {
-                    message: format!("read_file: cannot canonicalize {}: {e}", abs.display()),
-                };
-            },
-        };
-        if !canonical.starts_with(&self.worktree_root) {
+    };
+    let binary = args
+        .get("binary")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let abs = worktree_root.join(rel_path);
+    let canonical = match std::fs::canonicalize(&abs) {
+        Ok(p) => p,
+        Err(e) => {
             return ToolResultPayload::Error {
-                message: format!(
-                    "read_file: path {} escapes worktree {}",
-                    canonical.display(),
-                    self.worktree_root.display()
-                ),
+                message: format!("read_file: cannot canonicalize {}: {e}", abs.display()),
             };
-        }
-        if binary {
-            match tokio::fs::read(&canonical).await {
-                Ok(bytes) => {
-                    use base64::{Engine, engine::general_purpose::STANDARD};
-                    ToolResultPayload::Ok {
-                        content: serde_json::json!({
-                            "content_base64": STANDARD.encode(&bytes),
-                            "byte_len": bytes.len(),
-                        }),
-                    }
-                },
-                Err(e) => ToolResultPayload::Error {
-                    message: format!("read_file: {e}"),
-                },
-            }
-        } else {
-            match tokio::fs::read_to_string(&canonical).await {
-                Ok(s) => ToolResultPayload::Ok {
-                    content: serde_json::json!({
-                        "content_text": s,
-                    }),
-                },
-                Err(e) => ToolResultPayload::Error {
-                    message: format!("read_file: {e}"),
-                },
-            }
-        }
+        },
+    };
+    if !canonical.starts_with(worktree_root) {
+        return ToolResultPayload::Error {
+            message: format!(
+                "read_file: path {} escapes worktree {}",
+                canonical.display(),
+                worktree_root.display()
+            ),
+        };
     }
-
-    async fn write_file(&self, call: &ToolCall) -> ToolResultPayload {
-        let Some(args) = call.arguments.as_object() else {
-            return ToolResultPayload::Error {
-                message: "write_file: arguments must be an object".into(),
-            };
-        };
-        let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
-            return ToolResultPayload::Error {
-                message: "write_file: missing 'path' arg".into(),
-            };
-        };
-        let Some(content) = args.get("content").and_then(|v| v.as_str()) else {
-            return ToolResultPayload::Error {
-                message: "write_file: missing 'content' arg".into(),
-            };
-        };
-        let mode = args
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("overwrite");
-        let abs = self.worktree_root.join(rel_path);
-        // For write paths, the parent must canonicalize within worktree;
-        // the leaf may not yet exist.
-        let Some(parent) = abs.parent() else {
-            return ToolResultPayload::Error {
-                message: format!("write_file: invalid path {}", abs.display()),
-            };
-        };
-        let canonical_parent = match std::fs::canonicalize(parent) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResultPayload::Error {
-                    message: format!(
-                        "write_file: cannot canonicalize parent {}: {e}",
-                        parent.display()
-                    ),
-                };
+    if binary {
+        match tokio::fs::read(&canonical).await {
+            Ok(bytes) => {
+                use base64::{Engine, engine::general_purpose::STANDARD};
+                ToolResultPayload::Ok {
+                    content: serde_json::json!({
+                        "content_base64": STANDARD.encode(&bytes),
+                        "byte_len": bytes.len(),
+                    }),
+                }
             },
-        };
-        if !canonical_parent.starts_with(&self.worktree_root) {
-            return ToolResultPayload::Error {
-                message: format!(
-                    "write_file: parent {} escapes worktree {}",
-                    canonical_parent.display(),
-                    self.worktree_root.display()
-                ),
-            };
+            Err(e) => ToolResultPayload::Error {
+                message: format!("read_file: {e}"),
+            },
         }
-        let leaf = abs.file_name().unwrap_or_default();
-        let final_path = canonical_parent.join(leaf);
-        let result = match mode {
-            "create" => {
-                if final_path.exists() {
-                    return ToolResultPayload::Error {
-                        message: format!(
-                            "write_file create: {} already exists",
-                            final_path.display()
-                        ),
-                    };
-                }
-                tokio::fs::write(&final_path, content).await
-            },
-            "overwrite" => tokio::fs::write(&final_path, content).await,
-            "append" => {
-                use tokio::io::AsyncWriteExt;
-                match tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(&final_path)
-                    .await
-                {
-                    Ok(mut f) => f.write_all(content.as_bytes()).await,
-                    Err(e) => Err(e),
-                }
-            },
-            other => {
-                return ToolResultPayload::Error {
-                    message: format!(
-                        "write_file: unknown mode '{other}', expected create/overwrite/append"
-                    ),
-                };
-            },
-        };
-        match result {
-            Ok(()) => ToolResultPayload::Ok {
+    } else {
+        match tokio::fs::read_to_string(&canonical).await {
+            Ok(s) => ToolResultPayload::Ok {
                 content: serde_json::json!({
-                    "bytes_written": content.len(),
+                    "content_text": s,
                 }),
             },
             Err(e) => ToolResultPayload::Error {
-                message: format!("write_file: {e}"),
+                message: format!("read_file: {e}"),
             },
         }
     }
+}
 
-    async fn shell_exec(&self, call: &ToolCall) -> ToolResultPayload {
-        let Some(args) = call.arguments.as_object() else {
-            return ToolResultPayload::Error {
-                message: "shell_exec: arguments must be an object".into(),
-            };
+async fn write_file(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload {
+    let worktree_root = canonical_root(worktree_root);
+    let worktree_root = worktree_root.as_path();
+    let Some(args) = call.arguments.as_object() else {
+        return ToolResultPayload::Error {
+            message: "write_file: arguments must be an object".into(),
         };
-        let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
-            return ToolResultPayload::Error {
-                message: "shell_exec: missing 'command' arg".into(),
-            };
+    };
+    let Some(rel_path) = args.get("path").and_then(|v| v.as_str()) else {
+        return ToolResultPayload::Error {
+            message: "write_file: missing 'path' arg".into(),
         };
-        let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
-            let joined = self.worktree_root.join(rel);
-            let canonical = match std::fs::canonicalize(&joined) {
-                Ok(p) => p,
-                Err(e) => {
-                    return ToolResultPayload::Error {
-                        message: format!(
-                            "shell_exec: cannot canonicalize cwd_relative {}: {e}",
-                            joined.display()
-                        ),
-                    };
-                },
+    };
+    let Some(content) = args.get("content").and_then(|v| v.as_str()) else {
+        return ToolResultPayload::Error {
+            message: "write_file: missing 'content' arg".into(),
+        };
+    };
+    let mode = args
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("overwrite");
+    let abs = worktree_root.join(rel_path);
+    // For write paths, the parent must canonicalize within worktree;
+    // the leaf may not yet exist.
+    let Some(parent) = abs.parent() else {
+        return ToolResultPayload::Error {
+            message: format!("write_file: invalid path {}", abs.display()),
+        };
+    };
+    let canonical_parent = match std::fs::canonicalize(parent) {
+        Ok(p) => p,
+        Err(e) => {
+            return ToolResultPayload::Error {
+                message: format!(
+                    "write_file: cannot canonicalize parent {}: {e}",
+                    parent.display()
+                ),
             };
-            if !canonical.starts_with(&self.worktree_root) {
+        },
+    };
+    if !canonical_parent.starts_with(worktree_root) {
+        return ToolResultPayload::Error {
+            message: format!(
+                "write_file: parent {} escapes worktree {}",
+                canonical_parent.display(),
+                worktree_root.display()
+            ),
+        };
+    }
+    let leaf = abs.file_name().unwrap_or_default();
+    let final_path = canonical_parent.join(leaf);
+    let result = match mode {
+        "create" => {
+            if final_path.exists() {
                 return ToolResultPayload::Error {
-                    message: format!(
-                        "shell_exec: cwd_relative {} escapes worktree {}",
-                        canonical.display(),
-                        self.worktree_root.display()
-                    ),
+                    message: format!("write_file create: {} already exists", final_path.display()),
                 };
             }
-            canonical
-        } else {
-            self.worktree_root.clone()
-        };
-        let timeout_secs = args
-            .get("timeout_seconds")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(300);
+            tokio::fs::write(&final_path, content).await
+        },
+        "overwrite" => tokio::fs::write(&final_path, content).await,
+        "append" => {
+            use tokio::io::AsyncWriteExt;
+            match tokio::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&final_path)
+                .await
+            {
+                Ok(mut f) => f.write_all(content.as_bytes()).await,
+                Err(e) => Err(e),
+            }
+        },
+        other => {
+            return ToolResultPayload::Error {
+                message: format!(
+                    "write_file: unknown mode '{other}', expected create/overwrite/append"
+                ),
+            };
+        },
+    };
+    match result {
+        Ok(()) => ToolResultPayload::Ok {
+            content: serde_json::json!({
+                "bytes_written": content.len(),
+            }),
+        },
+        Err(e) => ToolResultPayload::Error {
+            message: format!("write_file: {e}"),
+        },
+    }
+}
 
-        let mut cmd = if cfg!(windows) {
-            let mut c = tokio::process::Command::new("cmd");
-            c.args(["/C", command]);
-            c
-        } else {
-            let mut c = tokio::process::Command::new("sh");
-            c.args(["-c", command]);
-            c
+async fn shell_exec(worktree_root: &Path, call: &ToolCall) -> ToolResultPayload {
+    let worktree_root = canonical_root(worktree_root);
+    let worktree_root = worktree_root.as_path();
+    let Some(args) = call.arguments.as_object() else {
+        return ToolResultPayload::Error {
+            message: "shell_exec: arguments must be an object".into(),
         };
-        cmd.current_dir(&cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let child = match cmd.spawn() {
-            Ok(c) => c,
+    };
+    let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
+        return ToolResultPayload::Error {
+            message: "shell_exec: missing 'command' arg".into(),
+        };
+    };
+    let cwd = if let Some(rel) = args.get("cwd_relative").and_then(|v| v.as_str()) {
+        let joined = worktree_root.join(rel);
+        let canonical = match std::fs::canonicalize(&joined) {
+            Ok(p) => p,
             Err(e) => {
                 return ToolResultPayload::Error {
-                    message: format!("shell_exec: spawn failed: {e}"),
+                    message: format!(
+                        "shell_exec: cannot canonicalize cwd_relative {}: {e}",
+                        joined.display()
+                    ),
                 };
             },
         };
-
-        let timeout = std::time::Duration::from_secs(timeout_secs);
-        let output_fut = child.wait_with_output();
-        let output = match tokio::time::timeout(timeout, output_fut).await {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => {
-                return ToolResultPayload::Error {
-                    message: format!("shell_exec: wait failed: {e}"),
-                };
-            },
-            Err(_) => {
-                return ToolResultPayload::Error {
-                    message: format!("shell_exec: timeout after {timeout_secs}s"),
-                };
-            },
-        };
-
-        let stdout = truncate_with_marker(
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-            TAIL_CAP,
-        );
-        let stderr = truncate_with_marker(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-            TAIL_CAP,
-        );
-        let exit_code = output.status.code().unwrap_or(-1);
-
-        ToolResultPayload::Ok {
-            content: serde_json::json!({
-                "stdout": stdout,
-                "stderr": stderr,
-                "exit_code": exit_code,
-            }),
+        if !canonical.starts_with(worktree_root) {
+            return ToolResultPayload::Error {
+                message: format!(
+                    "shell_exec: cwd_relative {} escapes worktree {}",
+                    canonical.display(),
+                    worktree_root.display()
+                ),
+            };
         }
+        canonical
+    } else {
+        worktree_root.to_path_buf()
+    };
+    let timeout_secs = args
+        .get("timeout_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(300);
+
+    let mut cmd = if cfg!(windows) {
+        let mut c = tokio::process::Command::new("cmd");
+        c.args(["/C", command]);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+    cmd.current_dir(&cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return ToolResultPayload::Error {
+                message: format!("shell_exec: spawn failed: {e}"),
+            };
+        },
+    };
+
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let output_fut = child.wait_with_output();
+    let output = match tokio::time::timeout(timeout, output_fut).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
+            return ToolResultPayload::Error {
+                message: format!("shell_exec: wait failed: {e}"),
+            };
+        },
+        Err(_) => {
+            return ToolResultPayload::Error {
+                message: format!("shell_exec: timeout after {timeout_secs}s"),
+            };
+        },
+    };
+
+    let stdout = truncate_with_marker(
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        TAIL_CAP,
+    );
+    let stderr = truncate_with_marker(
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        TAIL_CAP,
+    );
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    ToolResultPayload::Ok {
+        content: serde_json::json!({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+        }),
     }
 }
 
 #[async_trait]
 impl ToolDispatcher for WorktreeToolDispatcher {
-    async fn dispatch(&self, _ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
+    async fn dispatch(&self, ctx: &ToolDispatchContext<'_>, call: &ToolCall) -> ToolResultPayload {
         match call.tool.as_str() {
-            "read_file" => self.read_file(call).await,
-            "write_file" => self.write_file(call).await,
-            "shell_exec" => self.shell_exec(call).await,
+            "read_file" => read_file(ctx.worktree_root, call).await,
+            "write_file" => write_file(ctx.worktree_root, call).await,
+            "shell_exec" => shell_exec(ctx.worktree_root, call).await,
             other => ToolResultPayload::Unsupported {
                 message: format!(
                     "WorktreeToolDispatcher: tool '{other}' not implemented (M5 supports read_file/write_file/shell_exec)"
