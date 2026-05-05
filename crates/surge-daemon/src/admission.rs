@@ -82,6 +82,26 @@ impl AdmissionController {
         None
     }
 
+    /// Remove `run_id` from the FIFO queue if present. Returns whether
+    /// the id was found. Used by `StopRun` to cancel runs that haven't
+    /// been admitted yet — without this, the drain task would
+    /// eventually pop the run anyway and start it after the user has
+    /// already asked for cancellation.
+    ///
+    /// Removing a middle entry shifts later entries forward in the
+    /// FIFO. The `position` reported by an earlier `try_admit` for a
+    /// surviving entry becomes stale, but that is a snapshot value
+    /// only — callers that care about live position must re-query.
+    pub async fn cancel_queued(&self, run_id: RunId) -> bool {
+        let mut inner = self.inner.lock().await;
+        if let Some(pos) = inner.queue.iter().position(|&id| id == run_id) {
+            inner.queue.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Like [`Self::try_admit`], but rejects (returns `false`) instead of
     /// queueing when the cap is hit. Used by operations like
     /// `resume_run` that don't want to be deferred — the caller
@@ -193,5 +213,33 @@ mod tests {
         assert_eq!(s.active, 2);
         assert_eq!(s.max_active, 2);
         assert_eq!(s.queued, 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_removes_from_fifo() {
+        let a = AdmissionController::new(1);
+        let r1 = RunId::new();
+        let r2 = RunId::new();
+        let r3 = RunId::new();
+        let _ = a.try_admit(r1).await; // active
+        let _ = a.try_admit(r2).await; // queued at 0
+        let _ = a.try_admit(r3).await; // queued at 1
+
+        // Cancelling the middle entry shifts r3 forward.
+        assert!(a.cancel_queued(r2).await);
+        // Same id again returns false (already gone).
+        assert!(!a.cancel_queued(r2).await);
+        // Cancelling something that was never queued also returns false.
+        let r_other = RunId::new();
+        assert!(!a.cancel_queued(r_other).await);
+
+        // Snapshot should now show only one queued entry.
+        let s = a.snapshot().await;
+        assert_eq!(s.queued, 1);
+
+        // After the active slot frees, the next pop is r3 (FIFO after
+        // r2 was removed), not r2.
+        a.notify_completed(r1).await;
+        assert_eq!(a.pop_queued().await, Some(r3));
     }
 }

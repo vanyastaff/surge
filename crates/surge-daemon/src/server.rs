@@ -397,13 +397,43 @@ async fn dispatch(
             request_id,
             run_id,
             reason,
-        } => match facade.stop_run(run_id, reason).await {
-            Ok(()) => Some(DaemonResponse::StopRunOk { request_id }),
-            Err(e) => Some(DaemonResponse::Error {
-                request_id,
-                code: ErrorCode::EngineError,
-                message: format!("{e}"),
-            }),
+        } => {
+            // First check if the run is still in the admission queue.
+            // The engine only knows about runs that `Engine::start_run`
+            // has admitted; a queued run is invisible to
+            // `facade.stop_run`. Without this branch, the user's
+            // cancellation would be silently lost — `facade.stop_run`
+            // would return `RunNotFound`, and worse, the drain task
+            // would later admit and start the run anyway.
+            //
+            // Removing the entry here cancels the run cleanly: the
+            // queue no longer holds it, so the drain task's
+            // `pop_queued` cannot pick it up; and `pending_starts`
+            // no longer holds its parameters, so even if the queue
+            // and map fell out of sync (defensive branch in
+            // `drain_one_pass`), the recovery path just frees the
+            // slot. No `broadcast.deregister` is needed — a queued
+            // run never reaches `broadcast.register`.
+            if pending_starts.lock().await.remove(&run_id).is_some() {
+                let cancelled = admission.cancel_queued(run_id).await;
+                debug_assert!(
+                    cancelled,
+                    "pending_starts and admission queue out of sync for {run_id}"
+                );
+                broadcast.publish_global(GlobalDaemonEvent::RunFinished {
+                    run_id,
+                    outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted { reason },
+                });
+                return Some(DaemonResponse::StopRunOk { request_id });
+            }
+            match facade.stop_run(run_id, reason).await {
+                Ok(()) => Some(DaemonResponse::StopRunOk { request_id }),
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
         },
 
         DaemonRequest::ResolveHumanInput {
