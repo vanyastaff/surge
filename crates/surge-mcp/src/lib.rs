@@ -17,3 +17,6 @@ pub use connection::McpServerConnection;
 
 pub mod error;
 pub use error::McpError;
+
+pub mod registry;
+pub use registry::{McpContent, McpRegistry, McpToolEntry, McpToolResult};
