@@ -27,6 +27,26 @@ fn unique_socket_path(temp: &TempDir, prefix: &str) -> PathBuf {
     temp.path().join(format!("{prefix}_{pid}_{nanos}.sock"))
 }
 
+/// Repeatedly attempt to connect to the daemon socket until the
+/// listener accepts a connection (or the deadline elapses). Macos
+/// CI runners have shown the listener taking >200ms to bind in some
+/// cases; a fixed sleep is flaky.
+async fn connect_with_retry(
+    socket: PathBuf,
+    timeout: Duration,
+) -> Result<DaemonEngineFacade, surge_orchestrator::engine::EngineError> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match DaemonEngineFacade::connect(socket.clone()).await {
+            Ok(c) => return Ok(c),
+            Err(e) if std::time::Instant::now() >= deadline => return Err(e),
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            },
+        }
+    }
+}
+
 struct StubFacade;
 
 #[async_trait::async_trait]
@@ -86,9 +106,11 @@ async fn subscribe_unknown_run_returns_run_not_active() {
         async move { run_server(cfg, facade, shutdown).await }
     });
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let client = DaemonEngineFacade::connect(socket).await.expect("connect");
+    // Wait for the listener with retry — macOS CI runners have shown
+    // 200ms+ tails between spawn and `bind` returning successfully.
+    let client = connect_with_retry(socket, Duration::from_secs(3))
+        .await
+        .expect("connect");
     let unknown = RunId::new();
     let err = client
         .subscribe_to_run(unknown)

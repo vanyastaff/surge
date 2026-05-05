@@ -203,17 +203,27 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
     let mut rx = match facade.subscribe_to_run(id).await {
         Ok(rx) => rx,
         Err(EngineError::RunNotActive(_)) => {
-            // The run already terminated (or was never registered with
-            // this daemon). Fall back to disk-replay so users still see
-            // the run's history. This is the same "fast-run" race the
-            // M7 polish #2 PR called out as out-of-scope: a run can
-            // finish + deregister between the user observing the
-            // RunId and `watch --daemon` arriving at the daemon.
+            // No per-run channel in the daemon for this id. Three
+            // different states present the same way on the wire:
+            //   1. The run already terminated (M7 fast-run case).
+            //   2. The run is queued, awaiting admission (no events
+            //      have been persisted yet — `follow_log_from` will
+            //      also fail because the per-run DB doesn't exist
+            //      until `Engine::start_run` runs).
+            //   3. The run was never hosted by this daemon.
+            // Try the disk-replay fallback: it covers (1) cleanly,
+            // and emits a clear error for (2)/(3) so the user knows
+            // to retry later or check the run id.
             eprintln!(
                 "run {id} is not currently active in the daemon; \
-                 reading event history from disk instead."
+                 attempting to read event history from disk."
             );
-            follow_log_from(id, 0).await?;
+            follow_log_from(id, 0).await.with_context(|| {
+                format!(
+                    "reading events for {id} from disk (the run may be queued \
+                     and not yet admitted, or unknown to this daemon)"
+                )
+            })?;
             return Ok(());
         },
         Err(e) => return Err(e.into()),

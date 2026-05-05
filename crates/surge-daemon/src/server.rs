@@ -315,17 +315,33 @@ async fn dispatch(
                     // same admitted-arm logic (broadcast.register,
                     // facade.start_run, spawn_forward_task).
                     //
-                    // Known limitation: the original IPC connection
-                    // that received `StartRunQueued` is NOT
-                    // auto-resubscribed to the eventually-admitted
-                    // run's events. As of this PR there is also no
-                    // server-side delivery of `GlobalDaemonEvent` to
-                    // wire clients, so a client cannot watch for
-                    // `RunAccepted` to know when admission lands.
-                    // Clients that need to observe queued runs should
-                    // poll via `surge engine watch <run_id> --daemon`
-                    // — that path now falls back to disk-replay if
-                    // the run is not yet (or no longer) active.
+                    // Known limitations of observing queued runs from
+                    // outside today:
+                    //
+                    //   * The original IPC connection that received
+                    //     `StartRunQueued` is NOT auto-resubscribed
+                    //     to the eventually-admitted run's events.
+                    //   * `GlobalDaemonEvent` (incl. `RunAccepted`)
+                    //     is published into the broadcast registry
+                    //     but no server-side code currently forwards
+                    //     it to wire clients, so subscribing to
+                    //     "global" events is not actually exposed.
+                    //   * `surge engine watch <run_id> --daemon`
+                    //     also can't help yet: a queued run has no
+                    //     per-run DB on disk (the persistence
+                    //     scaffolding is created by `Engine::start_run`
+                    //     when admission lands), so the disk-replay
+                    //     fallback errors out with a not-found
+                    //     condition rather than waiting.
+                    //
+                    // For now, callers that care should poll the
+                    // run id (e.g., re-issue `watch --daemon` after
+                    // admission lands) or re-architect around
+                    // `start_run` returning a handle synchronously.
+                    // A follow-up polish can expose queue state via
+                    // `ListRuns` (`RunStatus::Awaiting` already
+                    // exists in the wire schema) and add a global-
+                    // event forwarder.
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
