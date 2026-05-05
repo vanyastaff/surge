@@ -269,8 +269,13 @@ async fn dispatch(
                         .await
                         .remove(&run_id)
                         .expect("just inserted; only the drain task removes other entries");
-                    broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
+                    // Register the per-run broadcast BEFORE publishing
+                    // RunAccepted so a client subscribed to global
+                    // daemon events that races a Subscribe(run_id)
+                    // against this dispatch finds the per-run channel
+                    // already in the registry.
                     let publisher = broadcast.register(run_id).await;
+                    broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     let admission_for_completion = admission.clone();
                     let broadcast_for_completion = broadcast.clone();
                     match facade
@@ -313,12 +318,14 @@ async fn dispatch(
                     // Known limitation: the original IPC connection
                     // that received `StartRunQueued` is NOT
                     // auto-resubscribed to the eventually-admitted
-                    // run's events. Even re-issuing `Subscribe` after
-                    // observing `GlobalDaemonEvent::RunAccepted` is
-                    // racy today because the existing dispatch
-                    // publishes `RunAccepted` before
-                    // `BroadcastRegistry::register`; that ordering
-                    // race is out-of-scope for this PR.
+                    // run's events. As of this PR there is also no
+                    // server-side delivery of `GlobalDaemonEvent` to
+                    // wire clients, so a client cannot watch for
+                    // `RunAccepted` to know when admission lands.
+                    // Clients that need to observe queued runs should
+                    // poll via `surge engine watch <run_id> --daemon`
+                    // — that path now falls back to disk-replay if
+                    // the run is not yet (or no longer) active.
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
@@ -514,8 +521,11 @@ async fn drain_one_pass(
             admission.notify_completed(run_id).await;
             continue;
         };
-        broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
+        // Register the per-run broadcast BEFORE publishing
+        // RunAccepted (mirrors the dispatch::StartRun Admitted arm
+        // ordering — see the comment there for the race).
         let publisher = broadcast.register(run_id).await;
+        broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
         let admission_for_completion = admission.clone();
         let broadcast_for_completion = broadcast.clone();
         match facade

@@ -193,13 +193,31 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
 
     // M7 daemon path: subscribe to per-run events and stream live.
     use std::time::Duration;
+    use surge_orchestrator::engine::EngineError;
     use surge_orchestrator::engine::handle::EngineRunEvent;
 
     ensure_daemon_running().await?;
     let socket = surge_daemon::pidfile::socket_path()?;
     let facade =
         surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
-    let mut rx = facade.subscribe_to_run(id).await?;
+    let mut rx = match facade.subscribe_to_run(id).await {
+        Ok(rx) => rx,
+        Err(EngineError::RunNotActive(_)) => {
+            // The run already terminated (or was never registered with
+            // this daemon). Fall back to disk-replay so users still see
+            // the run's history. This is the same "fast-run" race the
+            // M7 polish #2 PR called out as out-of-scope: a run can
+            // finish + deregister between the user observing the
+            // RunId and `watch --daemon` arriving at the daemon.
+            eprintln!(
+                "run {id} is not currently active in the daemon; \
+                 reading event history from disk instead."
+            );
+            follow_log_from(id, 0).await?;
+            return Ok(());
+        },
+        Err(e) => return Err(e.into()),
+    };
 
     eprintln!("watching {id} (Ctrl+C to stop)…");
 

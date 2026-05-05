@@ -39,6 +39,14 @@ pub enum EngineError {
     #[error("run not found: {0}")]
     RunNotFound(RunId),
 
+    /// A run with the given `RunId` is not currently active in the
+    /// daemon. Distinguishes "the run terminated already" from
+    /// "the run never existed". Returned by daemon paths like
+    /// `Subscribe` so callers (e.g., the CLI's `watch` command)
+    /// can fall back to disk-replay.
+    #[error("run not currently active: {0}")]
+    RunNotActive(RunId),
+
     /// An unexpected internal condition occurred.
     #[error("internal engine error: {0}")]
     Internal(String),
