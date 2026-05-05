@@ -49,7 +49,23 @@ impl RoutingToolDispatcher {
         let mut table: HashMap<String, ToolOrigin> = HashMap::new();
         let mut declared: Vec<DeclaredTool> = Vec::new();
 
-        for entry in mcp_tools {
+        // Sort MCP entries by (server, tool) for deterministic
+        // first-wins collision resolution across MCP servers.
+        let mut sorted_mcp: Vec<&McpToolEntry> = mcp_tools.iter().collect();
+        sorted_mcp.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.tool.cmp(&b.tool)));
+
+        for entry in sorted_mcp {
+            if table.contains_key(&entry.tool) {
+                // Collision: another (sorted-earlier) MCP server already
+                // claimed this tool name. Drop this entry and warn so
+                // operators can rename or namespace if needed.
+                tracing::warn!(
+                    server = %entry.server,
+                    tool = %entry.tool,
+                    "MCP tool name collision; first-wins (by sorted server name) — this entry skipped"
+                );
+                continue;
+            }
             let timeout = per_server_timeouts
                 .get(&entry.server)
                 .copied()
@@ -209,6 +225,40 @@ mod tests {
             },
             other => panic!("expected engine route, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_mcp_collision_first_wins_by_server() {
+        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        // Two servers that both expose "shared". "a_server" sorts before
+        // "z_server", so "a_server"'s entry should win.
+        let mcp_tools = vec![
+            McpToolEntry::new(
+                "z_server".into(),
+                "shared".into(),
+                Some("from z".into()),
+                serde_json::json!({}),
+            ),
+            McpToolEntry::new(
+                "a_server".into(),
+                "shared".into(),
+                Some("from a".into()),
+                serde_json::json!({}),
+            ),
+        ];
+        let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &mcp_tools, &HashMap::new());
+        let declared = r.declared_tools();
+        // Exactly one entry for "shared" — first by sorted server name (a_server).
+        assert_eq!(declared.iter().filter(|t| t.name == "shared").count(), 1);
+        assert_eq!(
+            declared
+                .iter()
+                .find(|t| t.name == "shared")
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("from a")
+        );
     }
 
     #[tokio::test]

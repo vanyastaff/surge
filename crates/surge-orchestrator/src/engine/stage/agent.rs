@@ -26,7 +26,7 @@ use crate::engine::sandbox_factory::build_sandbox;
 use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 use crate::engine::stage::{StageError, StageResult};
 use crate::engine::tools::{
-    ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload as EngineResultPayload,
+    ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
 };
 
 /// Parameters for executing a single agent stage.
@@ -163,7 +163,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // Build the session-scoped tool dispatcher. When an MCP registry is
     // configured, wrap the engine dispatcher with RoutingToolDispatcher so the
     // agent sees both engine built-ins and the per-stage MCP allowlist.
-    let session_dispatcher: Arc<dyn ToolDispatcher> = if let Some(ref reg) = p.mcp_registry {
+    let session_dispatcher: Arc<dyn crate::engine::tools::ToolDispatcher> = if let Some(ref reg) =
+        p.mcp_registry
+    {
         // Per-stage MCP server allowlist from ToolOverride::mcp_add.
         let allowed_servers: std::collections::HashSet<&str> = p
             .agent_config
@@ -172,38 +174,65 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             .map(|o| o.mcp_add.iter().map(String::as_str).collect())
             .unwrap_or_default();
 
-        let all_mcp_tools = match reg.list_all_tools().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    err = %e,
-                    "MCP list_all_tools failed; proceeding with engine tools only"
-                );
-                Vec::new()
-            },
-        };
+        // Short-circuit: stage doesn't expose any MCP servers, so skip
+        // the potentially expensive list_all_tools call entirely.
+        if allowed_servers.is_empty() {
+            p.tool_dispatcher.clone()
+        } else {
+            let all_mcp_tools = match reg.list_all_tools().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        err = %e,
+                        "MCP list_all_tools failed; proceeding with engine tools only"
+                    );
+                    Vec::new()
+                },
+            };
 
-        let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
-            .into_iter()
-            .filter(|t| {
-                allowed_servers.contains(t.server.as_str())
-                    && sandbox_allows_mcp_tool(&sandbox_cfg, &t.server, &t.tool)
-            })
-            .collect();
+            // Build per-server `allowed_tools` lookup from the run-level
+            // registry. `None` means "expose all tools the server reports".
+            let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
+                .mcp_servers
+                .iter()
+                .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
+                .collect();
 
-        // Per-server timeout map from the run-level McpServerRef list.
-        let timeouts: std::collections::HashMap<String, std::time::Duration> = p
-            .mcp_servers
-            .iter()
-            .map(|s| (s.name.clone(), s.call_timeout))
-            .collect();
+            let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
+                .into_iter()
+                .filter(|t| {
+                    if !allowed_servers.contains(t.server.as_str()) {
+                        return false;
+                    }
+                    if !sandbox_allows_mcp_tool(&sandbox_cfg, &t.server, &t.tool) {
+                        return false;
+                    }
+                    // Per-server allowed_tools whitelist: outer Some = entry
+                    // exists in the HashMap; inner Some = the field is set.
+                    // If allowed_tools is None, no filtering is applied.
+                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str()) {
+                        if !whitelist.iter().any(|w| w == &t.tool) {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect();
 
-        Arc::new(crate::engine::tools::RoutingToolDispatcher::new(
-            p.tool_dispatcher.clone(),
-            reg.clone(),
-            &filtered,
-            &timeouts,
-        )) as Arc<dyn ToolDispatcher>
+            // Per-server timeout map from the run-level McpServerRef list.
+            let timeouts: std::collections::HashMap<String, std::time::Duration> = p
+                .mcp_servers
+                .iter()
+                .map(|s| (s.name.clone(), s.call_timeout))
+                .collect();
+
+            Arc::new(crate::engine::tools::RoutingToolDispatcher::new(
+                p.tool_dispatcher.clone(),
+                reg.clone(),
+                &filtered,
+                &timeouts,
+            )) as Arc<dyn crate::engine::tools::ToolDispatcher>
+        }
     } else {
         p.tool_dispatcher.clone()
     };

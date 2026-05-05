@@ -97,9 +97,21 @@ impl McpRegistry {
     /// Combined `tools/list` across all configured servers. Used by
     /// `RoutingToolDispatcher` at session-open to assemble the
     /// agent's tool catalog.
+    ///
+    /// Servers are queried in sorted order by name, and the final list
+    /// is additionally sorted by `(server, tool)` to guarantee
+    /// deterministic output regardless of `HashMap` iteration order or
+    /// per-server `tools/list` ordering.
     pub async fn list_all_tools(&self) -> Result<Vec<McpToolEntry>, McpError> {
         let mut out = Vec::new();
-        for (name, conn) in &self.servers {
+        // Iterate servers in sorted order for deterministic output.
+        let mut server_names: Vec<&String> = self.servers.keys().collect();
+        server_names.sort();
+        for name in server_names {
+            let conn = self
+                .servers
+                .get(name)
+                .expect("just collected from this map");
             let tools = conn.list_tools().await?;
             for t in tools {
                 // Call `schema_as_json_value()` first (borrows `t`) before
@@ -117,26 +129,36 @@ impl McpRegistry {
                 });
             }
         }
+        // Final sort by (server, tool) to be doubly safe — server-side
+        // tools/list ordering is implementation-defined.
+        out.sort_by(|a, b| a.server.cmp(&b.server).then_with(|| a.tool.cmp(&b.tool)));
         Ok(out)
     }
 
     /// Call a tool on a specific server.
     ///
-    /// `_timeout` is reserved for a future per-call timeout override;
-    /// for now [`McpServerConnection::call_tool`] uses the
-    /// per-server `call_timeout` from the registry's `McpServerRef`.
+    /// `timeout` is enforced as a hard deadline via
+    /// [`tokio::time::timeout`]. The effective bound is
+    /// `min(timeout, server_config_timeout)` — whichever fires first
+    /// wins. On caller-timeout expiry this returns
+    /// [`McpError::Timeout`]; the server-config timeout is enforced
+    /// independently by [`McpServerConnection::call_tool`].
     pub async fn call_tool(
         &self,
         server: &str,
         tool: &str,
         arguments: serde_json::Value,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<McpToolResult, McpError> {
         let conn = self
             .servers
             .get(server)
             .ok_or_else(|| McpError::ServerNotConfigured(server.into()))?;
-        let r = conn.call_tool(tool, arguments).await?;
+        let r = match tokio::time::timeout(timeout, conn.call_tool(tool, arguments)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_elapsed) => return Err(McpError::Timeout(timeout)),
+        };
         // `r.content: Vec<Content>` where `Content = Annotated<RawContent>`.
         // `Annotated<T>` exposes the inner value as `pub raw: T`.
         // `RawContent::Text(t)` carries a `RawTextContent` with field `t.text: String`.
