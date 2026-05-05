@@ -164,6 +164,7 @@ async fn subscribe_global_delivers_run_lifecycle_events() {
     let socket = unique_socket_path(&temp, "sub_glob");
     let cfg = ServerConfig {
         max_active: 4,
+        max_queue: 16,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
@@ -282,6 +283,7 @@ async fn subscribe_global_is_idempotent_within_a_connection() {
     let socket = unique_socket_path(&temp, "sub_glob_idem");
     let cfg = ServerConfig {
         max_active: 4,
+        max_queue: 16,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
