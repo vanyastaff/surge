@@ -335,7 +335,11 @@ async fn dispatch(
         // this server is updated.
         _ => {
             tracing::warn!("unrecognised DaemonRequest variant; returning error");
-            None
+            Some(DaemonResponse::Error {
+                request_id: 0,
+                code: ErrorCode::BadRequest,
+                message: "unsupported request method".into(),
+            })
         },
     }
 }
