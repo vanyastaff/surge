@@ -116,7 +116,7 @@ impl CommandPalette {
             .rounded_md();
 
         let base = if is_selected {
-            base.bg(theme::PRIMARY.opacity(0.15))
+            base.bg(theme::primary().opacity(0.15))
         } else {
             base
         };
@@ -128,16 +128,16 @@ impl CommandPalette {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child(cmd.category.clone()),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(if is_selected {
-                            theme::TEXT_PRIMARY
+                            theme::text_primary()
                         } else {
-                            theme::TEXT_MUTED
+                            theme::text_muted()
                         })
                         .child(cmd.label.clone()),
                 ),
@@ -147,7 +147,7 @@ impl CommandPalette {
             row = row.child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED.opacity(0.5))
+                    .text_color(theme::text_muted().opacity(0.5))
                     .child(sc.clone()),
             );
         }
@@ -165,10 +165,10 @@ impl Render for CommandPalette {
             .v_flex()
             .w(px(500.0))
             .max_h(px(400.0))
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .rounded_lg()
             .border_1()
-            .border_color(theme::PRIMARY.opacity(0.3))
+            .border_color(theme::primary().opacity(0.3))
             .shadow_lg()
             .overflow_hidden()
             // Header with query display
@@ -178,18 +178,18 @@ impl Render for CommandPalette {
                     .px_3()
                     .py_2()
                     .border_b_1()
-                    .border_color(theme::BACKGROUND)
+                    .border_color(theme::background())
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child("⌘ ".to_string()),
                     )
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(if self.query.is_empty() {
                                 "Type to search commands...".to_string()
                             } else {
@@ -207,17 +207,17 @@ impl Render for CommandPalette {
                     .px_3()
                     .py_1()
                     .border_t_1()
-                    .border_color(theme::BACKGROUND)
+                    .border_color(theme::background())
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .child(format!("{} commands", item_count)),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .child("↑↓ Navigate  ⏎ Select  Esc Close".to_string()),
                     ),
             )

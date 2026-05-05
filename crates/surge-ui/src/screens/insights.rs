@@ -91,12 +91,12 @@ impl InsightsScreen {
                     .rounded_md()
                     .text_sm()
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
@@ -133,20 +133,20 @@ impl InsightsScreen {
             .gap_1()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
             .child(
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(value.to_string()),
             )
     }
@@ -159,13 +159,13 @@ impl InsightsScreen {
             .px_3()
             .py(px(8.0))
             .border_b_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .w(px(140.0))
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Agent".to_string()),
             )
             .child(
@@ -173,7 +173,7 @@ impl InsightsScreen {
                     .flex_1()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Requests".to_string()),
             )
             .child(
@@ -181,7 +181,7 @@ impl InsightsScreen {
                     .flex_1()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Input Tokens".to_string()),
             )
             .child(
@@ -189,7 +189,7 @@ impl InsightsScreen {
                     .flex_1()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Output Tokens".to_string()),
             )
             .child(
@@ -197,7 +197,7 @@ impl InsightsScreen {
                     .w(px(80.0))
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Cost".to_string()),
             );
 
@@ -211,33 +211,33 @@ impl InsightsScreen {
                     .px_3()
                     .py(px(6.0))
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .child(
                         div()
                             .w(px(140.0))
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(agent.name.clone()),
                     )
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(format!("{}", agent.requests)),
                     )
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(format_tokens(agent.input_tokens)),
                     )
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(format_tokens(agent.output_tokens)),
                     )
                     .child(
@@ -245,7 +245,7 @@ impl InsightsScreen {
                             .w(px(80.0))
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(format!("${:.2}", agent.cost_usd)),
                     )
             })
@@ -258,7 +258,7 @@ impl InsightsScreen {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Token Usage by Agent".to_string()),
             )
             .child(
@@ -266,8 +266,8 @@ impl InsightsScreen {
                     .v_flex()
                     .rounded_lg()
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
-                    .bg(theme::SURFACE)
+                    .border_color(theme::text_muted().opacity(0.1))
+                    .bg(theme::surface())
                     .overflow_hidden()
                     .child(header)
                     .children(rows),
@@ -280,14 +280,14 @@ impl InsightsScreen {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("QA Metrics".to_string()),
             )
             .child(
@@ -314,11 +314,11 @@ impl InsightsScreen {
 
     fn metric_row(&self, label: &str, value: &str, ratio: f32) -> Div {
         let bar_color = if ratio > 0.7 {
-            theme::SUCCESS
+            theme::success()
         } else if ratio > 0.4 {
-            theme::WARNING
+            theme::warning()
         } else {
-            theme::ERROR
+            theme::error()
         };
 
         div()
@@ -331,14 +331,14 @@ impl InsightsScreen {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(label.to_string()),
                     )
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(value.to_string()),
                     ),
             )
@@ -347,7 +347,7 @@ impl InsightsScreen {
                     .w_full()
                     .h(px(4.0))
                     .rounded_full()
-                    .bg(theme::TEXT_MUTED.opacity(0.15))
+                    .bg(theme::text_muted().opacity(0.15))
                     .child(
                         div()
                             .h_full()
@@ -377,7 +377,7 @@ impl Render for InsightsScreen {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Insights".to_string()),
                     )
                     .child(self.render_period_selector(cx)),

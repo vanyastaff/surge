@@ -417,9 +417,9 @@ impl AgentTerminalScreen {
             .flex()
             .items_center()
             .justify_between()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_b_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.3))
+            .border_color(theme::text_muted().opacity(0.3))
             .child(
                 div()
                     .flex()
@@ -428,13 +428,13 @@ impl AgentTerminalScreen {
                     .child(
                         Icon::new(IconName::SquareTerminal)
                             .size_4()
-                            .text_color(theme::PRIMARY),
+                            .text_color(theme::primary()),
                     )
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Agent Terminal"),
                     )
                     .child(
@@ -442,16 +442,16 @@ impl AgentTerminalScreen {
                             .px(px(8.0))
                             .py(px(2.0))
                             .rounded(px(4.0))
-                            .bg(theme::SIDEBAR_BG)
+                            .bg(theme::sidebar_bg())
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(self.agent_name.clone()),
                     ),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(format!("{} items", self.items.len())),
             )
     }
@@ -476,10 +476,10 @@ impl AgentTerminalScreen {
         let is_collapsed = self.is_collapsed(&tc.call_id, true);
 
         let (status_icon, status_color) = match tc.status {
-            surge_core::ToolCallStatus::Completed => (IconName::Check, theme::SUCCESS),
-            surge_core::ToolCallStatus::Failed => (IconName::CircleX, theme::ERROR),
-            surge_core::ToolCallStatus::InProgress => (IconName::LoaderCircle, theme::WARNING),
-            surge_core::ToolCallStatus::Pending => (IconName::Loader, theme::TEXT_MUTED),
+            surge_core::ToolCallStatus::Completed => (IconName::Check, theme::success()),
+            surge_core::ToolCallStatus::Failed => (IconName::CircleX, theme::error()),
+            surge_core::ToolCallStatus::InProgress => (IconName::LoaderCircle, theme::warning()),
+            surge_core::ToolCallStatus::Pending => (IconName::Loader, theme::text_muted()),
         };
         let kind_icon = tool_kind_icon(&tc.kind);
         let chevron = if is_collapsed {
@@ -509,12 +509,16 @@ impl AgentTerminalScreen {
                     cx.notify();
                 }))
                 .child(Icon::new(status_icon).size_3().text_color(status_color))
-                .child(Icon::new(kind_icon).size_3().text_color(theme::TEXT_MUTED))
+                .child(
+                    Icon::new(kind_icon)
+                        .size_3()
+                        .text_color(theme::text_muted()),
+                )
                 .child(
                     div()
                         .flex_1()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child(tc.title.clone()),
                 )
                 .children(tc.locations.iter().map(|loc| {
@@ -531,13 +535,13 @@ impl AgentTerminalScreen {
                         .px(px(6.0))
                         .py(px(1.0))
                         .rounded(px(3.0))
-                        .bg(theme::SIDEBAR_BG)
+                        .bg(theme::sidebar_bg())
                         .text_xs()
-                        .text_color(theme::WARNING)
+                        .text_color(theme::warning())
                         .font_family("Consolas")
                         .child(label)
                 }))
-                .child(Icon::new(chevron).size_3().text_color(theme::TEXT_MUTED)),
+                .child(Icon::new(chevron).size_3().text_color(theme::text_muted())),
         );
 
         // Expanded details — request, response, diffs
@@ -598,11 +602,11 @@ impl AgentTerminalScreen {
                         cx.notify();
                     })
                 })
-                .child(Icon::new(chevron).size_3().text_color(theme::TEXT_MUTED))
+                .child(Icon::new(chevron).size_3().text_color(theme::text_muted()))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child("Thinking..."),
                 ),
         );
@@ -612,7 +616,7 @@ impl AgentTerminalScreen {
                 div()
                     .pl(px(18.0))
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED.opacity(0.7))
+                    .text_color(theme::text_muted().opacity(0.7))
                     .font_family("Consolas")
                     .child(block.text.clone()),
             );
@@ -657,12 +661,12 @@ impl AgentTerminalScreen {
                         cx.notify();
                     })
                 })
-                .child(Icon::new(chevron).size_3().text_color(theme::PRIMARY))
+                .child(Icon::new(chevron).size_3().text_color(theme::primary()))
                 .child(
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::PRIMARY)
+                        .text_color(theme::primary())
                         .child(format!("Plan ({completed}/{total})")),
                 ),
         );
@@ -677,9 +681,11 @@ impl AgentTerminalScreen {
 
             for entry in entries {
                 let (icon, color) = match entry.status {
-                    surge_core::PlanStatus::Completed => (IconName::CircleCheck, theme::SUCCESS),
-                    surge_core::PlanStatus::InProgress => (IconName::LoaderCircle, theme::WARNING),
-                    surge_core::PlanStatus::Pending => (IconName::Dash, theme::TEXT_MUTED),
+                    surge_core::PlanStatus::Completed => (IconName::CircleCheck, theme::success()),
+                    surge_core::PlanStatus::InProgress => {
+                        (IconName::LoaderCircle, theme::warning())
+                    },
+                    surge_core::PlanStatus::Pending => (IconName::Dash, theme::text_muted()),
                 };
 
                 let mut row = div()
@@ -691,7 +697,7 @@ impl AgentTerminalScreen {
                         div()
                             .flex_1()
                             .text_xs()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(entry.content.clone()),
                     );
 
@@ -702,7 +708,7 @@ impl AgentTerminalScreen {
                             .rounded(px(2.0))
                             .text_xs()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::ERROR)
+                            .text_color(theme::error())
                             .child("!"),
                     );
                 }
@@ -751,7 +757,7 @@ impl Render for AgentTerminalScreen {
                     .overflow_y_scroll()
                     .overflow_x_hidden()
                     .track_scroll(&self.scroll_handle)
-                    .bg(theme::BACKGROUND)
+                    .bg(theme::background())
                     .children(items),
             )
             .child(
@@ -759,9 +765,9 @@ impl Render for AgentTerminalScreen {
                     .w_full()
                     .flex_shrink_0()
                     .p(px(12.0))
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_t_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.3))
+                    .border_color(theme::text_muted().opacity(0.3))
                     .flex()
                     .items_center()
                     .gap(px(8.0))
@@ -778,9 +784,9 @@ impl Render for AgentTerminalScreen {
                             .py(px(8.0))
                             .rounded(px(8.0))
                             .bg(if self.is_sending {
-                                theme::SIDEBAR_BG
+                                theme::sidebar_bg()
                             } else {
-                                theme::PRIMARY
+                                theme::primary()
                             })
                             .cursor_pointer()
                             .flex()
@@ -790,7 +796,7 @@ impl Render for AgentTerminalScreen {
                                 d.child(
                                     div()
                                         .text_sm()
-                                        .text_color(theme::TEXT_MUTED)
+                                        .text_color(theme::text_muted())
                                         .child("Sending..."),
                                 )
                             })
@@ -826,7 +832,7 @@ fn render_user_message(content: &str) -> Div {
         .w_full()
         .px(px(12.0))
         .py(px(6.0))
-        .bg(theme::PRIMARY.opacity(0.05))
+        .bg(theme::primary().opacity(0.05))
         .child(
             div()
                 .flex()
@@ -836,20 +842,20 @@ fn render_user_message(content: &str) -> Div {
                 .child(
                     Icon::new(IconName::User)
                         .size_3()
-                        .text_color(theme::PRIMARY),
+                        .text_color(theme::primary()),
                 )
                 .child(
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::PRIMARY)
+                        .text_color(theme::primary())
                         .child("You"),
                 ),
         )
         .child(
             div()
                 .text_sm()
-                .text_color(theme::TEXT_PRIMARY)
+                .text_color(theme::text_primary())
                 .child(content.to_string()),
         )
 }
@@ -869,28 +875,32 @@ fn render_agent_text(content: &str) -> Div {
                 .items_center()
                 .gap(px(5.0))
                 .mb(px(2.0))
-                .child(Icon::new(IconName::Bot).size_3().text_color(theme::SUCCESS))
+                .child(
+                    Icon::new(IconName::Bot)
+                        .size_3()
+                        .text_color(theme::success()),
+                )
                 .child(
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::SUCCESS)
+                        .text_color(theme::success())
                         .child("Agent"),
                 ),
         )
         .child(
             div()
                 .text_sm()
-                .text_color(theme::TEXT_PRIMARY)
+                .text_color(theme::text_primary())
                 .child(markdown::render_markdown(content)),
         )
 }
 
 fn render_permission(perm: &PermissionBlock) -> Div {
     let (icon, status_text, status_color) = match perm.resolved {
-        None => (IconName::TriangleAlert, "Awaiting", theme::WARNING),
-        Some(true) => (IconName::Check, "Granted", theme::SUCCESS),
-        Some(false) => (IconName::CircleX, "Denied", theme::ERROR),
+        None => (IconName::TriangleAlert, "Awaiting", theme::warning()),
+        Some(true) => (IconName::Check, "Granted", theme::success()),
+        Some(false) => (IconName::CircleX, "Denied", theme::error()),
     };
 
     div().w_full().px(px(12.0)).py(px(1.0)).child(
@@ -908,7 +918,7 @@ fn render_permission(perm: &PermissionBlock) -> Div {
                 div()
                     .flex_1()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(perm.description.clone()),
             )
             .child(
@@ -935,12 +945,12 @@ fn render_system(content: &str) -> Div {
         .child(
             Icon::new(IconName::Info)
                 .size_3()
-                .text_color(theme::TEXT_MUTED),
+                .text_color(theme::text_muted()),
         )
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(content.to_string()),
         )
 }
@@ -982,7 +992,7 @@ fn render_json_block(label: &str, json: &str) -> Div {
                 .py(px(2.0))
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(label),
         )
         .child(
@@ -1025,13 +1035,13 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
             .child(
                 Icon::new(IconName::File)
                     .size_3()
-                    .text_color(theme::TEXT_MUTED),
+                    .text_color(theme::text_muted()),
             )
             .child(
                 div()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .font_family("Consolas")
                     .child(filename),
             ),

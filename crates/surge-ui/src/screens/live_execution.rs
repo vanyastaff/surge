@@ -15,10 +15,10 @@ pub enum NodeState {
 impl NodeState {
     fn color(self) -> Hsla {
         match self {
-            Self::Pending => theme::TEXT_MUTED,
-            Self::Running => theme::WARNING,
-            Self::Done => theme::SUCCESS,
-            Self::Failed => theme::ERROR,
+            Self::Pending => theme::text_muted(),
+            Self::Running => theme::warning(),
+            Self::Done => theme::success(),
+            Self::Failed => theme::error(),
         }
     }
 
@@ -156,14 +156,14 @@ impl LiveExecutionScreen {
             .items_center()
             .p_3()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(self.spec_title.clone()),
             )
             .child(
@@ -171,25 +171,25 @@ impl LiveExecutionScreen {
                     .flex_1()
                     .h(px(6.0))
                     .rounded_full()
-                    .bg(theme::TEXT_MUTED.opacity(0.15))
+                    .bg(theme::text_muted().opacity(0.15))
                     .child(
                         div()
                             .h_full()
                             .rounded_full()
-                            .bg(theme::PRIMARY)
+                            .bg(theme::primary())
                             .w(relative(pct)),
                     ),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(format!("{}/{}", self.completed, self.total)),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(format!("{}K tokens", self.tokens_used / 1000)),
             )
     }
@@ -224,7 +224,7 @@ impl LiveExecutionScreen {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(node.title.clone()),
                             )
                             .child(
@@ -243,7 +243,7 @@ impl LiveExecutionScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .w(px(50.0))
                             .child(format!("Lane {}", lane + 1)),
                     )
@@ -256,14 +256,14 @@ impl LiveExecutionScreen {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Execution Graph".to_string()),
             )
             .children(lanes)
@@ -275,11 +275,11 @@ impl LiveExecutionScreen {
             .iter()
             .map(|entry| {
                 let color = if entry.message.starts_with("Completed") {
-                    theme::SUCCESS
+                    theme::success()
                 } else if entry.message.starts_with("Started") {
-                    theme::WARNING
+                    theme::warning()
                 } else {
-                    theme::TEXT_MUTED
+                    theme::text_muted()
                 };
 
                 div()
@@ -289,7 +289,7 @@ impl LiveExecutionScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .w(px(60.0))
                             .child(entry.timestamp.clone()),
                     )
@@ -308,14 +308,14 @@ impl LiveExecutionScreen {
             .gap_1()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Execution Log".to_string()),
             )
             .children(entries)
@@ -362,7 +362,7 @@ impl Render for LiveExecutionScreen {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Live Execution".to_string()),
                     )
                     .child(self.render_controls(cx)),

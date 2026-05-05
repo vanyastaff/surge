@@ -133,13 +133,13 @@ impl DashboardScreen {
 
     fn render_health_card(&self, counts: &TaskCounts) -> Div {
         let items = [
-            ("Draft", counts.draft, theme::TEXT_MUTED),
-            ("Planning", counts.planning, theme::PRIMARY),
-            ("Executing", counts.executing, theme::WARNING),
-            ("QA Review", counts.qa_review, theme::PRIMARY),
-            ("Human Review", counts.human_review, theme::WARNING),
-            ("Completed", counts.completed, theme::SUCCESS),
-            ("Failed", counts.failed, theme::ERROR),
+            ("Draft", counts.draft, theme::text_muted()),
+            ("Planning", counts.planning, theme::primary()),
+            ("Executing", counts.executing, theme::warning()),
+            ("QA Review", counts.qa_review, theme::primary()),
+            ("Human Review", counts.human_review, theme::warning()),
+            ("Completed", counts.completed, theme::success()),
+            ("Failed", counts.failed, theme::error()),
         ];
 
         let bars: Vec<Div> = items
@@ -158,7 +158,7 @@ impl DashboardScreen {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(label.to_string()),
                             ),
                     )
@@ -166,7 +166,7 @@ impl DashboardScreen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(format!("{count}")),
                     )
             })
@@ -184,9 +184,9 @@ impl DashboardScreen {
             .iter()
             .map(|a| {
                 let status_color = if a.connected {
-                    theme::SUCCESS
+                    theme::success()
                 } else {
-                    theme::ERROR
+                    theme::error()
                 };
                 let status_text = if a.connected { "Online" } else { "Offline" };
 
@@ -203,7 +203,7 @@ impl DashboardScreen {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(a.name.clone()),
                             ),
                     )
@@ -224,8 +224,8 @@ impl DashboardScreen {
                                         .px_2()
                                         .py_0p5()
                                         .rounded_md()
-                                        .bg(theme::PRIMARY.opacity(0.15))
-                                        .text_color(theme::PRIMARY)
+                                        .bg(theme::primary().opacity(0.15))
+                                        .text_color(theme::primary())
                                         .child(format!("{} tasks", a.active_tasks)),
                                 )
                             }),
@@ -275,20 +275,20 @@ impl DashboardScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(icon.to_string()),
                     )
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(entry.message.clone()),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.6))
+                            .text_color(theme::text_muted().opacity(0.6))
                             .child(entry.timestamp.clone()),
                     )
             })
@@ -307,9 +307,9 @@ impl DashboardScreen {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .v_flex()
@@ -318,14 +318,14 @@ impl DashboardScreen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(title.to_string()),
                     )
                     .when(!subtitle.is_empty(), |el: Div| {
                         el.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child(subtitle.to_string()),
                         )
                     }),
@@ -351,7 +351,7 @@ impl Render for DashboardScreen {
                 div()
                     .text_2xl()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Dashboard".to_string()),
             )
             // Grid: 2 columns

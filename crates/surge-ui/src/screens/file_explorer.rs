@@ -26,10 +26,10 @@ impl ChangeStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Added => theme::SUCCESS,
-            Self::Modified => theme::WARNING,
-            Self::Deleted => theme::ERROR,
-            Self::Renamed => theme::PRIMARY,
+            Self::Added => theme::success(),
+            Self::Modified => theme::warning(),
+            Self::Deleted => theme::error(),
+            Self::Renamed => theme::primary(),
         }
     }
 }
@@ -112,7 +112,7 @@ impl FileExplorerScreen {
             .py(px(6.0))
             .cursor_pointer()
             .rounded_md()
-            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
+            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.groups[group_idx].expanded = !this.groups[group_idx].expanded;
                 cx.notify();
@@ -120,7 +120,7 @@ impl FileExplorerScreen {
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(if group.expanded { "v" } else { ">" }.to_string()),
             )
             .child(
@@ -128,7 +128,7 @@ impl FileExplorerScreen {
                     .flex_1()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(group.dir.clone()),
             )
             .child(
@@ -137,8 +137,8 @@ impl FileExplorerScreen {
                     .px_2()
                     .py_0p5()
                     .rounded_full()
-                    .bg(theme::TEXT_MUTED.opacity(0.15))
-                    .text_color(theme::TEXT_MUTED)
+                    .bg(theme::text_muted().opacity(0.15))
+                    .text_color(theme::text_muted())
                     .child(format!("{}", group.files.len())),
             );
 
@@ -163,11 +163,11 @@ impl FileExplorerScreen {
                         .cursor_pointer()
                         .rounded_md()
                         .bg(if is_selected {
-                            theme::PRIMARY.opacity(0.1)
+                            theme::primary().opacity(0.1)
                         } else {
                             gpui::transparent_black()
                         })
-                        .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
+                        .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.selected_file = Some(path.clone());
                             cx.notify();
@@ -186,7 +186,7 @@ impl FileExplorerScreen {
                             div()
                                 .flex_1()
                                 .text_sm()
-                                .text_color(theme::TEXT_PRIMARY)
+                                .text_color(theme::text_primary())
                                 .child(file.filename.clone()),
                         )
                         // +/- counts
@@ -197,13 +197,13 @@ impl FileExplorerScreen {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme::SUCCESS)
+                                        .text_color(theme::success())
                                         .child(format!("+{}", file.added)),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme::ERROR)
+                                        .text_color(theme::error())
                                         .child(format!("-{}", file.removed)),
                                 ),
                         )
@@ -223,26 +223,26 @@ impl FileExplorerScreen {
             .gap_4()
             .px_4()
             .py_3()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .rounded_lg()
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(format!("{count} files changed")),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::SUCCESS)
+                    .text_color(theme::success())
                     .child(format!("+{added} lines")),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::ERROR)
+                    .text_color(theme::error())
                     .child(format!("-{removed} lines")),
             )
             .when(self.selected_file.is_some(), |el: Div| {
@@ -251,7 +251,7 @@ impl FileExplorerScreen {
                     div()
                         .flex_1()
                         .text_sm()
-                        .text_color(theme::PRIMARY)
+                        .text_color(theme::primary())
                         .child(format!("Selected: {selected}")),
                 )
             })
@@ -283,7 +283,7 @@ impl Render for FileExplorerScreen {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("File Explorer".to_string()),
                     )
                     .child(Button::new("fe-view-diff").primary().label("View Diff")),
@@ -296,9 +296,9 @@ impl Render for FileExplorerScreen {
                     .gap_1()
                     .p_3()
                     .rounded_lg()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .overflow_hidden()
                     .children(groups),
             )

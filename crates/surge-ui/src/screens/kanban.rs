@@ -31,12 +31,12 @@ impl KanbanColumn {
 
     pub fn color(self) -> Hsla {
         match self {
-            Self::Draft => theme::TEXT_MUTED,
-            Self::Planning => theme::PRIMARY,
-            Self::Executing => theme::WARNING,
+            Self::Draft => theme::text_muted(),
+            Self::Planning => theme::primary(),
+            Self::Executing => theme::warning(),
             Self::QaReview => hsla(190.0 / 360.0, 0.8, 0.5, 1.0), // cyan
-            Self::HumanReview => theme::WARNING,
-            Self::Done => theme::SUCCESS,
+            Self::HumanReview => theme::warning(),
+            Self::Done => theme::success(),
         }
     }
 
@@ -180,9 +180,9 @@ impl KanbanScreen {
             0.0
         };
         let progress_color = if pct >= 1.0 {
-            theme::SUCCESS
+            theme::success()
         } else {
-            theme::PRIMARY
+            theme::primary()
         };
 
         // Subtask dots
@@ -192,7 +192,7 @@ impl KanbanScreen {
                 div().w(px(7.0)).h(px(7.0)).rounded_full().bg(if done {
                     progress_color
                 } else {
-                    theme::TEXT_MUTED.opacity(0.2)
+                    theme::text_muted().opacity(0.2)
                 })
             })
             .collect();
@@ -210,13 +210,13 @@ impl KanbanScreen {
             .gap(px(10.0))
             .p_3()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.06))
+            .border_color(theme::text_muted().opacity(0.06))
             .cursor_pointer()
             .hover(|s: StyleRefinement| {
-                s.bg(theme::SURFACE)
-                    .border_color(theme::TEXT_MUTED.opacity(0.15))
+                s.bg(theme::surface())
+                    .border_color(theme::text_muted().opacity(0.15))
             })
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(TaskClicked(id.clone()));
@@ -226,7 +226,7 @@ impl KanbanScreen {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .line_height(relative(1.3))
                     .child(task.title.clone()),
             )
@@ -252,7 +252,7 @@ impl KanbanScreen {
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .line_height(relative(1.5))
                     .max_h(px(34.0))
                     .overflow_hidden()
@@ -272,14 +272,14 @@ impl KanbanScreen {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme::TEXT_MUTED)
+                                        .text_color(theme::text_muted())
                                         .child("Progress".to_string()),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::TEXT_PRIMARY)
+                                        .text_color(theme::text_primary())
                                         .child(format!("{}%", (pct * 100.0) as u32)),
                                 ),
                         )
@@ -289,7 +289,7 @@ impl KanbanScreen {
                                 .w_full()
                                 .h(px(4.0))
                                 .rounded_full()
-                                .bg(theme::TEXT_MUTED.opacity(0.1))
+                                .bg(theme::text_muted().opacity(0.1))
                                 .child(
                                     div()
                                         .h_full()
@@ -309,7 +309,7 @@ impl KanbanScreen {
                                     el.child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child(extra_subtasks.unwrap_or_default()),
                                     )
                                 }),
@@ -325,12 +325,12 @@ impl KanbanScreen {
                     .child(
                         Icon::new(IconName::Calendar)
                             .size_3()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5)),
+                            .text_color(theme::text_muted().opacity(0.5)),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.6))
+                            .text_color(theme::text_muted().opacity(0.6))
                             .child(task.time_ago.clone()),
                     ),
             )
@@ -347,12 +347,12 @@ impl KanbanScreen {
             .child(
                 Icon::new(col.empty_icon())
                     .size_6()
-                    .text_color(theme::TEXT_MUTED.opacity(0.25)),
+                    .text_color(theme::text_muted().opacity(0.25)),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED.opacity(0.4))
+                    .text_color(theme::text_muted().opacity(0.4))
                     .text_center()
                     .child(col.empty_text().to_string()),
             )
@@ -378,9 +378,9 @@ impl KanbanScreen {
             .min_w(px(COLUMN_MIN_W))
             .flex_shrink_0()
             .rounded_lg()
-            .bg(theme::BACKGROUND.opacity(0.5))
+            .bg(theme::background().opacity(0.5))
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.06))
+            .border_color(theme::text_muted().opacity(0.06))
             // Colored top border
             .child(div().w_full().h(px(3.0)).rounded_t_lg().bg(col.color()))
             // Column header
@@ -401,13 +401,13 @@ impl KanbanScreen {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(col.label().to_string()),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(format!("{count}")),
                             ),
                     )
@@ -415,7 +415,7 @@ impl KanbanScreen {
                         el.child(
                             Icon::new(IconName::Plus)
                                 .size_4()
-                                .text_color(theme::TEXT_MUTED),
+                                .text_color(theme::text_muted()),
                         )
                     }),
             )
@@ -448,12 +448,12 @@ impl Render for KanbanScreen {
                 .child(
                     Icon::new(IconName::Inbox)
                         .size_8()
-                        .text_color(theme::TEXT_MUTED.opacity(0.3)),
+                        .text_color(theme::text_muted().opacity(0.3)),
                 )
                 .child(
                     div()
                         .text_sm()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child("No tasks yet. Create a spec to get started.".to_string()),
                 )
                 .into_any_element();

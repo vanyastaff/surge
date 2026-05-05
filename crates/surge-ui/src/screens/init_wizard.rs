@@ -156,11 +156,11 @@ impl InitWizard {
                 let is_current = s == self.step;
                 let is_done = s.index() < self.step.index();
                 let color = if is_current {
-                    theme::PRIMARY
+                    theme::primary()
                 } else if is_done {
-                    theme::SUCCESS
+                    theme::success()
                 } else {
-                    theme::TEXT_MUTED.opacity(0.3)
+                    theme::text_muted().opacity(0.3)
                 };
 
                 div()
@@ -214,10 +214,10 @@ impl InitWizard {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Choose Directory".to_string()),
             )
-            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(
+            .child(div().text_sm().text_color(theme::text_muted()).child(
                 "Select an existing folder or create a new one for your project.".to_string(),
             ))
             .child(
@@ -227,17 +227,17 @@ impl InitWizard {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.2))
+                    .border_color(theme::text_muted().opacity(0.2))
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
                             .text_color(if self.directory.is_empty() {
-                                theme::TEXT_MUTED
+                                theme::text_muted()
                             } else {
-                                theme::TEXT_PRIMARY
+                                theme::text_primary()
                             })
                             .child(if self.directory.is_empty() {
                                 "No directory selected".to_string()
@@ -250,7 +250,7 @@ impl InitWizard {
                 el.child(
                     div()
                         .text_xs()
-                        .text_color(theme::WARNING)
+                        .text_color(theme::warning())
                         .child("⚠ This directory already has a .surge/ folder".to_string()),
                 )
             })
@@ -258,7 +258,7 @@ impl InitWizard {
                 el.child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child("ℹ No .git/ found — git init will be suggested".to_string()),
                 )
             })
@@ -272,7 +272,7 @@ impl InitWizard {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Project Info".to_string()),
             )
             .child(self.render_field("Name", &self.project_name))
@@ -286,7 +286,7 @@ impl InitWizard {
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child("Detected:".to_string()),
                         )
                         .child(
@@ -295,8 +295,8 @@ impl InitWizard {
                                 .px_2()
                                 .py_0p5()
                                 .rounded_md()
-                                .bg(theme::PRIMARY.opacity(0.15))
-                                .text_color(theme::PRIMARY)
+                                .bg(theme::primary().opacity(0.15))
+                                .text_color(theme::primary())
                                 .child(lang.to_string()),
                         ),
                 )
@@ -311,13 +311,13 @@ impl InitWizard {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Agent Setup".to_string()),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Configure the default coding agent.".to_string()),
             )
             .child(self.render_field("Agent Name", &self.agent_name))
@@ -325,7 +325,7 @@ impl InitWizard {
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("You can skip this and configure later in Settings.".to_string()),
             )
     }
@@ -361,14 +361,14 @@ impl InitWizard {
                     .rounded_md()
                     .border_1()
                     .border_color(if is_selected {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED.opacity(0.2)
+                        theme::text_muted().opacity(0.2)
                     })
                     .bg(if is_selected {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
-                        theme::SURFACE
+                        theme::surface()
                     })
                     .child(
                         div()
@@ -378,13 +378,13 @@ impl InitWizard {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(label.to_string()),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(desc.to_string()),
                             ),
                     )
@@ -398,7 +398,7 @@ impl InitWizard {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Pipeline Configuration".to_string()),
             )
             .children(preset_items)
@@ -418,7 +418,7 @@ impl InitWizard {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Confirm".to_string()),
             )
             .child(self.render_summary_row("Directory", &self.directory))
@@ -439,7 +439,7 @@ impl InitWizard {
                 div()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
             .child(
@@ -447,14 +447,14 @@ impl InitWizard {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.2))
+                    .border_color(theme::text_muted().opacity(0.2))
                     .text_sm()
                     .text_color(if value.is_empty() {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     } else {
-                        theme::TEXT_PRIMARY
+                        theme::text_primary()
                     })
                     .child(if value.is_empty() {
                         format!("Enter {}", label.to_lowercase())
@@ -473,13 +473,13 @@ impl InitWizard {
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(value.to_string()),
             )
     }
@@ -496,10 +496,10 @@ impl Render for InitWizard {
             .w(px(550.0))
             .gap_6()
             .p_6()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .rounded_xl()
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.15))
+            .border_color(theme::text_muted().opacity(0.15))
             // Stepper
             .child(self.render_stepper())
             // Content

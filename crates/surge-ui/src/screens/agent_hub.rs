@@ -137,16 +137,16 @@ impl AgentHubScreen {
                         FontWeight::MEDIUM
                     })
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
-                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
+                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
                     .on_click(cx.listener(move |this, _e, _w, cx| {
                         this.active_tab = tab;
                         cx.notify();
@@ -179,11 +179,11 @@ impl AgentHubScreen {
             .rounded_lg()
             .cursor_pointer()
             .bg(if is_selected {
-                theme::PRIMARY.opacity(0.08)
+                theme::primary().opacity(0.08)
             } else {
                 gpui::transparent_black()
             })
-            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
+            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.selected = Some(idx);
                 cx.notify();
@@ -191,15 +191,15 @@ impl AgentHubScreen {
             // Status dot — green for healthy, yellow for degraded, red for offline
             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(
                 match agent.health_status {
-                    Some(surge_acp::HealthStatus::Healthy) => theme::SUCCESS,
-                    Some(surge_acp::HealthStatus::Degraded) => theme::WARNING,
-                    Some(surge_acp::HealthStatus::Offline) => theme::ERROR,
+                    Some(surge_acp::HealthStatus::Healthy) => theme::success(),
+                    Some(surge_acp::HealthStatus::Degraded) => theme::warning(),
+                    Some(surge_acp::HealthStatus::Offline) => theme::error(),
                     None => {
                         // Fallback to install method if health status not available
                         if agent.install_method == InstallMethod::Installed {
-                            theme::SUCCESS
+                            theme::success()
                         } else {
-                            theme::PRIMARY
+                            theme::primary()
                         }
                     }
                 },
@@ -210,14 +210,14 @@ impl AgentHubScreen {
                     .flex_1()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(agent.display_name.clone()),
             )
             // Right info
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED.opacity(0.6))
+                    .text_color(theme::text_muted().opacity(0.6))
                     .child(if is_active {
                         format!(
                             "{} active · {} tok",
@@ -248,12 +248,12 @@ impl AgentHubScreen {
                 .child(
                     Icon::new(IconName::Bot)
                         .size_8()
-                        .text_color(theme::TEXT_MUTED.opacity(0.15)),
+                        .text_color(theme::text_muted().opacity(0.15)),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED.opacity(0.3))
+                        .text_color(theme::text_muted().opacity(0.3))
                         .child("Select an agent".to_string()),
                 );
         };
@@ -281,19 +281,19 @@ impl AgentHubScreen {
                             .h_flex()
                             .gap_2()
                             .items_center()
-                            .child(Icon::new(IconName::Bot).size_5().text_color(theme::PRIMARY))
+                            .child(Icon::new(IconName::Bot).size_5().text_color(theme::primary()))
                             .child(
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(agent.display_name.clone()),
                             )
                             .child({
                                 let (color, label) = match agent.install_method {
-                                    InstallMethod::Installed => (theme::SUCCESS, "Installed"),
-                                    InstallMethod::Npx => (theme::PRIMARY, "npx"),
-                                    InstallMethod::Uvx => (theme::PRIMARY, "uvx"),
+                                    InstallMethod::Installed => (theme::success(), "Installed"),
+                                    InstallMethod::Npx => (theme::primary(), "npx"),
+                                    InstallMethod::Uvx => (theme::primary(), "uvx"),
                                 };
                                 div()
                                     .h_flex()
@@ -316,7 +316,7 @@ impl AgentHubScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .child(version_str.to_string()),
                     ),
             )
@@ -324,7 +324,7 @@ impl AgentHubScreen {
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .line_height(relative(1.5))
                     .child(agent.description.clone()),
             )
@@ -337,7 +337,7 @@ impl AgentHubScreen {
                     .pb_1()
                     .border_t_1()
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.06))
+                    .border_color(theme::text_muted().opacity(0.06))
                     .child(info_item("Model", agent.model.as_deref().unwrap_or("—")))
                     .child(info_item("Binary", &agent.binary))
                     .child(info_item("Version", version_str))
@@ -356,10 +356,10 @@ impl AgentHubScreen {
                     None => "Unknown",
                 };
                 let health_color = match agent.health_status {
-                    Some(surge_acp::HealthStatus::Healthy) => theme::SUCCESS,
-                    Some(surge_acp::HealthStatus::Degraded) => theme::WARNING,
-                    Some(surge_acp::HealthStatus::Offline) => theme::ERROR,
-                    None => theme::TEXT_MUTED,
+                    Some(surge_acp::HealthStatus::Healthy) => theme::success(),
+                    Some(surge_acp::HealthStatus::Degraded) => theme::warning(),
+                    Some(surge_acp::HealthStatus::Offline) => theme::error(),
+                    None => theme::text_muted(),
                 };
                 el.child(
                     div()
@@ -368,7 +368,7 @@ impl AgentHubScreen {
                         .pt_2()
                         .pb_1()
                         .border_b_1()
-                        .border_color(theme::TEXT_MUTED.opacity(0.06))
+                        .border_color(theme::text_muted().opacity(0.06))
                         .child(
                             div()
                                 .v_flex()
@@ -376,7 +376,7 @@ impl AgentHubScreen {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                        .text_color(theme::text_muted().opacity(0.5))
                                         .child("Health Status"),
                                 )
                                 .child(
@@ -435,17 +435,17 @@ impl AgentHubScreen {
                             .px_3()
                             .py(px(6.0))
                             .border_b_1()
-                            .border_color(theme::TEXT_MUTED.opacity(0.04))
-                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
+                            .border_color(theme::text_muted().opacity(0.04))
+                            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.02)))
                             .child(
                                 div()
                                     .flex_shrink_0()
                                     .w(px(20.0))
                                     .text_xs()
                                     .text_color(if m.enabled {
-                                        theme::SUCCESS
+                                        theme::success()
                                     } else {
-                                        theme::TEXT_MUTED.opacity(0.3)
+                                        theme::text_muted().opacity(0.3)
                                     })
                                     .child(if m.enabled { "☑" } else { "☐" }),
                             )
@@ -455,7 +455,7 @@ impl AgentHubScreen {
                                     .min_w_0()
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_PRIMARY.opacity(o))
+                                    .text_color(theme::text_primary().opacity(o))
                                     .child(m.name.clone()),
                             )
                             .child(
@@ -463,7 +463,7 @@ impl AgentHubScreen {
                                     .flex_shrink_0()
                                     .w(px(65.0))
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(o * 0.7))
+                                    .text_color(theme::text_muted().opacity(o * 0.7))
                                     .child(m.price.clone()),
                             )
                             .child(
@@ -471,7 +471,7 @@ impl AgentHubScreen {
                                     .flex_shrink_0()
                                     .w(px(55.0))
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(o * 0.6))
+                                    .text_color(theme::text_muted().opacity(o * 0.6))
                                     .child(m.context.clone()),
                             )
                             .child(
@@ -479,7 +479,7 @@ impl AgentHubScreen {
                                     .flex_shrink_0()
                                     .w(px(100.0))
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(o * 0.5))
+                                    .text_color(theme::text_muted().opacity(o * 0.5))
                                     .child(m.note.clone()),
                             )
                     })
@@ -516,23 +516,23 @@ impl AgentHubScreen {
                             .py(px(4.0))
                             .rounded_md()
                             .bg(if p.enabled {
-                                theme::SUCCESS.opacity(0.06)
+                                theme::success().opacity(0.06)
                             } else {
-                                theme::TEXT_MUTED.opacity(0.03)
+                                theme::text_muted().opacity(0.03)
                             })
                             .border_1()
                             .border_color(if p.enabled {
-                                theme::SUCCESS.opacity(0.12)
+                                theme::success().opacity(0.12)
                             } else {
-                                theme::TEXT_MUTED.opacity(0.05)
+                                theme::text_muted().opacity(0.05)
                             })
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(if p.enabled {
-                                        theme::SUCCESS
+                                        theme::success()
                                     } else {
-                                        theme::TEXT_MUTED.opacity(0.3)
+                                        theme::text_muted().opacity(0.3)
                                     })
                                     .child(if p.enabled { "✓" } else { "✕" }),
                             )
@@ -540,9 +540,9 @@ impl AgentHubScreen {
                                 div()
                                     .text_xs()
                                     .text_color(if p.enabled {
-                                        theme::TEXT_PRIMARY
+                                        theme::text_primary()
                                     } else {
-                                        theme::TEXT_MUTED.opacity(0.4)
+                                        theme::text_muted().opacity(0.4)
                                     })
                                     .child(p.name.clone()),
                             )
@@ -563,7 +563,7 @@ impl AgentHubScreen {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                    .text_color(theme::text_muted().opacity(0.5))
                                     .child("Dangerous ops:".to_string()),
                             )
                             .child(
@@ -572,8 +572,8 @@ impl AgentHubScreen {
                                     .px(px(6.0))
                                     .py(px(1.0))
                                     .rounded(px(3.0))
-                                    .bg(theme::WARNING.opacity(0.1))
-                                    .text_color(theme::WARNING)
+                                    .bg(theme::warning().opacity(0.1))
+                                    .text_color(theme::warning())
                                     .child(d.clone()),
                             ),
                     );
@@ -591,19 +591,19 @@ impl AgentHubScreen {
                         "Requests",
                         &format!("{}", agent.requests_today),
                         "today",
-                        theme::PRIMARY,
+                        theme::primary(),
                     ))
                     .child(stat_card_with_period(
                         "Tokens",
                         &format_tokens(agent.tokens_today),
                         "today",
-                        theme::PRIMARY,
+                        theme::primary(),
                     ))
                     .child(stat_card_with_period(
                         "Cost",
                         &format!("${:.2}", agent.cost_today),
                         "today",
-                        theme::WARNING,
+                        theme::warning(),
                     ))
                     .child(stat_card_with_period(
                         "Latency",
@@ -620,9 +620,9 @@ impl AgentHubScreen {
                     .gap(px(8.0))
                     .p_3()
                     .rounded_lg()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.06));
+                    .border_color(theme::text_muted().opacity(0.06));
 
                 match &agent.usage {
                     Usage::ClaudeCode {
@@ -659,18 +659,18 @@ impl AgentHubScreen {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                            .text_color(theme::text_muted().opacity(0.5))
                                             .child("Extra Usage".to_string()),
                                     )
                                     .child(if *extra_usage_enabled {
-                                        div().text_xs().text_color(theme::SUCCESS).child(format!(
+                                        div().text_xs().text_color(theme::success()).child(format!(
                                             "Enabled · ${:.2} this period",
                                             extra_usage_cost
                                         ))
                                     } else {
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED.opacity(0.4))
+                                            .text_color(theme::text_muted().opacity(0.4))
                                             .child("Disabled".to_string())
                                     }),
                             );
@@ -689,13 +689,13 @@ impl AgentHubScreen {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child("Provider".to_string()),
                                     )
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(theme::text_primary())
                                             .child(provider.clone()),
                                     ),
                             )
@@ -706,13 +706,13 @@ impl AgentHubScreen {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child("Provider Limits".to_string()),
                                     )
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED.opacity(0.6))
+                                            .text_color(theme::text_muted().opacity(0.6))
                                             .child(if *is_local {
                                                 "No limits (local model)".to_string()
                                             } else {
@@ -727,10 +727,10 @@ impl AgentHubScreen {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child("Estimated Cost".to_string()),
                                     )
-                                    .child(div().text_xs().text_color(theme::TEXT_PRIMARY).child(
+                                    .child(div().text_xs().text_color(theme::text_primary()).child(
                                         format!(
                                             "${:.2} today (~{} tokens)",
                                             estimated_cost,
@@ -743,7 +743,7 @@ impl AgentHubScreen {
                         section = section.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                .text_color(theme::text_muted().opacity(0.5))
                                 .child("No usage data available".to_string()),
                         );
                     }
@@ -760,32 +760,32 @@ impl AgentHubScreen {
                         "Subtasks",
                         &format!("{}", agent.subtasks_completed),
                         "completed",
-                        theme::SUCCESS,
+                        theme::success(),
                     ))
                     .child(stat_card_with_period(
                         "Failures",
                         &format!("{}", agent.subtasks_failed),
                         "",
                         if agent.subtasks_failed > 0 {
-                            theme::ERROR
+                            theme::error()
                         } else {
-                            theme::TEXT_MUTED
+                            theme::text_muted()
                         },
                     ))
                     .child(stat_card_with_period(
                         "Avg time",
                         &format!("{}s", agent.avg_subtask_secs),
                         "/subtask",
-                        theme::TEXT_MUTED,
+                        theme::text_muted(),
                     ))
                     .child(stat_card_with_period(
                         "QA rate",
                         &format!("{:.0}%", agent.qa_first_pass_rate * 100.0),
                         "first-pass",
                         if agent.qa_first_pass_rate > 0.8 {
-                            theme::SUCCESS
+                            theme::success()
                         } else {
-                            theme::WARNING
+                            theme::warning()
                         },
                     )),
             )
@@ -796,9 +796,9 @@ impl AgentHubScreen {
                     .iter()
                     .map(|s| {
                         let (icon, color) = match s.status {
-                            SessionStatus::Running => ("⚡", theme::WARNING),
-                            SessionStatus::Completed => ("✓", theme::SUCCESS),
-                            SessionStatus::Failed => ("✕", theme::ERROR),
+                            SessionStatus::Running => ("⚡", theme::warning()),
+                            SessionStatus::Completed => ("✓", theme::success()),
+                            SessionStatus::Failed => ("✕", theme::error()),
                         };
                         let status_label = match s.status {
                             SessionStatus::Running => "running",
@@ -821,8 +821,8 @@ impl AgentHubScreen {
                             .px_3()
                             .py(px(7.0))
                             .border_b_1()
-                            .border_color(theme::TEXT_MUTED.opacity(0.04))
-                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.02)))
+                            .border_color(theme::text_muted().opacity(0.04))
+                            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.02)))
                             // Icon
                             .child(
                                 div()
@@ -838,7 +838,7 @@ impl AgentHubScreen {
                                     .flex_1()
                                     .min_w_0()
                                     .text_xs()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(s.label.clone()),
                             )
                             // Status badge
@@ -860,7 +860,7 @@ impl AgentHubScreen {
                                     .flex_shrink_0()
                                     .w(px(70.0))
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(0.5))
+                                    .text_color(theme::text_muted().opacity(0.5))
                                     .child(s.time_ago.clone()),
                             )
                             // Tokens + duration
@@ -869,7 +869,7 @@ impl AgentHubScreen {
                                     .flex_shrink_0()
                                     .w(px(130.0))
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED.opacity(0.4))
+                                    .text_color(theme::text_muted().opacity(0.4))
                                     .child(if detail.is_empty() {
                                         "—".to_string()
                                     } else {
@@ -955,11 +955,11 @@ impl AgentHubScreen {
                     .py(px(10.0))
                     .rounded_lg()
                     .bg(if is_even {
-                        theme::SURFACE.opacity(0.5)
+                        theme::surface().opacity(0.5)
                     } else {
                         gpui::transparent_black()
                     })
-                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.04)))
+                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.04)))
                     // Vendor avatar (colored initial)
                     .child(
                         div()
@@ -992,7 +992,7 @@ impl AgentHubScreen {
                                         div()
                                             .text_sm()
                                             .font_weight(FontWeight::BOLD)
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(theme::text_primary())
                                             .child(agent.display_name.clone()),
                                     )
                                     .children(agent.badges.iter().map(|badge| {
@@ -1011,7 +1011,7 @@ impl AgentHubScreen {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(format!("{} · {}", agent.vendor, agent.license)),
                             ),
                     )
@@ -1021,7 +1021,7 @@ impl AgentHubScreen {
                             .flex_1()
                             .min_w_0()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.8))
+                            .text_color(theme::text_muted().opacity(0.8))
                             .line_height(relative(1.5))
                             .max_h(px(48.0))
                             .overflow_hidden()
@@ -1034,9 +1034,9 @@ impl AgentHubScreen {
                             .w(px(70.0))
                             .text_xs()
                             .text_color(if agent.runnable {
-                                theme::SUCCESS
+                                theme::success()
                             } else {
-                                theme::TEXT_MUTED.opacity(0.5)
+                                theme::text_muted().opacity(0.5)
                             })
                             .child(if agent.runnable {
                                 format!("Ready · {}", agent.run_via.map_or("—", |s| s.label()))
@@ -1061,13 +1061,13 @@ impl AgentHubScreen {
                                     .px(px(12.0))
                                     .py(px(5.0))
                                     .rounded_md()
-                                    .bg(theme::SUCCESS.opacity(0.15))
-                                    .text_color(theme::SUCCESS)
-                                    .hover(|s: StyleRefinement| s.bg(theme::SUCCESS.opacity(0.25)))
+                                    .bg(theme::success().opacity(0.15))
+                                    .text_color(theme::success())
+                                    .hover(|s: StyleRefinement| s.bg(theme::success().opacity(0.25)))
                                     .child(
                                         Icon::new(IconName::Check)
                                             .size_3()
-                                            .text_color(theme::SUCCESS),
+                                            .text_color(theme::success()),
                                     )
                                     .child(
                                         div().text_xs().font_weight(FontWeight::BOLD).child("Use"),
@@ -1080,9 +1080,9 @@ impl AgentHubScreen {
                                     .px(px(12.0))
                                     .py(px(5.0))
                                     .rounded_md()
-                                    .bg(theme::PRIMARY)
+                                    .bg(theme::primary())
                                     .text_color(hsla(0.0, 0.0, 1.0, 1.0))
-                                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.85)))
+                                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.85)))
                                     .child(
                                         Icon::new(IconName::ArrowDown)
                                             .size_3()
@@ -1106,11 +1106,11 @@ impl AgentHubScreen {
                     .child(
                         div().flex_1().h_flex().gap_2().items_center()
                             .px_3().py(px(6.0)).rounded_lg()
-                            .bg(theme::SURFACE).border_1().border_color(theme::TEXT_MUTED.opacity(0.08))
-                            .child(Icon::new(IconName::Search).size_3p5().text_color(theme::TEXT_MUTED.opacity(0.4)))
+                            .bg(theme::surface()).border_1().border_color(theme::text_muted().opacity(0.08))
+                            .child(Icon::new(IconName::Search).size_3p5().text_color(theme::text_muted().opacity(0.4)))
                             .child(
                                 div().text_xs()
-                                    .text_color(if self.search.is_empty() { theme::TEXT_MUTED.opacity(0.4) } else { theme::TEXT_PRIMARY })
+                                    .text_color(if self.search.is_empty() { theme::text_muted().opacity(0.4) } else { theme::text_primary() })
                                     .child(if self.search.is_empty() { "Search agents...".to_string() } else { self.search.clone() }),
                             ),
                     )
@@ -1121,9 +1121,9 @@ impl AgentHubScreen {
                                 div()
                                     .id(SharedString::from(format!("cf-{}", f.label())))
                                     .px(px(8.0)).py(px(4.0)).rounded_full().cursor_pointer().text_xs()
-                                    .bg(if is_active { theme::PRIMARY.opacity(0.12) } else { gpui::transparent_black() })
-                                    .text_color(if is_active { theme::PRIMARY } else { theme::TEXT_MUTED })
-                                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.06)))
+                                    .bg(if is_active { theme::primary().opacity(0.12) } else { gpui::transparent_black() })
+                                    .text_color(if is_active { theme::primary() } else { theme::text_muted() })
+                                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.06)))
                                     .on_click(cx.listener(move |this, _e, _w, cx| { this.filter = f; cx.notify(); }))
                                     .child(f.label().to_string())
                             }),
@@ -1131,7 +1131,7 @@ impl AgentHubScreen {
                     ),
             )
             // Subtitle
-            .child(div().text_xs().text_color(theme::TEXT_MUTED.opacity(0.5))
+            .child(div().text_xs().text_color(theme::text_muted().opacity(0.5))
                 .child("Click Install to copy the command. Surge auto-detects agents after installation.".to_string()))
             // Rows
             .child(
@@ -1149,14 +1149,14 @@ fn info_item(label: &str, value: &str) -> Div {
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED.opacity(0.5))
+                .text_color(theme::text_muted().opacity(0.5))
                 .child(label.to_string()),
         )
         .child(
             div()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme::TEXT_PRIMARY)
+                .text_color(theme::text_primary())
                 .child(value.to_string()),
         )
 }
@@ -1165,7 +1165,7 @@ fn section_label(title: &str) -> Div {
     div()
         .text_xs()
         .font_weight(FontWeight::BOLD)
-        .text_color(theme::TEXT_MUTED.opacity(0.6))
+        .text_color(theme::text_muted().opacity(0.6))
         .pt(px(4.0))
         .child(title.to_string())
 }
@@ -1173,9 +1173,9 @@ fn section_label(title: &str) -> Div {
 fn section_card(content: Div) -> Div {
     content
         .rounded_lg()
-        .bg(theme::SURFACE)
+        .bg(theme::surface())
         .border_1()
-        .border_color(theme::TEXT_MUTED.opacity(0.06))
+        .border_color(theme::text_muted().opacity(0.06))
         .overflow_hidden()
 }
 
@@ -1186,23 +1186,23 @@ fn kv_row(label: &str, value: &str) -> Div {
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(label.to_string()),
         )
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_PRIMARY)
+                .text_color(theme::text_primary())
                 .child(value.to_string()),
         )
 }
 
 fn effort_color(level: EffortLevel) -> Hsla {
     match level {
-        EffortLevel::High => theme::WARNING,
-        EffortLevel::Medium => theme::PRIMARY,
-        EffortLevel::Low => theme::SUCCESS,
-        EffortLevel::Adaptive => theme::TEXT_MUTED,
+        EffortLevel::High => theme::warning(),
+        EffortLevel::Medium => theme::primary(),
+        EffortLevel::Low => theme::success(),
+        EffortLevel::Adaptive => theme::text_muted(),
     }
 }
 
@@ -1215,7 +1215,7 @@ fn effort_row(label: &str, level: EffortLevel) -> Div {
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(label.to_string()),
         )
         .child(
@@ -1246,7 +1246,7 @@ fn effort_card(label: &str, level: EffortLevel) -> Div {
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED.opacity(0.6))
+                .text_color(theme::text_muted().opacity(0.6))
                 .child(label.to_string()),
         )
         .child(
@@ -1260,11 +1260,11 @@ fn effort_card(label: &str, level: EffortLevel) -> Div {
 
 fn quota_color(pct: f32) -> Hsla {
     if pct < 0.5 {
-        theme::SUCCESS
+        theme::success()
     } else if pct < 0.8 {
-        theme::WARNING
+        theme::warning()
     } else {
-        theme::ERROR
+        theme::error()
     }
 }
 
@@ -1279,13 +1279,13 @@ fn usage_bar(label: &str, detail: &str, pct: f32, color: Hsla) -> Div {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED)
+                        .text_color(theme::text_muted())
                         .child(label.to_string()),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED.opacity(0.6))
+                        .text_color(theme::text_muted().opacity(0.6))
                         .child(detail.to_string()),
                 ),
         )
@@ -1294,7 +1294,7 @@ fn usage_bar(label: &str, detail: &str, pct: f32, color: Hsla) -> Div {
                 .w_full()
                 .h(px(5.0))
                 .rounded_full()
-                .bg(theme::TEXT_MUTED.opacity(0.1))
+                .bg(theme::text_muted().opacity(0.1))
                 .child(
                     div()
                         .h_full()
@@ -1312,13 +1312,13 @@ fn stat_card_with_period(label: &str, value: &str, period: &str, color: Hsla) ->
         .gap(px(3.0))
         .p(px(10.0))
         .rounded_lg()
-        .bg(theme::SURFACE)
+        .bg(theme::surface())
         .border_1()
-        .border_color(theme::TEXT_MUTED.opacity(0.06))
+        .border_color(theme::text_muted().opacity(0.06))
         .child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(label.to_string()),
         )
         .child(
@@ -1337,7 +1337,7 @@ fn stat_card_with_period(label: &str, value: &str, period: &str, color: Hsla) ->
                     el.child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.4))
+                            .text_color(theme::text_muted().opacity(0.4))
                             .pb(px(1.0))
                             .child(period.to_string()),
                     )
@@ -1347,23 +1347,23 @@ fn stat_card_with_period(label: &str, value: &str, period: &str, color: Hsla) ->
 
 fn latency_color(ms: u32) -> Hsla {
     if ms == 0 {
-        theme::TEXT_MUTED
+        theme::text_muted()
     } else if ms < 1000 {
-        theme::SUCCESS
+        theme::success()
     } else if ms < 3000 {
-        theme::WARNING
+        theme::warning()
     } else {
-        theme::ERROR
+        theme::error()
     }
 }
 
 /// Map BadgeKind to a theme color for rendering.
 fn badge_color(kind: BadgeKind) -> Hsla {
     match kind {
-        BadgeKind::Popular => theme::WARNING,
-        BadgeKind::OpenSource => theme::TEXT_MUTED,
-        BadgeKind::Free => theme::SUCCESS,
-        BadgeKind::New => theme::PRIMARY,
+        BadgeKind::Popular => theme::warning(),
+        BadgeKind::OpenSource => theme::text_muted(),
+        BadgeKind::Free => theme::success(),
+        BadgeKind::New => theme::primary(),
     }
 }
 
@@ -1409,7 +1409,7 @@ impl Render for AgentHubScreen {
                                 .gap_0()
                                 .p_2()
                                 .border_r_1()
-                                .border_color(theme::TEXT_MUTED.opacity(0.06))
+                                .border_color(theme::text_muted().opacity(0.06))
                                 .children(items),
                         )
                         .child(
@@ -1435,18 +1435,18 @@ impl Render for AgentHubScreen {
                     .child(
                         Icon::new(IconName::ChartPie)
                             .size_8()
-                            .text_color(theme::TEXT_MUTED.opacity(0.15)),
+                            .text_color(theme::text_muted().opacity(0.15)),
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED.opacity(0.4))
+                            .text_color(theme::text_muted().opacity(0.4))
                             .child("Agent Benchmarks".to_string()),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.3))
+                            .text_color(theme::text_muted().opacity(0.3))
                             .child("Compare agent performance — coming in Phase 7".to_string()),
                     ),
             })

@@ -150,11 +150,11 @@ impl MarkdownRenderer {
             if span.code {
                 el = el
                     .font_family("Consolas")
-                    .bg(theme::SIDEBAR_BG)
+                    .bg(theme::sidebar_bg())
                     .rounded(px(3.0))
                     .px(px(4.0))
                     .py(px(1.0))
-                    .text_color(theme::WARNING);
+                    .text_color(theme::warning());
             }
 
             line = line.child(el);
@@ -171,8 +171,8 @@ impl MarkdownRenderer {
                     div()
                         .pl(px(12.0))
                         .border_l_2()
-                        .border_color(theme::TEXT_MUTED)
-                        .text_color(theme::TEXT_MUTED)
+                        .border_color(theme::text_muted())
+                        .text_color(theme::text_muted())
                         .mb(px(8.0))
                         .child(el)
                         .into_any_element(),
@@ -212,7 +212,7 @@ impl MarkdownRenderer {
                     div()
                         .w_full()
                         .h(px(1.0))
-                        .bg(theme::TEXT_MUTED)
+                        .bg(theme::text_muted())
                         .my(px(12.0))
                         .into_any_element(),
                 );
@@ -330,7 +330,7 @@ impl MarkdownRenderer {
                     div()
                         .text_size(size)
                         .font_weight(weight)
-                        .text_color(theme::TEXT_PRIMARY)
+                        .text_color(theme::text_primary())
                         .mt(px(16.0))
                         .mb(px(8.0))
                         .child(text)
@@ -373,7 +373,7 @@ impl MarkdownRenderer {
                                 .px(px(12.0))
                                 .py(px(4.0))
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .border_b_1()
                                 .border_color(hsla(0.0, 0.0, 0.2, 1.0))
                                 .child(lang_label),
@@ -470,7 +470,7 @@ fn render_table(table: TableState) -> Div {
                     .px(px(10.0))
                     .py(px(6.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .min_w(px(80.0))
                     .child(cell.clone()),
             );
@@ -499,7 +499,7 @@ fn render_table(table: TableState) -> Div {
                     .flex_1()
                     .px(px(10.0))
                     .py(px(5.0))
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .min_w(px(80.0))
                     .child(cell.clone()),
             );
