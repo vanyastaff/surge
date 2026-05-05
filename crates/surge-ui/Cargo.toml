@@ -26,3 +26,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 pulldown-cmark = "0.12"
 chrono = { workspace = true }
+notify-rust = { workspace = true }

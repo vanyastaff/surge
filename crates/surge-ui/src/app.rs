@@ -67,6 +67,8 @@ pub struct SurgeApp {
     insights: Option<Entity<InsightsScreen>>,
     settings: Option<Entity<SettingsScreen>>,
     gate_approval: Option<Entity<GateApprovalScreen>>,
+    /// Queued notifications to flush on next render (needs Window access).
+    pending_notifications: Vec<gpui_component::notification::Notification>,
 }
 
 impl SurgeApp {
@@ -87,6 +89,16 @@ impl SurgeApp {
             &sidebar,
             |this: &mut Self, _sidebar, _event: &ToggleSidebar, cx| {
                 this.toggle_sidebar(cx);
+            },
+        )
+        .detach();
+
+        // Subscribe to SurgeEvents from AppState → queue notifications
+        cx.subscribe(
+            &state,
+            |this, _state, event: &surge_core::SurgeEvent, cx| {
+                this.queue_notification_for_event(event);
+                cx.notify(); // trigger re-render to flush
             },
         )
         .detach();
@@ -126,6 +138,7 @@ impl SurgeApp {
             insights: None,
             settings: None,
             gate_approval: None,
+            pending_notifications: Vec::new(),
         }
     }
 
@@ -265,6 +278,80 @@ impl SurgeApp {
         self.sidebar
             .update(cx, |sb, cx| sb.set_collapsed(collapsed, cx));
         cx.notify();
+    }
+
+    /// Queue a notification for a SurgeEvent (flushed during render when Window is available).
+    fn queue_notification_for_event(&mut self, event: &surge_core::SurgeEvent) {
+        // Also send OS-level notification
+        crate::notifications::os_notify_event(event);
+
+        use surge_core::SurgeEvent;
+
+        let notification = match event {
+            SurgeEvent::TaskStateChanged {
+                task_id, new_state, ..
+            } => {
+                let id_short = task_id.short();
+                match new_state {
+                    surge_core::TaskState::Completed => {
+                        Some(SurgeNotification::task_completed(&id_short))
+                    },
+                    surge_core::TaskState::Failed { .. } => {
+                        Some(SurgeNotification::task_failed(&id_short, "task failed"))
+                    },
+                    _ => None,
+                }
+            },
+            SurgeEvent::GateAwaitingApproval {
+                task_id, gate_name, ..
+            } => {
+                let label = format!("{} ({})", gate_name, task_id.short());
+                Some(SurgeNotification::review_needed(&label))
+            },
+            SurgeEvent::AgentConnected { agent_name } => {
+                Some(SurgeNotification::agent_connected(agent_name))
+            },
+            SurgeEvent::AgentDisconnected { agent_name } => {
+                Some(SurgeNotification::agent_disconnected(agent_name))
+            },
+            SurgeEvent::AgentRateLimited {
+                agent_name,
+                retry_after_secs,
+            } => Some(SurgeNotification::rate_limit_warning(
+                agent_name,
+                *retry_after_secs,
+            )),
+            SurgeEvent::CircuitBreakerOpened {
+                agent_name, reason, ..
+            } => Some(SurgeNotification::task_failed(
+                agent_name,
+                &format!("circuit breaker: {reason}"),
+            )),
+            _ => None,
+        };
+
+        if let Some(notif) = notification {
+            self.pending_notifications.push(notif);
+        }
+    }
+
+    /// Flush queued notifications (called from render where Window is available).
+    fn flush_notifications(&mut self, window: &mut Window, cx: &mut App) {
+        use gpui_component::WindowExt as _;
+        for notif in self.pending_notifications.drain(..) {
+            window.push_notification(notif, cx);
+        }
+    }
+
+    /// Push a single notification immediately (used from UI button handlers).
+    pub fn push_notification(
+        &mut self,
+        notif: gpui_component::notification::Notification,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        use gpui_component::WindowExt as _;
+        window.push_notification(notif, cx);
     }
 
     fn toggle_palette(&mut self, cx: &mut Context<Self>) {
@@ -492,18 +579,18 @@ impl SurgeApp {
                             .h_flex()
                             .gap_3()
                             .items_center()
-                            .child(Icon::new(icon).size_6().text_color(theme::PRIMARY))
+                            .child(Icon::new(icon).size_6().text_color(theme::primary()))
                             .child(
                                 div()
                                     .text_2xl()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(label.to_string()),
                             ),
                     )
                     .child(
                         div()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("{} — coming soon", label)),
                     )
                     .child(
@@ -548,9 +635,9 @@ impl SurgeApp {
                     .w(px(500.0))
                     .max_h(px(500.0))
                     .rounded_xl()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .on_click(|_e, _w, _cx| {}) // absorb click
                     // Header: title + close
                     .child(
@@ -562,7 +649,7 @@ impl SurgeApp {
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(task.title.clone()),
                             )
                             .child(
@@ -570,11 +657,11 @@ impl SurgeApp {
                                     .id("task-detail-close")
                                     .cursor_pointer()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
-                                    .hover(|s| s.bg(theme::TEXT_MUTED.opacity(0.1)))
+                                    .hover(|s| s.bg(theme::text_muted().opacity(0.1)))
                                     .on_click(cx.listener(|this, _e, _w, cx| {
                                         this.task_detail_id = None;
                                         cx.notify();
@@ -593,8 +680,8 @@ impl SurgeApp {
                                     .px_2()
                                     .py_0p5()
                                     .rounded_md()
-                                    .bg(theme::PRIMARY.opacity(0.15))
-                                    .text_color(theme::PRIMARY)
+                                    .bg(theme::primary().opacity(0.15))
+                                    .text_color(theme::primary())
                                     .child(format!("#{}", task.id)),
                             )
                             .child(
@@ -603,8 +690,8 @@ impl SurgeApp {
                                     .px_2()
                                     .py_0p5()
                                     .rounded_md()
-                                    .bg(theme::WARNING.opacity(0.15))
-                                    .text_color(theme::WARNING)
+                                    .bg(theme::warning().opacity(0.15))
+                                    .text_color(theme::warning())
                                     .child(status_label),
                             ),
                     )
@@ -617,10 +704,10 @@ impl SurgeApp {
                                 div()
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child("Description"),
                             )
-                            .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(
+                            .child(div().text_sm().text_color(theme::text_primary()).child(
                                 if task.description.is_empty() {
                                     "(no description)".to_string()
                                 } else {
@@ -639,7 +726,7 @@ impl SurgeApp {
                                     div()
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::TEXT_MUTED)
+                                        .text_color(theme::text_muted())
                                         .child(format!("Subtasks: {sub_done}/{sub_total}")),
                                 )
                                 .child(
@@ -647,12 +734,12 @@ impl SurgeApp {
                                         .w_full()
                                         .h(px(4.0))
                                         .rounded_full()
-                                        .bg(theme::TEXT_MUTED.opacity(0.1))
+                                        .bg(theme::text_muted().opacity(0.1))
                                         .child(
                                             div()
                                                 .h_full()
                                                 .rounded_full()
-                                                .bg(theme::PRIMARY)
+                                                .bg(theme::primary())
                                                 .w(relative(pct)),
                                         ),
                                 ),
@@ -670,10 +757,10 @@ impl SurgeApp {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child("Agent"),
                                     )
-                                    .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(
+                                    .child(div().text_sm().text_color(theme::text_primary()).child(
                                         task.agent.unwrap_or_else(|| "unassigned".to_string()),
                                     )),
                             )
@@ -684,13 +771,13 @@ impl SurgeApp {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_color(theme::text_muted())
                                             .child("Complexity"),
                                     )
                                     .child(
                                         div()
                                             .text_sm()
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(theme::text_primary())
                                             .child(task.complexity.clone()),
                                     ),
                             ),
@@ -704,9 +791,9 @@ impl SurgeApp {
                     .p_5()
                     .w(px(500.0))
                     .rounded_xl()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .on_click(|_e, _w, _cx| {})
                     .child(
                         div()
@@ -716,7 +803,7 @@ impl SurgeApp {
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child("Task not found"),
                             )
                             .child(
@@ -724,11 +811,11 @@ impl SurgeApp {
                                     .id("task-detail-close-nf")
                                     .cursor_pointer()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
-                                    .hover(|s| s.bg(theme::TEXT_MUTED.opacity(0.1)))
+                                    .hover(|s| s.bg(theme::text_muted().opacity(0.1)))
                                     .on_click(cx.listener(|this, _e, _w, cx| {
                                         this.task_detail_id = None;
                                         cx.notify();
@@ -739,7 +826,7 @@ impl SurgeApp {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("Task ID: {}", task_id)),
                     )
             };
@@ -785,7 +872,10 @@ impl SurgeApp {
 }
 
 impl Render for SurgeApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Flush any queued notifications now that we have Window access.
+        self.flush_notifications(window, cx);
+
         match &self.mode {
             AppMode::Welcome(welcome) => div()
                 .key_context("SurgeApp")
@@ -798,8 +888,8 @@ impl Render for SurgeApp {
                     .key_context("SurgeApp")
                     .track_focus(&self.focus)
                     .size_full()
-                    .bg(theme::BACKGROUND)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .bg(theme::background())
+                    .text_color(theme::text_primary())
                     .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| {
                         this.navigate(Screen::Dashboard, cx)
                     }))
@@ -891,6 +981,7 @@ impl Render for SurgeApp {
                     )
                     .child(self.render_palette_overlay())
                     .child(self.render_task_detail_overlay(cx))
+                    .children(gpui_component::Root::render_notification_layer(window, cx))
                     .into_any_element()
             },
         }
