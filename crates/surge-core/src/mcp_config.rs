@@ -23,7 +23,10 @@ pub struct McpServerRef {
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
     /// Maximum time a single `tools/call` may take. Default 60 s.
-    #[serde(default = "McpServerRef::default_call_timeout", with = "humantime_serde")]
+    #[serde(
+        default = "McpServerRef::default_call_timeout",
+        with = "humantime_serde"
+    )]
     pub call_timeout: Duration,
     /// Whether the engine should re-spawn the server child process if
     /// it exits while still configured. Default true.

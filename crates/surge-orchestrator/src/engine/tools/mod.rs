@@ -141,9 +141,14 @@ mod tests {
         use std::path::PathBuf;
         let d = crate::engine::tools::worktree::WorktreeToolDispatcher::new(PathBuf::from("/tmp"));
         let tools = d.declared_tools();
-        let names: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        let expected: std::collections::HashSet<&str> =
-            ["read_file", "write_file", "shell_exec"].into_iter().collect();
-        assert_eq!(names, expected, "declared_tools must match dispatch's match arms");
+        let names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
+        let expected: std::collections::HashSet<&str> = ["read_file", "write_file", "shell_exec"]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            names, expected,
+            "declared_tools must match dispatch's match arms"
+        );
     }
 }

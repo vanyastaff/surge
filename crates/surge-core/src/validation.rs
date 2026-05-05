@@ -81,11 +81,16 @@ pub enum ValidationErrorKind {
     },
     /// A stage's `ToolOverride::mcp_add` references a server name not
     /// declared in `RunConfig::mcp_servers`.
-    McpServerUndeclared { stage: String, server: String },
+    McpServerUndeclared {
+        stage: String,
+        server: String,
+    },
     /// `McpServerRef::name` is empty.
     McpServerNameEmpty,
     /// `McpTransportConfig::Stdio::command` contains `..` segments.
-    McpCommandPathUnsafe { command: String },
+    McpCommandPathUnsafe {
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -795,8 +800,7 @@ pub fn validate_mcp_references(
     let Some(overrides) = &stage_cfg.tool_overrides else {
         return out;
     };
-    let known: std::collections::HashSet<&str> =
-        registry.iter().map(|r| r.name.as_str()).collect();
+    let known: std::collections::HashSet<&str> = registry.iter().map(|r| r.name.as_str()).collect();
     for name in &overrides.mcp_add {
         if !known.contains(name.as_str()) {
             out.push(ValidationError {
@@ -817,9 +821,7 @@ pub fn validate_mcp_references(
 
 /// Validate a single `McpServerRef` for safety / well-formedness.
 #[must_use]
-pub fn validate_mcp_server_ref(
-    r: &crate::mcp_config::McpServerRef,
-) -> Vec<ValidationError> {
+pub fn validate_mcp_server_ref(r: &crate::mcp_config::McpServerRef) -> Vec<ValidationError> {
     let mut out = Vec::new();
     if r.name.is_empty() {
         out.push(ValidationError {
@@ -850,7 +852,7 @@ pub fn validate_mcp_server_ref(
                     ),
                 });
             }
-        }
+        },
     }
     out
 }
@@ -1595,11 +1597,7 @@ mod tests {
             custom_fields: BTreeMap::new(),
         };
         let registry: Vec<crate::mcp_config::McpServerRef> = vec![]; // empty registry
-        let errors = crate::validation::validate_mcp_references(
-            "stage_x",
-            &stage_cfg,
-            &registry,
-        );
+        let errors = crate::validation::validate_mcp_references("stage_x", &stage_cfg, &registry);
         assert_eq!(errors.len(), 1);
         assert!(matches!(
             errors[0].kind,
@@ -1746,10 +1744,10 @@ mod tests {
     fn validate_with_run_config_happy_path_returns_no_mcp_errors() {
         use crate::agent_config::{AgentConfig, NodeLimits, ToolOverride};
         use crate::approvals::ApprovalPolicy;
-        use crate::mcp_config::{McpServerRef, McpTransportConfig};
-        use crate::node::{Node, NodeConfig, Position};
         use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
         use crate::keys::{NodeKey, ProfileKey};
+        use crate::mcp_config::{McpServerRef, McpTransportConfig};
+        use crate::node::{Node, NodeConfig, Position};
         use crate::run_event::RunConfig;
         use crate::sandbox::SandboxMode;
         use crate::terminal_config::{TerminalConfig, TerminalKind};

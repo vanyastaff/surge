@@ -439,7 +439,7 @@ mod tests {
             } => {
                 assert_eq!(code, ErrorCode::RunNotFound);
                 assert_eq!(request_id, 7);
-            }
+            },
             _ => panic!("expected Error variant"),
         }
     }
@@ -450,7 +450,7 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         let parsed: DaemonEvent = serde_json::from_str(&s).unwrap();
         match parsed {
-            DaemonEvent::Global(GlobalDaemonEvent::DaemonShuttingDown) => {}
+            DaemonEvent::Global(GlobalDaemonEvent::DaemonShuttingDown) => {},
             _ => panic!("roundtrip failed"),
         }
     }
@@ -488,7 +488,9 @@ mod tests {
         use tokio::io::BufReader;
         let empty: &[u8] = &[];
         let mut reader = BufReader::new(empty);
-        let parsed = crate::engine::ipc::read_request_frame(&mut reader).await.unwrap();
+        let parsed = crate::engine::ipc::read_request_frame(&mut reader)
+            .await
+            .unwrap();
         assert!(parsed.is_none());
     }
 }

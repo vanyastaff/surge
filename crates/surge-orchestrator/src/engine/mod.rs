@@ -50,4 +50,6 @@ pub use error::EngineError;
 pub use facade::{EngineFacade, LocalEngineFacade};
 pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus, RunSummary};
-pub use ipc::{DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId};
+pub use ipc::{
+    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
+};
