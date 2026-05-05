@@ -30,8 +30,10 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod facade;
 pub mod frames;
 pub mod handle;
+pub mod ipc;
 pub mod predicates;
 pub mod replay;
 pub mod routing;
@@ -45,5 +47,9 @@ pub mod validate;
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use engine::Engine;
 pub use error::EngineError;
+pub use facade::{EngineFacade, LocalEngineFacade};
 pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
-pub use handle::{EngineRunEvent, RunHandle, RunOutcome};
+pub use handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus, RunSummary};
+pub use ipc::{
+    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
+};

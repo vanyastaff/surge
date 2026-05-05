@@ -10,6 +10,8 @@ members = [
     "crates/surge-cli",
     "crates/surge-ui",
     "crates/surge-notify",
+    "crates/surge-daemon",
+    "crates/surge-mcp",
 ]
 
 [workspace.package]
@@ -47,6 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
+humantime-serde = "1"
 
 # Edit-aware TOML writes
 toml_edit = "0.22"
@@ -113,3 +116,10 @@ surge-git = { path = "crates/surge-git" }
 surge-persistence = { path = "crates/surge-persistence" }
 surge-orchestrator = { path = "crates/surge-orchestrator" }
 surge-notify = { path = "crates/surge-notify" }
+surge-daemon = { path = "crates/surge-daemon" }
+surge-mcp = { path = "crates/surge-mcp" }
+
+# M7 dependencies
+rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process"] }
+interprocess = { version = "2", features = ["tokio"] }
+nix = { version = "0.29", default-features = false, features = ["signal"] }

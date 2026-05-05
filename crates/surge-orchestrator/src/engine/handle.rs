@@ -9,7 +9,8 @@ use tokio::task::JoinHandle;
 
 /// Terminal outcome of a run's execution.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunOutcome {
     /// The run reached a `TerminalKind::Success` node.
     Completed {
@@ -33,7 +34,8 @@ pub enum RunOutcome {
 /// Each variant corresponds 1:1 to an [`EventPayload`] that was successfully
 /// written to the event log (and therefore is durable).
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineRunEvent {
     /// A new event was persisted. Carries the payload + assigned seq.
     Persisted {
@@ -69,4 +71,44 @@ impl RunHandle {
             .await
             .map_err(|e| EngineError::Internal(format!("run task join failed: {e}")))
     }
+}
+
+/// Lightweight projection of a run's state, used by
+/// `EngineFacade::list_runs` and the daemon's `ListRuns` IPC reply.
+#[non_exhaustive]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RunSummary {
+    /// Identifier of the run.
+    pub run_id: RunId,
+    /// Current high-level status.
+    pub status: RunStatus,
+    /// Wall-clock time the run was registered with the engine.
+    ///
+    /// In M7's `LocalEngineFacade::list_runs`, this is a placeholder
+    /// set to "now" at the time `list_runs` is called — the engine
+    /// does not yet track per-run start time. The daemon facade
+    /// (Phase 5) returns the real registration time. M8+ may unify
+    /// by adding a real `started_at: DateTime<Utc>` field to
+    /// `Engine::ActiveRun`.
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// Highest seq the engine has persisted for this run, if any.
+    pub last_event_seq: Option<u64>,
+}
+
+/// High-level run status as observed from outside (e.g., by `surge
+/// engine ls --daemon`). Distinct from the engine's internal state.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    /// Run is currently executing inside the engine.
+    Active,
+    /// Run is queued by the daemon's `AdmissionController`, not yet started.
+    Awaiting,
+    /// Run reached a successful terminal node.
+    Completed,
+    /// Run reached a failure terminal node or an unrecoverable error.
+    Failed,
+    /// Run was cancelled via `stop_run`.
+    Aborted,
 }

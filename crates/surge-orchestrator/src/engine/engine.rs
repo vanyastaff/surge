@@ -118,6 +118,7 @@ impl Engine {
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
+            mcp_servers: Vec::new(),
         };
         let graph_bytes = serde_json::to_vec(&graph)
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
@@ -335,6 +336,26 @@ impl Engine {
                 ))
             }
         }
+    }
+
+    /// Snapshot the in-process active-run map as a `Vec<RunSummary>`.
+    /// Used by `LocalEngineFacade::list_runs`. M7 simplification: the
+    /// engine doesn't track per-run `started_at`, so we return
+    /// `chrono::Utc::now()` for every entry. The daemon facade has a
+    /// richer view; M8+ may add real per-run start timestamps to
+    /// `ActiveRun`.
+    pub async fn snapshot_active_runs(&self) -> Vec<crate::engine::handle::RunSummary> {
+        use crate::engine::handle::{RunStatus, RunSummary};
+        let runs = self.runs.read().await;
+        let now = chrono::Utc::now();
+        runs.keys()
+            .map(|id| RunSummary {
+                run_id: *id,
+                status: RunStatus::Active,
+                started_at: now,
+                last_event_seq: None,
+            })
+            .collect()
     }
 
     /// Cancel an in-flight run. Signals the cancellation token so the run task
