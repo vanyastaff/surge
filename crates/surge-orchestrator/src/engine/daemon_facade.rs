@@ -403,6 +403,88 @@ impl EngineFacade for DaemonEngineFacade {
 }
 
 impl DaemonEngineFacade {
+    /// Subscribe to per-run events for an EXISTING active run. Returns
+    /// a `broadcast::Receiver<EngineRunEvent>` fed by the daemon's
+    /// per-run forwarder. Used by `surge engine watch <run_id> --daemon`.
+    ///
+    /// Errors with `EngineError::Internal` if:
+    /// - the daemon doesn't recognize `run_id` (returns `RunNotActive`)
+    /// - the IPC connection fails
+    /// - an unexpected response variant arrives
+    ///
+    /// Note: per-run broadcast doesn't replay history. Events emitted
+    /// before this call returns are not seen by the caller. This is
+    /// the same semantics as the explicit `Subscribe` path inside
+    /// `start_run` / `resume_run`.
+    pub async fn subscribe_to_run(
+        &self,
+        run_id: RunId,
+    ) -> Result<broadcast::Receiver<EngineRunEvent>, EngineError> {
+        // Register a local per-run broadcast channel BEFORE sending
+        // Subscribe so the read loop can dispatch any events arriving
+        // mid-handshake.
+        let (event_tx, event_rx) = broadcast::channel(256);
+        self.inner
+            .event_dispatcher
+            .per_run
+            .lock()
+            .await
+            .insert(run_id, event_tx);
+
+        let resp = self
+            .inner
+            .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
+            .await?;
+        match resp {
+            DaemonResponse::SubscribeOk { .. } => Ok(event_rx),
+            DaemonResponse::Error { code, message, .. } => {
+                // Clean up the locally-registered channel since we never got Ok.
+                self.inner
+                    .event_dispatcher
+                    .per_run
+                    .lock()
+                    .await
+                    .remove(&run_id);
+                Err(map_error(code, &message))
+            },
+            other => {
+                self.inner
+                    .event_dispatcher
+                    .per_run
+                    .lock()
+                    .await
+                    .remove(&run_id);
+                Err(EngineError::Internal(format!(
+                    "unexpected response to Subscribe: {other:?}"
+                )))
+            },
+        }
+    }
+
+    /// Unsubscribe from a run's events. Drops the per-run broadcast
+    /// channel locally (subscribers see Closed); sends Unsubscribe
+    /// IPC to the daemon so it stops pumping events to this connection.
+    pub async fn unsubscribe_from_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        let resp = self
+            .inner
+            .rpc(|request_id| DaemonRequest::Unsubscribe { request_id, run_id })
+            .await?;
+        // Whether the daemon ack'd or errored, drop our local channel.
+        self.inner
+            .event_dispatcher
+            .per_run
+            .lock()
+            .await
+            .remove(&run_id);
+        match resp {
+            DaemonResponse::UnsubscribeOk { .. } => Ok(()),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!(
+                "unexpected response to Unsubscribe: {other:?}"
+            ))),
+        }
+    }
+
     async fn cleanup_run_channels(&self, run_id: RunId) {
         self.inner
             .event_dispatcher
@@ -423,6 +505,9 @@ fn map_error(code: ErrorCode, message: &str) -> EngineError {
     match code {
         ErrorCode::RunNotFound => {
             EngineError::Internal(format!("daemon: run not found ({message})"))
+        },
+        ErrorCode::RunNotActive => {
+            EngineError::Internal(format!("daemon: run not active ({message})"))
         },
         ErrorCode::RunAlreadyActive => {
             EngineError::Internal(format!("daemon: run already active ({message})"))

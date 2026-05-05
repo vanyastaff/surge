@@ -30,9 +30,8 @@ pub enum EngineCommands {
     Watch {
         /// `RunId` (ULID).
         run_id: String,
-        /// Ensure the daemon is running before tailing. (Live streaming
-        /// via Subscribe is M7+ polish; this currently still uses the
-        /// disk-tail mode.)
+        /// Subscribe to live events via the daemon. Without this flag
+        /// the command reads from disk (M6 mode).
         #[arg(long)]
         daemon: bool,
     },
@@ -191,12 +190,41 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
         follow_log_from(id, 0).await?;
         return Ok(());
     }
-    // M7 daemon path: full streaming subscribe is M7+ polish; for PR 3
-    // we fall back to disk-tail mode after ensuring the daemon is up so
-    // existing on-disk events are visible.
+
+    // M7 daemon path: subscribe to per-run events and stream live.
+    use std::time::Duration;
+    use surge_orchestrator::engine::handle::EngineRunEvent;
+
     ensure_daemon_running().await?;
-    eprintln!("watching {id} (disk-tail mode; live streaming via daemon is M7+ polish)…");
-    follow_log_from(id, 0).await?;
+    let socket = surge_daemon::pidfile::socket_path()?;
+    let facade =
+        surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
+    let mut rx = facade.subscribe_to_run(id).await?;
+
+    eprintln!("watching {id} (Ctrl+C to stop)…");
+
+    loop {
+        match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+            Ok(Ok(event)) => {
+                print_event(&event);
+                if matches!(event, EngineRunEvent::Terminal(_)) {
+                    break;
+                }
+            },
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                eprintln!("daemon closed the per-run channel; run may have terminated");
+                break;
+            },
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("note: dropped {n} events (subscriber lagged); continuing");
+            },
+            Err(_timeout) => continue, // 60s without events; keep waiting
+        }
+    }
+
+    // Best-effort unsubscribe so the daemon stops pumping events to this
+    // connection. If it fails (e.g., daemon died), we don't care.
+    let _ = facade.unsubscribe_from_run(id).await;
     Ok(())
 }
 
