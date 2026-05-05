@@ -39,6 +39,11 @@ struct PendingStartRun {
     /// response is sent on that request.
     #[allow(dead_code)]
     request_id: RequestId,
+    /// Wall-clock time the run was added to the admission queue.
+    /// Surfaced as `RunSummary::started_at` for queued runs in
+    /// `dispatch::ListRuns` so callers see a stable timestamp instead
+    /// of one that drifts on each call.
+    queued_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Map from queued `RunId` → its stashed `StartRun` params. Populated by
@@ -259,6 +264,7 @@ async fn dispatch(
                     worktree_path,
                     run_config,
                     request_id,
+                    queued_at: chrono::Utc::now(),
                 },
             );
             let decision = admission.try_admit(run_id).await;
@@ -334,14 +340,10 @@ async fn dispatch(
                     //     fallback errors out with a not-found
                     //     condition rather than waiting.
                     //
-                    // For now, callers that care should poll the
-                    // run id (e.g., re-issue `watch --daemon` after
-                    // admission lands) or re-architect around
-                    // `start_run` returning a handle synchronously.
-                    // A follow-up polish can expose queue state via
-                    // `ListRuns` (`RunStatus::Awaiting` already
-                    // exists in the wire schema) and add a global-
-                    // event forwarder.
+                    // What IS exposed: the queued run shows up in
+                    // `dispatch::ListRuns` with `RunStatus::Awaiting`
+                    // (synthesised from `pending_starts`). Callers
+                    // can poll that to detect admission landing.
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
@@ -420,13 +422,32 @@ async fn dispatch(
             }),
         },
 
-        DaemonRequest::ListRuns { request_id } => match facade.list_runs().await {
-            Ok(runs) => Some(DaemonResponse::ListRunsOk { request_id, runs }),
-            Err(e) => Some(DaemonResponse::Error {
-                request_id,
-                code: ErrorCode::EngineError,
-                message: format!("{e}"),
-            }),
+        DaemonRequest::ListRuns { request_id } => {
+            // Merge two sources: the engine's view of currently
+            // active runs (via the facade) plus the daemon's queued
+            // runs (held in `pending_starts` while waiting for
+            // admission). Queued entries are synthesised with
+            // `RunStatus::Awaiting`; without this the daemon's
+            // queue would be invisible to clients calling ListRuns.
+            match facade.list_runs().await {
+                Ok(mut runs) => {
+                    let pending = pending_starts.lock().await;
+                    runs.reserve(pending.len());
+                    for (run_id, entry) in &*pending {
+                        runs.push(surge_orchestrator::engine::handle::RunSummary::queued(
+                            *run_id,
+                            entry.queued_at,
+                        ));
+                    }
+                    drop(pending);
+                    Some(DaemonResponse::ListRunsOk { request_id, runs })
+                },
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
         },
 
         DaemonRequest::Subscribe { request_id, run_id } => {

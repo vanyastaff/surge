@@ -87,12 +87,34 @@ pub struct RunSummary {
     /// In M7's `LocalEngineFacade::list_runs`, this is a placeholder
     /// set to "now" at the time `list_runs` is called — the engine
     /// does not yet track per-run start time. The daemon facade
-    /// (Phase 5) returns the real registration time. M8+ may unify
-    /// by adding a real `started_at: DateTime<Utc>` field to
-    /// `Engine::ActiveRun`.
+    /// (Phase 5) returns the real registration time. For queued
+    /// runs synthesised by the daemon's `ListRuns` dispatch, this
+    /// holds the time the run was added to the admission queue.
+    /// M8+ may unify by adding a real `started_at: DateTime<Utc>`
+    /// field to `Engine::ActiveRun`.
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// Highest seq the engine has persisted for this run, if any.
     pub last_event_seq: Option<u64>,
+}
+
+impl RunSummary {
+    /// Construct a `RunSummary` for a run that is queued (awaiting
+    /// admission) inside the daemon. `last_event_seq` is always
+    /// `None` because no events have been persisted yet.
+    ///
+    /// Exposed because `RunSummary` is `#[non_exhaustive]`, which
+    /// blocks struct-literal construction outside this crate. The
+    /// daemon (a downstream crate) needs to synthesise these
+    /// summaries from its `pending_starts` map.
+    #[must_use]
+    pub fn queued(run_id: RunId, queued_at: chrono::DateTime<chrono::Utc>) -> Self {
+        Self {
+            run_id,
+            status: RunStatus::Awaiting,
+            started_at: queued_at,
+            last_event_seq: None,
+        }
+    }
 }
 
 /// High-level run status as observed from outside (e.g., by `surge
