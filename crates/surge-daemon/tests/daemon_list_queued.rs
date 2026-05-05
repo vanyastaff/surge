@@ -287,7 +287,10 @@ async fn list_runs_includes_queued_run_as_awaiting() {
         other => panic!("expected StartRunQueued for run2, got {other:?}"),
     }
 
-    // --- ListRuns — must include both the active and the queued run ---
+    // --- ListRuns — must surface the queued run as `Awaiting`.
+    // The stub facade's `list_runs` returns an empty slice, so
+    // active-run rendering is out of scope for this test; we assert
+    // only that the queued entry appears in the merged response.
     write_frame(&mut write_half, &DaemonRequest::ListRuns { request_id: 3 })
         .await
         .expect("write ListRuns");

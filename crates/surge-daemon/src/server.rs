@@ -44,6 +44,16 @@ struct PendingStartRun {
     /// `dispatch::ListRuns` so callers see a stable timestamp instead
     /// of one that drifts on each call.
     queued_at: chrono::DateTime<chrono::Utc>,
+    /// `true` once admission has confirmed the run is queued (i.e.,
+    /// `try_admit` returned `Queued`). The entry is inserted into
+    /// `pending_starts` BEFORE `try_admit` runs (see the comment in
+    /// `dispatch::StartRun` for why); on the `Admitted` path it is
+    /// removed immediately, but during the brief window between
+    /// `insert` and `remove` a concurrent `ListRuns` would otherwise
+    /// see the entry. `dispatch::ListRuns` filters by this flag so
+    /// admitted-but-not-yet-removed entries don't get reported as
+    /// `Awaiting`. Set only in the `AdmissionDecision::Queued` arm.
+    was_queued: bool,
 }
 
 /// Map from queued `RunId` → its stashed `StartRun` params. Populated by
@@ -265,6 +275,7 @@ async fn dispatch(
                     run_config,
                     request_id,
                     queued_at: chrono::Utc::now(),
+                    was_queued: false,
                 },
             );
             let decision = admission.try_admit(run_id).await;
@@ -343,7 +354,14 @@ async fn dispatch(
                     // What IS exposed: the queued run shows up in
                     // `dispatch::ListRuns` with `RunStatus::Awaiting`
                     // (synthesised from `pending_starts`). Callers
-                    // can poll that to detect admission landing.
+                    // can poll that to detect admission landing. We
+                    // mark `was_queued = true` so ListRuns can
+                    // distinguish entries that are actually queued
+                    // from ones still mid-flight through the
+                    // Admitted-arm's brief insert→remove window.
+                    if let Some(entry) = pending_starts.lock().await.get_mut(&run_id) {
+                        entry.was_queued = true;
+                    }
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
@@ -429,11 +447,25 @@ async fn dispatch(
             // admission). Queued entries are synthesised with
             // `RunStatus::Awaiting`; without this the daemon's
             // queue would be invisible to clients calling ListRuns.
+            //
+            // Filter by `was_queued` to skip entries that are still
+            // mid-flight through the `dispatch::StartRun` Admitted
+            // arm: those are inserted into `pending_starts` BEFORE
+            // `try_admit` runs (see the comment there for the
+            // drain-task race that justifies that ordering) and
+            // removed immediately after admission lands. A
+            // concurrent ListRuns observing the entry in that
+            // window would otherwise misreport an Active run as
+            // `Awaiting`.
             match facade.list_runs().await {
                 Ok(mut runs) => {
                     let pending = pending_starts.lock().await;
-                    runs.reserve(pending.len());
+                    let queued_count = pending.values().filter(|e| e.was_queued).count();
+                    runs.reserve(queued_count);
                     for (run_id, entry) in &*pending {
+                        if !entry.was_queued {
+                            continue;
+                        }
                         runs.push(surge_orchestrator::engine::handle::RunSummary::queued(
                             *run_id,
                             entry.queued_at,
