@@ -28,8 +28,20 @@ pub enum ErrorCode {
     RunNotFound,
     /// Lookup of a run id that the daemon knows but is not currently active.
     RunNotActive,
-    /// `AdmissionController` queue overflow.
+    /// `ResumeRun` was rejected because the active-runs cap (`max_active`)
+    /// is reached. Resumes are never queued — the user expects the run
+    /// to come back live — so the cap maps directly to a rejection.
+    /// Distinct from `QueueFull`, which signals the FIFO admission
+    /// queue (used only on the `StartRun` path) is at its own cap.
     AdmissionFull,
+    /// `StartRun` was rejected because the FIFO admission queue is at
+    /// its configured cap (`max_queue`); both `max_active` and the
+    /// queue are saturated, so the run was neither admitted nor
+    /// enqueued. Distinct from `AdmissionFull`, which is the
+    /// `ResumeRun`-side signal for active-cap rejection. Clients
+    /// should back off and retry rather than treating this as a
+    /// hard failure.
+    QueueFull,
     /// Underlying storage error (sqlite I/O, etc.).
     StorageError,
     /// Engine-level error (graph validation, run lifecycle, etc.).

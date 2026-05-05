@@ -53,6 +53,7 @@ CLI flags on `surge daemon start`:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--max-active N` | 8 | Concurrent active runs cap. Excess starts queue (FIFO). |
+| `--max-queue N` | `max_active * 4` | FIFO admission queue cap. When both `max_active` and `max_queue` are hit, further `StartRun` requests are rejected with `QueueFull` so the daemon's pending-start map cannot grow without bound under load. |
 | `--shutdown-grace D` | 30s | Time to wait for in-flight runs to drain on stop. |
 | `--detached` | false | Detach from controlling terminal (Unix `setsid`, Windows `DETACHED_PROCESS`). |
 

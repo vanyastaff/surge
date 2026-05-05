@@ -26,6 +26,17 @@ pub enum DaemonError {
         /// Number of runs waiting in the queue.
         queued: usize,
     },
+    /// FIFO admission queue is at its configured cap. The active set
+    /// may also be at cap, but the load-bearing condition is the queue
+    /// length: even if a slot freed instantly, accepting more work
+    /// would still grow the daemon's pending state without bound.
+    #[error("admission queue is full ({queue_len}/{max_queue})")]
+    QueueFull {
+        /// Current queue length.
+        queue_len: usize,
+        /// Configured queue cap.
+        max_queue: usize,
+    },
     /// Lookup of a run id the daemon does not currently host.
     #[error("run not active: {0}")]
     RunNotActive(surge_core::id::RunId),
@@ -52,6 +63,7 @@ impl DaemonError {
             Self::Framing(_) => ErrorCode::BadRequest,
             Self::Io(_) | Self::Pidfile(_) | Self::ClientGone => ErrorCode::Internal,
             Self::AdmissionFull { .. } => ErrorCode::AdmissionFull,
+            Self::QueueFull { .. } => ErrorCode::QueueFull,
             Self::RunNotActive(_) => ErrorCode::RunNotActive,
             Self::Storage(_) => ErrorCode::StorageError,
             Self::Engine(_) => ErrorCode::EngineError,
@@ -72,6 +84,16 @@ mod tests {
             queued: 3,
         };
         assert_eq!(e.code(), ErrorCode::AdmissionFull);
+    }
+
+    #[test]
+    fn queue_full_maps_to_queue_full() {
+        let e = DaemonError::QueueFull {
+            queue_len: 4,
+            max_queue: 4,
+        };
+        assert_eq!(e.code(), ErrorCode::QueueFull);
+        assert!(format!("{e}").contains("4/4"));
     }
 
     #[test]

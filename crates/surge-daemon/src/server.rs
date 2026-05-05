@@ -50,6 +50,11 @@ type PendingStarts = Arc<Mutex<HashMap<RunId, PendingStartRun>>>;
 pub struct ServerConfig {
     /// Maximum concurrent active runs.
     pub max_active: usize,
+    /// Maximum runs allowed to wait in the FIFO admission queue. When
+    /// both `max_active` and this cap are hit, further `StartRun`
+    /// requests are rejected with [`ErrorCode::QueueFull`] instead of
+    /// growing the daemon's pending-start map without bound.
+    pub max_queue: usize,
     /// Path of the local socket to bind.
     pub socket_path: PathBuf,
 }
@@ -63,7 +68,7 @@ pub async fn run(
 ) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
 
-    let admission = Arc::new(AdmissionController::new(cfg.max_active));
+    let admission = Arc::new(AdmissionController::new(cfg.max_active, cfg.max_queue));
     let broadcast = Arc::new(BroadcastRegistry::new());
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
@@ -355,6 +360,25 @@ async fn dispatch(
                         request_id,
                         run_id,
                         position,
+                    })
+                },
+                AdmissionDecision::QueueFull {
+                    queue_len,
+                    max_queue,
+                } => {
+                    // We optimistically inserted into `pending_starts`
+                    // before `try_admit` to close a TOCTOU window
+                    // against the drain task (see comment on the
+                    // insert above). Admission rejected — the run
+                    // will never be popped, so we MUST remove the
+                    // entry here or the daemon leaks the boxed Graph
+                    // and `EngineRunConfig` for every QueueFull
+                    // rejection.
+                    pending_starts.lock().await.remove(&run_id);
+                    Some(DaemonResponse::Error {
+                        request_id,
+                        code: ErrorCode::QueueFull,
+                        message: format!("queue is full ({queue_len}/{max_queue})"),
                     })
                 },
             }

@@ -1,24 +1,25 @@
-//! Integration test for the queue-drain task.
+//! Bounded admission queue: when both `max_active` and `max_queue` are
+//! saturated, further `StartRun` requests are rejected with
+//! `Error { code: QueueFull }` instead of growing the daemon's
+//! pending-start map without bound.
 //!
-//! Setup: `run_server` with `max_active=1` and a stub facade whose
-//! `start_run` returns a quickly-terminating `RunHandle`.
+//! Setup: `run_server` with `max_active=1, max_queue=1` and a stub
+//! facade whose first `start_run` holds the events channel open
+//! until the test releases it. That keeps run 1 active and the queue
+//! occupied (after run 2 lands), so the third `StartRun` must hit
+//! `AdmissionDecision::QueueFull`.
 //!
 //! Procedure:
-//! 1. Send `StartRun` for run 1 over raw IPC → expect `StartRunOk`.
-//! 2. Send `StartRun` for run 2 over raw IPC → expect `StartRunQueued`.
-//! 3. The handle the stub returned for run 1 emits `Terminal` and its
-//!    completion future resolves immediately, so `spawn_forward_task`
-//!    calls `admission.notify_completed`.
-//! 4. The drain task wakes on `wait_changed`, pops run 2, and calls
-//!    `facade.start_run` again.
-//! 5. Assert `stub.start_count == 2` within a short timeout.
+//! 1. `StartRun` for run 1 over raw IPC → expect `StartRunOk`.
+//! 2. `StartRun` for run 2 → expect `StartRunQueued`.
+//! 3. `StartRun` for run 3 → expect `Error { code: QueueFull }`.
+//! 4. Release run 1 to let the drain task admit run 2 and the server
+//!    shut down cleanly.
 //!
-//! We use raw frame I/O (rather than `DaemonEngineFacade::start_run`)
-//! because the facade pipelines a `Subscribe` immediately after the
-//! StartRun reply, and that `Subscribe` fails for a queued run (the
-//! run is not yet registered with `BroadcastRegistry` until admission).
-//! That failure mode is documented as a known limitation of this PR;
-//! the drain-task production behaviour is what we want to exercise.
+//! Raw IPC (rather than `DaemonEngineFacade::start_run`) for the same
+//! reason as `daemon_queue_drain.rs`: the facade pipelines a
+//! `Subscribe` immediately after the StartRun reply, which fails for
+//! a queued / rejected run that has no per-run channel registered.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,13 +35,16 @@ use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
 use surge_orchestrator::engine::ipc::{
-    DaemonRequest, DaemonResponse, local_socket_name_from_path, read_response_frame, write_frame,
+    DaemonRequest, DaemonResponse, ErrorCode, local_socket_name_from_path, read_response_frame,
+    write_frame,
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+/// macOS caps `sockaddr_un.sun_path` at 104 chars. The system temp dir
+/// on CI runners eats most of that, so we keep the prefix terse.
 fn unique_socket_path(temp: &TempDir, prefix: &str) -> PathBuf {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
@@ -54,7 +58,7 @@ fn make_minimal_graph() -> surge_core::graph::Graph {
     surge_core::graph::Graph {
         schema_version: surge_core::graph::SCHEMA_VERSION,
         metadata: surge_core::graph::GraphMetadata {
-            name: "queue-drain-test".into(),
+            name: "queue-full-test".into(),
             description: None,
             template_origin: None,
             created_at: chrono::Utc::now(),
@@ -67,11 +71,10 @@ fn make_minimal_graph() -> surge_core::graph::Graph {
     }
 }
 
-/// Stub `EngineFacade` whose `start_run` increments a counter and
-/// returns a `RunHandle`. The FIRST call's handle holds its events
-/// channel open until `release_first` fires — that lets the test
-/// queue a second `StartRun` while run 1 is still active. Subsequent
-/// calls return a handle that completes immediately.
+/// Stub facade: first `start_run` holds the events channel open until
+/// `release_first` fires; subsequent runs complete instantly. Used to
+/// pin run 1 in the active set while we test what happens when the
+/// queue fills.
 struct CountingStubFacade {
     start_count: AtomicUsize,
     release_first: Arc<tokio::sync::Notify>,
@@ -83,10 +86,6 @@ impl CountingStubFacade {
             start_count: AtomicUsize::new(0),
             release_first: Arc::new(tokio::sync::Notify::new()),
         }
-    }
-
-    fn start_count(&self) -> usize {
-        self.start_count.load(Ordering::SeqCst)
     }
 
     fn release_first(&self) {
@@ -110,10 +109,7 @@ impl EngineFacade for CountingStubFacade {
         let release = self.release_first.clone();
 
         if is_first {
-            // First run: hold events open until the test notifies
-            // `release_first`. Then emit Terminal and drop the sender,
-            // which lets `spawn_forward_task` finish and call
-            // `admission.notify_completed` — waking the drain task.
+            // First run: hold events open until released.
             tokio::spawn(async move {
                 release.notified().await;
                 let _ = tx.send(EngineRunEvent::Terminal(RunOutcome::Completed {
@@ -122,7 +118,6 @@ impl EngineFacade for CountingStubFacade {
                 drop(tx);
             });
         } else {
-            // Subsequent runs: complete instantly.
             let _ = tx.send(EngineRunEvent::Terminal(RunOutcome::Completed {
                 terminal: NodeKey::try_from("end").unwrap(),
             }));
@@ -179,14 +174,13 @@ impl EngineFacade for CountingStubFacade {
 }
 
 #[tokio::test]
-async fn queued_run_admitted_after_completion() {
+async fn third_start_run_at_saturation_returns_queue_full() {
     let temp = TempDir::new().unwrap();
-    let socket = unique_socket_path(&temp, "queue_drain");
+    // Keep the prefix short — see comment on unique_socket_path.
+    let socket = unique_socket_path(&temp, "q_full");
     let cfg = ServerConfig {
         max_active: 1,
-        // Plenty of queue capacity — this test exercises the drain
-        // path, not the rejection path.
-        max_queue: 8,
+        max_queue: 1,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
@@ -208,7 +202,7 @@ async fn queued_run_admitted_after_completion() {
     let (read_half, mut write_half) = stream.split();
     let mut reader = BufReader::new(read_half);
 
-    // --- StartRun #1 ---
+    // --- StartRun #1 — admitted ---
     let run1 = RunId::new();
     let req1 = DaemonRequest::StartRun {
         request_id: 1,
@@ -233,7 +227,7 @@ async fn queued_run_admitted_after_completion() {
         other => panic!("expected StartRunOk for run1, got {other:?}"),
     }
 
-    // --- StartRun #2 — admission cap reached, should queue ---
+    // --- StartRun #2 — queued ---
     let run2 = RunId::new();
     let req2 = DaemonRequest::StartRun {
         request_id: 2,
@@ -263,24 +257,69 @@ async fn queued_run_admitted_after_completion() {
         other => panic!("expected StartRunQueued for run2, got {other:?}"),
     }
 
-    // Release run 1's terminal event. `spawn_forward_task` will call
-    // `admission.notify_completed`, the drain task wakes via
-    // `wait_changed`, and run 2 gets admitted via `facade.start_run`.
+    // --- StartRun #3 — both caps hit, expect QueueFull ---
+    let run3 = RunId::new();
+    let req3 = DaemonRequest::StartRun {
+        request_id: 3,
+        run_id: run3,
+        graph: Box::new(make_minimal_graph()),
+        worktree_path: temp.path().to_path_buf(),
+        run_config: EngineRunConfig::default(),
+    };
+    write_frame(&mut write_half, &req3)
+        .await
+        .expect("write StartRun #3");
+    write_half.flush().await.expect("flush #3");
+    let resp3 = read_response_frame(&mut reader)
+        .await
+        .expect("read #3")
+        .expect("frame #3");
+    match resp3 {
+        DaemonResponse::Error {
+            request_id,
+            code,
+            message,
+        } => {
+            assert_eq!(request_id, 3);
+            assert_eq!(code, ErrorCode::QueueFull);
+            assert!(
+                message.contains("queue is full"),
+                "expected diagnostic message; got {message:?}"
+            );
+            assert!(
+                message.contains("1/1"),
+                "message should include queue_len/max_queue numbers; got {message:?}"
+            );
+        },
+        other => panic!("expected Error{{QueueFull}} for run3, got {other:?}"),
+    }
+
+    // Now release run 1 so the drain task can admit run 2 and the
+    // server shuts down cleanly. Without this, the held-open events
+    // channel would keep the spawn_forward_task blocked past the
+    // 2s timeout below.
     stub.release_first();
 
-    // The stub's run-1 handle terminates immediately, so
-    // `spawn_forward_task` calls `admission.notify_completed` very
-    // quickly. The drain task should then pop run 2 and call
-    // `facade.start_run` for it. Poll the counter with a generous
-    // timeout to avoid CI flakes.
+    // After release, run 2 will be admitted (start_count == 2).
+    // The rejected run 3 must NOT result in another start_run call.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while std::time::Instant::now() < deadline && stub.start_count() < 2 {
+    while std::time::Instant::now() < deadline && stub.start_count.load(Ordering::SeqCst) < 2 {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(
-        stub.start_count(),
+        stub.start_count.load(Ordering::SeqCst),
         2,
-        "drain task should have admitted the queued run within 2s"
+        "run 2 must be admitted exactly once via the drain task; run 3 must NOT \
+         have triggered a third start_run"
+    );
+
+    // Belt and braces: give the drain task a brief window to misbehave
+    // (re-admit a phantom run 3) before checking again.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        stub.start_count.load(Ordering::SeqCst),
+        2,
+        "rejected run 3 must not appear in start_run history"
     );
 
     shutdown.cancel();

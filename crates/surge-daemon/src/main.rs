@@ -16,6 +16,13 @@ struct Args {
     /// Maximum concurrent active runs.
     #[arg(long, default_value_t = 8)]
     max_active: usize,
+    /// Maximum runs allowed to wait in the FIFO admission queue.
+    /// When omitted, defaults to `max_active * 4`. When both
+    /// `max_active` and this cap are saturated, further `StartRun`
+    /// requests are rejected with `QueueFull` so the daemon's
+    /// pending-start map cannot grow unboundedly under load.
+    #[arg(long)]
+    max_queue: Option<usize>,
     /// Graceful-shutdown grace window.
     #[arg(long, default_value = "30s", value_parser = parse_humantime)]
     shutdown_grace: Duration,
@@ -117,8 +124,10 @@ fn main() -> std::process::ExitCode {
             let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
         }
 
+        let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
         let server_cfg = ServerConfig {
             max_active: args.max_active,
+            max_queue,
             socket_path: socket_path.clone(),
         };
         let server_handle = tokio::spawn({

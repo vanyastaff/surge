@@ -78,6 +78,7 @@ async fn shutdown_token_exits_within_500ms() {
     let socket = unique_socket_path(&temp, "shutdown");
     let cfg = ServerConfig {
         max_active: 4,
+        max_queue: 16,
         socket_path: socket,
     };
     let shutdown = CancellationToken::new();

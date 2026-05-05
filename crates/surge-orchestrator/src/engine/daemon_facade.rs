@@ -599,6 +599,7 @@ fn map_error(code: ErrorCode, message: &str) -> EngineError {
         ErrorCode::AdmissionFull => {
             EngineError::Internal(format!("daemon: admission full ({message})"))
         },
+        ErrorCode::QueueFull => EngineError::QueueFull(message.to_string()),
         ErrorCode::ShuttingDown => {
             EngineError::Internal(format!("daemon: shutting down ({message})"))
         },
@@ -614,5 +615,15 @@ mod tests {
     fn map_error_admission_full() {
         let e = map_error(ErrorCode::AdmissionFull, "8/8 active");
         assert!(format!("{e}").contains("admission full"));
+    }
+
+    #[test]
+    fn map_error_queue_full_returns_typed_variant() {
+        let e = map_error(ErrorCode::QueueFull, "queue is full (4/4)");
+        assert!(
+            matches!(e, EngineError::QueueFull(ref m) if m == "queue is full (4/4)"),
+            "QueueFull must surface as a typed variant carrying the daemon message; got {e:?}"
+        );
+        assert!(format!("{e}").contains("queue is full (4/4)"));
     }
 }
