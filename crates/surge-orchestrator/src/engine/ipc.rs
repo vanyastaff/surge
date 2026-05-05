@@ -296,9 +296,9 @@ pub enum FramingError {
     FrameTooLarge(usize, usize),
 }
 
-/// Maximum size of a single IPC frame in bytes. Larger frames (e.g.,
-/// a Graph TOML payload over 8 MB) are rejected. Adjust if real
-/// workloads bump up against this.
+/// Maximum size of a single IPC frame in bytes, **including the trailing
+/// newline delimiter**. Larger frames (e.g., a Graph TOML payload over 8 MB)
+/// are rejected. Adjust if real workloads bump up against this.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// Serialize and write a single frame followed by `\n`. Compact JSON
@@ -309,13 +309,83 @@ where
     T: serde::Serialize,
 {
     let mut bytes = serde_json::to_vec(frame)?;
-    if bytes.len() > MAX_FRAME_BYTES {
-        return Err(FramingError::FrameTooLarge(bytes.len(), MAX_FRAME_BYTES));
+    // +1 for the trailing newline we'll append; cap includes the delimiter.
+    if bytes.len() + 1 > MAX_FRAME_BYTES {
+        return Err(FramingError::FrameTooLarge(
+            bytes.len() + 1,
+            MAX_FRAME_BYTES,
+        ));
     }
     bytes.push(b'\n');
     writer.write_all(&bytes).await?;
     writer.flush().await?;
     Ok(())
+}
+
+/// Read one newline-terminated frame as bytes, enforcing [`MAX_FRAME_BYTES`]
+/// as bytes are consumed — not after the full line is buffered. This prevents
+/// a misbehaving peer from forcing unbounded heap allocation by sending a very
+/// long line without a `\n` terminator.
+///
+/// Returns `Ok(None)` on clean EOF before any bytes were read.
+/// Returns `Err(FramingError::FrameTooLarge)` when the running byte count
+/// exceeds [`MAX_FRAME_BYTES`] before a `\n` is seen.
+async fn read_frame_bytes_capped<R>(
+    reader: &mut BufReader<R>,
+) -> Result<Option<Vec<u8>>, FramingError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            // Clean EOF.
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            // Trailing data without a newline terminator.
+            return Err(FramingError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "stream ended without trailing newline",
+            )));
+        }
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+            // Found the newline at chunk[pos]. Include it in the frame bytes
+            // so the cap check mirrors the write side (which also counts `\n`).
+            if buf.len() + pos + 1 > MAX_FRAME_BYTES {
+                let to_consume = pos + 1;
+                reader.consume(to_consume);
+                return Err(FramingError::FrameTooLarge(
+                    buf.len() + pos + 1,
+                    MAX_FRAME_BYTES,
+                ));
+            }
+            buf.extend_from_slice(&chunk[..=pos]);
+            let to_consume = pos + 1;
+            reader.consume(to_consume);
+            return Ok(Some(buf));
+        }
+        // No newline in this chunk — check cap before appending.
+        let chunk_len = chunk.len();
+        if buf.len() + chunk_len > MAX_FRAME_BYTES {
+            return Err(FramingError::FrameTooLarge(
+                buf.len() + chunk_len,
+                MAX_FRAME_BYTES,
+            ));
+        }
+        buf.extend_from_slice(chunk);
+        reader.consume(chunk_len);
+    }
+}
+
+/// Trim trailing `\r` and `\n` from a byte slice, returning the trimmed slice.
+fn trim_newline(bytes: &[u8]) -> &[u8] {
+    let end = bytes
+        .iter()
+        .rposition(|&b| b != b'\n' && b != b'\r')
+        .map_or(0, |i| i + 1);
+    &bytes[..end]
 }
 
 /// Read one line from `reader` and parse it as a [`DaemonRequest`].
@@ -326,15 +396,10 @@ pub async fn read_request_frame<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(None);
+    match read_frame_bytes_capped(reader).await? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(serde_json::from_slice(trim_newline(&bytes))?)),
     }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
-    }
-    Ok(Some(serde_json::from_str(line.trim_end())?))
 }
 
 /// Read one line and parse as a [`DaemonResponse`].
@@ -344,15 +409,10 @@ pub async fn read_response_frame<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(None);
+    match read_frame_bytes_capped(reader).await? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(serde_json::from_slice(trim_newline(&bytes))?)),
     }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
-    }
-    Ok(Some(serde_json::from_str(line.trim_end())?))
 }
 
 /// Read one line and parse as a [`DaemonEvent`] (notification frame).
@@ -362,15 +422,10 @@ pub async fn read_event_frame<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(None);
+    match read_frame_bytes_capped(reader).await? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(serde_json::from_slice(trim_newline(&bytes))?)),
     }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
-    }
-    Ok(Some(serde_json::from_str(line.trim_end())?))
 }
 
 /// Either a [`DaemonResponse`] or a [`DaemonEvent`], since they share
@@ -394,21 +449,18 @@ pub async fn read_inbound_server_frame<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(None);
+    match read_frame_bytes_capped(reader).await? {
+        None => Ok(None),
+        Some(bytes) => {
+            let trimmed = trim_newline(&bytes);
+            // Both share serde discriminator tags — try response first.
+            if let Ok(r) = serde_json::from_slice::<DaemonResponse>(trimmed) {
+                return Ok(Some(InboundServerFrame::Response(r)));
+            }
+            let ev: DaemonEvent = serde_json::from_slice(trimmed)?;
+            Ok(Some(InboundServerFrame::Event(ev)))
+        },
     }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(FramingError::FrameTooLarge(line.len(), MAX_FRAME_BYTES));
-    }
-    let trimmed = line.trim_end();
-    // Both share serde discriminator tags — try response first.
-    if let Ok(r) = serde_json::from_str::<DaemonResponse>(trimmed) {
-        return Ok(Some(InboundServerFrame::Response(r)));
-    }
-    let ev: DaemonEvent = serde_json::from_str(trimmed)?;
-    Ok(Some(InboundServerFrame::Event(ev)))
 }
 
 #[cfg(test)]
@@ -492,5 +544,22 @@ mod tests {
             .await
             .unwrap();
         assert!(parsed.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_request_frame_rejects_oversized_input() {
+        use tokio::io::BufReader;
+        // Construct a "frame" that exceeds the cap by 1 byte (no newline).
+        // The cap covers the entire frame including the trailing delimiter,
+        // so MAX_FRAME_BYTES + 1 bytes of payload with no '\n' will exceed it.
+        let over = vec![b'x'; MAX_FRAME_BYTES + 1];
+        let cursor = std::io::Cursor::new(over.clone());
+        let mut reader = BufReader::new(cursor);
+        let err = crate::engine::ipc::read_request_frame(&mut reader).await;
+        assert!(
+            matches!(err, Err(FramingError::FrameTooLarge(_, MAX_FRAME_BYTES))),
+            "expected FrameTooLarge, got {err:?}"
+        );
+        let _ = over; // keep variable to avoid lint
     }
 }

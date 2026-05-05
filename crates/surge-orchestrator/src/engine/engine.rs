@@ -347,11 +347,12 @@ impl Engine {
     pub async fn snapshot_active_runs(&self) -> Vec<crate::engine::handle::RunSummary> {
         use crate::engine::handle::{RunStatus, RunSummary};
         let runs = self.runs.read().await;
+        let now = chrono::Utc::now();
         runs.keys()
             .map(|id| RunSummary {
                 run_id: *id,
                 status: RunStatus::Active,
-                started_at: chrono::Utc::now(),
+                started_at: now,
                 last_event_seq: None,
             })
             .collect()
