@@ -215,6 +215,19 @@ async fn deliver_approval(&self, approval: &ApprovalRequested) -> Result<Message
 }
 ```
 
+> **MarkdownV2 escaping note.** The `card.body` builder is responsible
+> for escaping every character with special meaning in MarkdownV2
+> (`_ * [ ] ( ) ~ \` > # + - = | { } . !`) inside any field that comes
+> from arbitrary user/run data — `summary.goal`, `summary.target`, file
+> paths, agent output snippets, etc. Use
+> `teloxide::utils::markdown::escape` (or equivalent) when interpolating
+> those into the template. Failure to escape causes silent message
+> rejection from Telegram (`Bad Request: can't parse entities`) and
+> drops the approval card entirely. The card builder is the right place
+> for this, not the delivery function — by the time we reach
+> `deliver_approval` the body is treated as a fully-formed MarkdownV2
+> document.
+
 ## Incoming flow
 
 ### Callback query handler
@@ -239,24 +252,34 @@ async fn handle_callback(
     let run_id = storage.resolve_short_id(&data.rid).await?;
     let approval_event = storage.read_event(&run_id, data.ev).await?;
     
-    // Determine outcome from action
-    let outcome = match data.act.as_str() {
-        "approve" => "approve",
-        "reject" => "reject",
-        "edit" => "edit",
-        "allow_once" => "allow_once",
-        "allow_remember" => "allow_remember",
-        "deny" => "deny",
-        _ => return Err(...),
+    // Determine outcome + which event payload this action writes.
+    // Approval-gate buttons → ApprovalDecided.
+    // Sandbox-elevation buttons → SandboxElevationDecided.
+    // Bootstrap-stage buttons (description / roadmap / flow) →
+    // BootstrapStageDecided. The spec keeps these on different
+    // payloads so projection / replay can distinguish a gate
+    // approval ("ship the PR") from a one-off sandbox grant
+    // ("let this stage write outside the worktree once").
+    let decision_event = match data.act.as_str() {
+        "approve" | "reject" | "edit" => EventPayload::ApprovalDecided {
+            gate: extract_gate_from(&approval_event),
+            decision: data.act.clone(),
+            channel: ApprovalChannel::Telegram,
+            comment: None,
+        },
+        "allow_once" | "allow_remember" | "deny" => EventPayload::SandboxElevationDecided {
+            request_id: extract_elevation_id_from(&approval_event),
+            decision: data.act.clone(),
+            channel: ApprovalChannel::Telegram,
+        },
+        "accept_bootstrap" | "regenerate_bootstrap" => EventPayload::BootstrapStageDecided {
+            stage: extract_bootstrap_stage_from(&approval_event),
+            decision: data.act.clone(),
+            channel: ApprovalChannel::Telegram,
+        },
+        _ => return Err(invalid_action(&data.act)),
     };
-    
-    // Write decision event
-    let decision_event = EventPayload::ApprovalDecided {
-        gate: extract_gate_from(&approval_event),
-        decision: outcome.to_string(),
-        channel: ApprovalChannel::Telegram,
-        comment: None,
-    };
+    let outcome = data.act.clone(); // for the confirmation banner below
     storage.append_event(&run_id, decision_event).await?;
     
     // Update message: remove keyboard, append confirmation

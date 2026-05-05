@@ -313,7 +313,7 @@ For large projects with many AGENTS.md files in subdirs:
 
 Engine maintains a watch list of subdir AGENTS.md files (just paths, not content). When the agent reads or writes a file in a subdir, engine:
 
-1. Checks if there's an unlooaded AGENTS.md in that subdir or its parents up to the loaded root.
+1. Checks if there's an unloaded AGENTS.md in that subdir or its parents up to the loaded root.
 2. If yes, reads it, validates trust, prepends to next agent turn's context.
 3. Tracks "loaded" status to avoid re-reading.
 

@@ -92,7 +92,7 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 | **Flow Generator** | The bootstrap agent that produces the run-specific graph based on user description and roadmap. |
 | **Worktree** | Git worktree branch dedicated to a single run. Created at run start, optionally merged at run end. |
 | **Event** | Immutable record in the run's event log. Examples: `RunStarted`, `StageEntered`, `OutcomeReported`, `ApprovalRequested`. |
-| **Sandbox** | Per-node policy controlling filesystem/network/shell access. Modes: `read-only`, `workspace`, `workspace+network`, `full-access`. |
+| **Sandbox** | Per-node policy controlling filesystem/network/shell access. Modes: `read-only`, `workspace-write`, `workspace+network`, `full-access`. See RFC-0006 for full semantics. |
 | **AGENTS.md** | Markdown rules file format (Linux Foundation standard). Loaded into agent context based on scope (global/profile/project/subdir). |
 | **ACP** | Agent Client Protocol. Standard interface for invoking AI coding agents (Claude Code, Codex, Gemini). |
 
