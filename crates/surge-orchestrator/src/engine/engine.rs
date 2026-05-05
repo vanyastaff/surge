@@ -170,6 +170,20 @@ impl Engine {
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
+        // Per-run MCP registry: prefer the run-config-supplied list over
+        // the engine-level fallback. If `run_config.mcp_servers` is
+        // non-empty a fresh `McpRegistry` is built for this run; otherwise
+        // we fall back to the engine-wide registry (typically `None` for
+        // daemon mode, where the per-run list is the only source).
+        let per_run_mcp_registry = if run_config.mcp_servers.is_empty() {
+            self.mcp_registry.clone()
+        } else {
+            Some(Arc::new(surge_mcp::McpRegistry::from_config(
+                &run_config.mcp_servers,
+            )))
+        };
+        let mcp_servers_clone = run_config.mcp_servers.clone();
+
         let (event_tx, event_rx) = broadcast::channel(256);
         let cancel = CancellationToken::new();
 
@@ -201,8 +215,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
-            mcp_registry: self.mcp_registry.clone(),
-            mcp_servers: Vec::new(), // populated from RunConfig::mcp_servers in a future task
+            mcp_registry: per_run_mcp_registry,
+            mcp_servers: mcp_servers_clone,
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -287,6 +301,11 @@ impl Engine {
         };
         self.runs.write().await.insert(run_id, active);
 
+        // Resume reads RunConfig from the persisted event log; plumbing
+        // mcp_servers from the persisted RunConfig into a per-run registry
+        // is a follow-up task. For now we fall back to the engine-level
+        // registry (typically None) and an empty server list.
+        let resume_run_config = EngineRunConfig::default();
         let params = RunTaskParams {
             run_id,
             writer,
@@ -295,7 +314,7 @@ impl Engine {
             notify_deliverer: self.notify_deliverer.clone(),
             graph: replayed.graph,
             worktree_path,
-            run_config: EngineRunConfig::default(),
+            run_config: resume_run_config,
             event_tx,
             cancel,
             resume_cursor: Some(replayed.cursor),
@@ -305,7 +324,7 @@ impl Engine {
             gate_resolutions,
             tool_resolutions,
             mcp_registry: self.mcp_registry.clone(),
-            mcp_servers: Vec::new(), // populated from RunConfig::mcp_servers in a future task
+            mcp_servers: Vec::new(),
         };
 
         let runs_for_cleanup = self.runs.clone();

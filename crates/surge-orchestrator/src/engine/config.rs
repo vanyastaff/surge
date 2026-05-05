@@ -1,6 +1,7 @@
 //! Engine-level and run-level configuration knobs.
 
 use std::time::Duration;
+use surge_core::mcp_config::McpServerRef;
 
 /// Top-level engine configuration, shared across all runs.
 #[derive(Debug, Clone)]
@@ -35,6 +36,18 @@ pub struct EngineRunConfig {
     /// for agent stages. Reserved for M6 daemon-level overrides.
     #[serde(default, with = "humantime_serde::option")]
     pub stage_timeout_override: Option<Duration>,
+    /// Per-run MCP server registry. When non-empty, the engine builds an
+    /// `Arc<McpRegistry>` from these entries before dispatching to the run
+    /// task; agent stages then expose the configured MCP tools via
+    /// `RoutingToolDispatcher`. Defaults to empty (no MCP).
+    ///
+    /// The CLI populates this from a user-supplied config source (e.g.
+    /// `~/.surge/config.toml` or `--mcp-config` flag); for now the field
+    /// is additive and defaults to empty. Existing serialised
+    /// `EngineRunConfig` blobs without the field deserialize with an empty
+    /// list (via `#[serde(default)]`).
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerRef>,
 }
 
 impl Default for EngineRunConfig {
@@ -42,6 +55,7 @@ impl Default for EngineRunConfig {
         Self {
             human_input_timeout: Duration::from_secs(300),
             stage_timeout_override: None,
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -49,6 +63,9 @@ impl Default for EngineRunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use surge_core::mcp_config::McpTransportConfig;
 
     #[test]
     fn engine_config_default_uses_stage_boundary() {
@@ -60,5 +77,38 @@ mod tests {
     fn run_config_default_human_input_is_5_minutes() {
         let c = EngineRunConfig::default();
         assert_eq!(c.human_input_timeout, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn engine_run_config_default_mcp_servers_empty() {
+        let cfg = EngineRunConfig::default();
+        assert!(cfg.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn engine_run_config_with_mcp_servers_serde_roundtrip() {
+        let cfg = EngineRunConfig {
+            human_input_timeout: Duration::from_secs(120),
+            stage_timeout_override: None,
+            mcp_servers: vec![McpServerRef::new(
+                "playwright".into(),
+                McpTransportConfig::stdio(PathBuf::from("mcp-playwright"), vec![], HashMap::new()),
+                None,
+                Duration::from_secs(60),
+                true,
+            )],
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.mcp_servers.len(), 1);
+        assert_eq!(parsed.mcp_servers[0].name, "playwright");
+    }
+
+    #[test]
+    fn engine_run_config_missing_mcp_servers_deserializes_to_empty() {
+        // Old serialised blobs without the field should still round-trip.
+        let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
+        let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.mcp_servers.is_empty());
     }
 }
