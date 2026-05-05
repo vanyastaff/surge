@@ -92,7 +92,10 @@ impl EngineFacade for StubFacade {
 #[tokio::test]
 async fn subscribe_unknown_run_returns_run_not_active() {
     let temp = TempDir::new().unwrap();
-    let socket = unique_socket_path(&temp, "subscribe_unknown");
+    // Keep the prefix short — macOS caps sockaddr_un.sun_path at 104
+    // chars, and the system temp dir on CI runners eats most of that
+    // budget already (see daemon_e2e_smoke.rs which uses "smoke").
+    let socket = unique_socket_path(&temp, "sub_unk");
     let cfg = ServerConfig {
         max_active: 4,
         socket_path: socket.clone(),
