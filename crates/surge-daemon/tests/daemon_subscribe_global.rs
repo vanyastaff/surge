@@ -263,3 +263,119 @@ async fn subscribe_global_delivers_run_lifecycle_events() {
     let server_result = join_result.expect("server task panicked");
     server_result.expect("server returned error");
 }
+
+/// Regression test for the Copilot review on PR #30: a second
+/// `SubscribeGlobal` on the same connection must not spawn a
+/// concurrent forwarder. If it did, each `GlobalDaemonEvent` would
+/// be forwarded twice on this connection's wire and every receiver
+/// produced by `EventDispatcher.global.subscribe()` would observe
+/// duplicate frames.
+///
+/// We can't directly inspect server-side task counts, so we assert
+/// the observable invariant: after two `subscribe_global()` calls
+/// followed by a `StartRun`, every receiver sees exactly ONE
+/// `RunAccepted{run_id}` and exactly ONE `RunFinished{run_id}` —
+/// never a third event for the same run.
+#[tokio::test]
+async fn subscribe_global_is_idempotent_within_a_connection() {
+    let temp = TempDir::new().unwrap();
+    let socket = unique_socket_path(&temp, "sub_glob_idem");
+    let cfg = ServerConfig {
+        max_active: 4,
+        socket_path: socket.clone(),
+    };
+    let shutdown = CancellationToken::new();
+    let stub: Arc<dyn EngineFacade> = Arc::new(InstantFinishStubFacade);
+
+    let server_handle = tokio::spawn({
+        let stub = stub.clone();
+        let shutdown = shutdown.clone();
+        async move { run_server(cfg, stub, shutdown).await }
+    });
+
+    let client = connect_with_retry(socket.clone(), Duration::from_secs(3))
+        .await
+        .expect("connect global subscriber");
+
+    // Two subscribes back-to-back. The second must be a no-op on the
+    // server side; the receiver returned by the second call is fed
+    // by the same local broadcast Sender.
+    let mut rx_first = client
+        .subscribe_global()
+        .await
+        .expect("first subscribe_global Ok");
+    let mut rx_second = client
+        .subscribe_global()
+        .await
+        .expect("second subscribe_global Ok");
+
+    // Drive a run on a separate raw-IPC connection so the StartRun
+    // response doesn't interleave on the subscriber connection.
+    let name = local_socket_name_from_path(&socket).expect("socket name");
+    let stream = LocalSocketStream::connect(name)
+        .await
+        .expect("connect issuer");
+    let (read_half, mut write_half) = stream.split();
+    let mut reader = BufReader::new(read_half);
+
+    let run_id = RunId::new();
+    let req = DaemonRequest::StartRun {
+        request_id: 1,
+        run_id,
+        graph: Box::new(make_minimal_graph()),
+        worktree_path: temp.path().to_path_buf(),
+        run_config: EngineRunConfig::default(),
+    };
+    write_frame(&mut write_half, &req)
+        .await
+        .expect("write StartRun");
+    write_half.flush().await.expect("flush StartRun");
+    let resp = read_response_frame(&mut reader)
+        .await
+        .expect("read StartRun resp")
+        .expect("frame StartRun resp");
+    assert!(matches!(resp, DaemonResponse::StartRunOk { .. }));
+
+    // Both receivers must observe exactly RunAccepted then RunFinished
+    // for this run — no third frame. Drain on each independently.
+    for (label, rx) in [("first", &mut rx_first), ("second", &mut rx_second)] {
+        let accepted = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{label}: RunAccepted not received within 2s"))
+            .unwrap_or_else(|e| panic!("{label}: global channel closed early: {e:?}"));
+        match accepted {
+            GlobalDaemonEvent::RunAccepted { run_id: got } => assert_eq!(got, run_id),
+            other => panic!("{label}: expected RunAccepted, got {other:?}"),
+        }
+
+        let finished = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{label}: RunFinished not received within 2s"))
+            .unwrap_or_else(|e| panic!("{label}: global channel closed early: {e:?}"));
+        match finished {
+            GlobalDaemonEvent::RunFinished {
+                run_id: got,
+                outcome: RunOutcome::Completed { .. },
+            } => assert_eq!(got, run_id),
+            other => panic!("{label}: expected RunFinished{{Completed}}, got {other:?}"),
+        }
+
+        // No further events should arrive for this run. A duplicate
+        // forwarder would have re-emitted RunAccepted/RunFinished a
+        // second time. 200ms is enough on tokio's current_thread.
+        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            Err(_) => {}, // timeout — good
+            Ok(Ok(unexpected)) => {
+                panic!("{label}: unexpected extra event after RunFinished: {unexpected:?}")
+            },
+            Ok(Err(e)) => panic!("{label}: unexpected channel error: {e:?}"),
+        }
+    }
+
+    shutdown.cancel();
+    let join_result = tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("server did not shut down within 2s after cancellation");
+    let server_result = join_result.expect("server task panicked");
+    server_result.expect("server returned error");
+}

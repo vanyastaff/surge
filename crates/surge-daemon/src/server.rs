@@ -472,15 +472,32 @@ async fn dispatch(
         },
 
         DaemonRequest::SubscribeGlobal { request_id } => {
-            let rx = broadcast.subscribe_global();
-            let writer_for_task = writer.clone();
-            let handle = tokio::spawn(forward_global_to_client(rx, writer_for_task));
-            // Replace any pre-existing global forwarder on this connection
-            // (defensive — clients shouldn't double-subscribe, but if they
-            // do, we abort the old one rather than leak it).
+            // Idempotent. Spawning a second forwarder while the first
+            // is still alive would briefly race it: both receivers
+            // would observe the same `GlobalDaemonEvent` from
+            // `BroadcastRegistry.global` and each would call
+            // `write_frame` (the writer mutex serializes the wire
+            // writes, but the duplication is real and observable as
+            // two identical `DaemonEvent::Global` frames). Only
+            // (re)spawn when there is no live forwarder — i.e. either
+            // the slot is empty or the previous task has finished
+            // (e.g. writer error broke it out of its loop).
             let mut s = state.lock().await;
-            if let Some(old) = s.global_forwarder.replace(handle) {
-                old.abort();
+            let needs_new = match s.global_forwarder.as_ref() {
+                Some(h) => h.is_finished(),
+                None => true,
+            };
+            if needs_new {
+                // Drop the dead handle (if any) before spawning the
+                // replacement; abort is a no-op on an already-finished
+                // task but keeps the call symmetric with teardown.
+                if let Some(old) = s.global_forwarder.take() {
+                    old.abort();
+                }
+                let rx = broadcast.subscribe_global();
+                let writer_for_task = writer.clone();
+                let handle = tokio::spawn(forward_global_to_client(rx, writer_for_task));
+                s.global_forwarder = Some(handle);
             }
             Some(DaemonResponse::SubscribeGlobalOk { request_id })
         },
