@@ -22,28 +22,44 @@ pub enum EngineCommands {
         /// Worktree path. Default: current working directory.
         #[arg(long)]
         worktree: Option<PathBuf>,
+        /// Route through the long-running surge-daemon (auto-spawn if not running).
+        #[arg(long)]
+        daemon: bool,
     },
-    /// Tail events from an existing run by id (reads on-disk log).
+    /// Tail events from an existing run by id.
     Watch {
         /// `RunId` (ULID).
         run_id: String,
+        /// Use the daemon's live event stream instead of disk-tail.
+        #[arg(long)]
+        daemon: bool,
     },
-    /// Resume an interrupted run from its latest snapshot.
+    /// Resume an interrupted run.
     Resume {
         /// `RunId` (ULID).
         run_id: String,
+        /// Required — resume needs the engine to be alive (i.e., the daemon).
+        #[arg(long)]
+        daemon: bool,
     },
-    /// Cancel a run owned by the current process.
+    /// Cancel a run.
     Stop {
         /// `RunId` (ULID).
         run_id: String,
         /// Reason string recorded in the abort event.
         #[arg(long)]
         reason: Option<String>,
+        /// Required — cross-process stop needs the daemon.
+        #[arg(long)]
+        daemon: bool,
     },
-    /// List runs from the on-disk store.
-    Ls,
-    /// Print events for a run.
+    /// List runs.
+    Ls {
+        /// List runs the daemon currently hosts (default: list on-disk).
+        #[arg(long)]
+        daemon: bool,
+    },
+    /// Print events for a run (always reads from disk; daemon not required).
     Logs {
         /// `RunId` (ULID).
         run_id: String,
@@ -63,11 +79,16 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             spec_path,
             watch,
             worktree,
-        } => run_command(spec_path, watch, worktree).await,
-        EngineCommands::Watch { run_id } => watch_command(run_id).await,
-        EngineCommands::Resume { run_id } => resume_command(run_id).await,
-        EngineCommands::Stop { run_id, reason } => stop_command(run_id, reason).await,
-        EngineCommands::Ls => ls_command().await,
+            daemon,
+        } => run_command(spec_path, watch, worktree, daemon).await,
+        EngineCommands::Watch { run_id, daemon } => watch_command(run_id, daemon).await,
+        EngineCommands::Resume { run_id, daemon } => resume_command(run_id, daemon).await,
+        EngineCommands::Stop {
+            run_id,
+            reason,
+            daemon,
+        } => stop_command(run_id, reason, daemon).await,
+        EngineCommands::Ls { daemon } => ls_command(daemon).await,
         EngineCommands::Logs {
             run_id,
             since,
@@ -76,9 +97,15 @@ pub async fn run(command: EngineCommands) -> Result<()> {
     }
 }
 
-async fn run_command(spec_path: PathBuf, watch: bool, worktree: Option<PathBuf>) -> Result<()> {
+async fn run_command(
+    spec_path: PathBuf,
+    watch: bool,
+    worktree: Option<PathBuf>,
+    daemon: bool,
+) -> Result<()> {
     use std::time::Duration;
     use surge_core::graph::Graph;
+    use surge_orchestrator::engine::facade::EngineFacade;
     use surge_orchestrator::engine::handle::EngineRunEvent;
 
     let toml_text = std::fs::read_to_string(&spec_path)
@@ -94,34 +121,45 @@ async fn run_command(spec_path: PathBuf, watch: bool, worktree: Option<PathBuf>)
         ));
     }
 
-    let storage = Storage::open(&surge_runs_dir()?)
-        .await
-        .context("open storage")?;
+    let facade: Arc<dyn EngineFacade> = if daemon {
+        ensure_daemon_running().await?;
+        let socket = surge_daemon::pidfile::socket_path()?;
+        Arc::new(
+            surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?,
+        )
+    } else {
+        let storage = Storage::open(&surge_runs_dir()?)
+            .await
+            .context("open storage")?;
 
-    let bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade> = Arc::new(
-        surge_acp::bridge::AcpBridge::with_defaults().context("AcpBridge::with_defaults")?,
-    );
+        let bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade> = Arc::new(
+            surge_acp::bridge::AcpBridge::with_defaults().context("AcpBridge::with_defaults")?,
+        );
 
-    let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
-        surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
-            worktree_path.clone(),
-        ),
-    );
+        let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
+            surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+                worktree_path.clone(),
+            ),
+        );
 
-    let notifier = build_default_notifier();
+        let notifier = build_default_notifier();
 
-    let engine = Engine::new_with_notifier(
-        bridge,
-        storage,
-        tool_dispatcher,
-        notifier,
-        EngineConfig::default(),
-    );
+        let engine = Arc::new(Engine::new_with_notifier(
+            bridge,
+            storage,
+            tool_dispatcher,
+            notifier,
+            EngineConfig::default(),
+        ));
+        Arc::new(surge_orchestrator::engine::facade::LocalEngineFacade::new(
+            engine,
+        ))
+    };
 
     let run_id = RunId::new();
     println!("{run_id}");
 
-    let handle = engine
+    let handle = facade
         .start_run(run_id, graph, worktree_path, EngineRunConfig::default())
         .await?;
 
@@ -144,29 +182,84 @@ async fn run_command(spec_path: PathBuf, watch: bool, worktree: Option<PathBuf>)
     Ok(())
 }
 
-async fn watch_command(run_id: String) -> Result<()> {
+async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
     let id = parse_run_id(&run_id)?;
+    if !daemon {
+        // Existing M6 disk-tail behavior preserved.
+        follow_log_from(id, 0).await?;
+        return Ok(());
+    }
+    // M7 daemon path: full streaming subscribe is M7+ polish; for PR 3
+    // we fall back to disk-tail mode after ensuring the daemon is up so
+    // existing on-disk events are visible.
+    ensure_daemon_running().await?;
+    eprintln!("watching {id} (disk-tail mode; live streaming via daemon is M7+ polish)…");
     follow_log_from(id, 0).await?;
     Ok(())
 }
 
-async fn resume_command(run_id: String) -> Result<()> {
-    let _ = run_id;
-    Err(anyhow!(
-        "M6: resume requires the engine to be running in this process; \
-         use `surge engine run` instead, or wait for M7's daemon mode"
-    ))
+async fn resume_command(run_id: String, daemon: bool) -> Result<()> {
+    let id = parse_run_id(&run_id)?;
+    if !daemon {
+        return Err(anyhow!(
+            "resume requires --daemon (the engine must be alive to resume); \
+             use `surge engine resume {id} --daemon`"
+        ));
+    }
+    ensure_daemon_running().await?;
+    let socket = surge_daemon::pidfile::socket_path()?;
+    let facade =
+        surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
+    let cwd = std::env::current_dir().context("cwd")?;
+    use surge_orchestrator::engine::facade::EngineFacade;
+    let _handle = facade.resume_run(id, cwd).await?;
+    println!("resumed {id}");
+    Ok(())
 }
 
-async fn stop_command(run_id: String, reason: Option<String>) -> Result<()> {
-    let _ = (run_id, reason);
-    Err(anyhow!(
-        "M6: stop requires the engine to be running in this process; \
-         M7's daemon mode adds out-of-process stop"
-    ))
+async fn stop_command(run_id: String, reason: Option<String>, daemon: bool) -> Result<()> {
+    let id = parse_run_id(&run_id)?;
+    if !daemon {
+        return Err(anyhow!(
+            "stop requires --daemon (cross-process cancel); \
+             use `surge engine stop {id} --daemon`"
+        ));
+    }
+    ensure_daemon_running().await?;
+    let socket = surge_daemon::pidfile::socket_path()?;
+    let facade =
+        surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
+    use surge_orchestrator::engine::facade::EngineFacade;
+    facade
+        .stop_run(id, reason.unwrap_or_else(|| "user-requested".into()))
+        .await?;
+    println!("stopped {id}");
+    Ok(())
 }
 
-async fn ls_command() -> Result<()> {
+async fn ls_command(daemon: bool) -> Result<()> {
+    if daemon {
+        ensure_daemon_running().await?;
+        let socket = surge_daemon::pidfile::socket_path()?;
+        use surge_orchestrator::engine::facade::EngineFacade;
+        let facade =
+            surge_orchestrator::engine::daemon_facade::DaemonEngineFacade::connect(socket).await?;
+        let runs = facade.list_runs().await?;
+        println!("{:<32} {:<10} STARTED", "ID", "STATUS");
+        for r in runs {
+            println!(
+                "{:<32} {:<10} {}",
+                r.run_id,
+                format!("{:?}", r.status).to_lowercase(),
+                r.started_at.format("%Y-%m-%d %H:%M:%S")
+            );
+        }
+        return Ok(());
+    }
+    legacy_ls_command().await
+}
+
+async fn legacy_ls_command() -> Result<()> {
     let runs_dir = surge_runs_dir()?;
     // Use storage registry for accurate metadata when available; fall back to
     // raw directory listing if the registry isn't open.
@@ -308,4 +401,21 @@ fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {
         },
         _ => {},
     }
+}
+
+/// If `--daemon` is requested but no daemon is running, auto-spawn
+/// one. Idempotent if a daemon is already alive.
+async fn ensure_daemon_running() -> Result<()> {
+    use surge_daemon::pidfile;
+    if let Some(p) = pidfile::read_pid(&pidfile::pid_path()?)? {
+        if pidfile::is_alive(p) {
+            return Ok(());
+        }
+    }
+    eprintln!("note: daemon not running; auto-spawning…");
+    crate::commands::daemon::run(crate::commands::daemon::DaemonCommands::Start {
+        detached: true,
+        max_active: 8,
+    })
+    .await
 }
