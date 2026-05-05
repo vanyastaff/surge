@@ -9,6 +9,47 @@ use std::sync::Arc;
 use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
 use tokio::sync::Mutex;
 
+/// Internal classification of rmcp `ServiceError`-derived messages
+/// for deciding whether to mark the connection as crashed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorClass {
+    /// Peer is gone or transport is broken — connection should be
+    /// marked crashed so the next call reconnects (subject to
+    /// `restart_on_crash`).
+    Transport,
+    /// Server returned a service-level error (bad params, tool not
+    /// found, etc.) — server is still healthy; don't mark crashed.
+    Service,
+}
+
+/// Heuristic classifier for rmcp error display strings. rmcp's
+/// `ServiceError` doesn't expose a structured kind across its
+/// variants, so we string-match on common phrases. False classification
+/// is acceptable: misclassifying transport as service means we don't
+/// reconnect (next call will hit the same dead transport and fail
+/// again — eventually the client gives up). Misclassifying service as
+/// transport means an unnecessary reconnect — wasteful but harmless.
+fn classify_rmcp_error(message: &str) -> ErrorClass {
+    let lower = message.to_lowercase();
+    // Transport / connection-loss indicators.
+    let transport_markers = [
+        "connection",
+        "transport",
+        "broken pipe",
+        "channel closed",
+        "i/o",
+        "io error",
+        "unexpected end",
+        "disconnected",
+        "eof",
+    ];
+    if transport_markers.iter().any(|m| lower.contains(m)) {
+        ErrorClass::Transport
+    } else {
+        ErrorClass::Service
+    }
+}
+
 /// State of a single MCP server connection.
 #[derive(Debug)]
 enum ConnState {
@@ -67,6 +108,13 @@ impl McpServerConnection {
     /// - `Running` → return cached handle immediately.
     /// - `Crashed` + `restart_on_crash = true` → re-spawn → `Running`.
     /// - `Crashed` + `restart_on_crash = false` → `McpError::ServerNotRunning`.
+    ///
+    /// Note: the state mutex is held across the child-process spawn and
+    /// the rmcp handshake (~50-1000ms typically). Concurrent callers to
+    /// the same connection during a cold start are serialized. M7+ may
+    /// refactor to an explicit Connecting state with a shared join
+    /// handle so concurrent waiters share the same connect attempt
+    /// without holding the mutex.
     async fn ensure_connected(&self) -> Result<Arc<RunningService<RoleClient, ()>>, McpError> {
         let mut state = self.state.lock().await;
         match &*state {
@@ -104,14 +152,22 @@ impl McpServerConnection {
 
         // `()` implements `ClientHandler` (all methods defaulted), and
         // the blanket `impl<H: ClientHandler> Service<RoleClient> for H`
-        // gives it `ServiceExt::serve`.
-        let service =
-            ().serve(transport)
-                .await
-                .map_err(|e| McpError::StartFailed {
+        // gives it `ServiceExt::serve`. Bound the handshake with the
+        // same call_timeout used for individual tool calls — if the
+        // child starts but never completes MCP init we don't hang.
+        let call_timeout = self.config.call_timeout;
+        let service = match tokio::time::timeout(call_timeout, ().serve(transport)).await {
+            Ok(Ok(svc)) => svc,
+            Ok(Err(e)) => {
+                return Err(McpError::StartFailed {
                     server: self.config.name.clone(),
                     reason: e.to_string(),
-                })?;
+                });
+            },
+            Err(_elapsed) => {
+                return Err(McpError::Timeout(call_timeout));
+            },
+        };
 
         let rs = Arc::new(service);
         *state = ConnState::Running(rs.clone());
@@ -120,23 +176,38 @@ impl McpServerConnection {
 
     /// List all tools the server reports via the MCP `tools/list` verb.
     ///
-    /// Triggers a lazy connect on first call.
+    /// Triggers a lazy connect on first call. On failure, classifies
+    /// the error as transport-vs-service: transport failures mark the
+    /// connection crashed (so the next call reconnects); service-level
+    /// errors leave the connection alive.
     pub async fn list_tools(&self) -> Result<Vec<rmcp::model::Tool>, McpError> {
         let rs = self.ensure_connected().await?;
-        // `RunningService` derefs to `Peer<R>`, so methods are available
-        // directly. We use the deref path here.
-        rs.list_all_tools()
-            .await
-            .map_err(|e| McpError::Service(e.to_string()))
+        match rs.list_all_tools().await {
+            Ok(tools) => Ok(tools),
+            Err(e) => {
+                let msg = e.to_string();
+                match classify_rmcp_error(&msg) {
+                    ErrorClass::Transport => {
+                        self.mark_crashed(None).await;
+                        Err(McpError::Transport(msg))
+                    },
+                    ErrorClass::Service => Err(McpError::Service(msg)),
+                }
+            },
+        }
     }
 
     /// Call a named tool with the supplied JSON arguments, honouring
     /// the configured `call_timeout`.
     ///
-    /// - If the timeout elapses: returns [`McpError::Timeout`].
-    /// - If the call returns a service-level error: marks the
-    ///   connection as [`Crashed`](ConnState::Crashed) and returns
-    ///   [`McpError::Service`].
+    /// - If the timeout elapses: returns [`McpError::Timeout`] without
+    ///   marking crashed — a slow server is not necessarily a dead one.
+    /// - If the call returns a transport-like error (broken pipe, EOF,
+    ///   etc.): marks the connection crashed and returns
+    ///   [`McpError::Transport`].
+    /// - If the call returns a service-level error (bad params, tool not
+    ///   found, etc.): returns [`McpError::Service`] without marking
+    ///   crashed — the server is still healthy.
     pub async fn call_tool(
         &self,
         tool: &str,
@@ -164,8 +235,14 @@ impl McpServerConnection {
         match tokio::time::timeout(timeout, rs.call_tool(params)).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => {
-                self.mark_crashed(None).await;
-                Err(McpError::Service(e.to_string()))
+                let msg = e.to_string();
+                match classify_rmcp_error(&msg) {
+                    ErrorClass::Transport => {
+                        self.mark_crashed(None).await;
+                        Err(McpError::Transport(msg))
+                    },
+                    ErrorClass::Service => Err(McpError::Service(msg)),
+                }
             },
             Err(_elapsed) => Err(McpError::Timeout(timeout)),
         }
@@ -210,6 +287,33 @@ mod tests {
             Duration::from_millis(100),
             true,
         )
+    }
+
+    #[test]
+    fn classify_transport_markers() {
+        assert_eq!(classify_rmcp_error("broken pipe"), ErrorClass::Transport);
+        assert_eq!(
+            classify_rmcp_error("connection closed"),
+            ErrorClass::Transport
+        );
+        assert_eq!(
+            classify_rmcp_error("unexpected end of stream"),
+            ErrorClass::Transport
+        );
+        assert_eq!(classify_rmcp_error("EOF"), ErrorClass::Transport);
+    }
+
+    #[test]
+    fn classify_service_default() {
+        assert_eq!(classify_rmcp_error("tool not found"), ErrorClass::Service);
+        assert_eq!(
+            classify_rmcp_error("invalid arguments"),
+            ErrorClass::Service
+        );
+        assert_eq!(
+            classify_rmcp_error("permission denied by server policy"),
+            ErrorClass::Service
+        );
     }
 
     #[tokio::test]
