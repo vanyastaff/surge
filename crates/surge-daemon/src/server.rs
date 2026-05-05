@@ -269,8 +269,13 @@ async fn dispatch(
                         .await
                         .remove(&run_id)
                         .expect("just inserted; only the drain task removes other entries");
-                    broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
+                    // Register the per-run broadcast BEFORE publishing
+                    // RunAccepted so a client subscribed to global
+                    // daemon events that races a Subscribe(run_id)
+                    // against this dispatch finds the per-run channel
+                    // already in the registry.
                     let publisher = broadcast.register(run_id).await;
+                    broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     let admission_for_completion = admission.clone();
                     let broadcast_for_completion = broadcast.clone();
                     match facade
@@ -310,15 +315,33 @@ async fn dispatch(
                     // same admitted-arm logic (broadcast.register,
                     // facade.start_run, spawn_forward_task).
                     //
-                    // Known limitation: the original IPC connection
-                    // that received `StartRunQueued` is NOT
-                    // auto-resubscribed to the eventually-admitted
-                    // run's events. Even re-issuing `Subscribe` after
-                    // observing `GlobalDaemonEvent::RunAccepted` is
-                    // racy today because the existing dispatch
-                    // publishes `RunAccepted` before
-                    // `BroadcastRegistry::register`; that ordering
-                    // race is out-of-scope for this PR.
+                    // Known limitations of observing queued runs from
+                    // outside today:
+                    //
+                    //   * The original IPC connection that received
+                    //     `StartRunQueued` is NOT auto-resubscribed
+                    //     to the eventually-admitted run's events.
+                    //   * `GlobalDaemonEvent` (incl. `RunAccepted`)
+                    //     is published into the broadcast registry
+                    //     but no server-side code currently forwards
+                    //     it to wire clients, so subscribing to
+                    //     "global" events is not actually exposed.
+                    //   * `surge engine watch <run_id> --daemon`
+                    //     also can't help yet: a queued run has no
+                    //     per-run DB on disk (the persistence
+                    //     scaffolding is created by `Engine::start_run`
+                    //     when admission lands), so the disk-replay
+                    //     fallback errors out with a not-found
+                    //     condition rather than waiting.
+                    //
+                    // For now, callers that care should poll the
+                    // run id (e.g., re-issue `watch --daemon` after
+                    // admission lands) or re-architect around
+                    // `start_run` returning a handle synchronously.
+                    // A follow-up polish can expose queue state via
+                    // `ListRuns` (`RunStatus::Awaiting` already
+                    // exists in the wire schema) and add a global-
+                    // event forwarder.
                     Some(DaemonResponse::StartRunQueued {
                         request_id,
                         run_id,
@@ -514,8 +537,11 @@ async fn drain_one_pass(
             admission.notify_completed(run_id).await;
             continue;
         };
-        broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
+        // Register the per-run broadcast BEFORE publishing
+        // RunAccepted (mirrors the dispatch::StartRun Admitted arm
+        // ordering — see the comment there for the race).
         let publisher = broadcast.register(run_id).await;
+        broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
         let admission_for_completion = admission.clone();
         let broadcast_for_completion = broadcast.clone();
         match facade

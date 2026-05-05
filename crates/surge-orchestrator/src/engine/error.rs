@@ -39,6 +39,17 @@ pub enum EngineError {
     #[error("run not found: {0}")]
     RunNotFound(RunId),
 
+    /// The daemon has no per-run channel registered for this `RunId`.
+    /// Returned by daemon paths like `Subscribe`. This does NOT
+    /// distinguish "the run terminated already" from "the run was
+    /// never hosted here" or "the run is queued and not yet
+    /// admitted" — all three present as the same condition on the
+    /// wire. Useful so callers (e.g., the CLI's `watch` command) can
+    /// branch into a fallback path (such as disk-replay) instead of
+    /// propagating an opaque `Internal` error.
+    #[error("run not currently active in daemon: {0}")]
+    RunNotActive(RunId),
+
     /// An unexpected internal condition occurred.
     #[error("internal engine error: {0}")]
     Internal(String),

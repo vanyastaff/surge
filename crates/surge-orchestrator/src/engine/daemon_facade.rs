@@ -452,8 +452,20 @@ impl DaemonEngineFacade {
         };
         match resp {
             DaemonResponse::SubscribeOk { .. } => Ok(event_rx),
-            DaemonResponse::Error { code, message, .. } => {
+            DaemonResponse::Error {
+                code: ErrorCode::RunNotActive,
+                ..
+            } => {
                 // Clean up the locally-registered channel since we never got Ok.
+                self.inner
+                    .event_dispatcher
+                    .per_run
+                    .lock()
+                    .await
+                    .remove(&run_id);
+                Err(EngineError::RunNotActive(run_id))
+            },
+            DaemonResponse::Error { code, message, .. } => {
                 self.inner
                     .event_dispatcher
                     .per_run
