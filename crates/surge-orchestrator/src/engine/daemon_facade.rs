@@ -18,7 +18,7 @@ use crate::engine::ipc::{
 use async_trait::async_trait;
 use interprocess::local_socket::tokio::prelude::*;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use surge_core::graph::Graph;
@@ -54,7 +54,7 @@ impl DaemonClient {
     /// recorded in `~/.surge/daemon/daemon.sock` (the discovery
     /// helper resolving the file→pipe-name lives in PR 3).
     pub async fn connect(socket_path: PathBuf) -> Result<Arc<Self>, EngineError> {
-        let name = socket_name_from_path(&socket_path)
+        let name = crate::engine::ipc::local_socket_name_from_path(&socket_path)
             .map_err(|e| EngineError::Internal(format!("socket name: {e}")))?;
         let stream = LocalSocketStream::connect(name).await.map_err(|e| {
             EngineError::Internal(format!("connect {}: {e}", socket_path.display()))
@@ -180,17 +180,6 @@ impl DaemonClient {
         rx.await
             .map_err(|_| EngineError::Internal("daemon dropped before response".into()))
     }
-}
-
-/// Helper to convert a filesystem path into the platform-specific
-/// [`interprocess::local_socket::Name`] that interprocess expects. Uses the
-/// `GenericFilePath` namespace (i.e., the path is interpreted as a
-/// filesystem entry on every platform).
-fn socket_name_from_path(
-    path: &Path,
-) -> Result<interprocess::local_socket::Name<'_>, std::io::Error> {
-    use interprocess::local_socket::ToFsName;
-    path.to_fs_name::<interprocess::local_socket::GenericFilePath>()
 }
 
 /// Public [`EngineFacade`] surface — wraps the [`DaemonClient`].

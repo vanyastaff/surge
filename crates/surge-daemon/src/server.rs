@@ -10,7 +10,7 @@ use crate::broadcast::BroadcastRegistry;
 use crate::error::DaemonError;
 use interprocess::local_socket::tokio::prelude::*;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -43,7 +43,8 @@ pub async fn run(
     let admission = Arc::new(AdmissionController::new(cfg.max_active));
     let broadcast = Arc::new(BroadcastRegistry::new());
 
-    let name = path_to_socket_name(&cfg.socket_path)?;
+    let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&cfg.socket_path)
+        .map_err(DaemonError::Io)?;
     let listener = ListenerOptions::new()
         .name(name)
         .create_tokio()
@@ -86,12 +87,6 @@ pub async fn run(
         }
     }
     Ok(())
-}
-
-fn path_to_socket_name(path: &Path) -> Result<interprocess::local_socket::Name<'_>, DaemonError> {
-    use interprocess::local_socket::ToFsName;
-    path.to_fs_name::<interprocess::local_socket::GenericFilePath>()
-        .map_err(DaemonError::Io)
 }
 
 /// Per-connection state: tracks which runs the client subscribed to,
