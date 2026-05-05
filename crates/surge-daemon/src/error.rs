@@ -49,8 +49,8 @@ impl DaemonError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Io(_) | Self::Framing(_) => ErrorCode::BadRequest,
-            Self::Pidfile(_) | Self::ClientGone => ErrorCode::Internal,
+            Self::Framing(_) => ErrorCode::BadRequest,
+            Self::Io(_) | Self::Pidfile(_) | Self::ClientGone => ErrorCode::Internal,
             Self::AdmissionFull { .. } => ErrorCode::AdmissionFull,
             Self::RunNotActive(_) => ErrorCode::RunNotActive,
             Self::Storage(_) => ErrorCode::StorageError,

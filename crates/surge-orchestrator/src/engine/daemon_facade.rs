@@ -85,16 +85,27 @@ impl DaemonClient {
                     },
                     Ok(Some(InboundServerFrame::Event(ev))) => match ev {
                         DaemonEvent::PerRun { run_id, event } => {
-                            if let EngineRunEvent::Terminal(outcome) = &event {
-                                if let Some(tx) =
-                                    dispatcher_for_task.completion.lock().await.remove(&run_id)
-                                {
-                                    let _ = tx.send(outcome.clone());
+                            let is_terminal = matches!(event, EngineRunEvent::Terminal(_));
+                            if is_terminal {
+                                if let EngineRunEvent::Terminal(outcome) = &event {
+                                    if let Some(tx) =
+                                        dispatcher_for_task.completion.lock().await.remove(&run_id)
+                                    {
+                                        let _ = tx.send(outcome.clone());
+                                    }
                                 }
                             }
-                            if let Some(tx) = dispatcher_for_task.per_run.lock().await.get(&run_id)
+                            // Forward event to per-run broadcast (if subscribed).
                             {
-                                let _ = tx.send(event);
+                                let map = dispatcher_for_task.per_run.lock().await;
+                                if let Some(tx) = map.get(&run_id) {
+                                    let _ = tx.send(event);
+                                }
+                            }
+                            // After Terminal: remove the per_run sender so subscribers see
+                            // a closed channel and the map doesn't accumulate stale entries.
+                            if is_terminal {
+                                dispatcher_for_task.per_run.lock().await.remove(&run_id);
                             }
                         },
                         DaemonEvent::Global(g) => {
@@ -107,6 +118,21 @@ impl DaemonClient {
                         break;
                     },
                 }
+            }
+            // Fix 1: drain all pending maps so in-flight futures resolve
+            // gracefully (via channel-closed error) instead of hanging forever.
+            tracing::info!("daemon-client read loop ended; draining pending+completion maps");
+            {
+                let mut p = pending_for_task.lock().await;
+                p.clear();
+            }
+            {
+                let mut c = dispatcher_for_task.completion.lock().await;
+                c.clear();
+            }
+            {
+                let mut r = dispatcher_for_task.per_run.lock().await;
+                r.clear();
             }
         });
 
@@ -132,13 +158,25 @@ impl DaemonClient {
         let req = build(id);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
-        {
+
+        let write_result = async {
             let mut w = self.write_half.lock().await;
             write_frame(&mut *w, &req)
                 .await
                 .map_err(|e| EngineError::Internal(format!("write_frame: {e}")))?;
-            w.flush().await.ok();
+            w.flush()
+                .await
+                .map_err(|e| EngineError::Internal(format!("flush: {e}")))?;
+            Ok::<(), EngineError>(())
         }
+        .await;
+
+        if let Err(e) = write_result {
+            // Remove the orphaned pending entry — receiver would otherwise hang.
+            self.pending.lock().await.remove(&id);
+            return Err(e);
+        }
+
         rx.await
             .map_err(|_| EngineError::Internal("daemon dropped before response".into()))
     }
@@ -224,9 +262,18 @@ impl EngineFacade for DaemonEngineFacade {
             .inner
             .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
             .await?;
-        if let DaemonResponse::Error { code, message, .. } = sub {
-            self.cleanup_run_channels(run_id).await;
-            return Err(map_error(code, &message));
+        match sub {
+            DaemonResponse::SubscribeOk { .. } => {},
+            DaemonResponse::Error { code, message, .. } => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(map_error(code, &message));
+            },
+            other => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(EngineError::Internal(format!(
+                    "unexpected response to Subscribe: {other:?}"
+                )));
+            },
         }
 
         let join: tokio::task::JoinHandle<RunOutcome> = tokio::spawn(async move {
@@ -288,9 +335,18 @@ impl EngineFacade for DaemonEngineFacade {
             .inner
             .rpc(|request_id| DaemonRequest::Subscribe { request_id, run_id })
             .await?;
-        if let DaemonResponse::Error { code, message, .. } = sub {
-            self.cleanup_run_channels(run_id).await;
-            return Err(map_error(code, &message));
+        match sub {
+            DaemonResponse::SubscribeOk { .. } => {},
+            DaemonResponse::Error { code, message, .. } => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(map_error(code, &message));
+            },
+            other => {
+                self.cleanup_run_channels(run_id).await;
+                return Err(EngineError::Internal(format!(
+                    "unexpected response to Subscribe: {other:?}"
+                )));
+            },
         }
 
         let join: tokio::task::JoinHandle<RunOutcome> = tokio::spawn(async move {

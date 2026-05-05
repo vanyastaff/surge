@@ -77,17 +77,42 @@ pub fn is_alive(pid: u32) -> bool {
 /// Acquire the daemon lock by writing our PID. If a stale PID file
 /// exists (process not alive), it is overwritten; if the PID is alive,
 /// returns [`PidfileError::AlreadyRunning`].
+///
+/// Uses `OpenOptions::create_new` for the first attempt so that two
+/// concurrent cold-starts cannot both write the file (atomic on all
+/// major OSes including Windows). The stale-recovery fallback still
+/// has a small race window, but that case (two processes racing after
+/// a previous unclean exit) is rare and M7 documents single-user
+/// operation as the constraint.
 pub fn acquire_lock(pid: u32) -> Result<(), PidfileError> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
     let dir = daemon_dir()?;
     std::fs::create_dir_all(&dir)?;
     let path = pid_path()?;
-    if let Some(existing) = read_pid(&path)? {
-        if is_alive(existing) {
-            return Err(PidfileError::AlreadyRunning(existing));
-        }
+
+    // Try atomic create_new first.
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => {
+            f.write_all(pid.to_string().as_bytes())?;
+            Ok(())
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // File exists — check if it's stale.
+            match read_pid(&path)? {
+                Some(existing) if is_alive(existing) => Err(PidfileError::AlreadyRunning(existing)),
+                _ => {
+                    // Stale — overwrite explicitly. Race window narrowed
+                    // (only racing two stale-recovery attempts, which is
+                    // far less common than two cold starts).
+                    std::fs::write(&path, pid.to_string())?;
+                    Ok(())
+                },
+            }
+        },
+        Err(e) => Err(PidfileError::Io(e)),
     }
-    std::fs::write(&path, pid.to_string())?;
-    Ok(())
 }
 
 /// Release the lock by removing the PID file. Best-effort.
