@@ -10,6 +10,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 // Modules added incrementally in Phase 3+.
+pub mod admission;
 pub mod error;
 pub mod pidfile;
 
