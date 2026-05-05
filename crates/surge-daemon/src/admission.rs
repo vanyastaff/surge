@@ -82,6 +82,20 @@ impl AdmissionController {
         None
     }
 
+    /// Like [`try_admit`], but rejects (returns `false`) instead of
+    /// queueing when the cap is hit. Used by operations like
+    /// `resume_run` that don't want to be deferred — the caller
+    /// should propagate an error to the client and let them retry.
+    pub async fn try_admit_no_queue(&self, run_id: RunId) -> bool {
+        let mut inner = self.inner.lock().await;
+        if inner.active.len() < self.max_active {
+            inner.active.insert(run_id);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Snapshot counts for `surge daemon status`.
     pub async fn snapshot(&self) -> AdmissionSnapshot {
         let inner = self.inner.lock().await;
@@ -152,6 +166,18 @@ mod tests {
         a.notify_completed(r1).await;
         let popped = a.pop_queued().await;
         assert_eq!(popped, Some(r2));
+    }
+
+    #[tokio::test]
+    async fn try_admit_no_queue_rejects_at_cap() {
+        let a = AdmissionController::new(1);
+        let r1 = RunId::new();
+        let r2 = RunId::new();
+        assert!(a.try_admit_no_queue(r1).await);
+        assert!(!a.try_admit_no_queue(r2).await);
+        // No queueing happened — snapshot.queued should be 0.
+        let s = a.snapshot().await;
+        assert_eq!(s.queued, 0);
     }
 
     #[tokio::test]

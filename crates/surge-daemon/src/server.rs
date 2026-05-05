@@ -253,6 +253,17 @@ async fn dispatch(
             run_id,
             worktree_path,
         } => {
+            // Resume must consume an admission slot just like a fresh
+            // StartRun, otherwise users can exceed max_active by replaying
+            // resumes. We do NOT queue resumes (the user expects the run to
+            // come back live); if the cap is hit, return AdmissionFull.
+            if !admission.try_admit_no_queue(run_id).await {
+                return Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::AdmissionFull,
+                    message: format!("admission cap reached; cannot resume {run_id} now"),
+                });
+            }
             let publisher = broadcast.register(run_id).await;
             let admission_for_completion = admission.clone();
             let broadcast_for_completion = broadcast.clone();
@@ -269,6 +280,7 @@ async fn dispatch(
                 },
                 Err(e) => {
                     broadcast.deregister(run_id).await;
+                    admission.notify_completed(run_id).await;
                     Some(DaemonResponse::Error {
                         request_id,
                         code: ErrorCode::EngineError,
