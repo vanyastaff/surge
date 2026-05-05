@@ -83,14 +83,30 @@ fn main() -> std::process::ExitCode {
                 },
             };
 
+        // F6: WorktreeToolDispatcher uses `self.worktree_root` (the constructor
+        // argument) for all path operations.  In the daemon, every run supplies
+        // its own isolated git worktree via `start_run`'s `worktree_path`
+        // argument, but the engine currently roots the dispatcher at the path
+        // provided here rather than at the per-run path.  This is an
+        // architectural gap: the dispatcher needs to be re-rooted per run
+        // (tracked as a follow-up TODO).  Passing `current_dir()` is the
+        // status-quo behaviour; it will produce incorrect paths for any run
+        // whose worktree differs from the daemon's cwd.
+        //
+        // TODO: per-run WorktreeToolDispatcher rooted at the run's worktree.
         let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
             surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
                 std::env::current_dir().unwrap_or_default(),
             ),
         );
 
-        let notifier: Arc<dyn surge_notify::NotifyDeliverer> =
-            Arc::new(surge_notify::MultiplexingNotifier::new());
+        // F3: match the CLI's default notifier — Desktop + Webhook deliverers wired.
+        // A bare MultiplexingNotifier silently drops all notifications.
+        let notifier: Arc<dyn surge_notify::NotifyDeliverer> = Arc::new(
+            surge_notify::MultiplexingNotifier::new()
+                .with_desktop(Arc::new(surge_notify::DesktopDeliverer::new()))
+                .with_webhook(Arc::new(surge_notify::WebhookDeliverer::new())),
+        );
 
         let engine = Arc::new(Engine::new_with_notifier(
             bridge,
@@ -112,12 +128,17 @@ fn main() -> std::process::ExitCode {
             max_active: args.max_active,
             socket_path: socket_path.clone(),
         };
-        let shutdown_for_server = shutdown.clone();
         let server_handle = tokio::spawn({
             let facade = facade.clone();
+            let shutdown_for_server = shutdown.clone();
+            // F1: keep a second clone so that a server error (e.g. bind failure)
+            // cancels the outer shutdown token — otherwise lifecycle::drain
+            // waits forever holding the pid lock.
+            let shutdown_for_cancel = shutdown.clone();
             async move {
                 if let Err(e) = run_server(server_cfg, facade, shutdown_for_server).await {
-                    tracing::error!(err = %e, "server exited with error");
+                    tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
+                    shutdown_for_cancel.cancel();
                 }
             }
         });

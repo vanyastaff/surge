@@ -21,7 +21,8 @@ pub enum DaemonCommands {
     },
     /// Stop the daemon (graceful drain).
     Stop {
-        /// Skip the drain — send SIGKILL after 1s.
+        /// Skip the graceful drain and terminate the daemon
+        /// immediately (Unix: SIGKILL; Windows: `taskkill /F`).
         #[arg(long)]
         force: bool,
     },

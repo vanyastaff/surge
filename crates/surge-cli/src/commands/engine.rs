@@ -30,7 +30,9 @@ pub enum EngineCommands {
     Watch {
         /// `RunId` (ULID).
         run_id: String,
-        /// Use the daemon's live event stream instead of disk-tail.
+        /// Ensure the daemon is running before tailing. (Live streaming
+        /// via Subscribe is M7+ polish; this currently still uses the
+        /// disk-tail mode.)
         #[arg(long)]
         daemon: bool,
     },

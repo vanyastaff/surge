@@ -9,7 +9,7 @@ use crate::admission::{AdmissionController, AdmissionDecision};
 use crate::broadcast::BroadcastRegistry;
 use crate::error::DaemonError;
 use interprocess::local_socket::tokio::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_core::id::RunId;
@@ -42,6 +42,15 @@ pub async fn run(
 
     let admission = Arc::new(AdmissionController::new(cfg.max_active));
     let broadcast = Arc::new(BroadcastRegistry::new());
+
+    // F2: Unlink any stale socket file from a previous unclean exit.
+    // On Windows, the named pipe doesn't live on the filesystem so this is a no-op.
+    #[cfg(unix)]
+    {
+        if cfg.socket_path.exists() {
+            let _ = std::fs::remove_file(&cfg.socket_path);
+        }
+    }
 
     let name = surge_orchestrator::engine::ipc::local_socket_name_from_path(&cfg.socket_path)
         .map_err(DaemonError::Io)?;
@@ -89,11 +98,14 @@ pub async fn run(
     Ok(())
 }
 
-/// Per-connection state: tracks which runs the client subscribed to,
-/// so we can identify subscriptions on disconnect (per-run forwarders
-/// terminate naturally when their write target closes).
+/// Per-connection state: tracks which runs the client subscribed to
+/// and the `JoinHandle` of each per-run forwarder task so that
+/// `Unsubscribe` (and disconnect cleanup) can abort them promptly.
 struct ConnState {
     subscriptions: HashSet<RunId>,
+    /// Per-run forwarder task handles. Populated by `Subscribe`;
+    /// removed (and aborted) by `Unsubscribe` or connection teardown.
+    forwarders: HashMap<RunId, tokio::task::JoinHandle<()>>,
 }
 
 async fn handle_connection(
@@ -108,6 +120,7 @@ async fn handle_connection(
     let writer: Arc<Mutex<_>> = Arc::new(Mutex::new(write_half));
     let state = Arc::new(Mutex::new(ConnState {
         subscriptions: HashSet::new(),
+        forwarders: HashMap::new(),
     }));
 
     loop {
@@ -133,6 +146,7 @@ async fn handle_connection(
                             &broadcast,
                             &state,
                             &writer,
+                            &shutdown,
                         )
                         .await;
                         if let Some(r) = resp {
@@ -152,6 +166,13 @@ async fn handle_connection(
             }
         }
     }
+
+    // F5: Cleanup — abort any forwarder tasks the client left open.
+    let mut s = state.lock().await;
+    for (_, h) in s.forwarders.drain() {
+        h.abort();
+    }
+
     Ok(())
 }
 
@@ -163,6 +184,7 @@ async fn dispatch(
     broadcast: &Arc<BroadcastRegistry>,
     state: &Arc<Mutex<ConnState>>,
     writer: &Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
+    shutdown: &CancellationToken,
 ) -> Option<DaemonResponse> {
     match req {
         DaemonRequest::Ping { request_id } => Some(DaemonResponse::PingOk {
@@ -296,12 +318,15 @@ async fn dispatch(
             let rx = broadcast.subscribe(run_id).await;
             match rx {
                 Some(rx) => {
+                    let writer_for_task = writer.clone();
+                    // F5: store the JoinHandle so Unsubscribe can abort it.
+                    let handle =
+                        tokio::spawn(forward_per_run_to_client(run_id, rx, writer_for_task));
                     {
                         let mut s = state.lock().await;
                         s.subscriptions.insert(run_id);
+                        s.forwarders.insert(run_id, handle);
                     }
-                    let writer_for_task = writer.clone();
-                    tokio::spawn(forward_per_run_to_client(run_id, rx, writer_for_task));
                     Some(DaemonResponse::SubscribeOk { request_id })
                 },
                 None => Some(DaemonResponse::Error {
@@ -315,13 +340,17 @@ async fn dispatch(
         DaemonRequest::Unsubscribe { request_id, run_id } => {
             let mut s = state.lock().await;
             s.subscriptions.remove(&run_id);
+            // F5: abort the per-run forwarder task.
+            if let Some(h) = s.forwarders.remove(&run_id) {
+                h.abort();
+            }
             Some(DaemonResponse::UnsubscribeOk { request_id })
         },
 
         DaemonRequest::Shutdown { request_id } => {
-            // Lifecycle (Phase 6.2) handles the actual signal cancel;
-            // we just acknowledge here. The lifecycle drain closes
-            // connections shortly after.
+            // F4: actually cancel the shutdown token so the daemon exits.
+            tracing::info!("Shutdown IPC received; cancelling shutdown token");
+            shutdown.cancel();
             Some(DaemonResponse::ShutdownOk { request_id })
         },
 
