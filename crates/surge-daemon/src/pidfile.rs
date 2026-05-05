@@ -59,7 +59,7 @@ pub fn read_pid(path: &Path) -> Result<Option<u32>, PidfileError> {
                 .parse::<u32>()
                 .map(Some)
                 .map_err(|_| PidfileError::Malformed(trimmed.to_string()))
-        }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(PidfileError::Io(e)),
     }
