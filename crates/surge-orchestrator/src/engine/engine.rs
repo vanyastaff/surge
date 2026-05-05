@@ -20,6 +20,12 @@ pub struct Engine {
     storage: Arc<surge_persistence::runs::Storage>,
     tool_dispatcher: Arc<dyn ToolDispatcher>,
     notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
+    /// Optional MCP registry shared across all runs hosted by this engine.
+    /// `None` for the M6 in-process default; `Some` for daemon mode where
+    /// the daemon constructed a registry from `RunConfig::mcp_servers`.
+    /// Per-stage agent execution wraps the engine dispatcher with
+    /// `RoutingToolDispatcher` when this is `Some`.
+    mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
     config: Arc<EngineConfig>,
     /// Active runs indexed by `RunId`. Each entry holds the per-run resolution
     /// senders + cancellation token so engine-level methods (resolve, stop)
@@ -67,11 +73,35 @@ impl Engine {
         notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
         config: EngineConfig,
     ) -> Self {
+        Self::new_with_mcp(
+            bridge,
+            storage,
+            tool_dispatcher,
+            notify_deliverer,
+            None,
+            config,
+        )
+    }
+
+    /// Construct with an MCP registry. The registry is shared across
+    /// all runs hosted by this engine. M7 daemon uses this constructor
+    /// to wire user-configured MCP servers; in-process M6-style CLI
+    /// stays on `new` / `new_with_notifier` (no MCP).
+    #[must_use]
+    pub fn new_with_mcp(
+        bridge: Arc<dyn BridgeFacade>,
+        storage: Arc<surge_persistence::runs::Storage>,
+        tool_dispatcher: Arc<dyn ToolDispatcher>,
+        notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
+        mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
+        config: EngineConfig,
+    ) -> Self {
         Self {
             bridge,
             storage,
             tool_dispatcher,
             notify_deliverer,
+            mcp_registry,
             config: Arc::new(config),
             runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
@@ -171,8 +201,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
-            mcp_registry: None,
-            mcp_servers: Vec::new(),
+            mcp_registry: self.mcp_registry.clone(),
+            mcp_servers: Vec::new(), // populated from RunConfig::mcp_servers in a future task
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -274,8 +304,8 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
-            mcp_registry: None,
-            mcp_servers: Vec::new(),
+            mcp_registry: self.mcp_registry.clone(),
+            mcp_servers: Vec::new(), // populated from RunConfig::mcp_servers in a future task
         };
 
         let runs_for_cleanup = self.runs.clone();

@@ -100,11 +100,12 @@ fn main() -> std::process::ExitCode {
                 .with_webhook(Arc::new(surge_notify::WebhookDeliverer::new())),
         );
 
-        let engine = Arc::new(Engine::new_with_notifier(
+        let engine = Arc::new(Engine::new_with_mcp(
             bridge,
             storage,
             tool_dispatcher,
             notifier,
+            None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
             EngineConfig::default(),
         ));
 
