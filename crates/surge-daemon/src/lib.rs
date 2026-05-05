@@ -14,5 +14,7 @@ pub mod admission;
 pub mod broadcast;
 pub mod error;
 pub mod pidfile;
+pub mod server;
 
 pub use error::DaemonError;
+pub use server::{ServerConfig, run as run_server};
