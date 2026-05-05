@@ -18,5 +18,14 @@ rmcp.workspace = true
 
 surge-core.workspace = true
 
+[features]
+mock-server = []
+
+[[example]]
+name = "mock_mcp_server"
+path = "tests/fixtures/mock_mcp_server.rs"
+required-features = ["mock-server"]
+
 [dev-dependencies]
 tempfile.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }

@@ -73,6 +73,18 @@ pub struct DeclaredTool {
     pub input_schema: serde_json::Value,
 }
 
+impl DeclaredTool {
+    /// Construct a new [`DeclaredTool`].
+    #[must_use]
+    pub fn new(name: String, description: Option<String>, input_schema: serde_json::Value) -> Self {
+        Self {
+            name,
+            description,
+            input_schema,
+        }
+    }
+}
+
 /// Routes non-special ACP tool calls to implementations. Engine calls
 /// `dispatch` for every `ToolCall` whose name is not `report_stage_outcome`
 /// or `request_human_input` (those are engine-handled).
