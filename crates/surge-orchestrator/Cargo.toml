@@ -36,6 +36,7 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 tiny_http = { workspace = true }
 surge-notify = { workspace = true }
+insta = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"

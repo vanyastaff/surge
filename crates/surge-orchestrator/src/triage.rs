@@ -522,4 +522,67 @@ mod tests {
             "system prompt should contain the actual instruction text; got: {extracted}"
         );
     }
+
+    #[test]
+    fn render_prompt_snapshot() {
+        use chrono::TimeZone;
+        let task = TaskDetails {
+            task_id: TaskId::try_new("github_issues:test/repo#42").unwrap(),
+            source_id: "github_issues:test/repo".into(),
+            title: "Add tracing to auth middleware".into(),
+            description: "We have no observability into the auth flow.".into(),
+            status: "open".into(),
+            labels: vec!["surge:enabled".into(), "area/auth".into()],
+            url: "https://github.com/test/repo/issues/42".into(),
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 10, 0, 0).unwrap(),
+            updated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 5, 12, 0, 0).unwrap(),
+            assignee: None,
+            raw_payload: serde_json::json!({}),
+        };
+        let candidates = vec![TaskSummary {
+            task_id: TaskId::try_new("github_issues:test/repo#10").unwrap(),
+            title: "Update README".into(),
+            status: "open".into(),
+            url: "https://github.com/test/repo/issues/10".into(),
+            updated_at: chrono::Utc.with_ymd_and_hms(2026, 4, 28, 9, 0, 0).unwrap(),
+        }];
+        let active_runs = vec![ActiveRunSummary {
+            run_id: "01HXX0000000000000000RUN1".into(),
+            task_id: Some("github_issues:test/repo#9".into()),
+            status: "Running".into(),
+            started_at: "2026-05-06T10:00:00Z".into(),
+        }];
+        let input = TriageInput {
+            task,
+            candidates,
+            active_runs,
+        };
+        let rendered = super::render_prompt(&input, None);
+        insta::assert_snapshot!("triage_initial_prompt", rendered);
+    }
+
+    #[test]
+    fn render_prompt_with_feedback_includes_feedback_block() {
+        let task = TaskDetails {
+            task_id: TaskId::try_new("github_issues:t/r#1").unwrap(),
+            source_id: "github_issues:t/r".into(),
+            title: "x".into(),
+            description: "y".into(),
+            status: "open".into(),
+            labels: vec![],
+            url: "https://x".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            assignee: None,
+            raw_payload: serde_json::json!({}),
+        };
+        let input = TriageInput {
+            task,
+            candidates: vec![],
+            active_runs: vec![],
+        };
+        let rendered = super::render_prompt(&input, Some("previous attempt malformed JSON"));
+        assert!(rendered.contains("# Feedback from previous attempt"));
+        assert!(rendered.contains("previous attempt malformed JSON"));
+    }
 }
