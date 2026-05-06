@@ -29,6 +29,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0003-task-source-state",
         include_str!("migrations/registry/0003_task_source_state.sql"),
     ),
+    (
+        "registry-0004-inbox-callback-columns",
+        include_str!("migrations/registry/0004_inbox_callback_columns.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
