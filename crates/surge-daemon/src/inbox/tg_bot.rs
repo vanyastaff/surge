@@ -51,12 +51,109 @@ impl TgInboxBot {
 }
 
 async fn outgoing_loop(
-    _bot: Bot,
-    _chat_id: ChatId,
-    _storage: Arc<Storage>,
-    _shutdown: CancellationToken,
+    bot: Bot,
+    chat_id: ChatId,
+    storage: Arc<Storage>,
+    shutdown: CancellationToken,
 ) {
-    // Implemented in Task 5.3.
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = interval.tick() => {}
+        }
+        if let Err(e) = tick_outgoing(&bot, chat_id, &storage).await {
+            warn!(error = %e, "TgInboxBot outgoing tick failed");
+        }
+    }
+}
+
+async fn tick_outgoing(
+    bot: &Bot,
+    chat_id: ChatId,
+    storage: &Storage,
+) -> Result<(), String> {
+    use surge_notify::messages::InboxCardPayload;
+    use surge_notify::telegram::format_inbox_card;
+    use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+    let pending = {
+        let conn = storage
+            .acquire_registry_conn()
+            .map_err(|e| e.to_string())?;
+        inbox_queue::list_pending_telegram_deliveries(&conn).map_err(|e| e.to_string())?
+    };
+    for row in pending {
+        let payload: InboxCardPayload = match serde_json::from_str(&row.payload_json) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, seq = row.seq, "failed to parse delivery payload; skipping");
+                continue;
+            }
+        };
+        let rendered = format_inbox_card(&payload);
+        let kb_rows: Vec<Vec<InlineKeyboardButton>> = rendered
+            .keyboard
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|btn| {
+                        if btn.is_url {
+                            // Parse the URL string; if invalid, fall back to a callback
+                            // button with the URL as label so we don't crash the loop.
+                            match btn.data.parse::<reqwest::Url>() {
+                                Ok(url) => InlineKeyboardButton::url(btn.label.clone(), url),
+                                Err(_) => {
+                                    warn!(label = %btn.label, data = %btn.data, "URL button has invalid URL; rendering as text");
+                                    InlineKeyboardButton::callback(
+                                        btn.label.clone(),
+                                        format!("invalid_url:{}", btn.data),
+                                    )
+                                }
+                            }
+                        } else {
+                            InlineKeyboardButton::callback(btn.label.clone(), btn.data.clone())
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let kb = InlineKeyboardMarkup::new(kb_rows);
+        match bot
+            .send_message(chat_id, rendered.body)
+            .reply_markup(kb)
+            .await
+        {
+            Ok(msg) => {
+                let conn = storage
+                    .acquire_registry_conn()
+                    .map_err(|e| e.to_string())?;
+                inbox_queue::record_telegram_delivered(
+                    &conn,
+                    row.seq,
+                    chat_id.0,
+                    msg.id.0,
+                )
+                .map_err(|e| e.to_string())?;
+                let repo = surge_persistence::intake::IntakeRepo::new(&conn);
+                if let Err(e) = repo.set_tg_message_ref(&row.task_id, chat_id.0, msg.id.0) {
+                    // The row may not exist yet (if enqueue_inbox_card was skipped or
+                    // the row is in another state); log but don't fail the loop.
+                    warn!(error = %e, task_id = %row.task_id, "failed to persist tg message ref");
+                }
+                info!(
+                    task_id = %row.task_id,
+                    seq = row.seq,
+                    "InboxCard delivered to Telegram"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, task_id = %row.task_id, "Telegram send failed; will retry");
+                // Don't mark as delivered — next tick retries.
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn incoming_loop(bot: Bot, storage: Arc<Storage>) {
