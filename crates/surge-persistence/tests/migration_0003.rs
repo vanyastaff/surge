@@ -1,13 +1,11 @@
 //! Smoke test for 0003_task_source_state.sql
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 #[test]
 fn migration_0003_creates_task_source_state_table() {
     let conn = Connection::open_in_memory().unwrap();
-    let sql = include_str!(
-        "../src/runs/migrations/registry/0003_task_source_state.sql"
-    );
+    let sql = include_str!("../src/runs/migrations/registry/0003_task_source_state.sql");
     conn.execute_batch(sql).unwrap();
 
     let count: i64 = conn

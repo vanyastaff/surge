@@ -5,11 +5,11 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::sync::Arc;
 use std::time::Duration;
+use surge_intake::TaskSource;
 use surge_intake::router::{RouterOutput, TaskRouter};
 use surge_intake::testing::MockTaskSource;
 use surge_intake::types::{TaskEvent, TaskEventKind, TaskId};
-use surge_intake::TaskSource;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 fn ev(source_id: &str, task_id: &str) -> TaskEvent {
     TaskEvent {
@@ -23,10 +23,10 @@ fn ev(source_id: &str, task_id: &str) -> TaskEvent {
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);").unwrap();
-    let sql = include_str!(
-        "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
-    );
+    conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
+        .unwrap();
+    let sql =
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
     conn.execute_batch(sql).unwrap();
     conn
 }

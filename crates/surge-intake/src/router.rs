@@ -4,14 +4,14 @@
 //! Lives in `surge-intake` to keep storage + dedup + multiplexing close together.
 //! `surge-daemon` instantiates this with the configured sources at startup.
 
+use crate::Result;
 use crate::dedup::Tier1PreFilter;
 use crate::source::TaskSource;
 use crate::types::{TaskEvent, Tier1Decision};
-use crate::Result;
-use futures::stream::{select_all, StreamExt};
+use futures::stream::{StreamExt, select_all};
 use rusqlite::Connection;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{info, warn};
 
 /// Output of the router for downstream consumers (Triage Author dispatcher).
@@ -73,17 +73,17 @@ impl TaskRouter {
                         Tier1Decision::Pass => RouterOutput::Triage { event },
                         Tier1Decision::EarlyDuplicate { run_id } => {
                             RouterOutput::EarlyDuplicate { event, run_id }
-                        }
+                        },
                     };
 
                     if self.out_tx.send(out).await.is_err() {
                         info!("router output channel closed; stopping");
                         return Ok(());
                     }
-                }
+                },
                 Err(e) => {
                     warn!(error = %e, "task source emitted error; continuing");
-                }
+                },
             }
         }
 
@@ -102,7 +102,8 @@ mod tests {
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);").unwrap();
+        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
+            .unwrap();
         let sql = include_str!(
             "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
         );
@@ -148,7 +149,8 @@ mod tests {
         // Pre-seed an active run for task mock:t#9.
         {
             let c = conn.lock().await;
-            c.execute("INSERT INTO runs(id) VALUES ('run_active')", []).unwrap();
+            c.execute("INSERT INTO runs(id) VALUES ('run_active')", [])
+                .unwrap();
             IntakeRepo::new(&c)
                 .insert(&IntakeRow {
                     task_id: "mock:t#9".into(),

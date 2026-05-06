@@ -32,11 +32,11 @@ impl<'a> Tier1PreFilter<'a> {
             Ok(Some(run_id)) => {
                 trace!(?task_id, %run_id, "tier1 early-duplicate hit");
                 Ok(Tier1Decision::EarlyDuplicate { run_id })
-            }
+            },
             Ok(None) => {
                 trace!(?task_id, "tier1 pass");
                 Ok(Tier1Decision::Pass)
-            }
+            },
             Err(e) => Err(Error::Storage(e.to_string())),
         }
     }
@@ -52,7 +52,8 @@ mod tests {
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);").unwrap();
+        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
+            .unwrap();
         let sql = include_str!(
             "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
         );
@@ -97,9 +98,14 @@ mod tests {
     #[test]
     fn early_duplicate_when_active_run_exists() {
         let conn = db();
-        conn.execute("INSERT INTO runs(id) VALUES ('run_x')", []).unwrap();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_x')", [])
+            .unwrap();
         IntakeRepo::new(&conn)
-            .insert(&sample_row("linear:wsp1/A-2", Some("run_x"), TicketState::Active))
+            .insert(&sample_row(
+                "linear:wsp1/A-2",
+                Some("run_x"),
+                TicketState::Active,
+            ))
             .unwrap();
         let f = Tier1PreFilter::new(&conn);
         let dec = f.check(&sample_event("linear:wsp1/A-2")).unwrap();
@@ -114,9 +120,14 @@ mod tests {
     #[test]
     fn pass_when_existing_run_completed() {
         let conn = db();
-        conn.execute("INSERT INTO runs(id) VALUES ('run_done')", []).unwrap();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_done')", [])
+            .unwrap();
         IntakeRepo::new(&conn)
-            .insert(&sample_row("linear:wsp1/A-3", Some("run_done"), TicketState::Completed))
+            .insert(&sample_row(
+                "linear:wsp1/A-3",
+                Some("run_done"),
+                TicketState::Completed,
+            ))
             .unwrap();
         let f = Tier1PreFilter::new(&conn);
         let dec = f.check(&sample_event("linear:wsp1/A-3")).unwrap();

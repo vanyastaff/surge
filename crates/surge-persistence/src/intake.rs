@@ -4,7 +4,7 @@
 //! (read/write methods) is added in T2.4.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -182,11 +182,7 @@ impl<'a> IntakeRepo<'a> {
     }
 
     /// Update the lifecycle `state` of an existing row.
-    pub fn update_state(
-        &self,
-        task_id: &str,
-        state: TicketState,
-    ) -> rusqlite::Result<()> {
+    pub fn update_state(&self, task_id: &str, state: TicketState) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE ticket_index SET state = ?1 WHERE task_id = ?2",
             params![state.as_str(), task_id],
@@ -208,11 +204,7 @@ impl<'a> IntakeRepo<'a> {
 
         let state_str: String = r.get(7)?;
         let state: TicketState = state_str.parse().map_err(|e: String| {
-            rusqlite::Error::FromSqlConversionFailure(
-                7,
-                rusqlite::types::Type::Text,
-                e.into(),
-            )
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, e.into())
         })?;
         let first_seen: String = r.get(8)?;
         let last_seen: String = r.get(9)?;
@@ -246,9 +238,7 @@ impl<'a> IntakeRepo<'a> {
                 })?
                 .with_timezone(&Utc),
             snooze_until: snooze_until
-                .map(|s| {
-                    DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc))
-                })
+                .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
                 .transpose()
                 .map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -344,7 +334,8 @@ mod repo_tests {
 
     fn db_with_schema() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);").unwrap();
+        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
+            .unwrap();
         let sql = include_str!("runs/migrations/registry/0002_ticket_index.sql");
         conn.execute_batch(sql).unwrap();
         conn
@@ -381,7 +372,8 @@ mod repo_tests {
     fn lookup_active_run_returns_none_when_no_run_id() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        repo.insert(&sample_row("linear:wsp1/ABC-2", TicketState::Seen)).unwrap();
+        repo.insert(&sample_row("linear:wsp1/ABC-2", TicketState::Seen))
+            .unwrap();
         let res = repo.lookup_active_run("linear:wsp1/ABC-2").unwrap();
         assert_eq!(res, None);
     }
@@ -389,7 +381,8 @@ mod repo_tests {
     #[test]
     fn lookup_active_run_returns_run_id_when_active() {
         let conn = db_with_schema();
-        conn.execute("INSERT INTO runs(id) VALUES ('run_abc')", []).unwrap();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_abc')", [])
+            .unwrap();
         let repo = IntakeRepo::new(&conn);
         let mut row = sample_row("linear:wsp1/ABC-3", TicketState::Active);
         row.run_id = Some("run_abc".into());
@@ -401,7 +394,8 @@ mod repo_tests {
     #[test]
     fn lookup_active_run_excludes_completed() {
         let conn = db_with_schema();
-        conn.execute("INSERT INTO runs(id) VALUES ('run_done')", []).unwrap();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_done')", [])
+            .unwrap();
         let repo = IntakeRepo::new(&conn);
         let mut row = sample_row("linear:wsp1/ABC-4", TicketState::Completed);
         row.run_id = Some("run_done".into());
@@ -414,8 +408,10 @@ mod repo_tests {
     fn update_state_changes_row() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        repo.insert(&sample_row("linear:wsp1/ABC-5", TicketState::Seen)).unwrap();
-        repo.update_state("linear:wsp1/ABC-5", TicketState::Triaged).unwrap();
+        repo.insert(&sample_row("linear:wsp1/ABC-5", TicketState::Seen))
+            .unwrap();
+        repo.update_state("linear:wsp1/ABC-5", TicketState::Triaged)
+            .unwrap();
         let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Triaged);
     }

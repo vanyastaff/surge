@@ -47,7 +47,10 @@ impl MockTaskSource {
 
     /// Add a task that `fetch_task` and `list_open_tasks` should return.
     pub async fn put_task(&self, details: TaskDetails) {
-        self.open_tasks.lock().await.insert(details.task_id.clone(), details);
+        self.open_tasks
+            .lock()
+            .await
+            .insert(details.task_id.clone(), details);
     }
 
     /// Snapshot of comments posted via `post_comment`.

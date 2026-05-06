@@ -7,10 +7,8 @@ use rusqlite::Connection;
 fn migration_0002_creates_ticket_index_table() {
     let conn = Connection::open_in_memory().unwrap();
     // 0002 depends on `runs` table for FK; use minimal stub.
-    conn.execute_batch(
-        "CREATE TABLE runs (id TEXT PRIMARY KEY);",
-    )
-    .unwrap();
+    conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
+        .unwrap();
 
     let sql = include_str!("../src/runs/migrations/registry/0002_ticket_index.sql");
     conn.execute_batch(sql).unwrap();
@@ -37,7 +35,7 @@ fn migration_0002_creates_ticket_index_table() {
 #[test]
 fn migration_0002_fk_constraints_are_valid() {
     let conn = Connection::open_in_memory().unwrap();
-    
+
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
          CREATE TABLE runs (id TEXT PRIMARY KEY);",
@@ -53,7 +51,10 @@ fn migration_0002_fk_constraints_are_valid() {
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params!["t1", "src1", "github", "open", "2025-01-01", "2025-01-02", "nonexistent"],
     );
-    assert!(res.is_err(), "FK constraint should reject run_id that doesn't exist");
+    assert!(
+        res.is_err(),
+        "FK constraint should reject run_id that doesn't exist"
+    );
 
     // Verify self-referential FK works by first inserting a valid ticket
     conn.execute(
@@ -68,5 +69,8 @@ fn migration_0002_fk_constraints_are_valid() {
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params!["t2", "src2", "github", "open", "2025-01-01", "2025-01-02", "nonexistent"],
     );
-    assert!(res.is_err(), "FK constraint should reject duplicate_of that doesn't exist");
+    assert!(
+        res.is_err(),
+        "FK constraint should reject duplicate_of that doesn't exist"
+    );
 }

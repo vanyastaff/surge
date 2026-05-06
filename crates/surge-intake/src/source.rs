@@ -3,8 +3,8 @@
 //! Implementations live in this crate (Linear, GitHub Issues) or in
 //! downstream adapter crates (`surge-intake-discord`, etc.).
 
-use crate::types::{TaskDetails, TaskEvent, TaskId, TaskSummary};
 use crate::Result;
+use crate::types::{TaskDetails, TaskEvent, TaskId, TaskSummary};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 

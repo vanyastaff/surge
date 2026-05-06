@@ -37,7 +37,11 @@ pub fn top_by_keyword_overlap(
         .filter(|c| c.score > 0.0)
         .collect();
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(limit);
     scored
 }
@@ -57,11 +61,7 @@ fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
     }
     let inter = a.intersection(b).count() as f32;
     let union = a.union(b).count() as f32;
-    if union == 0.0 {
-        0.0
-    } else {
-        inter / union
-    }
+    if union == 0.0 { 0.0 } else { inter / union }
 }
 
 /// Input shape for keyword overlap selection.
@@ -142,7 +142,11 @@ mod tests {
             "Stack overflow when nesting exceeds 16",
         );
         let cs = vec![
-            cand("github:r#2", "Parser crash with deep nesting", "stack overflow on 20+"),
+            cand(
+                "github:r#2",
+                "Parser crash with deep nesting",
+                "stack overflow on 20+",
+            ),
             cand("github:r#3", "Add new logo", "ui design refresh"),
         ];
         let top = top_by_keyword_overlap(&target, &cs, 5);
@@ -163,7 +167,13 @@ mod tests {
     fn respects_limit() {
         let target = details("github:r#1", "deep nesting parser", "stack overflow");
         let cs: Vec<_> = (10..30)
-            .map(|i| cand(&format!("github:r#{i}"), "parser nesting stack overflow problem", "deep stack"))
+            .map(|i| {
+                cand(
+                    &format!("github:r#{i}"),
+                    "parser nesting stack overflow problem",
+                    "deep stack",
+                )
+            })
             .collect();
         let top = top_by_keyword_overlap(&target, &cs, 5);
         assert_eq!(top.len(), 5);

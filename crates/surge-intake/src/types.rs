@@ -202,7 +202,10 @@ mod triage_decision_tests {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskEventKind {
     NewTask,
-    StatusChanged { from: String, to: String },
+    StatusChanged {
+        from: String,
+        to: String,
+    },
     LabelsChanged {
         added: Vec<String>,
         removed: Vec<String>,
