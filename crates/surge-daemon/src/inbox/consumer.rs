@@ -187,9 +187,12 @@ impl InboxActionConsumer {
         }
 
         // Spawn TicketStateSync to follow the run.
-        // (state_sync.rs is Task 7.1; for this task we leave a TODO and
-        // do not import the state_sync module yet — Task 7.1 wires it.)
-        let _ = handle; // silence unused; Task 7.1 will use it.
+        let sync = crate::inbox::state_sync::TicketStateSync::new(
+            task_id.clone(),
+            Arc::clone(&self.storage),
+            Arc::clone(source),
+        );
+        tokio::spawn(sync.run(handle));
 
         info!(task_id = %task_id, run_id = %run_id, "inbox Start dispatched");
         Ok(())
