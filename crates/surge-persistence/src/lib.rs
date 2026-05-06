@@ -50,6 +50,9 @@ pub mod aggregator;
 /// Budget tracking and alerting
 pub mod budget;
 
+/// Storage layer for external ticket intake
+pub mod intake;
+
 /// Data models for token usage tracking
 pub mod models;
 
