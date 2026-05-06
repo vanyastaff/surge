@@ -108,12 +108,12 @@ impl DenyListSandbox {
                 reason: format!("tool '{tool}' is denied"),
             };
         }
-        if let Some(id) = mcp_id {
-            if self.denied_mcp_ids.contains(id) {
-                return SandboxDecision::Deny {
-                    reason: format!("mcp server '{id}' is denied"),
-                };
-            }
+        if let Some(id) = mcp_id
+            && self.denied_mcp_ids.contains(id)
+        {
+            return SandboxDecision::Deny {
+                reason: format!("mcp server '{id}' is denied"),
+            };
         }
         SandboxDecision::Allow
     }

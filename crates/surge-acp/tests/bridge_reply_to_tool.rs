@@ -136,10 +136,9 @@ async fn reply_to_valid_call_id_emits_tool_result_and_returns_ok() {
             call_id: cid,
             ..
         })) = timeout(Duration::from_millis(200), events.recv()).await
+            && session == sid
         {
-            if session == sid {
-                call_id = Some(cid);
-            }
+            call_id = Some(cid);
         }
     }
     let call_id = call_id.expect("HumanInputRequested with call_id within 5s");
@@ -165,14 +164,14 @@ async fn reply_to_valid_call_id_emits_tool_result_and_returns_ok() {
             call_id: cid,
             payload,
         })) = timeout(Duration::from_millis(200), events.recv()).await
+            && session == sid
+            && cid == call_id
         {
-            if session == sid && cid == call_id {
-                assert!(
-                    matches!(payload, ToolResultPayload::Ok { ref result_json } if result_json == "\"ack\""),
-                    "payload mismatch: {payload:?}",
-                );
-                saw_result = true;
-            }
+            assert!(
+                matches!(payload, ToolResultPayload::Ok { ref result_json } if result_json == "\"ack\""),
+                "payload mismatch: {payload:?}",
+            );
+            saw_result = true;
         }
     }
     assert!(saw_result, "expected BridgeEvent::ToolResult after reply");

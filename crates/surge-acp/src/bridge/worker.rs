@@ -1115,12 +1115,11 @@ pub(crate) async fn close_session_impl(
     // indirection. subprocess_waiter will call start_kill(), await child.wait(),
     // emit SessionEnded, and remove the session from the map.
     let mut killed = false;
-    if let Some(s) = sessions.borrow_mut().get_mut(&session) {
-        if let Some(kill_tx) = s.kill_tx.take() {
-            if kill_tx.send(()).is_ok() {
-                killed = true;
-            }
-        }
+    if let Some(s) = sessions.borrow_mut().get_mut(&session)
+        && let Some(kill_tx) = s.kill_tx.take()
+        && kill_tx.send(()).is_ok()
+    {
+        killed = true;
     }
 
     // Short-wait for subprocess_waiter to react (it emits SessionEnded once the

@@ -1,0 +1,13 @@
+# Pinned toolchain for surge.
+#
+# Keeps local development, IDE checks and CI on the same compiler so that
+# "green on my machine" matches "green on CI". Bump deliberately when we
+# want a newer toolchain — typically every 1–2 stable releases (~6–12 weeks).
+#
+# CI consumes this file via dtolnay/rust-toolchain@<version> (which we keep
+# in sync with `channel` below).
+
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

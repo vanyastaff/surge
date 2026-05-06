@@ -221,17 +221,17 @@ impl AcpBridge {
             .await
             .map_err(|e| BridgeError::CommandSendFailed(e.to_string()))?;
         rx.await.map_err(|_| BridgeError::ReplyDropped)?;
-        if let Some(t) = self.worker.take() {
-            if let Err(panic_payload) = t.join() {
-                // Worker panicked after sending the Shutdown reply. Cleanup
-                // already completed; this is a bug to investigate via logs but
-                // not a caller-actionable failure (shutdown succeeded as far as
-                // the caller can observe).
-                tracing::warn!(
-                    "bridge worker panicked after shutdown reply: {:?}",
-                    panic_payload
-                );
-            }
+        if let Some(t) = self.worker.take()
+            && let Err(panic_payload) = t.join()
+        {
+            // Worker panicked after sending the Shutdown reply. Cleanup
+            // already completed; this is a bug to investigate via logs but
+            // not a caller-actionable failure (shutdown succeeded as far as
+            // the caller can observe).
+            tracing::warn!(
+                "bridge worker panicked after shutdown reply: {:?}",
+                panic_payload
+            );
         }
         Ok(())
     }

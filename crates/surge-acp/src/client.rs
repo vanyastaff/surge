@@ -148,10 +148,10 @@ impl SurgeClient {
     /// silently dropped. This is intentional — event monitoring is optional
     /// and the hot path must not block on a missing receiver.
     fn emit_event(&self, event: SurgeEvent) {
-        if let Some(tx) = &self.event_tx {
-            if tx.send(event).is_err() {
-                tracing::trace!("no event subscribers — event dropped (this is normal)");
-            }
+        if let Some(tx) = &self.event_tx
+            && tx.send(event).is_err()
+        {
+            tracing::trace!("no event subscribers — event dropped (this is normal)");
         }
     }
 

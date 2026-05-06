@@ -110,16 +110,15 @@ pub fn next_node_after_with_counters(
     let count = counts.entry(edge_id.clone()).or_insert(0);
     *count += 1;
 
-    // No let-chains (workspace MSRV is 1.85; let-chains stable in 1.88).
-    if let Some(max) = max_traversals {
-        if *count > max {
-            return Err(RoutingError::ExceededTraversal {
-                edge: edge_id,
-                count: *count,
-                max,
-                action: on_max_exceeded,
-            });
-        }
+    if let Some(max) = max_traversals
+        && *count > max
+    {
+        return Err(RoutingError::ExceededTraversal {
+            edge: edge_id,
+            count: *count,
+            max,
+            action: on_max_exceeded,
+        });
     }
 
     Ok(edge_to)

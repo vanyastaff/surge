@@ -5,7 +5,7 @@
 # nebula monorepo (e.g. via a worktree) or against a standalone checkout
 # of just the surge crate (which is what CI does — see .github/workflows/ci.yml).
 
-msrv = "1.85"
+msrv = "1.95"
 
 # ── Test ergonomics ────────────────────────────────────────────────────────
 # Tests may panic / unwrap / dbg / print liberally — production code may not.
