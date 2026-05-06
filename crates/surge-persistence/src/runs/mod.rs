@@ -46,6 +46,7 @@ pub mod clock;
 pub mod config;
 pub mod error;
 pub(crate) mod file_lock;
+pub mod inbox_queue;
 mod macros;
 pub mod migrations;
 pub mod pragmas;
