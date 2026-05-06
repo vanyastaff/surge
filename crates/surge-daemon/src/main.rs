@@ -1,6 +1,7 @@
 //! `surge-daemon` binary entry point.
 
 use clap::Parser;
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -142,6 +143,7 @@ fn main() -> std::process::ExitCode {
         };
 
         let mut sources: Vec<Arc<dyn TaskSource>> = Vec::new();
+        let mut source_map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
         for src_cfg in &config.task_sources {
             match src_cfg {
                 TaskSourceConfig::Linear(l) => {
@@ -159,7 +161,11 @@ fn main() -> std::process::ExitCode {
                         label_filters: l.label_filters.clone(),
                     };
                     match LinearTaskSource::new(cfg) {
-                        Ok(s) => sources.push(Arc::new(s)),
+                        Ok(s) => {
+                            let arc: Arc<dyn TaskSource> = Arc::new(s);
+                            source_map.insert(arc.id().to_string(), Arc::clone(&arc));
+                            sources.push(arc);
+                        }
                         Err(e) => {
                             warn!(error = %e, source_id = %l.id, "failed to init Linear source");
                         }
@@ -188,7 +194,11 @@ fn main() -> std::process::ExitCode {
                         label_filters: g.label_filters.clone(),
                     };
                     match GitHubIssuesTaskSource::new(cfg) {
-                        Ok(s) => sources.push(Arc::new(s)),
+                        Ok(s) => {
+                            let arc: Arc<dyn TaskSource> = Arc::new(s);
+                            source_map.insert(arc.id().to_string(), Arc::clone(&arc));
+                            sources.push(arc);
+                        }
                         Err(e) => {
                             warn!(error = %e, source_id = %g.id, "failed to init GitHub source");
                         }
@@ -198,7 +208,7 @@ fn main() -> std::process::ExitCode {
         }
 
         if !sources.is_empty() {
-            spawn_task_router(sources).await;
+            spawn_task_router(sources, source_map).await;
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
@@ -242,7 +252,10 @@ fn surge_runs_dir() -> std::path::PathBuf {
 }
 
 /// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
-async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
+async fn spawn_task_router(
+    sources: Vec<Arc<dyn TaskSource>>,
+    source_map: HashMap<String, Arc<dyn TaskSource>>,
+) {
     use rusqlite::Connection;
 
     info!(
@@ -288,6 +301,7 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
     });
 
     // Consume router output and build InboxCard payloads (T9.3).
+    let source_map_for_consumer = Arc::new(source_map);
     tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             match out {
@@ -333,16 +347,30 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
                     let _ = msg; // silence "unused" lint until delivery wires up
                 },
                 surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
-                    // TODO Plan-C-polish: invoke source.post_comment with prefix
-                    // "Surge run #N: detected duplicate of active run …" and update
-                    // ticket_index state to TriagedDup. Requires resurfacing the
-                    // originating TaskSource instance via RouterOutput, which is
-                    // also a follow-up.
-                    tracing::info!(
-                        task_id = %event.task_id,
-                        %run_id,
-                        "router output: early duplicate (comment posting is Plan-C-polish)"
+                    let source_id = event.source_id.clone();
+                    let Some(source) = source_map_for_consumer.get(&source_id) else {
+                        tracing::warn!(
+                            source_id = %source_id,
+                            "no source registered for this ID; cannot post duplicate comment"
+                        );
+                        continue;
+                    };
+                    let body = format!(
+                        "Surge run #{run_id}: detected duplicate of an active run for this ticket. Skipping re-triage."
                     );
+                    match source.post_comment(&event.task_id, &body).await {
+                        Ok(()) => tracing::info!(
+                            task_id = %event.task_id,
+                            %run_id,
+                            "posted duplicate comment to tracker"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            task_id = %event.task_id,
+                            %run_id,
+                            "failed to post duplicate comment"
+                        ),
+                    }
                 },
             }
         }
