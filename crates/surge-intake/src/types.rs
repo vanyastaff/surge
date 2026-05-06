@@ -191,3 +191,112 @@ mod triage_decision_tests {
         assert_eq!(back, d);
     }
 }
+
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TaskEventKind {
+    NewTask,
+    StatusChanged { from: String, to: String },
+    LabelsChanged {
+        added: Vec<String>,
+        removed: Vec<String>,
+    },
+    TaskClosed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskEvent {
+    pub source_id: String,
+    pub task_id: TaskId,
+    pub kind: TaskEventKind,
+    pub seen_at: DateTime<Utc>,
+    pub raw_payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskDetails {
+    pub task_id: TaskId,
+    pub source_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub labels: Vec<String>,
+    pub url: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub assignee: Option<String>,
+    pub raw_payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskSummary {
+    pub task_id: TaskId,
+    pub title: String,
+    pub status: String,
+    pub url: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+
+    fn sample_task_id() -> TaskId {
+        TaskId::try_new("github_issues:user/repo#1234").unwrap()
+    }
+
+    #[test]
+    fn event_round_trip_new_task() {
+        let ev = TaskEvent {
+            source_id: "github_issues:user/repo".into(),
+            task_id: sample_task_id(),
+            kind: TaskEventKind::NewTask,
+            seen_at: DateTime::parse_from_rfc3339("2026-05-06T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            raw_payload: serde_json::json!({"id": 1234}),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        let back: TaskEvent = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn event_round_trip_labels_changed() {
+        let ev = TaskEvent {
+            source_id: "linear:wsp1".into(),
+            task_id: TaskId::try_new("linear:wsp1/ABC-42").unwrap(),
+            kind: TaskEventKind::LabelsChanged {
+                added: vec!["surge:enabled".into()],
+                removed: vec![],
+            },
+            seen_at: Utc::now(),
+            raw_payload: serde_json::json!({}),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        let back: TaskEvent = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn details_round_trip() {
+        let d = TaskDetails {
+            task_id: sample_task_id(),
+            source_id: "github_issues:user/repo".into(),
+            title: "Fix parser panic".into(),
+            description: "Stack overflow on deep nesting".into(),
+            status: "open".into(),
+            labels: vec!["surge:enabled".into(), "priority/high".into()],
+            url: "https://github.com/user/repo/issues/1234".into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            assignee: None,
+            raw_payload: serde_json::json!({}),
+        };
+        let s = serde_json::to_string(&d).unwrap();
+        let back: TaskDetails = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, d);
+    }
+}
