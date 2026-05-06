@@ -8,6 +8,29 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Errors raised by `IntakeRepo` mutating helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum IntakeError {
+    /// The requested transition violates the FSM defined in
+    /// `TicketState::is_valid_transition_from`.
+    #[error("invalid ticket state transition {from:?} -> {to:?}")]
+    InvalidTransition {
+        /// The state the ticket was in before the attempted transition.
+        from: TicketState,
+        /// The state that was requested but rejected.
+        to: TicketState,
+    },
+    /// No row with the given `task_id` exists.
+    #[error("ticket_index row not found: {task_id}")]
+    NotFound {
+        /// The `task_id` that was not found in `ticket_index`.
+        task_id: String,
+    },
+    /// Underlying SQLite error.
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+}
+
 /// Lifecycle states of an external ticket as tracked by `surge-intake`.
 ///
 /// See `docs/revision/rfcs/0010-issue-tracker-integration.md` data-flow section
@@ -348,21 +371,31 @@ impl<'a> IntakeRepo<'a> {
 
     /// Set the callback token, replacing any prior value. UNIQUE constraint
     /// on the partial index will reject collisions.
-    pub fn set_callback_token(&self, task_id: &str, token: &str) -> rusqlite::Result<()> {
-        self.conn.execute(
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn set_callback_token(&self, task_id: &str, token: &str) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
             "UPDATE ticket_index SET callback_token = ?1 WHERE task_id = ?2",
             params![token, task_id],
         )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound { task_id: task_id.into() });
+        }
         Ok(())
     }
 
     /// Clear the callback token (called after Start to free the token for
     /// the partial UNIQUE index).
-    pub fn clear_callback_token(&self, task_id: &str) -> rusqlite::Result<()> {
-        self.conn.execute(
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn clear_callback_token(&self, task_id: &str) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
             "UPDATE ticket_index SET callback_token = NULL WHERE task_id = ?1",
             params![task_id],
         )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound { task_id: task_id.into() });
+        }
         Ok(())
     }
 
@@ -389,16 +422,47 @@ impl<'a> IntakeRepo<'a> {
     }
 
     /// Persist the Telegram message reference for the most recent inbox card.
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
     pub fn set_tg_message_ref(
         &self,
         task_id: &str,
         chat_id: i64,
         msg_id: i32,
-    ) -> rusqlite::Result<()> {
-        self.conn.execute(
+    ) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
             "UPDATE ticket_index SET tg_chat_id = ?1, tg_message_id = ?2 WHERE task_id = ?3",
             params![chat_id, msg_id, task_id],
         )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound { task_id: task_id.into() });
+        }
+        Ok(())
+    }
+
+    /// Validated state transition. Errors if the row is missing or if
+    /// `to.is_valid_transition_from(current)` returns false; the on-disk
+    /// state is unchanged on error.
+    ///
+    /// This is the only mutator the inbox subsystem uses; raw `update_state`
+    /// remains for crash-recovery and tests.
+    pub fn update_state_validated(
+        &self,
+        task_id: &str,
+        to: TicketState,
+    ) -> Result<(), IntakeError> {
+        let current = self
+            .fetch(task_id)?
+            .ok_or_else(|| IntakeError::NotFound {
+                task_id: task_id.into(),
+            })?;
+        if !to.is_valid_transition_from(current.state) {
+            return Err(IntakeError::InvalidTransition {
+                from: current.state,
+                to,
+            });
+        }
+        self.update_state(task_id, to)?;
         Ok(())
     }
 }
@@ -598,6 +662,78 @@ mod repo_tests {
         let row = repo.fetch("linear:wsp1/T-4").unwrap().unwrap();
         assert_eq!(row.tg_chat_id, Some(-1001234567890));
         assert_eq!(row.tg_message_id, Some(4242));
+    }
+
+    #[test]
+    fn update_state_validated_accepts_valid_transition() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/V-1", TicketState::InboxNotified))
+            .unwrap();
+        repo.update_state_validated("linear:wsp1/V-1", TicketState::RunStarted)
+            .expect("InboxNotified -> RunStarted is valid");
+        assert_eq!(
+            repo.fetch("linear:wsp1/V-1").unwrap().unwrap().state,
+            TicketState::RunStarted
+        );
+    }
+
+    #[test]
+    fn update_state_validated_rejects_invalid_transition() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/V-2", TicketState::Skipped))
+            .unwrap();
+        // Skipped is terminal; any non-self transition is invalid.
+        let err = repo
+            .update_state_validated("linear:wsp1/V-2", TicketState::Active)
+            .unwrap_err();
+        match err {
+            IntakeError::InvalidTransition { from, to } => {
+                assert_eq!(from, TicketState::Skipped);
+                assert_eq!(to, TicketState::Active);
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+        // State must be unchanged.
+        assert_eq!(
+            repo.fetch("linear:wsp1/V-2").unwrap().unwrap().state,
+            TicketState::Skipped
+        );
+    }
+
+    #[test]
+    fn update_state_validated_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .update_state_validated("linear:wsp1/missing", TicketState::Active)
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn set_callback_token_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo.set_callback_token("linear:wsp1/missing", "tok").unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn clear_callback_token_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo.clear_callback_token("linear:wsp1/missing").unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn set_tg_message_ref_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo.set_tg_message_ref("linear:wsp1/missing", 1, 2).unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
     }
 }
 
