@@ -4,6 +4,7 @@
 //! (read/write methods) is added in T2.4.
 
 use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -128,6 +129,156 @@ pub struct IntakeRow {
     pub snooze_until: Option<DateTime<Utc>>,
 }
 
+/// Read/write helpers for the `ticket_index` table.
+///
+/// Borrows a `&Connection` rather than owning it so the caller (e.g. the
+/// surge-daemon TaskRouter) can hold the connection in a `Mutex` and lock
+/// per call.
+pub struct IntakeRepo<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> IntakeRepo<'a> {
+    /// Construct a repository borrowing the given connection.
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    /// Insert a new row. Fails if the `task_id` already exists (PK conflict).
+    pub fn insert(&self, row: &IntakeRow) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO ticket_index(\
+                task_id, source_id, provider, run_id, triage_decision, duplicate_of,\
+                priority, state, first_seen, last_seen, snooze_until\
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                row.task_id,
+                row.source_id,
+                row.provider,
+                row.run_id,
+                row.triage_decision,
+                row.duplicate_of,
+                row.priority,
+                row.state.as_str(),
+                row.first_seen.to_rfc3339(),
+                row.last_seen.to_rfc3339(),
+                row.snooze_until.map(|d| d.to_rfc3339()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Update only the `last_seen` timestamp on an existing row.
+    pub fn upsert_last_seen(
+        &self,
+        task_id: &str,
+        last_seen: DateTime<Utc>,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ticket_index SET last_seen = ?1 WHERE task_id = ?2",
+            params![last_seen.to_rfc3339(), task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update the lifecycle `state` of an existing row.
+    pub fn update_state(
+        &self,
+        task_id: &str,
+        state: TicketState,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ticket_index SET state = ?1 WHERE task_id = ?2",
+            params![state.as_str(), task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch one row by `task_id`. Returns `Ok(None)` if absent.
+    pub fn fetch(&self, task_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
+                    priority, state, first_seen, last_seen, snooze_until \
+             FROM ticket_index WHERE task_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![task_id])?;
+        let Some(r) = rows.next()? else {
+            return Ok(None);
+        };
+
+        let state_str: String = r.get(7)?;
+        let state: TicketState = state_str.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(
+                7,
+                rusqlite::types::Type::Text,
+                e.into(),
+            )
+        })?;
+        let first_seen: String = r.get(8)?;
+        let last_seen: String = r.get(9)?;
+        let snooze_until: Option<String> = r.get(10)?;
+
+        Ok(Some(IntakeRow {
+            task_id: r.get(0)?,
+            source_id: r.get(1)?,
+            provider: r.get(2)?,
+            run_id: r.get(3)?,
+            triage_decision: r.get(4)?,
+            duplicate_of: r.get(5)?,
+            priority: r.get(6)?,
+            state,
+            first_seen: DateTime::parse_from_rfc3339(&first_seen)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        8,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?
+                .with_timezone(&Utc),
+            last_seen: DateTime::parse_from_rfc3339(&last_seen)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        9,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?
+                .with_timezone(&Utc),
+            snooze_until: snooze_until
+                .map(|s| {
+                    DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc))
+                })
+                .transpose()
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        10,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?,
+        }))
+    }
+
+    /// Returns the `run_id` of an active duplicate run for the given task,
+    /// if one exists. Used by Tier-1 PreFilter.
+    pub fn lookup_active_run(&self, task_id: &str) -> rusqlite::Result<Option<String>> {
+        let row = self.conn.query_row(
+            "SELECT run_id FROM ticket_index \
+             WHERE task_id = ?1 \
+               AND run_id IS NOT NULL \
+               AND state NOT IN ('Completed','Aborted','Skipped','Stale','TriagedDup','TriagedOOS')",
+            params![task_id],
+            |r| r.get::<_, Option<String>>(0),
+        );
+        match row {
+            Ok(opt) => Ok(opt),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +334,89 @@ mod tests {
             original_len,
             "TicketState::as_str strings must be distinct"
         );
+    }
+}
+
+#[cfg(test)]
+mod repo_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn db_with_schema() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);").unwrap();
+        let sql = include_str!("runs/migrations/registry/0002_ticket_index.sql");
+        conn.execute_batch(sql).unwrap();
+        conn
+    }
+
+    fn sample_row(task_id: &str, state: TicketState) -> IntakeRow {
+        IntakeRow {
+            task_id: task_id.into(),
+            source_id: "linear:wsp1".into(),
+            provider: "linear".into(),
+            run_id: None,
+            triage_decision: None,
+            duplicate_of: None,
+            priority: None,
+            state,
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+            snooze_until: None,
+        }
+    }
+
+    #[test]
+    fn insert_then_fetch_roundtrip() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let row = sample_row("linear:wsp1/ABC-1", TicketState::Seen);
+        repo.insert(&row).unwrap();
+        let fetched = repo.fetch("linear:wsp1/ABC-1").unwrap().unwrap();
+        assert_eq!(fetched.state, TicketState::Seen);
+        assert_eq!(fetched.task_id, "linear:wsp1/ABC-1");
+    }
+
+    #[test]
+    fn lookup_active_run_returns_none_when_no_run_id() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/ABC-2", TicketState::Seen)).unwrap();
+        let res = repo.lookup_active_run("linear:wsp1/ABC-2").unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn lookup_active_run_returns_run_id_when_active() {
+        let conn = db_with_schema();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_abc')", []).unwrap();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/ABC-3", TicketState::Active);
+        row.run_id = Some("run_abc".into());
+        repo.insert(&row).unwrap();
+        let res = repo.lookup_active_run("linear:wsp1/ABC-3").unwrap();
+        assert_eq!(res, Some("run_abc".into()));
+    }
+
+    #[test]
+    fn lookup_active_run_excludes_completed() {
+        let conn = db_with_schema();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_done')", []).unwrap();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/ABC-4", TicketState::Completed);
+        row.run_id = Some("run_done".into());
+        repo.insert(&row).unwrap();
+        let res = repo.lookup_active_run("linear:wsp1/ABC-4").unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn update_state_changes_row() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/ABC-5", TicketState::Seen)).unwrap();
+        repo.update_state("linear:wsp1/ABC-5", TicketState::Triaged).unwrap();
+        let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
+        assert_eq!(fetched.state, TicketState::Triaged);
     }
 }
