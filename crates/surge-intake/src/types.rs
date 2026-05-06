@@ -246,6 +246,7 @@ pub struct TaskDetails {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub assignee: Option<String>,
+    #[serde(default)]
     pub raw_payload: serde_json::Value,
 }
 

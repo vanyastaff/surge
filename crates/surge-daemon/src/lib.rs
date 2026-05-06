@@ -14,9 +14,10 @@ pub mod admission;
 pub mod broadcast;
 pub mod error;
 pub mod inbox;
+pub mod intake_completion;
 pub mod lifecycle;
 pub mod pidfile;
 pub mod server;
 
 pub use error::DaemonError;
-pub use server::{ServerConfig, run as run_server};
+pub use server::{ServerConfig, run as run_server, run_with_registry};

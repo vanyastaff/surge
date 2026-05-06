@@ -547,6 +547,30 @@ impl<'a> IntakeRepo<'a> {
         }
         Ok(out)
     }
+
+    /// Reverse of `lookup_active_run`: returns the ticket row whose `run_id`
+    /// matches, regardless of state. Used when an engine run finishes and we
+    /// need to find the originating ticket (if any) so we can post a tracker
+    /// comment + update the ticket FSM. Returns `Ok(None)` when no row has
+    /// this `run_id` (e.g., the run was not tracker-originated).
+    pub fn lookup_ticket_by_run_id(&self, run_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
+        let task_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT task_id FROM ticket_index WHERE run_id = ?1",
+                params![run_id],
+                |r| r.get::<_, String>(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        match task_id {
+            Some(id) => self.fetch(&id),
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -928,6 +952,42 @@ mod repo_tests {
         let due = repo.fetch_due_snoozed(Utc::now()).unwrap();
         let ids: Vec<&str> = due.iter().map(|r| r.task_id.as_str()).collect();
         assert_eq!(ids, vec!["linear:wsp1/D-1"]);
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_returns_row() {
+        let conn = db_with_schema();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_xyz')", [])
+            .unwrap();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/ABC-9", TicketState::Active);
+        row.run_id = Some("run_xyz".into());
+        repo.insert(&row).unwrap();
+
+        let fetched = repo.lookup_ticket_by_run_id("run_xyz").unwrap();
+        assert!(fetched.is_some());
+        let fetched = fetched.unwrap();
+        assert_eq!(fetched.task_id, "linear:wsp1/ABC-9");
+        assert_eq!(fetched.state, TicketState::Active);
+        assert_eq!(fetched.run_id, Some("run_xyz".into()));
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_returns_none_when_absent() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let res = repo.lookup_ticket_by_run_id("does_not_exist").unwrap();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_skips_rows_without_run_id() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/ABC-10", TicketState::Seen))
+            .unwrap();
+        let res = repo.lookup_ticket_by_run_id("anything").unwrap();
+        assert!(res.is_none());
     }
 }
 

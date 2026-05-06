@@ -49,3 +49,5 @@ nix.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 chrono.workspace = true
+surge-orchestrator.workspace = true
+surge-acp.workspace = true

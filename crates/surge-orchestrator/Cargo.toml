@@ -28,6 +28,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 base64 = "0.22"
 interprocess.workspace = true
+ulid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -35,6 +36,10 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 tiny_http = { workspace = true }
 surge-notify = { workspace = true }
+insta = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"
+
+[features]
+_bootstrap_llm_test = []
