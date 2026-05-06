@@ -70,6 +70,18 @@ impl LinearTaskSource {
         })
     }
 
+    /// Override the Linear GraphQL endpoint URL (primarily for testing with wiremock).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut source = LinearTaskSource::new(cfg)?;
+    /// source.set_base_url("http://localhost:7777/graphql".into());
+    /// ```
+    pub fn set_base_url(&mut self, url: String) {
+        self.client.set_base_url(url);
+    }
+
     /// Convert a Linear Issue to TaskDetails.
     fn issue_to_details(&self, issue: &Issue) -> TaskDetails {
         let identifier = issue.identifier.as_deref().unwrap_or("unknown").to_string();
