@@ -16,10 +16,16 @@ use crate::runs::clock::Clock;
 pub type MigrationSet = &'static [(&'static str, &'static str)];
 
 /// Migrations applied to the registry DB.
-pub const REGISTRY_MIGRATIONS: MigrationSet = &[(
-    "registry-0001-initial",
-    include_str!("migrations/registry/0001_initial.sql"),
-)];
+pub const REGISTRY_MIGRATIONS: MigrationSet = &[
+    (
+        "registry-0001-initial",
+        include_str!("migrations/registry/0001_initial.sql"),
+    ),
+    (
+        "registry-0002-ticket-index",
+        include_str!("migrations/registry/0002_ticket_index.sql"),
+    ),
+];
 
 /// Migrations applied to each per-run DB.
 pub const PER_RUN_MIGRATIONS: MigrationSet = &[(
