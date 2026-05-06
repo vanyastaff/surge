@@ -486,7 +486,8 @@ surge spec ...          manage legacy specs
 surge run ...           execute the legacy spec pipeline
 surge engine ...        execute flow.toml graphs
 surge daemon ...        manage the long-running local engine host
-surge clean/worktrees   inspect and clean git worktrees
+surge clean             clean up orphaned worktrees and merged branches
+surge worktrees         list active worktrees
 surge analytics ...     view token/cost analytics
 ```
 

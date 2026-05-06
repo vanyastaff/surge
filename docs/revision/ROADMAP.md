@@ -2,9 +2,9 @@
 
 ## Overview
 
-This roadmap breaks the implementation into **milestones with concrete tasks**. Each milestone is independently shippable — at the end of each, you have a working slice of surge.
+This roadmap breaks the implementation into **milestones with concrete tasks**. Each milestone is independently shippable — at the end of each, you have a working slice of Surge.
 
-The roadmap is **realistic for solo evening/weekend work** — author has full-time job, builds Nebula and Surge in parallel. Estimates assume 8-12 hours/week of focused surge work.
+The roadmap is **realistic for solo evening/weekend work** — author has full-time job, builds Nebula and Surge in parallel. Estimates assume 8-12 hours/week of focused Surge work.
 
 ## Realistic timeline
 
