@@ -77,6 +77,11 @@ impl Storage {
         &self.config
     }
 
+    /// Registry database path.
+    pub fn registry_db_path(&self) -> PathBuf {
+        self.home.join("db").join("registry.sqlite")
+    }
+
     pub(crate) fn run_dir(&self, run_id: &RunId) -> PathBuf {
         self.home.join("runs").join(run_id.to_string())
     }

@@ -118,7 +118,7 @@ fn main() -> std::process::ExitCode {
 
         let engine = Arc::new(Engine::new_with_mcp(
             bridge,
-            storage,
+            Arc::clone(&storage),
             tool_dispatcher,
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
@@ -208,7 +208,7 @@ fn main() -> std::process::ExitCode {
         }
 
         if !sources.is_empty() {
-            spawn_task_router(sources, source_map, Arc::clone(&notifier)).await;
+            spawn_task_router(sources, source_map, Arc::clone(&notifier), Arc::clone(&storage)).await;
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
@@ -256,6 +256,7 @@ async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: HashMap<String, Arc<dyn TaskSource>>,
     notifier: Arc<dyn surge_notify::NotifyDeliverer>,
+    storage: Arc<Storage>,
 ) {
     use rusqlite::Connection;
 
@@ -267,28 +268,29 @@ async fn spawn_task_router(
 
     let (tx, mut rx) = mpsc::channel::<RouterOutput>(64);
 
-    // CONCERN (T9.2): TaskRouter expects Arc<Mutex<Connection>> but Storage owns a
-    // connection pool (registry_pool: Pool<SqliteConnectionManager>). The pool is
-    // crate-private and cannot be directly shared with surge-daemon. For now we use
-    // an in-memory connection as a proof-of-concept. In production (T10+), the Tier1
-    // dedup logic should move to the daemon's persistence layer so both the router
-    // and the engine share the same DB, eliminating this duplicative connection.
-    let conn =
-        Connection::open_in_memory().expect("failed to create in-memory registry for router");
+    // Acquire a dedicated connection from the registry pool for the TaskRouter's
+    // Tier-1 dedup queries. By opening directly to the same registry DB file that
+    // the engine's pool uses, both the router and the engine's persistence layer
+    // query the same persistent ticket_index. This ensures Tier-1 dedup state
+    // survives daemon restarts and stays in sync with the engine's writes.
+    let registry_db_path = storage.registry_db_path();
+    let conn = match Connection::open(&registry_db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                path = ?registry_db_path,
+                "failed to open persistent registry DB for TaskRouter; intake disabled"
+            );
+            return;
+        }
+    };
 
-    // Apply the same schema as the pool-backed registry so dedup queries work.
-    conn.execute_batch(include_str!(
-        "../../surge-persistence/src/runs/migrations/registry/0001_initial.sql"
-    ))
-    .expect("failed to initialize router registry schema");
-    conn.execute_batch(include_str!(
-        "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
-    ))
-    .expect("failed to initialize ticket_index schema");
-    conn.execute_batch(include_str!(
-        "../../surge-persistence/src/runs/migrations/registry/0003_task_source_state.sql"
-    ))
-    .expect("failed to initialize task_source_state schema");
+    // Enable foreign keys for consistency with the registry pool's pragmas.
+    if let Err(e) = conn.execute("PRAGMA foreign_keys = ON;", []) {
+        tracing::error!(error = %e, "failed to enable foreign keys on dedup connection; intake disabled");
+        return;
+    }
 
     let conn_arc = Arc::new(TokioMutex::new(conn));
     let router = TaskRouter::new(sources, Arc::clone(&conn_arc), tx);
