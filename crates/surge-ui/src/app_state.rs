@@ -5,7 +5,12 @@ use gpui::EventEmitter;
 use surge_acp::{
     AgentHealth, AgentPool, DetectedAgent, HealthTracker, PermissionPolicy, Registry, RegistryEntry,
 };
+use surge_core::id::RunId;
 use surge_core::{Spec, SpecId, SurgeConfig, SurgeEvent, TaskId, TaskState};
+use surge_orchestrator::engine::handle::{RunStatus, RunSummary};
+use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
+
+use crate::daemon_link::ConnectionState;
 
 /// Central application state shared across all UI screens.
 ///
@@ -39,6 +44,21 @@ pub struct AppState {
     /// Agent pool for ACP connections (created when project has agents configured).
     pub agent_pool: Option<Arc<AgentPool>>,
 
+    // ── Daemon (runtime UI client) ──
+    /// Connection state with `surge-daemon`. The runtime UI is a daemon
+    /// client: it lists / watches runs that the daemon hosts rather than
+    /// running them in-process. See `crate::daemon_link::try_connect`.
+    pub daemon_state: ConnectionState,
+    /// Run summaries last fetched / observed from the daemon. Updated by
+    /// the connect task on `ListRuns` and incrementally by the global-event
+    /// subscription as `RunAccepted` / `RunFinished` arrive.
+    ///
+    /// We store our own `UiRun` rather than `RunSummary` directly because
+    /// the latter is `#[non_exhaustive]` (engine can grow new fields) and
+    /// would prevent us from synthesising a stub when a `RunAccepted` for
+    /// an unknown id arrives ahead of a `ListRuns` refresh.
+    pub runs: Vec<UiRun>,
+
     // ── Events ──
     pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
     pub recent_events: Vec<SurgeEvent>,
@@ -67,6 +87,29 @@ pub struct WorktreeEntry {
     pub exists: bool,
 }
 
+/// UI-side projection of a daemon-hosted run. Mirrors the orchestrator's
+/// `RunSummary` (which is `#[non_exhaustive]` and therefore not
+/// constructible from outside) but with only the fields the runtime UI
+/// reads today. Add fields here as the UI starts surfacing more state.
+#[derive(Debug, Clone)]
+pub struct UiRun {
+    pub run_id: RunId,
+    pub status: RunStatus,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub last_event_seq: Option<u64>,
+}
+
+impl From<&RunSummary> for UiRun {
+    fn from(s: &RunSummary) -> Self {
+        Self {
+            run_id: s.run_id,
+            status: s.status,
+            started_at: s.started_at,
+            last_event_seq: s.last_event_seq,
+        }
+    }
+}
+
 impl AppState {
     /// Create initial state with empty data and real registry.
     pub fn new() -> Self {
@@ -92,9 +135,73 @@ impl AppState {
             specs: Vec::new(),
             worktrees: Vec::new(),
             agent_pool: None,
+            daemon_state: ConnectionState::default(),
+            runs: Vec::new(),
             _event_tx: event_tx,
             recent_events: Vec::new(),
         }
+    }
+
+    /// Apply a `GlobalDaemonEvent` to the run list.
+    ///
+    /// `RunAccepted` inserts a fresh `RunSummary` if the id isn't
+    /// already known (or marks an existing one as `Active`).
+    /// `RunFinished` flips an existing run's status to a terminal
+    /// variant matching the outcome — keeps the entry around so the
+    /// UI can show "recently finished" runs without re-querying
+    /// `ListRuns`.
+    ///
+    /// Future variants are tolerated by ignoring (the wire enum is
+    /// `#[non_exhaustive]`).
+    pub fn apply_global_event(&mut self, event: &GlobalDaemonEvent) {
+        use surge_orchestrator::engine::handle::RunOutcome;
+
+        match event {
+            GlobalDaemonEvent::RunAccepted { run_id } => {
+                if let Some(existing) = self.runs.iter_mut().find(|r| &r.run_id == run_id) {
+                    existing.status = RunStatus::Active;
+                } else {
+                    self.runs.push(UiRun {
+                        run_id: *run_id,
+                        status: RunStatus::Active,
+                        started_at: chrono::Utc::now(),
+                        last_event_seq: None,
+                    });
+                }
+            },
+            GlobalDaemonEvent::RunFinished { run_id, outcome } => {
+                let new_status = match outcome {
+                    RunOutcome::Completed { .. } => RunStatus::Completed,
+                    RunOutcome::Failed { .. } => RunStatus::Failed,
+                    RunOutcome::Aborted { .. } => RunStatus::Aborted,
+                    // `RunOutcome` is `#[non_exhaustive]` — fall through to
+                    // a sane neutral status; refine when new variants land.
+                    _ => RunStatus::Aborted,
+                };
+                if let Some(existing) = self.runs.iter_mut().find(|r| &r.run_id == run_id) {
+                    existing.status = new_status;
+                } else {
+                    // Unknown run id — synthesize a stub so the user sees
+                    // *something*. Real `started_at` is unrecoverable here.
+                    self.runs.push(UiRun {
+                        run_id: *run_id,
+                        status: new_status,
+                        started_at: chrono::Utc::now(),
+                        last_event_seq: None,
+                    });
+                }
+            },
+            _ => {
+                // `GlobalDaemonEvent` is `#[non_exhaustive]`. Future
+                // variants are silently dropped here; add cases as
+                // they're introduced.
+            },
+        }
+    }
+
+    /// Replace the run list from a fresh `ListRuns` response.
+    pub fn set_runs_from_summaries(&mut self, summaries: &[RunSummary]) {
+        self.runs = summaries.iter().map(UiRun::from).collect();
     }
 
     /// Load project from a directory path.
