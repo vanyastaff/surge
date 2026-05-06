@@ -187,10 +187,31 @@ enum AttemptError {
     Retryable(String),
 }
 
+/// Extract just the `[prompt].system` field from the bundled Triage Author
+/// TOML profile, parsed once at first access.
+///
+/// We don't ship the whole TOML to Claude — only the natural-language
+/// instruction. The TOML's metadata (id, version, declared_outcomes, etc.)
+/// is bookkeeping for the engine, not content for the agent.
+fn triage_system_prompt() -> &'static str {
+    static CACHED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let parsed: toml::Value = toml::from_str(crate::BOOTSTRAP_TRIAGE_AUTHOR_TOML).expect(
+            "bundled triage-author-1.0.toml is valid TOML — checked by bootstrap_profile_tests",
+        );
+        parsed
+            .get("prompt")
+            .and_then(|p| p.get("system"))
+            .and_then(|s| s.as_str())
+            .map(str::to_string)
+            .expect("triage-author-1.0.toml must have [prompt].system field — checked by bootstrap_profile_tests")
+    });
+    CACHED.as_str()
+}
+
 fn render_prompt(input: &TriageInput, feedback: Option<&str>) -> String {
     let json = serde_json::to_string_pretty(input).unwrap_or_else(|_| "{}".into());
     let mut out = String::new();
-    out.push_str(crate::BOOTSTRAP_TRIAGE_AUTHOR_TOML);
+    out.push_str(triage_system_prompt());
     out.push_str("\n\n# Inputs\n\nThe triage input is encoded as JSON. The shape is:\n");
     out.push_str(
         "- task: TaskDetails\n- candidates: TaskSummary[]\n- active_runs: ActiveRunSummary[]\n\n",
@@ -296,7 +317,9 @@ async fn try_one_attempt(
                             SessionEndReason::Timeout { .. } => {
                                 return Err("session timeout".into());
                             },
-                            _ => continue,
+                            SessionEndReason::Normal | SessionEndReason::ForcedClose => {
+                                return Err("session ended without outcome".into());
+                            },
                         },
                         _ => continue,
                     }
@@ -398,6 +421,10 @@ pub async fn dispatch_triage(
         .await
         {
             Ok(decision) => {
+                // Cleanup logic: remove scratch dir when we got a decisive outcome AND
+                // the caller didn't ask us to keep it. `Unclear` is treated as a non-decisive
+                // outcome (the agent expressed uncertainty), so we keep its artifacts for
+                // post-mortem regardless of `keep_scratch_on_failure`.
                 if !opts.keep_scratch_on_failure
                     && !matches!(decision, TriageDecision::Unclear { .. })
                 {
@@ -477,5 +504,22 @@ mod tests {
         let parsed: TriageJson = serde_json::from_str(raw).unwrap();
         let err = parsed.into_decision().unwrap_err();
         assert!(err.contains("unknown decision"));
+    }
+
+    #[test]
+    fn triage_system_prompt_extracts_only_prompt_section() {
+        let extracted = super::triage_system_prompt();
+        assert!(
+            !extracted.contains("declared_outcomes"),
+            "system prompt should not contain TOML metadata field"
+        );
+        assert!(
+            !extracted.contains("display_name"),
+            "system prompt should not contain TOML metadata field"
+        );
+        assert!(
+            extracted.contains("triage incoming tickets"),
+            "system prompt should contain the actual instruction text; got: {extracted}"
+        );
     }
 }
