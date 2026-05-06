@@ -71,6 +71,73 @@ impl TicketState {
             Self::TriageStale => "TriageStale",
         }
     }
+
+    /// Whether `from -> self` is a valid transition.
+    ///
+    /// Returns `true` iff this transition is permitted by the ticket FSM
+    /// described in `docs/revision/rfcs/0010-issue-tracker-integration.md`.
+    /// Used for property testing and for runtime guards in `IntakeRepo::update_state`
+    /// (future enhancement).
+    #[must_use]
+    pub fn is_valid_transition_from(&self, from: Self) -> bool {
+        use TicketState::*;
+        match (from, *self) {
+            // Self-transitions: always allowed (no-op updates).
+            (a, b) if a == b => true,
+
+            // Initial branching from `Seen`:
+            (Seen, Tier1Dup)
+            | (Seen, Triaged)
+            | (Seen, TriagedDup)
+            | (Seen, TriagedOOS)
+            | (Seen, TriagedUnclear)
+            | (Seen, Stale) => true,
+
+            // Triage decisions can produce inbox notification or stale.
+            (Triaged, InboxNotified)
+            | (Triaged, Stale)
+            | (TriagedDup, Stale)
+            | (TriagedOOS, Stale)
+            | (TriagedUnclear, Stale)
+            | (TriagedUnclear, Triaged)
+            | (TriagedUnclear, TriagedDup)
+            | (TriagedUnclear, TriagedOOS) => true,
+
+            // Inbox notified -> user decisions.
+            (InboxNotified, Snoozed)
+            | (InboxNotified, Skipped)
+            | (InboxNotified, RunStarted)
+            | (InboxNotified, Stale) => true,
+
+            // Snoozed can return to inbox when timer fires, or skip/stale.
+            (Snoozed, InboxNotified)
+            | (Snoozed, Skipped)
+            | (Snoozed, Stale) => true,
+
+            // Run started -> active or abort/stale recovery.
+            (RunStarted, Active)
+            | (RunStarted, TriageStale)
+            | (RunStarted, Aborted) => true,
+
+            // Active -> terminal states.
+            (Active, Completed)
+            | (Active, Failed)
+            | (Active, Aborted) => true,
+
+            // Recovery: stale-triage path.
+            (TriageStale, Triaged)
+            | (TriageStale, Aborted) => true,
+
+            // Tier1Dup is terminal-ish for this ticket but allow Aborted.
+            (Tier1Dup, Aborted) => true,
+
+            // Terminal states are sticky (no transitions allowed beyond their self-transitions above).
+            // (Completed, Failed, Aborted, Skipped, Stale -> nothing else)
+
+            // Anything else is invalid.
+            _ => false,
+        }
+    }
 }
 
 impl FromStr for TicketState {
@@ -414,5 +481,128 @@ mod repo_tests {
             .unwrap();
         let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Triaged);
+    }
+}
+
+#[cfg(test)]
+mod fsm_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// All TicketState variants, in declaration order, for proptest::prop_oneof.
+    fn any_state() -> impl Strategy<Value = TicketState> {
+        prop_oneof![
+            Just(TicketState::Seen),
+            Just(TicketState::Tier1Dup),
+            Just(TicketState::Triaged),
+            Just(TicketState::TriagedDup),
+            Just(TicketState::TriagedOOS),
+            Just(TicketState::TriagedUnclear),
+            Just(TicketState::InboxNotified),
+            Just(TicketState::Snoozed),
+            Just(TicketState::Skipped),
+            Just(TicketState::RunStarted),
+            Just(TicketState::Active),
+            Just(TicketState::Completed),
+            Just(TicketState::Failed),
+            Just(TicketState::Aborted),
+            Just(TicketState::Stale),
+            Just(TicketState::TriageStale),
+        ]
+    }
+
+    proptest! {
+        /// Walking a chain of valid transitions never lands in an invalid state.
+        ///
+        /// Generates a sequence of (from, to) candidate pairs; for each, if
+        /// `to.is_valid_transition_from(from)` returns true, advance to `to`,
+        /// otherwise stay in `from`. The walk's final state is always one of
+        /// the 16 declared variants.
+        #[test]
+        fn walk_terminates_in_a_valid_state(
+            start in any_state(),
+            steps in proptest::collection::vec(any_state(), 0..50),
+        ) {
+            let mut current = start;
+            for candidate in steps {
+                if candidate.is_valid_transition_from(current) {
+                    current = candidate;
+                }
+            }
+            // Round-trip the final state through string form to confirm
+            // the FSM walk produced a value that survives serialization.
+            let s = current.as_str();
+            let back: TicketState = s.parse().unwrap();
+            prop_assert_eq!(back, current);
+        }
+
+        /// Self-transitions are always valid (idempotent updates).
+        #[test]
+        fn self_transition_always_valid(s in any_state()) {
+            prop_assert!(s.is_valid_transition_from(s));
+        }
+
+        /// Round-trip `as_str` <-> `FromStr` for every randomly-chosen state.
+        #[test]
+        fn as_str_round_trips_for_all_variants(s in any_state()) {
+            let str_form = s.as_str();
+            let back: TicketState = str_form.parse().expect("FromStr");
+            prop_assert_eq!(back, s);
+        }
+    }
+
+    /// Hand-coded "happy path" scenario: Seen -> Triaged -> InboxNotified -> RunStarted -> Active -> Completed
+    #[test]
+    fn happy_path_is_valid() {
+        let chain = [
+            TicketState::Seen,
+            TicketState::Triaged,
+            TicketState::InboxNotified,
+            TicketState::RunStarted,
+            TicketState::Active,
+            TicketState::Completed,
+        ];
+        for window in chain.windows(2) {
+            let [from, to] = [window[0], window[1]];
+            assert!(
+                to.is_valid_transition_from(from),
+                "happy path step {from:?} -> {to:?} should be valid"
+            );
+        }
+    }
+
+    /// Hand-coded invalid: Seen -> Active (skips bootstrap entirely)
+    #[test]
+    fn cannot_skip_bootstrap_states() {
+        assert!(
+            !TicketState::Active.is_valid_transition_from(TicketState::Seen),
+            "Seen -> Active must be invalid"
+        );
+        assert!(
+            !TicketState::Completed.is_valid_transition_from(TicketState::Seen),
+            "Seen -> Completed must be invalid"
+        );
+    }
+
+    /// Terminal states are sticky.
+    #[test]
+    fn terminals_are_sticky() {
+        for terminal in [
+            TicketState::Completed,
+            TicketState::Failed,
+            TicketState::Aborted,
+            TicketState::Skipped,
+        ] {
+            for next in [
+                TicketState::Triaged,
+                TicketState::Active,
+                TicketState::InboxNotified,
+            ] {
+                assert!(
+                    !next.is_valid_transition_from(terminal),
+                    "{terminal:?} -> {next:?} must be invalid (terminal is sticky)"
+                );
+            }
+        }
     }
 }
