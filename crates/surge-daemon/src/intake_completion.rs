@@ -35,9 +35,10 @@ use tracing::{info, warn};
 ///
 /// Runs forever, draining `rx` until the broadcast channel closes (i.e., the
 /// last `BroadcastRegistry` clone is dropped) or the process exits. Lagged
-/// receives are logged and dropped — losing a `RunFinished` event in this
-/// path is recoverable: the ticket stays in `Active` until manual intervention
-/// or the next daemon restart's recovery sweep.
+/// receives are logged and dropped: the ticket then stays stuck in `Active`
+/// until manual intervention. RFC-0010 § Crash recovery designs a startup
+/// sweep that would also catch this case, but that sweep is not implemented
+/// yet — see the RFC for the planned reconciliation rules.
 // `clippy::implicit_hasher`: the daemon owns the source map; consumers don't
 // need to be generic over `BuildHasher`. The map uses the default
 // `RandomState` everywhere, including the daemon's `main.rs` call site.
@@ -100,33 +101,39 @@ async fn handle_run_finished(
 
     let (body, new_state, purpose) = format_completion(outcome);
 
+    // Best-effort comment post: a malformed `task_id` string in the DB row
+    // (e.g., from a future migration that loosened validation, or manual
+    // edits) skips the cosmetic tracker note but MUST NOT skip the FSM
+    // transition below — the on-disk state is authoritative regardless.
     let task_id = match TaskId::try_new(row.task_id.clone()) {
-        Ok(id) => id,
+        Ok(id) => Some(id),
         Err(e) => {
             warn!(error = %e, task_id = %row.task_id, "invalid task_id; skipping comment post");
-            return;
+            None
         },
     };
 
-    if let Some(source) = source_map.get(&row.source_id) {
-        match source.post_comment(&task_id, &body).await {
-            Ok(()) => info!(
+    if let Some(task_id) = task_id {
+        if let Some(source) = source_map.get(&row.source_id) {
+            match source.post_comment(&task_id, &body).await {
+                Ok(()) => info!(
+                    task_id = %row.task_id,
+                    purpose = %purpose,
+                    "posted run-completion comment"
+                ),
+                Err(e) => warn!(
+                    error = %e,
+                    task_id = %row.task_id,
+                    "failed to post run-completion comment"
+                ),
+            }
+        } else {
+            warn!(
+                source_id = %row.source_id,
                 task_id = %row.task_id,
-                purpose = %purpose,
-                "posted run-completion comment"
-            ),
-            Err(e) => warn!(
-                error = %e,
-                task_id = %row.task_id,
-                "failed to post run-completion comment"
-            ),
+                "no source registered; cannot post run-completion comment"
+            );
         }
-    } else {
-        warn!(
-            source_id = %row.source_id,
-            task_id = %row.task_id,
-            "no source registered; cannot post run-completion comment"
-        );
     }
 
     let guard = conn.lock().await;
