@@ -371,13 +371,15 @@ async fn deliver_desktop(
     }
 }
 
-/// Handle one `RouterOutput::Triage` event end-to-end.
+/// Handle a single `RouterOutput::Triage` event end-to-end.
 ///
-/// Returns `true` if the caller loop should `continue` (i.e. if we already
-/// fell back and the outer iteration should not do further processing). Returns
-/// `false` only in the `Enqueued` path when `run_id` / `node_key` parsing
-/// fails — in that case the caller skips delivery but doesn't need a `continue`.
-/// In practice the loop always calls `continue` after this returns.
+/// Pipeline: source lookup → `fetch_task` → candidate assembly →
+/// active-runs snapshot → `dispatch_triage` → decision routing.
+///
+/// Always delivers some signal to the user — either an InboxCard
+/// (Enqueued or fallback), a tracker comment (Duplicate / OOS),
+/// or an Unclear notification. Errors at any step are logged and
+/// fall back to a Medium-priority placeholder InboxCard.
 async fn handle_triage_event(
     event: surge_intake::types::TaskEvent,
     source_map: &std::collections::HashMap<String, Arc<dyn TaskSource>>,

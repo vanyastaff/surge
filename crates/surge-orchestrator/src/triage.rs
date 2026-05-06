@@ -1,9 +1,18 @@
-//! Triage Author dispatcher: assembles inputs, parses LLM output.
+//! Triage Author dispatcher: assembles inputs, dispatches via ACP,
+//! parses LLM output.
 //!
-//! This module owns the input/output schema for the bootstrap-stage 0
-//! Triage Author. The actual agent invocation (LLM call via ACP) will
-//! be wired in a follow-up polish task; for now this module provides
-//! the typed interface.
+//! Layer 1 of the two-layer plan in
+//! `docs/superpowers/specs/2026-05-06-triage-author-llm-dispatch-design.md`:
+//! standalone [`dispatch_triage`] function that opens an ACP session
+//! against the bundled `_bootstrap/triage-author@1.0` profile, sends
+//! a structured input, awaits the agent's `triage_decision.json`
+//! artifact, and returns a typed [`TriageDecision`].
+//!
+//! Layer 2 (separate RFC, deferred) will promote Triage Author to a
+//! first-class [`NodeKind::Agent`] inside the engine state machine.
+//! When that lands, [`dispatch_triage`]'s caller-visible surface
+//! does not change — the function is either inlined into the
+//! engine's stage handler or kept as a thin test wrapper.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -42,7 +51,7 @@ pub struct ActiveRunSummary {
 /// `Option`/`#[serde(default)]`) so we can normalise into the strict
 /// [`TriageDecision`] enum via [`Self::into_decision`].
 #[derive(Debug, Clone, Deserialize)]
-pub struct TriageJson {
+pub(crate) struct TriageJson {
     pub decision: String,
     #[serde(default)]
     pub duplicate_of: Option<String>,
@@ -62,7 +71,7 @@ impl TriageJson {
     /// Returns `Err(message)` if required fields for the chosen decision
     /// are missing (e.g. `duplicate` without `duplicate_of`) or the
     /// decision/priority strings are unrecognised.
-    pub fn into_decision(self) -> Result<TriageDecision, String> {
+    pub(crate) fn into_decision(self) -> Result<TriageDecision, String> {
         let prio_str = self.priority.as_deref().unwrap_or("medium");
         let priority = match prio_str {
             "urgent" => Priority::Urgent,
@@ -105,6 +114,7 @@ impl TriageJson {
 /// Construct via [`Self::with_scratch_root`] for the typical case of
 /// passing only the per-task scratch root and Claude binary path.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TriageOptions {
     /// Resolved Claude binary path. If `None`, the dispatcher
     /// returns `Ok(TriageDecision::Unclear)` immediately on the
@@ -361,6 +371,10 @@ async fn try_one_attempt(
                         _ => continue,
                     }
                 },
+                // Lagged means the broadcast queue dropped events we didn't consume
+                // fast enough. We hold a session filter, so a missed OutcomeReported
+                // for our session would eventually trigger the attempt timeout and
+                // cause a retry — correctness is preserved at the cost of latency.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err("event stream closed".into());

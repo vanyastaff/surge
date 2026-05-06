@@ -86,13 +86,13 @@ mod llm {
                 active_runs: vec![],
             };
             let tmp = tempfile::tempdir().unwrap();
-            let opts = TriageOptions {
-                claude_binary: surge_orchestrator::triage::find_claude_binary(),
-                attempt_timeout: Duration::from_secs(180),
-                max_attempts: 1,
-                scratch_root: tmp.path().to_path_buf(),
-                keep_scratch_on_failure: true,
-            };
+            let mut opts = TriageOptions::with_scratch_root(
+                tmp.path().to_path_buf(),
+                surge_orchestrator::triage::find_claude_binary(),
+            );
+            opts.attempt_timeout = Duration::from_secs(180);
+            opts.max_attempts = 1;
+            opts.keep_scratch_on_failure = true;
             let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input, opts)
                 .await
                 .expect("dispatch_triage");

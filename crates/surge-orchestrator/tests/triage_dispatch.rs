@@ -114,13 +114,13 @@ async fn enqueued_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
 
     let drive = tokio::spawn(drive_one_attempt(
         Arc::clone(&bridge),
@@ -152,13 +152,13 @@ async fn duplicate_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
 
     let drive = tokio::spawn(drive_one_attempt(
         Arc::clone(&bridge),
@@ -189,13 +189,13 @@ async fn out_of_scope_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
 
     let drive = tokio::spawn(drive_one_attempt(
         Arc::clone(&bridge),
@@ -221,13 +221,13 @@ async fn unclear_happy_path() {
     bridge.pin_next_session_id(session).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
 
     let drive = tokio::spawn(drive_one_attempt(
         Arc::clone(&bridge),
@@ -259,13 +259,13 @@ async fn bad_json_then_recovers() {
     bridge.pin_session_ids(vec![session_a, session_b]).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 3,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 3;
+    opts.keep_scratch_on_failure = false;
 
     let drive = tokio::spawn(drive_n_attempts(
         Arc::clone(&bridge),
@@ -297,13 +297,13 @@ async fn exhaust_retries_yields_unclear() {
     bridge.pin_session_ids(vec![s1, s2, s3]).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 3,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: true,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 3;
+    opts.keep_scratch_on_failure = true;
 
     let drive = tokio::spawn(drive_n_attempts(
         Arc::clone(&bridge),
@@ -339,13 +339,13 @@ async fn timeout_yields_unclear() {
     bridge.pin_session_ids(vec![s]).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_millis(150),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: true,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_millis(150);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = true;
 
     // No drive task — bridge never emits OutcomeReported, so the
     // dispatcher hits its tokio::time::timeout.
@@ -371,13 +371,13 @@ async fn agent_crashed_yields_unclear() {
     bridge.pin_session_ids(vec![s]).await;
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: true,
-    };
+    let mut opts = TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = true;
 
     let drive = {
         let bridge = Arc::clone(&bridge);
@@ -417,13 +417,10 @@ async fn binary_missing_short_circuits() {
     let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
 
     let tmp = TempDir::new().unwrap();
-    let opts = TriageOptions {
-        claude_binary: None, // explicit
-        attempt_timeout: Duration::from_secs(5),
-        max_attempts: 3,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = TriageOptions::with_scratch_root(tmp.path().to_path_buf(), None);
+    opts.attempt_timeout = Duration::from_secs(5);
+    opts.max_attempts = 3;
+    opts.keep_scratch_on_failure = false;
 
     let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
         .await

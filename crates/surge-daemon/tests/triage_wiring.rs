@@ -157,13 +157,13 @@ async fn triage_enqueued_yields_real_priority() {
         bridge_drive.pump_scripted_events().await;
     });
 
-    let opts = surge_orchestrator::triage::TriageOptions {
-        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
-        attempt_timeout: Duration::from_secs(2),
-        max_attempts: 1,
-        scratch_root: tmp.path().to_path_buf(),
-        keep_scratch_on_failure: false,
-    };
+    let mut opts = surge_orchestrator::triage::TriageOptions::with_scratch_root(
+        tmp.path().to_path_buf(),
+        Some(std::path::PathBuf::from("/dev/null")),
+    );
+    opts.attempt_timeout = Duration::from_secs(2);
+    opts.max_attempts = 1;
+    opts.keep_scratch_on_failure = false;
     let input = surge_orchestrator::triage::TriageInput {
         task: task.clone(),
         candidates: vec![],
