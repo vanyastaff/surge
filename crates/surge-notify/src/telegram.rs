@@ -156,12 +156,18 @@ pub fn format_inbox_card(payload: &InboxCardPayload) -> InboxCardRendered {
 
     let keyboard = vec![
         vec![
-            InboxKeyboardButton::callback("▶ Start", format!("inbox:start:{}", payload.run_id)),
+            InboxKeyboardButton::callback(
+                "▶ Start",
+                format!("inbox:start:{}", payload.callback_token),
+            ),
             InboxKeyboardButton::callback(
                 "⏸ Snooze 24h",
-                format!("inbox:snooze:{}", payload.run_id),
+                format!("inbox:snooze:{}", payload.callback_token),
             ),
-            InboxKeyboardButton::callback("✕ Skip", format!("inbox:skip:{}", payload.run_id)),
+            InboxKeyboardButton::callback(
+                "✕ Skip",
+                format!("inbox:skip:{}", payload.callback_token),
+            ),
         ],
         vec![InboxKeyboardButton::url(
             "View ticket ↗",
@@ -187,7 +193,7 @@ mod inbox_format_tests {
             summary: "Stack overflow at depth 16".into(),
             priority: Priority::High,
             task_url: "https://github.com/user/repo/issues/1".into(),
-            run_id: "run_abc".into(),
+            callback_token: "01HKGZTOKABC".into(),
         }
     }
 
@@ -210,15 +216,15 @@ mod inbox_format_tests {
         assert_eq!(row0.len(), 3);
 
         assert_eq!(row0[0].label, "▶ Start");
-        assert_eq!(row0[0].data, "inbox:start:run_abc");
+        assert_eq!(row0[0].data, "inbox:start:01HKGZTOKABC");
         assert!(!row0[0].is_url);
 
         assert_eq!(row0[1].label, "⏸ Snooze 24h");
-        assert_eq!(row0[1].data, "inbox:snooze:run_abc");
+        assert_eq!(row0[1].data, "inbox:snooze:01HKGZTOKABC");
         assert!(!row0[1].is_url);
 
         assert_eq!(row0[2].label, "✕ Skip");
-        assert_eq!(row0[2].data, "inbox:skip:run_abc");
+        assert_eq!(row0[2].data, "inbox:skip:01HKGZTOKABC");
         assert!(!row0[2].is_url);
 
         let row1 = &rendered.keyboard[1];

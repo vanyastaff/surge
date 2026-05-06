@@ -27,8 +27,12 @@ pub struct InboxCardPayload {
     pub priority: Priority,
     /// Tracker URL of the originating ticket (deep-link).
     pub task_url: String,
-    /// Pre-created run id (the run that will start when user accepts).
-    pub run_id: String,
+    /// Short ULID — embedded in callback_data of inline buttons. The
+    /// daemon resolves this to a `task_id` via
+    /// `IntakeRepo::fetch_by_callback_token`. Replaces the prior `run_id`
+    /// field (the actual `RunId` is generated only when Engine::start_run
+    /// runs; pre-creating one violated the FK on `ticket_index.run_id`).
+    pub callback_token: String,
 }
 
 /// Notification message type.
@@ -55,7 +59,7 @@ mod inbox_card_tests {
             summary: "panic on nested".into(),
             priority: Priority::High,
             task_url: "https://github.com/user/repo/issues/1".into(),
-            run_id: "run_abc".into(),
+            callback_token: "01HKGZTOKABC".into(),
         };
         let msg = NotifyMessage::InboxCard(payload.clone());
         let s = serde_json::to_string(&msg).unwrap();
@@ -63,6 +67,7 @@ mod inbox_card_tests {
         match back {
             NotifyMessage::InboxCard(p) => {
                 assert_eq!(p.task_id, payload.task_id);
+                assert_eq!(p.callback_token, "01HKGZTOKABC");
                 assert_eq!(p.priority, Priority::High);
             },
         }

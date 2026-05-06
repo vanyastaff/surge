@@ -330,7 +330,7 @@ async fn spawn_task_router(
                         .next()
                         .unwrap_or("unknown")
                         .to_string();
-                    let run_id_str = ulid::Ulid::new().to_string();
+                    let callback_token = ulid::Ulid::new().to_string();
                     let payload = surge_notify::messages::InboxCardPayload {
                         task_id: event.task_id.clone(),
                         source_id: event.source_id.clone(),
@@ -339,7 +339,7 @@ async fn spawn_task_router(
                         summary: String::new(),
                         priority: surge_intake::types::Priority::Medium,
                         task_url,
-                        run_id: run_id_str.clone(),
+                        callback_token: callback_token.clone(),
                     };
                     let msg = surge_notify::messages::NotifyMessage::InboxCard(payload.clone());
                     tracing::info!(
@@ -357,14 +357,12 @@ async fn spawn_task_router(
                         artifact_paths: vec![],
                     };
 
-                    // Parse run_id and construct NodeKey for delivery context
-                    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to parse run_id as RunId; skipping delivery");
-                            continue;
-                        },
-                    };
+                    // Delivery context needs a RunId; the inbox card itself doesn't
+                    // belong to any real run yet (the user hasn't tapped Start). Use
+                    // a fresh placeholder RunId for delivery telemetry only — the
+                    // actual run is created later in InboxActionConsumer::handle_start.
+                    let run_id = surge_core::id::RunId::new();
+                    let _ = callback_token; // silence unused-binding lint for now
                     let node_key = match surge_core::keys::NodeKey::try_new("intake") {
                         Ok(key) => key,
                         Err(e) => {
