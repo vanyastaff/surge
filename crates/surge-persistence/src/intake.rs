@@ -188,6 +188,15 @@ pub struct IntakeRow {
     pub last_seen: DateTime<Utc>,
     /// If state is Snoozed, resume processing at this time.
     pub snooze_until: Option<DateTime<Utc>>,
+    /// Short ULID embedded in inbox-card callback data; lookup key for the
+    /// daemon's inbox handler. NULL after Start (cleared) or before any
+    /// card is emitted.
+    pub callback_token: Option<String>,
+    /// Telegram chat ID where the most recent inbox card was sent.
+    pub tg_chat_id: Option<i64>,
+    /// Telegram message ID of the most recent inbox card; used by future
+    /// `editMessageReplyMarkup` to remove the keyboard after action.
+    pub tg_message_id: Option<i32>,
 }
 
 /// Read/write helpers for the `ticket_index` table.
@@ -210,8 +219,9 @@ impl<'a> IntakeRepo<'a> {
         self.conn.execute(
             "INSERT INTO ticket_index(\
                 task_id, source_id, provider, run_id, triage_decision, duplicate_of,\
-                priority, state, first_seen, last_seen, snooze_until\
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                priority, state, first_seen, last_seen, snooze_until,\
+                callback_token, tg_chat_id, tg_message_id\
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 row.task_id,
                 row.source_id,
@@ -224,6 +234,9 @@ impl<'a> IntakeRepo<'a> {
                 row.first_seen.to_rfc3339(),
                 row.last_seen.to_rfc3339(),
                 row.snooze_until.map(|d| d.to_rfc3339()),
+                row.callback_token,
+                row.tg_chat_id,
+                row.tg_message_id,
             ],
         )?;
         Ok(())
@@ -255,7 +268,8 @@ impl<'a> IntakeRepo<'a> {
     pub fn fetch(&self, task_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
-                    priority, state, first_seen, last_seen, snooze_until \
+                    priority, state, first_seen, last_seen, snooze_until, \
+                    callback_token, tg_chat_id, tg_message_id \
              FROM ticket_index WHERE task_id = ?1",
         )?;
         let mut rows = stmt.query(params![task_id])?;
@@ -308,6 +322,9 @@ impl<'a> IntakeRepo<'a> {
                         e.to_string().into(),
                     )
                 })?,
+            callback_token: r.get(11)?,
+            tg_chat_id: r.get(12)?,
+            tg_message_id: r.get(13)?,
         }))
     }
 
@@ -327,6 +344,62 @@ impl<'a> IntakeRepo<'a> {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Set the callback token, replacing any prior value. UNIQUE constraint
+    /// on the partial index will reject collisions.
+    pub fn set_callback_token(&self, task_id: &str, token: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ticket_index SET callback_token = ?1 WHERE task_id = ?2",
+            params![token, task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear the callback token (called after Start to free the token for
+    /// the partial UNIQUE index).
+    pub fn clear_callback_token(&self, task_id: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ticket_index SET callback_token = NULL WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Look up a ticket row by callback_token. Used by inbox-action receivers
+    /// to map a callback_data string back to the ticket.
+    pub fn fetch_by_callback_token(
+        &self,
+        token: &str,
+    ) -> rusqlite::Result<Option<IntakeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id FROM ticket_index WHERE callback_token = ?1",
+        )?;
+        let task_id: Option<String> = stmt
+            .query_row(params![token], |r| r.get::<_, String>(0))
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        match task_id {
+            Some(id) => self.fetch(&id),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the Telegram message reference for the most recent inbox card.
+    pub fn set_tg_message_ref(
+        &self,
+        task_id: &str,
+        chat_id: i64,
+        msg_id: i32,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ticket_index SET tg_chat_id = ?1, tg_message_id = ?2 WHERE task_id = ?3",
+            params![chat_id, msg_id, task_id],
+        )?;
+        Ok(())
     }
 }
 
@@ -397,8 +470,10 @@ mod repo_tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
             .unwrap();
-        let sql = include_str!("runs/migrations/registry/0002_ticket_index.sql");
-        conn.execute_batch(sql).unwrap();
+        let m2 = include_str!("runs/migrations/registry/0002_ticket_index.sql");
+        conn.execute_batch(m2).unwrap();
+        let m4 = include_str!("runs/migrations/registry/0004_inbox_callback_columns.sql");
+        conn.execute_batch(m4).unwrap();
         conn
     }
 
@@ -415,6 +490,9 @@ mod repo_tests {
             first_seen: Utc::now(),
             last_seen: Utc::now(),
             snooze_until: None,
+            callback_token: None,
+            tg_chat_id: None,
+            tg_message_id: None,
         }
     }
 
@@ -475,6 +553,51 @@ mod repo_tests {
             .unwrap();
         let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Triaged);
+    }
+
+    #[test]
+    fn callback_token_set_clear_lookup() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-1", TicketState::InboxNotified))
+            .unwrap();
+
+        repo.set_callback_token("linear:wsp1/T-1", "01HKGZTOK1").unwrap();
+        let row = repo.fetch_by_callback_token("01HKGZTOK1").unwrap().unwrap();
+        assert_eq!(row.task_id, "linear:wsp1/T-1");
+        assert_eq!(row.callback_token.as_deref(), Some("01HKGZTOK1"));
+
+        repo.clear_callback_token("linear:wsp1/T-1").unwrap();
+        assert!(
+            repo.fetch_by_callback_token("01HKGZTOK1")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn callback_token_uniqueness() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-2", TicketState::InboxNotified))
+            .unwrap();
+        repo.insert(&sample_row("linear:wsp1/T-3", TicketState::InboxNotified))
+            .unwrap();
+        repo.set_callback_token("linear:wsp1/T-2", "01HKGZSAME").unwrap();
+        let dup_err = repo.set_callback_token("linear:wsp1/T-3", "01HKGZSAME");
+        assert!(dup_err.is_err(), "duplicate callback_token must fail UNIQUE");
+    }
+
+    #[test]
+    fn tg_message_ref_round_trip() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-4", TicketState::InboxNotified))
+            .unwrap();
+        repo.set_tg_message_ref("linear:wsp1/T-4", -1001234567890, 4242).unwrap();
+        let row = repo.fetch("linear:wsp1/T-4").unwrap().unwrap();
+        assert_eq!(row.tg_chat_id, Some(-1001234567890));
+        assert_eq!(row.tg_message_id, Some(4242));
     }
 }
 
