@@ -2,9 +2,9 @@
 
 ## Overview
 
-This roadmap breaks the implementation into **milestones with concrete tasks**. Each milestone is independently shippable — at the end of each, you have a working slice of vibe-flow.
+This roadmap breaks the implementation into **milestones with concrete tasks**. Each milestone is independently shippable — at the end of each, you have a working slice of Surge.
 
-The roadmap is **realistic for solo evening/weekend work** — author has full-time job, builds Nebula and Surge in parallel. Estimates assume 8-12 hours/week of focused vibe-flow work.
+The roadmap is **realistic for solo evening/weekend work** — author has full-time job, builds Nebula and Surge in parallel. Estimates assume 8-12 hours/week of focused Surge work.
 
 ## Realistic timeline
 
@@ -20,9 +20,9 @@ Total: 9-12 months from start to v1.0. Don't try to compress this.
 
 ## v0.1 MVP
 
-**Goal**: A user can run `vibe run "<description>"` from a Rust project, get bootstrapped through Telegram approvals, and end up with a merged PR — without ever opening a desktop UI.
+**Goal**: A user can run `surge run "<description>"` from a Rust project, get bootstrapped through Telegram approvals, and end up with a merged PR — without ever opening a desktop UI.
 
-**Includes**: CLI, engine, ACP integration, sandbox, Telegram bot, 7 standard profiles, 3 templates.
+**Includes**: CLI, engine, ACP integration, agent launch configuration, agent-native sandbox configuration, Telegram bot, 7 standard profiles, 3 templates.
 
 **Excludes**: Visual editor, runtime UI, replay/fork features.
 
@@ -92,30 +92,30 @@ Implement the ACP bridge from architecture/04-acp-integration.md.
 - T3.6 — Agent registry: detect Claude Code, Codex, Gemini in PATH.
 - T3.7 — Tool injection: `report_stage_outcome` with dynamic outcome enum.
 - T3.8 — Tool injection: `request_human_input`.
-- T3.9 — Sandbox-filtered MCP tool list per session.
+- T3.9 — Agent launch/profile/sandbox settings passed into each session; MCP tool exposure follows what the agent runtime supports.
 - T3.10 — Session crash detection (subprocess exit) → `SessionEnded` event.
 - T3.11 — Token usage tracking from agent messages.
 - T3.12 — Mock ACP agent for testing (in `crates/testing`).
 
 **Acceptance**: Can open a session with at least Claude Code (or mock), exchange messages, observe tool calls, close cleanly. Multiple concurrent sessions work.
 
-### M4: Sandbox (week 9)
+### M4: Agent sandbox integration and approvals (week 9)
 
-Implement sandbox enforcement from RFC-0006.
+Implement the launch, approval, and permission layer from RFC-0006. surge does **not** implement its own OS sandbox; it configures the selected agent runtime's launch mode, sandbox/permission mode, and records/approves escalation requests.
 
 **Tasks:**
-- T4.1 — Define `Sandbox` trait + 4 modes (`read-only`, `workspace-write`, `workspace+network`, `full-access`).
-- T4.2 — Tier 1 enforcement: MCP tool filtering.
-- T4.3 — Tier 2 enforcement: filesystem path checking.
-- T4.4 — Tier 3 Linux: Landlock integration via `landlock` crate.
-- T4.5 — Tier 3 macOS: `sandbox-exec` wrapper.
-- T4.6 — Tier 3 Windows: AppContainer + Job Objects (most limited).
-- T4.7 — Tier 4 network: domain allowlist for outbound HTTPS.
-- T4.8 — Sandbox elevation flow: detect, request, decide, persist if "remember".
-- T4.9 — Always-deny patterns (`.git`, `.vibe`, secrets).
-- T4.10 — `vibe doctor` reports sandbox capability per OS.
+- T4.1 — Define agent launch profile model (`provider-default`, `local`, `cloud`, `sandbox`) and sandbox profile model (`read-only`, `workspace-write`, `workspace+network`, `full-access`, `provider-default`) as configuration, not enforcement.
+- T4.2 — Implement compose-like `agents.yml` parser/validator with named agents, role routes, defaults, and project/global precedence.
+- T4.3 — Map named agent launch and sandbox settings to supported session flags for Claude Code, Codex, Gemini CLI, and Custom ACP agents.
+- T4.4 — Surface provider capability metadata: which launch modes, sandbox modes, approval policies, network flags, and tool permission flows are supported.
+- T4.5 — Implement permission/elevation event flow: detect provider permission request, write event, send Telegram card, resume with allow/deny result when the provider supports it.
+- T4.6 — Implement fallback behavior when provider cannot pause for permission: warn, fail closed for risky modes, or require explicit `full-access`.
+- T4.7 — Persist "Allow & remember" as profile/template policy, not as local OS rules.
+- T4.8 — Secrets filtering and protected-path warning rules for summaries sent to Telegram.
+- T4.9 — `surge doctor` reports agent launch/sandbox capability per installed provider and validates `agents.yml`.
+- T4.10 — Mock-agent tests for permission request/decision/retry flow and named-agent resolution.
 
-**Acceptance**: Attempted escapes (write outside worktree, access ~/.ssh, network to non-allowlisted) are blocked at appropriate tier on each OS.
+**Acceptance**: For each supported agent provider, surge passes the requested launch/sandbox/approval settings into the session when supported, reports unsupported modes clearly, and completes a permission request → Telegram decision → resumed session flow with the mock provider.
 
 ### M5: Engine executor (week 10-11)
 
@@ -153,14 +153,14 @@ Implement CLI commands from components/cli.md.
 - T6.9 — Daemon spawning logic (cross-platform).
 - T6.10 — Live attach: tail event log, format events for terminal.
 
-**Acceptance**: All commands work in text and JSON modes. `vibe doctor` correctly diagnoses common issues.
+**Acceptance**: All commands work in text and JSON modes. `surge doctor` correctly diagnoses common issues.
 
 ### M7: Telegram bot (week 13)
 
 Implement Telegram bot from components/telegram-bot.md.
 
 **Tasks:**
-- T7.1 — `teloxide` setup, bot binary `vibe-tg`.
+- T7.1 — `teloxide` setup, bot binary `surge-tg`.
 - T7.2 — Long-poll mode, dispatcher.
 - T7.3 — Setup flow: ephemeral binding token, /start handling.
 - T7.4 — Outgoing pipeline: poll for `pending_approvals`, build cards, send.
@@ -202,9 +202,9 @@ Implement the 10 v1 profiles + 3 templates.
 
 The v0.1 milestone is complete when:
 
-1. A new user can install vibe-flow on Linux/macOS/Windows (binary distribution or `cargo install`)
-2. They can run `vibe telegram setup` and bind their bot
-3. They can run `vibe run "<description>"` from a Rust project
+1. A new user can install surge on Linux/macOS/Windows (binary distribution or `cargo install`)
+2. They can run `surge telegram setup` and bind their bot
+3. They can run `surge run "<description>"` from a Rust project
 4. They receive Telegram bootstrap cards (Description → Roadmap → Flow)
 5. After approving, the run executes autonomously
 6. They receive a final card with PR link
@@ -257,7 +257,7 @@ The v0.1 milestone is complete when:
 - T10.11 — Multiple runs sidebar.
 - T10.12 — Cross-platform binaries.
 
-**Acceptance**: Can attach to a running run via `vibe-runtime --run <id>`, see live progress, follow events, view active stage details.
+**Acceptance**: Can attach to a running run via `surge-runtime --run <id>`, see live progress, follow events, view active stage details.
 
 ---
 
@@ -305,7 +305,7 @@ The v0.1 milestone is complete when:
 - T14.1 — Hook execution refinements: timeouts, env injection.
 - T14.2 — AGENTS.md JIT loading with token budget management.
 - T14.3 — Trust state management UI in editor.
-- T14.4 — Project-level `.vibe/` directory full support.
+- T14.4 — Project-level `.surge/` directory full support.
 
 ### M15: Specialized profiles (week 34-35)
 
@@ -326,8 +326,8 @@ The v0.1 milestone is complete when:
 ### M17: Quality of life (week 37-38)
 
 **Tasks:**
-- T17.1 — `vibe gc` polish.
-- T17.2 — Run export/import (`vibe export <id>`).
+- T17.1 — `surge gc` polish.
+- T17.2 — Run export/import (`surge export <id>`).
 - T17.3 — Better error messages across all commands.
 - T17.4 — Logging improvements with structured fields.
 - T17.5 — Performance audit on long runs (10K+ events).
@@ -352,7 +352,7 @@ The v0.1 milestone is complete when:
 **Tasks:**
 - T19.1 — Binary builds for major platforms (release artifacts).
 - T19.2 — Homebrew formula.
-- T19.3 — `cargo install vibe-flow` works.
+- T19.3 — `cargo install surge` works.
 - T19.4 — AUR package (Arch).
 - T19.5 — Debian/RPM packages.
 - T19.6 — Windows installer (msi or exe).
@@ -408,11 +408,11 @@ The 3 bootstrap prompts (Description, Roadmap, Flow Generator) are the make-or-b
 
 **Mitigation**: Spend disproportionate time iterating on these prompts during M8. Build a fixture-based testing system (M8.T14) that runs prompts against varied inputs and verifies output quality. Don't release v0.1 until 10+ test descriptions produce coherent flows.
 
-### Risk: Sandbox edge cases on Windows
+### Risk: Agent sandbox behavior differs by provider
 
-Windows sandboxing (AppContainer + Job Objects) is significantly more limited than Linux/macOS.
+Codex, Claude Code, Gemini CLI, and custom ACP agents may expose different local/cloud/sandbox launch modes, sandbox flags, approval prompts, or permission callback semantics.
 
-**Mitigation**: Windows in v0.1 ships with Tier 1 + Tier 2 only (MCP filtering + path checking). Tier 3 enforcement comes later. Document this clearly. Most users on Windows will probably run vibe-flow in WSL anyway.
+**Mitigation**: Treat launch and sandboxing as provider capability metadata. surge only promises to configure and observe what the selected runtime supports. Unsupported combinations fail with a clear diagnostic or require an explicit profile change.
 
 ### Risk: Author doesn't have time
 
@@ -428,7 +428,7 @@ Solo project, full-time job, two other side projects (Nebula, Surge).
 | M1 | Core types tested, 80%+ coverage |
 | M2 | All storage acceptance criteria pass |
 | M3 | Mock + real ACP integration works |
-| M4 | Sandbox tests pass on all 3 OSes |
+| M4 | Agent launch/sandbox settings and permission approvals work through provider capabilities |
 | M5 | End-to-end test (5-node graph) succeeds |
 | M6 | All CLI commands work in text + JSON |
 | M7 | Full bootstrap via Telegram works |

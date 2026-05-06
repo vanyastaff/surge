@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the vibe-flow data model (graph, events, profiles, state machine) to `surge-core` via pure addition, without breaking any existing consumer.
+**Goal:** Add the Surge data model (graph, events, profiles, state machine) to `surge-core` via pure addition, without breaking any existing consumer.
 
 **Architecture:** Flat module layout — 19 new files at `surge-core/src/` next to legacy modules. Domain-key for stable string keys (`NodeKey`, `EdgeKey`, `OutcomeKey`, `SubgraphKey`, `ProfileKey`, `TemplateKey`); existing ULID `define_id!` macro for runtime IDs (`RunId`, `SessionId`); dedicated `ContentHash` newtype. `RunState::Pipeline` holds `Arc<Graph>` from the start. Subgraphs flat-stored at root level via `SubgraphKey` references (no `Box<Graph>` recursion).
 
@@ -93,7 +93,7 @@ Expected: compiles cleanly (no missing-dep errors). If `domain-key` API doesn't 
 
 ```bash
 git add Cargo.toml crates/surge-core/Cargo.toml
-git commit -m "chore(surge-core): add deps for vibe-flow data model
+git commit -m "chore(surge-core): add deps for Surge data model
 
 domain-key for stable string keys, chrono for timestamps, toml_edit for
 edit-aware writes, sha2+hex for ContentHash, bincode for event log,
@@ -133,7 +133,7 @@ Edit `crates/surge-core/src/lib.rs`. Add `pub mod keys;` between `pub mod id;` a
 Create `crates/surge-core/src/keys.rs` with this content:
 
 ```rust
-//! Domain-keyed identifiers for vibe-flow graph entities.
+//! Domain-keyed identifiers for Surge graph entities.
 //!
 //! These keys are *user-typed strings* in `flow.toml` (e.g., `"impl_2"`,
 //! `"done"`). For *runtime-generated* IDs (`RunId`, `SessionId`) see [`crate::id`].
@@ -427,7 +427,7 @@ Run `cat crates/surge-core/src/id.rs` to see the existing `define_id!` macro and
 Edit `crates/surge-core/src/id.rs`. After `define_id!(SubtaskId, "sub");` add:
 
 ```rust
-// New runtime IDs added in M1 for vibe-flow data model.
+// New runtime IDs added in M1 for Surge data model.
 define_id!(RunId, "run");
 define_id!(SessionId, "session");
 ```
@@ -486,7 +486,7 @@ Expected: existing id tests pass + 4 new tests pass.
 git add crates/surge-core/src/id.rs crates/surge-core/src/lib.rs
 git commit -m "feat(surge-core): add RunId and SessionId via define_id!
 
-ULID-based runtime IDs for the vibe-flow event log. Same macro as legacy
+ULID-based runtime IDs for the Surge event log. Same macro as legacy
 SpecId/TaskId/SubtaskId — consistent prefix-display, FromStr semantics.
 
 Part of M1."
@@ -4474,7 +4474,7 @@ Run: `cargo test -p surge-core --lib error`. Expected: existing tests + 2 new = 
 
 Commit:
 ```
-feat(surge-core): extend SurgeError with new variants for vibe-flow
+feat(surge-core): extend SurgeError with new variants for Surge
 
 GraphValidation (carries Vec<ValidationError>), EventFold (#[from]
 FoldError), ProfileParse, ContentHashMismatch. Existing variants
@@ -4507,7 +4507,7 @@ pub mod roadmap;
 pub mod spec;
 pub mod state;
 
-// New modules — vibe-flow data model.
+// New modules — Surge data model.
 pub mod agent_config;
 pub mod approvals;
 pub mod branch_config;
@@ -4540,7 +4540,7 @@ pub use roadmap::{Priority, RoadmapItem, RoadmapStatus, Timeline, TimelineBatch}
 pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, SubtaskState};
 pub use state::TaskState;
 
-// ── New re-exports (vibe-flow data model) ──
+// ── New re-exports (Surge data model) ──
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, Subgraph, SCHEMA_VERSION};
@@ -4570,7 +4570,7 @@ Expected: all green. Any clippy warnings — fix them in their respective files 
 - [ ] **Step 3: Commit**
 
 ```
-chore(surge-core): finalize lib.rs re-exports for vibe-flow data model
+chore(surge-core): finalize lib.rs re-exports for Surge data model
 
 All new types reachable from crate root: ContentHash, Edge*, Graph*,
 *Key (5 domain-keys), Node*, Profile*, RunEvent*, RunState*, validate.
@@ -4998,7 +4998,7 @@ Part of M1."
 
 - [ ] **Step 1: Pick a real project's roadmap**
 
-Pick the author's `domain-key` crate (or another real project the author maintains). Read its existing roadmap or task plan; mentally translate the milestones into a vibe-flow graph: a Milestone Loop over the listed milestones with an inner Task Loop per milestone's tasks. Write it as `flow.toml` based on the structure from `nested-3-levels.toml`.
+Pick the author's `domain-key` crate (or another real project the author maintains). Read its existing roadmap or task plan; mentally translate the milestones into a Surge graph: a Milestone Loop over the listed milestones with an inner Task Loop per milestone's tasks. Write it as `flow.toml` based on the structure from `nested-3-levels.toml`.
 
 If no real roadmap exists, use Surge's own roadmap (see `docs/03-ROADMAP.md`) — describe its milestones as graph nodes.
 

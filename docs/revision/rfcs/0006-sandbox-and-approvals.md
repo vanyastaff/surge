@@ -1,89 +1,230 @@
-# RFC-0006 · Sandbox and Approvals
+# RFC-0006 · Agent Sandbox and Approvals
 
 ## Overview
 
-The sandbox-and-approvals system is the **autonomy enabler**: it lets agents execute long-running work without per-action human approval, while preserving safety. Without effective sandboxing, the user's "describe and walk away" model collapses into per-tool-call confirmation dialogs.
+The sandbox-and-approvals system is the **autonomy enabler**: it lets agents execute long-running work without per-action human approval, while preserving enough control that the user can safely walk away.
 
-This document specifies:
-- Sandbox modes and what each allows/denies
-- Per-OS sandbox enforcement mechanisms
-- Approval policy and granular flags
-- Hooks system
-- AGENTS.md rules loading
-- Trust state for projects and templates
+surge does **not** implement its own OS sandbox in v0.1. There is no Landlock layer, no AppContainer layer, no `sandbox-exec`, no custom DNS interception, and no filesystem policy engine owned by surge.
 
-## Core principle
+Instead, surge treats sandboxing as **agent-native capability**:
 
-> The agent should be able to do everything the **graph allows** without asking a human, and nothing else.
+- Codex, Claude Code, Gemini CLI, and custom ACP agents already have their own permission/sandbox models.
+- surge stores the desired agent launch configuration and sandbox intent in profiles and nodes.
+- The ACP integration maps launch configuration and sandbox intent to the selected provider's supported session settings.
+- If the provider requests permission/elevation, surge turns that request into a Telegram/UI approval event and resumes the agent with the user's decision when the provider supports that flow.
+
+This keeps v0.1 focused on orchestration and remote control instead of rebuilding security primitives each agent runtime already ships.
+
+## Core Principle
+
+> The agent should be able to do everything its configured runtime sandbox allows without asking a human, and surge should ask the human only when the agent runtime requests a decision or the graph reaches a declared HumanGate.
 
 This means:
-- Sandbox enforces **technical** boundaries (filesystem, network, processes)
-- Profile/node config defines **policy** boundaries (allowed tools, max retries)
-- HumanGate nodes are explicit pause points — the only place humans interact during a run
-- Sandbox elevations are **rare exceptions** that ping the user, not normal flow
 
-## Sandbox modes
+- Agent runtime enforces **technical** boundaries.
+- Profile/node config defines **orchestration policy**: launch mode, requested sandbox intent, approval policy, allowed MCP/tool exposure, max retries.
+- HumanGate nodes are explicit pause points.
+- Permission/elevation requests are rare exceptions that ping the user, not normal flow.
 
-Four built-in modes plus custom configurations:
+## What surge Owns
+
+surge owns:
+
+- Agent launch configuration model in graph/profile TOML.
+- Sandbox intent model in graph/profile TOML.
+- Provider capability detection and diagnostics.
+- Mapping launch mode and sandbox intent to provider launch/session settings.
+- Approval events, Telegram cards, UI/CLI resolution, audit log.
+- "Allow once" / "Allow & remember" policy persistence.
+- Secrets filtering before remote notifications.
+- AGENTS.md trust and prompt-loading policy.
+- Hooks triggered by engine lifecycle events.
+
+surge does **not** own:
+
+- OS-level filesystem enforcement.
+- OS-level network enforcement.
+- Kernel sandboxing.
+- Shell subprocess containment.
+- Provider-specific internals that are not exposed through ACP/CLI settings.
+
+If a provider cannot enforce a requested mode, surge must say so clearly and either fail closed or require explicit user opt-in.
+
+## Agent Launch Configuration
+
+Launch configuration is the first layer of provider setup. It answers: **where and how is this agent session started?**
+
+Most users should not write raw launch fields in every flow. They define named agents in `agents.yml`, then `flow.toml` nodes reference those names. This mirrors `docker-compose.yml`: the friendly file declares reusable services, and the generated graph references them.
+
+```toml
+[launch]
+provider = "codex"                    # claude-code | codex | gemini | custom
+mode = "local"                        # provider-default | local | cloud | sandbox
+config_profile = "default"
+extra_args = []
+```
+
+Launch modes are provider-native:
+
+- **`provider-default`** — use the provider's default launch behavior.
+- **`local`** — run the agent on the user's machine as a local process.
+- **`cloud`** — use the provider's cloud/hosted execution mode when available.
+- **`sandbox`** — use the provider's isolated/sandboxed execution target when available.
+
+surge does not emulate a missing launch mode. If Codex supports a sandbox launch and Claude Code does not, the provider capability metadata says that clearly and validation handles it.
+
+## Sandbox Intent Modes
+
+These modes are portable intent labels. They are not a guarantee that every provider implements identical semantics.
+
+### `provider-default`
+
+Use the selected agent's default sandbox/permission behavior. This is useful during early integration or when the provider's defaults are already trusted by the user.
 
 ### `read-only`
 
-- Filesystem: read-only access to project worktree
-- No network
-- No subprocess execution
-- No git operations
+Intent:
 
-Use case: planning agents, analyzers, security auditors.
+- Agent may inspect project files.
+- Agent should not modify files.
+- Agent should not run mutating commands.
+- Network is disabled unless the provider default allows read-only network metadata.
+
+Use case: planning agents, analyzers, reviewers.
 
 ### `workspace-write`
 
-- Filesystem: read everywhere allowed, write only within run worktree
-- No network
-- Subprocess execution allowed for declared shell allowlist (e.g., `cargo`, `git`)
-- Git: read + commit allowed (within run branch), no push, no force operations
+Intent:
 
-Use case: implementers, test authors. **Default for most coding agents.**
+- Agent may read the project.
+- Agent may write within the run worktree.
+- Agent may run normal build/test commands.
+- Agent should not access user secrets or write outside the worktree.
+
+Use case: implementers, test authors. This is the default intent for most coding nodes.
 
 ### `workspace+network`
 
-- Same as `workspace-write` plus
-- Network: outbound HTTPS to declared domain allowlist
-- DNS: only allowed domains resolvable
+Intent:
 
-Use case: agents that need to download dependencies (`cargo add` resolves crates.io), agents that fetch API specs.
+- Same as `workspace-write`.
+- Agent may use network for declared development domains such as package registries, API docs, or GitHub.
+
+Use case: dependency updates, codegen from public specs, package resolution.
 
 ### `full-access`
 
-- Filesystem: full read/write (subject to `protected_paths` exclusions)
-- Network: unrestricted
-- Subprocess: unrestricted
-- Git: full access including push
+Intent:
 
-Use case: PR Composer (needs github push), CI integrations. **Always requires explicit elevation, never default.**
+- Agent runtime runs with broad access according to its own model.
+- Used only for trusted stages such as PR composition or explicit user-approved operations.
 
-### Custom
+`full-access` must never be silently selected by generated flows. It requires explicit profile/template configuration or a human approval.
 
-A node can define its own sandbox profile:
+### `custom`
+
+Provider-specific options for users who know the selected runtime:
 
 ```toml
-[sandbox_override]
+[sandbox]
 mode = "custom"
-read = ["~/projects/**"]
-write = ["~/.vibe/runs/<run_id>/**", "/tmp/vibe-*"]
-network_allowlist = ["api.openai.com", "internal.company.com"]
-shell_allowlist = ["docker", "kubectl"]
+provider = "codex"
+
+[sandbox.provider_options]
+approval_policy = "on-request"
+network = "enabled"
+extra_args = ["--some-provider-flag"]
 ```
 
-## Protected paths (always denied)
+Custom options are passed only to the matching provider. Unknown options are rejected during profile validation.
 
-Regardless of sandbox mode, these are **always read-only or denied**:
+## Provider Capability Metadata
 
-- `.git/` — never write directly (use git commands)
-- `.vibe/` — engine's own state
-- `~/.ssh/`, `~/.config/`, `~/.aws/` — user secrets
-- Files matched by `~/.vibe/global-deny.toml`
+Each provider reports or is configured with capabilities:
 
-The default global deny list is shipped with the app and includes:
+```toml
+[[providers]]
+id = "codex"
+supports_launch_modes = ["local", "cloud", "sandbox"]
+supports_modes = ["read-only", "workspace-write", "workspace+network", "full-access"]
+supports_permission_callbacks = true
+supports_mcp_filtering = true
+supports_network_policy = "provider-native"
+notes = "Exact enforcement is owned by Codex."
+```
+
+Capability metadata is used by:
+
+- `surge doctor`
+- profile validation
+- flow validation
+- engine startup diagnostics
+- Telegram warning cards when the requested policy is weaker/stronger than what the provider can express
+
+## Profile Configuration
+
+Profiles declare launch configuration and sandbox intent:
+
+```toml
+[launch]
+provider = "codex"
+mode = "local"
+config_profile = "default"
+
+[sandbox]
+mode = "workspace-write"              # provider-default | read-only | workspace-write | workspace+network | full-access | custom
+network_allowlist = ["crates.io", "github.com"]
+require_provider_support = true
+
+[approvals]
+policy = "on-request"                 # untrusted | on-request | never
+sandbox_approval = true
+mcp_elicitations = false
+request_permissions = true
+skill_approval = false
+elevation = true
+```
+
+`network_allowlist` is advisory unless the selected provider supports native network policy. If unsupported and `require_provider_support = true`, validation fails. If `false`, surge logs a warning and records the limitation in the run event log.
+
+## Approval Policy
+
+### Policy levels
+
+- **`untrusted`** — conservative mode. Human approval is requested for generated flow approval, sensitive permission requests, and risky provider warnings.
+- **`on-request`** — default. Agent runs autonomously inside its provider sandbox; user is pinged only for HumanGate nodes and provider permission/elevation requests.
+- **`never`** — no approvals during this stage. Used for automated re-runs or trusted CI-like stages. If a provider asks for permission, the request is denied or the stage fails.
+
+### Granular flags
+
+| Flag | Effect when `true` |
+|------|-------------------|
+| `sandbox_approval` | Ask before accepting provider sandbox/elevation requests |
+| `mcp_elicitations` | Forward MCP server elicitations to the user |
+| `request_permissions` | Forward agent permission requests to the user |
+| `skill_approval` | Ask before loading optional skills |
+| `elevation` | Always ask before moving to `full-access` |
+
+Combination: `policy = on-request, elevation = true` means the agent works autonomously until its runtime asks for more authority.
+
+## Permission and Elevation Flow
+
+When a provider exposes a permission/elevation request:
+
+1. **Detection**: ACP bridge or provider adapter receives a permission request, tool approval request, or sandbox escalation signal.
+2. **Event**: Engine writes `SandboxElevationRequested` or a more specific provider-permission event.
+3. **Delivery**: Telegram bot sends a card with action, reason, stage, command/tool summary, and risk notes.
+4. **Decision**:
+   - `Allow once`: return approval to the provider for this request.
+   - `Allow & remember`: approve and persist a broader profile/template policy when safe.
+   - `Deny`: return denial to the provider.
+5. **Resume**: Engine writes `SandboxElevationDecided` and resumes or fails the stage based on provider result.
+
+If the provider cannot pause and wait for a decision, surge fails closed for risky requests unless the profile explicitly selected `full-access` or `provider-default`.
+
+## Protected Paths and Secret Handling
+
+Because surge does not own OS enforcement, protected-path handling is advisory unless supported by the provider. The engine still keeps a default deny/warning list:
 
 ```toml
 deny = [
@@ -97,239 +238,67 @@ deny = [
 ]
 ```
 
-User can extend but not weaken this list.
+Uses:
 
-## OS-level enforcement
+- Pass to providers that support path deny lists.
+- Warn during flow/profile validation.
+- Redact sensitive-looking data before Telegram notifications.
+- Instruct bundled profiles to avoid copying secrets into summaries.
 
-The sandbox is enforced by the engine at multiple layers:
-
-### Tier 1: MCP tool filtering (always active)
-
-The engine controls which MCP tools the agent can call. Tools that would violate sandbox are not exposed at all. The agent literally doesn't see them in its tool list.
-
-This is the primary enforcement layer.
-
-### Tier 2: Filesystem path checking (always active)
-
-For tools that take paths (`read_file`, `write_file`, `edit_file`):
-- Engine intercepts the tool call before forwarding to MCP server
-- Checks the path against allow/deny lists
-- Rejects with informative error if violated
-
-This catches cases where the agent tries to escape via path manipulation (e.g., `../../etc/passwd`).
-
-### Tier 3: OS sandboxing (best effort, OS-dependent)
-
-When available, the engine wraps shell subprocesses in OS-level sandboxes:
-
-- **Linux**: Landlock (kernel 5.13+) for filesystem; seccomp-bpf for syscalls; or `nsjail` if installed.
-- **macOS**: Seatbelt (`sandbox-exec`) with custom `.sb` profile
-- **Windows**: Job Objects + AppContainer (more limited)
-
-This prevents agents from escaping through subprocess spawn (e.g., `cargo build` → `build.rs` → arbitrary code).
-
-If OS sandbox is unavailable, engine logs a warning and proceeds with Tier 1+2 only. User is notified at run start.
-
-### Tier 4: Network isolation (best effort)
-
-For `workspace+network` and `full-access`:
-- DNS resolution restricted to allowlist (via `/etc/hosts` patching in nsjail, or DNS server override)
-- Outbound connections monitored; deny attempts to reach non-allowlisted IPs
-
-Like Tier 3, this is best-effort. On systems without nsjail, agents could theoretically bypass via direct IP calls, but this is impractical for typical agent workflows.
-
-## Approval policy
-
-Per-node approval policy:
-
-```toml
-[approvals]
-policy = "on-request"                 # untrusted | on-request | never
-
-# Granular flags
-sandbox_approval = true               # ask before sandbox elevation
-mcp_elicitations = false              # auto-confirm MCP server prompts
-request_permissions = true            # ask if agent requests new perms
-skill_approval = false                # auto-load safe skills
-elevation = true                      # always ask before full-access
-```
-
-### Policy levels
-
-- **`untrusted`** — every meaningful action requires approval. Used when running untrusted templates or third-party flows.
-- **`on-request`** — agent runs autonomously within sandbox, approvals requested only for elevation events. **Default for normal use.**
-- **`never`** — no approvals during this stage. Used for automated re-runs, CI integrations.
-
-### Granular flags
-
-Override the policy for specific event types:
-
-| Flag | Effect when `true` |
-|------|-------------------|
-| `sandbox_approval` | Ask before commands escape sandbox |
-| `mcp_elicitations` | MCP server can ask agent for input → forwarded to user |
-| `request_permissions` | Agent can request new tool/scope, ask user |
-| `skill_approval` | New skills require approval before use |
-| `elevation` | Always ask before sandbox raised to higher tier |
-
-Combination: `policy = on-request, elevation = true` (default) means: agent works autonomously, only pings for sandbox tier upgrades.
-
-## Sandbox elevation flow
-
-When an agent attempts an action outside its sandbox:
-
-1. **Detection**: Tool filter / path checker / OS sandbox catches the attempt.
-2. **Decision**: Engine checks node's `approvals.elevation`:
-   - `false` (auto-deny): write `SandboxElevationDecided { decision: deny }`, agent receives error.
-   - `true` (ask): write `SandboxElevationRequested`, send Telegram card, pause.
-3. **User response**: 
-   - `Allow once`: action proceeds, no template change.
-   - `Allow & remember`: action proceeds, template's allowlist is permanently extended.
-   - `Deny`: action fails with informative error to agent.
-4. **Resolution**: write `SandboxElevationDecided`, resume execution.
-
-The "remember" option makes the system **learn from user choices**. Each future run from the same template starts with broader allowlist, fewer pings.
+Telegram must never receive full source files, secret values, or raw environment dumps. It receives summaries, command snippets, metadata, and links to local views.
 
 ## Hooks
 
-Hooks are user-defined shell commands executed at lifecycle points. They cannot be invoked by the agent directly — they're triggered by the engine.
+Hooks are user-defined shell commands executed at lifecycle points. They cannot be invoked by the agent directly; they are triggered by the engine.
 
 ### Hook triggers
 
-- **`pre_tool_use`** — before agent calls a tool
-- **`post_tool_use`** — after tool returns successfully
-- **`on_outcome`** — after agent reports outcome (before engine routes)
-- **`on_error`** — when stage fails or retry attempted
+- **`pre_tool_use`** — before a provider-visible tool call is accepted by the engine/adapter, when available.
+- **`post_tool_use`** — after a tool returns successfully.
+- **`on_outcome`** — after agent reports outcome, before routing.
+- **`on_error`** — when stage fails or retry is attempted.
 
 ### Hook configuration
 
 ```toml
 [[hooks.entries]]
 trigger = "pre_tool_use"
-matcher = 'tool == "edit_file"'       # JS-like predicate
-command = "./.vibe/hooks/check_guard.sh ${TOOL_ARG_PATH}"
+matcher = 'tool == "edit_file"'
+command = "./.surge/hooks/check_guard.sh ${TOOL_ARG_PATH}"
 on_failure = "reject"                 # reject | warn | ignore
 timeout_seconds = 10
 inherit = "extend"                    # extend | replace | disable
 ```
 
-### Available context variables in hook commands
+Hook coverage depends on what the provider exposes. If a provider does not expose a tool event before execution, `pre_tool_use` cannot be guaranteed for that provider.
 
-- `${RUN_ID}` — current run ID
-- `${NODE_ID}` — current node
-- `${TOOL_NAME}` — for tool hooks
-- `${TOOL_ARG_*}` — tool argument values (e.g., `${TOOL_ARG_PATH}`)
-- `${OUTCOME_ID}` — for `on_outcome` hooks
-- `${WORKTREE}` — path to run's worktree
+## AGENTS.md Rules Files
 
-### Hook on_failure semantics
+`AGENTS.md` is used for context injection and project rules. Loading scope hierarchy:
 
-- **`reject`**: stage fails as if hook is part of the contract
-- **`warn`**: log a warning, continue
-- **`ignore`**: silent, continue
-
-For `on_outcome` hooks, `reject` causes outcome rejection (covered in RFC-0003): retry counter increments, agent gets another chance.
-
-### Hook inheritance
-
-Hooks combine across scopes (global → profile → project → node):
-
-- **`extend`** (default): node-level hooks add to inherited hooks
-- **`replace`**: node-level hooks replace inherited hooks at this trigger
-- **`disable`**: explicitly disable specific inherited hooks by ID
-
-This lets profiles ship reasonable defaults while allowing per-node opt-out.
-
-## AGENTS.md rules files
-
-`AGENTS.md` is the de facto standard for AI coding agent rules (Linux Foundation initiative). vibe-flow uses this format for context injection.
-
-### Loading scope hierarchy
-
-```
-1. ~/.vibe/AGENTS.md                          (global, user-level)
-2. <profile>/<role>.md or .toml [prompt.system] (profile-level)
-3. <project_root>/AGENTS.md                   (project-level)
-4. <subdir>/AGENTS.md                         (subdir-level, JIT)
+```text
+1. ~/.surge/AGENTS.md
+2. <profile>/<role>.md or .toml [prompt.system]
+3. <project_root>/AGENTS.md
+4. <subdir>/AGENTS.md
 ```
 
-Loaded in order, later overrides earlier. JIT (just-in-time) loading: subdir AGENTS.md is loaded only when an agent touches a file in that subdir, saving tokens.
-
-### Rule file format
-
-Standard markdown. Front matter optional for metadata:
-
-```markdown
----
-applies_to: ["**/*.rs"]
-priority: high
----
-
-# Project rules
-
-- All public functions must have rustdoc comments
-- No `unwrap()` outside `#[cfg(test)]`
-- Use `tracing` not `log` for logging
-```
-
-The `applies_to` pattern (if specified) restricts the rule to matching files. The agent sees rules only when they apply.
+Rules are loaded in order, later scopes override earlier scopes. Subdirectory rules can be loaded just-in-time when the agent touches relevant paths, if the provider supports mid-session context injection. Otherwise they are loaded at stage start.
 
 ### Trust state
 
-A rules file can be marked untrusted:
+Rules files imported from external sources start untrusted. Untrusted files are not loaded into agent context until the user trusts them.
 
-- Files imported from external sources start untrusted
-- User must explicitly trust them in the editor
-- Untrusted files are NOT loaded into agent context, regardless of scope
-
-Trust is per-file, persisted in `~/.vibe/trust.toml`:
+Trust is persisted globally:
 
 ```toml
 [[trusted]]
 path = "/home/user/projects/myapp/AGENTS.md"
 hash = "sha256:..."
 trusted_at = "2026-05-01T..."
-
-[[untrusted]]
-path = "/home/user/projects/myapp/imported/external-rules.md"
-reason = "Imported from external source, awaiting review"
 ```
 
-### Project trust
-
-A project (working directory) is also trusted/untrusted:
-
-- New project (first time `vibe run` is invoked): prompts for trust decision
-- Trusted: project's `AGENTS.md` and `.vibe/` configs are loaded
-- Untrusted: project hooks, rules, custom node types are skipped (Codex-style)
-
-Trust is project-path-based, persisted globally.
-
-## JIT context loading
-
-For large projects with many AGENTS.md files in subdirs:
-
-### Strategy
-
-Engine maintains a watch list of subdir AGENTS.md files (just paths, not content). When the agent reads or writes a file in a subdir, engine:
-
-1. Checks if there's an unloaded AGENTS.md in that subdir or its parents up to the loaded root.
-2. If yes, reads it, validates trust, prepends to next agent turn's context.
-3. Tracks "loaded" status to avoid re-reading.
-
-### Token budget
-
-Each profile has a `max_context_tokens` that JIT loading respects. If loading the new AGENTS.md would exceed budget, the engine either:
-- Skips loading (and logs warning)
-- Truncates oldest non-essential context to make room
-
-User-configurable via `auto_trim_oldest = true` (default).
-
-### Disabling JIT
-
-Set `[runtime].load_rules_lazily = false` in profile to load all AGENTS.md upfront. Useful for short runs where the up-front cost is acceptable and avoiding mid-run context shifts.
-
-## Notification channels (recap from RFC-0001 + sandbox angle)
+## Notification Channels
 
 Approvals can route through different channels in priority order:
 
@@ -338,60 +307,47 @@ Approvals can route through different channels in priority order:
 channels = [
   { type = "telegram", chat_id_ref = "$DEFAULT" },
   { type = "desktop", duration = "persistent" },
-  { type = "email", to_ref = "$USER_EMAIL" },     # fallback
+  { type = "email", to_ref = "$USER_EMAIL" },
 ]
-fallback_timeout_seconds = 1800                    # try next channel after 30 min
+fallback_timeout_seconds = 1800
 ```
 
-Critical for "user is away" scenarios: if Telegram delivery fails or user doesn't respond in 30 min, engine escalates to email or desktop notification.
+For the "user is away" scenario, Telegram is the primary channel. Desktop UI is a convenience, not a v0.1 dependency.
 
-## Audit log
+## Audit Log
 
-Every approval event is in the run's event log permanently. This is the audit trail:
+Every approval event is in the run event log permanently:
 
-- Who approved what (channel + decision)
-- When (seq + timestamp)
-- What was the context (the artifact being approved)
-- What changed in trust state ("Allow & remember" → which template extended)
+- Who approved what, by channel.
+- When it was approved.
+- What context was shown.
+- Whether policy changed because of "Allow & remember".
+- Which provider launch and sandbox settings were requested and which were actually applied.
 
-For compliance-conscious users, this gives a complete record. Future enterprise feature could export this to SIEM, but for v1 it's just the SQLite event log.
+This is the source of truth for replay, debugging, and trust decisions.
 
-## Open questions
+## Security Model
 
-### Network egress monitoring
+surge's v0.1 security model is honest and limited:
 
-Even with allowlist, an agent could exfiltrate data via DNS queries to allowed domains (e.g., encoding data in subdomain queries to a domain that has wildcard support). This is theoretical — in practice, mitigation:
+- It is an orchestrator, not a sandbox kernel.
+- It relies on the selected agent runtime for technical isolation.
+- It records what it requested from the provider.
+- It warns when the provider cannot honor the requested mode.
+- It keeps code and secrets local; Telegram receives summaries only.
 
-- Log all DNS queries
-- Pattern-match for suspicious patterns (high entropy, unusual subdomain structure)
-- Per-template "data egress concerns" flag that tightens monitoring
+For high-risk repositories, users should run surge inside a VM, container, WSL distro, or dedicated machine and choose an agent provider with the sandbox guarantees they need.
 
-For v1: log + pattern-match + warn. Active blocking is v2.
+## Acceptance Criteria
 
-### Sandbox escape via OS bugs
+The agent sandbox and approval system is correctly implemented when:
 
-The agent could find a kernel bug (in Landlock, seccomp) and escape. Mitigation: defense in depth — multiple tiers, with Tier 1 (MCP filtering) being the strongest. Even if Tier 3 is bypassed, the agent has limited tool access.
-
-For high-stakes work (production systems), users should run vibe-flow in a VM or container. Document this in security best practices.
-
-### Approval forgery
-
-A malicious actor with access to user's Telegram could approve runs. Mitigations:
-- Two-factor approval for elevation events (Telegram + desktop confirmation)
-- Approval signing (require user to type a confirmation phrase for sensitive operations)
-
-For v1: Telegram-only. Two-factor is opt-in v2.
-
-## Acceptance criteria
-
-The sandbox and approval system is correctly implemented when:
-
-1. An Implementer node with default `workspace-write` sandbox cannot write outside the worktree (verified via attempted escapes in test).
-2. Trying to access `~/.ssh/` from any sandbox mode is denied at Tier 1 + Tier 2 + Tier 3.
-3. Sandbox elevation request reaches Telegram within 5 seconds of the agent's blocked attempt.
-4. "Allow & remember" persists the new allowlist entry in the template, verified by inspecting template TOML after run.
-5. AGENTS.md JIT loading saves measurable tokens vs. eager loading on a 100-file project (test fixture).
-6. Untrusted AGENTS.md files are NOT included in agent context, verified by token-level inspection.
-7. Hooks fire reliably and reject failed outcomes per `on_failure` policy.
-8. OS sandbox enforcement works on Linux (Landlock available), macOS (sandbox-exec), and Windows (Job Objects).
-9. End-to-end: a 30-minute autonomous run with default `workspace-write` produces zero approval requests beyond the 3 declared HumanGates.
+1. Profiles can declare launch configuration and sandbox intent, and validation checks both against provider capability metadata.
+2. Starting a session records requested and applied launch/sandbox settings in the event log.
+3. Unsupported launch or sandbox modes fail with a clear diagnostic unless `provider-default` or explicit opt-in is selected.
+4. A mock provider permission request reaches Telegram within 5 seconds.
+5. Telegram `Allow once`, `Allow & remember`, and `Deny` decisions are written to the event log and returned to the mock provider.
+6. "Allow & remember" persists a profile/template policy change and is visible in later validation.
+7. Secret filtering catches common API key patterns before Telegram delivery.
+8. `surge doctor` reports provider sandbox capabilities and warns about unsupported or unknown behavior.
+9. End-to-end: a 30-minute autonomous run with default `workspace-write` produces zero approval requests beyond declared HumanGates and provider-native permission requests.

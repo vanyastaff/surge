@@ -15,7 +15,7 @@ This document specifies:
 
 Alternatives considered and rejected:
 
-**Plain CRUD** (current_status column, updated in place). Cannot replay. Cannot fork. Cannot debug "why did the run go this way at 14:32" — that information is gone the moment status updates. Common choice in similar tools (Vibe Kanban, Conductor) — and they all suffer from this limitation.
+**Plain CRUD** (current_status column, updated in place). Cannot replay. Cannot fork. Cannot debug "why did the run go this way at 14:32" — that information is gone the moment status updates. Common choice in similar tools (surge Kanban, Conductor) — and they all suffer from this limitation.
 
 **Snapshots + diffs**. Periodically dump full state to disk, store diffs between snapshots. Less storage than full event log but loses fine-grained history. Time-travel only works to snapshot boundaries.
 
@@ -48,7 +48,7 @@ struct Event {
 
 #### Run lifecycle
 
-- **`RunStarted`** — first event of any run. Carries pipeline ID, initial inputs, project context, run policy (sandbox tier, retry limits).
+- **`RunStarted`** — first event of any run. Carries pipeline ID, initial inputs, project context, run policy (agent sandbox intent, retry limits).
 - **`RunCompleted`** — terminal event. Carries final state and which Terminal node was reached.
 - **`RunFailed`** — terminal event for unrecoverable failures. Carries error chain.
 - **`RunAborted`** — terminal event for user-initiated cancellation.
@@ -68,7 +68,7 @@ struct Event {
 
 - **`StageEntered`** — pipeline reached a node. Carries node ID and attempt number (≥1).
 - **`StageInputsResolved`** — all bindings (artifact references, prompt variables) have been computed and the agent is about to be invoked.
-- **`SessionOpened`** — ACP session created for this stage attempt. Carries session ID.
+- **`SessionOpened`** — ACP session created for this stage attempt. Carries session ID, provider, launch mode, and applied sandbox mode.
 - **`ToolCalled`** — agent invoked a tool. Carries tool name, arguments (redacted if sensitive), session ID.
 - **`ToolResultReceived`** — tool returned. Carries success/failure and result hash.
 - **`ArtifactProduced`** — stage created or modified an artifact (file, document). Carries path and content hash.
@@ -91,7 +91,7 @@ struct Event {
 
 #### Sandbox
 
-- **`SandboxElevationRequested`** — agent attempted action outside current sandbox. Carries requested capability.
+- **`SandboxElevationRequested`** — provider or agent requested capability outside current sandbox intent. Carries requested capability.
 - **`SandboxElevationDecided`** — user approved/denied (or remembered for template).
 
 #### Hooks
@@ -175,11 +175,11 @@ The full match is exhaustive. Invalid transitions (e.g., `OutcomeReported` while
 
 ### Phase 1: Initialization
 
-User invokes `vibe run "<description>"` from a project directory.
+User invokes `surge run "<description>"` from a project directory.
 
 1. Engine generates `RunId` (UUIDv7).
-2. Engine creates worktree branch `vibe/run-<short_id>` from current `HEAD`.
-3. Engine creates run directory `~/.vibe/runs/<run_id>/`.
+2. Engine creates worktree branch `surge/run-<short_id>` from current `HEAD`.
+3. Engine creates run directory `~/.surge/runs/<run_id>/`.
 4. Engine writes initial event `RunStarted` to event log.
 5. Engine forks subprocess to handle this run; main process returns control.
 6. Daemon mode: engine continues even after CLI exits (run persists across terminal closures).
@@ -241,7 +241,7 @@ The engine must survive:
 
 ### Recovery procedure
 
-On engine startup, scan `~/.vibe/runs/` for runs in non-terminal state. For each:
+On engine startup, scan `~/.surge/runs/` for runs in non-terminal state. For each:
 
 1. Load event log into memory.
 2. Fold events to compute current state.
@@ -273,7 +273,7 @@ Multiple runs can execute concurrently. Each run is isolated:
 - Own ACP session pool
 - Own subprocess (daemon)
 
-The CLI tracks runs by ID. `vibe list` queries all runs, `vibe attach <run_id>` connects stdout to a running run for live tailing.
+The CLI tracks runs by ID. `surge list` queries all runs, `surge attach <run_id>` connects stdout to a running run for live tailing.
 
 ### Locking
 

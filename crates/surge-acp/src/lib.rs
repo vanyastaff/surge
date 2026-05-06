@@ -59,7 +59,7 @@ pub mod secrets;
 pub mod terminal;
 pub mod transport;
 
-// New (M3) — vibe-flow ACP bridge. Pure addition, legacy modules untouched.
+// New (M3) — Surge ACP bridge. Pure addition, legacy modules untouched.
 pub mod bridge;
 pub mod shared;
 

@@ -1,4 +1,4 @@
-//! Stable string identifiers for vibe-flow graph entities.
+//! Stable string identifiers for Surge graph entities.
 //!
 //! These keys are *user-typed strings* in `flow.toml` (e.g., `"impl_2"`,
 //! `"done"`, `"implementer@1.0"`). For *runtime-generated* IDs (`RunId`,

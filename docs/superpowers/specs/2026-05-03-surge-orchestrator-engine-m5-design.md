@@ -2,7 +2,7 @@
 
 > Scope: milestone M5 — engine that drives a frozen `Graph` through `AcpBridge`
 > sessions, persists every observable transition into `surge-persistence`, and
-> resumes from the latest snapshot after a crash. Closes the vibe-flow loop:
+> resumes from the latest snapshot after a crash. Closes the Surge loop:
 > M1 (data) + M2 (storage) + M3 (bridge) → working autonomous runs.
 
 ## 1. Goals & non-goals
@@ -80,7 +80,7 @@
 ### 2.1 Pure addition strategy (mirrors M1 / M2 / M3)
 
 The legacy `surge-orchestrator::{pipeline, phases, executor, parallel, planner,
-qa, retry, schedule}` modules are FSM-based and predate the vibe-flow data
+qa, retry, schedule}` modules are FSM-based and predate the Surge data
 model. M5 does not modify them. A new `engine` submodule is added alongside,
 with no public re-exports that could shadow legacy names. The crate's
 `lib.rs` adds one line: `pub mod engine;`.

@@ -1,10 +1,10 @@
-# vibe-flow · Project Specification
+# surge · Project Specification
 
-> Graph-based AI coding orchestrator with adaptive flow generation, sandbox-first autonomy, and Telegram-driven approvals.
+> Graph-based AI coding orchestrator with adaptive flow generation, agent-native sandbox autonomy, and Telegram-driven approvals.
 
 ## What is this
 
-`vibe-flow` is a local-first desktop tool for orchestrating long-running AI coding tasks through declarative graphs. The user describes a goal in natural language, the system generates a tailored execution flow (linear for trivial tasks, nested loops for large multi-milestone work), and agents execute autonomously with the user approving only at strategic checkpoints — typically via Telegram, so they don't need to sit at the computer.
+`surge` is a local-first desktop tool for orchestrating long-running AI coding tasks through declarative graphs. The user describes a goal in natural language, the system generates a tailored execution flow (linear for trivial tasks, nested loops for large multi-milestone work), and agents execute autonomously with the user approving only at strategic checkpoints — typically via Telegram, so they don't need to sit at the computer.
 
 It is **not** another kanban or task manager. It is **not** a multi-agent swarm. It is a deterministic engine driving typed graphs where each node is an isolated agent session with declared outcomes that route to specific next nodes.
 
@@ -16,9 +16,10 @@ Author has a full-time job. Existing AI coding tools require constant attention 
 
 1. **Engine is dumb, agents are smart.** Routing decisions are declarative (graph edges by outcome). LLM only writes code, never decides "what to do next" — that's the graph's job.
 2. **Adaptive complexity.** Trivial task → 3 nodes. Large project → nested milestone/task loops. The Flow Generator picks structure per-task, the user never selects a "tier" or "methodology".
-3. **Sandbox-first autonomy.** Default sandbox is restrictive enough that 90% of agent actions need no approval. User is pinged only on (a) declared HumanGate nodes, (b) sandbox elevation, (c) terminal events.
-4. **Event-sourced, replayable.** Every run is an append-only event log. Time-travel debugging and "fork from here" are free consequences.
-5. **Open source, MIT/Apache-2.0.** No paywalls, no telemetry without opt-in, no CLA. DCO sign-off only.
+3. **Compose-like configuration.** Agent routing is declared in a friendly `agents.yml` file with named agents and role routes, similar to `docker-compose.yml`. LLMs should be able to read and edit it safely.
+4. **Agent-native sandbox autonomy.** surge does not implement its own OS sandbox. It configures and observes the sandbox/permission system already provided by the selected agent runtime, then pings the user only on (a) declared HumanGate nodes, (b) agent permission/elevation requests, (c) terminal events.
+5. **Event-sourced, replayable.** Every run is an append-only event log. Time-travel debugging and "fork from here" are free consequences.
+6. **Open source, MIT/Apache-2.0.** No paywalls, no telemetry without opt-in, no CLA. DCO sign-off only.
 
 ## Document index
 
@@ -29,7 +30,7 @@ Author has a full-time job. Existing AI coding tools require constant attention 
 - [`rfcs/0003-graph-model.md`](rfcs/0003-graph-model.md) — Nodes, edges, outcomes, validation rules
 - [`rfcs/0004-bootstrap-and-flow-generation.md`](rfcs/0004-bootstrap-and-flow-generation.md) — Three-stage bootstrap, adaptive complexity
 - [`rfcs/0005-profiles-and-roles.md`](rfcs/0005-profiles-and-roles.md) — Profile registry, role-as-first-class-node
-- [`rfcs/0006-sandbox-and-approvals.md`](rfcs/0006-sandbox-and-approvals.md) — Sandbox modes, hooks, AGENTS.md, trust
+- [`rfcs/0006-sandbox-and-approvals.md`](rfcs/0006-sandbox-and-approvals.md) — Agent launch/sandbox settings, approvals, hooks, AGENTS.md, trust
 - [`rfcs/0007-telegram-bot.md`](rfcs/0007-telegram-bot.md) — Approval UX, inline keyboard, command interface
 - [`rfcs/0008-ui-architecture.md`](rfcs/0008-ui-architecture.md) — Editor canvas, runtime view, replay mode
 
@@ -43,7 +44,7 @@ Author has a full-time job. Existing AI coding tools require constant attention 
 
 ### Component specs (implementation level)
 
-- [`components/cli.md`](components/cli.md) — `vibe` CLI surface
+- [`components/cli.md`](components/cli.md) — `surge` CLI surface
 - [`components/editor.md`](components/editor.md) — egui canvas editor
 - [`components/runtime-ui.md`](components/runtime-ui.md) — gpui runtime/replay view
 - [`components/telegram-bot.md`](components/telegram-bot.md) — teloxide bot implementation

@@ -2,7 +2,7 @@
 
 ## Overview
 
-vibe-flow is a Rust workspace with multiple crates. The split is driven by:
+surge is a Rust workspace with multiple crates. The split is driven by:
 - **Layered architecture**: dependencies flow only downward
 - **Different stacks**: editor (egui) and runtime (gpui) need separate UI crates
 - **Compilation time**: smaller crates rebuild faster
@@ -11,7 +11,7 @@ vibe-flow is a Rust workspace with multiple crates. The split is driven by:
 ## Crate structure
 
 ```
-vibe-flow/
+surge/
 ├── Cargo.toml                  (workspace)
 ├── README.md
 ├── ARCHITECTURE.md             (link to spec docs)
@@ -24,14 +24,13 @@ vibe-flow/
 │   ├── engine/                 (state machine, executor)
 │   ├── storage/                (SQLite + filesystem)
 │   ├── acp/                    (ACP integration)
-│   ├── sandbox/                (OS-level sandboxing)
 │   ├── telegram/               (bot service)
 │   ├── editor/                 (egui editor binary)
 │   ├── runtime-ui/             (gpui runtime binary)
 │   ├── cli/                    (CLI binary)
 │   └── testing/                (test utilities)
 │
-├── profiles/                   (bundled profiles, copied to ~/.vibe/profiles/)
+├── profiles/                   (bundled profiles, copied to ~/.surge/profiles/)
 │   ├── _bootstrap/
 │   │   ├── description-author-1.0.toml
 │   │   ├── roadmap-planner-1.0.toml
@@ -78,8 +77,9 @@ Lowest layer. No I/O, no async, no UI.
 - `Event`, `EventPayload` types (RFC-0002)
 - `RunState`, fold function (RFC-0002)
 - `Profile`, `Role` types (RFC-0005)
-- `SandboxMode`, `ApprovalPolicy` types (RFC-0006)
-- TOML serialization/deserialization
+- `AgentLaunchConfig`, `LaunchMode`, `SandboxMode`, `ApprovalPolicy` types (RFC-0006)
+- TOML serialization/deserialization for profiles/flows/templates
+- YAML serialization/deserialization for `agents.yml`
 - Validation logic
 
 **Dependencies:**
@@ -88,6 +88,7 @@ Lowest layer. No I/O, no async, no UI.
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 toml_edit = "0.22"
+# YAML parser for compose-like agents.yml; exact crate chosen during implementation.
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 domain-key = { workspace = true }   # author's existing crate
@@ -119,7 +120,6 @@ The state machine that drives runs.
 core = { path = "../core" }
 storage = { path = "../storage" }
 acp = { path = "../acp" }
-sandbox = { path = "../sandbox" }
 tokio = { version = "1", features = ["full"] }
 async-trait = "1"
 tracing = "0.1"
@@ -133,7 +133,7 @@ Wraps SQLite for event log + materialized views, plus filesystem for artifacts.
 - SQLite schema and migrations
 - Event log append + read
 - Materialized view maintenance
-- Artifact storage (filesystem under `~/.vibe/runs/<run_id>/artifacts/`)
+- Artifact storage (filesystem under `~/.surge/runs/<run_id>/artifacts/`)
 - Worktree management (creating, listing, cleaning git worktrees)
 - Run directory layout
 
@@ -153,8 +153,9 @@ Bridge to ACP (Agent Client Protocol). Handles agent invocation, session lifecyc
 **Contents:**
 - ACP bridge (dedicated thread + LocalSet pattern, similar to Surge)
 - Session pool
-- Tool injection (`report_stage_outcome`, sandbox-filtered MCP tools)
+- Tool injection (`report_stage_outcome`, provider-supported MCP tools)
 - Agent registry (Claude Code, Codex, Gemini executable lookup)
+- Agent launch and agent-native sandbox/session configuration mapping per provider
 - Streaming support for live tool calls
 
 **Dependencies:**
@@ -167,27 +168,11 @@ tokio = { version = "1" }
 
 This crate may be either built fresh or extracted from the author's `surge` project's `surge-acp` crate. The author has noted this could be either approach.
 
-### `sandbox` — OS-level enforcement
+### Sandbox boundary
 
-Per-OS sandboxing implementations.
+surge does **not** ship a dedicated sandbox crate in v0.1. Sandboxing is provided by the selected agent runtime (Claude Code, Codex, Gemini CLI, or a custom ACP agent). The core crate stores launch configuration (`provider-default`, `local`, `cloud`, `sandbox`) plus sandbox intent (`read-only`, `workspace-write`, `workspace+network`, `full-access`, provider-specific options), and the ACP crate maps those settings to provider-supported session flags or permission flows.
 
-**Contents:**
-- Trait `Sandbox` with `apply_to_command(...)`, `check_path(...)`, etc.
-- Linux impl: Landlock (via `landlock` crate), nsjail wrapper
-- macOS impl: sandbox-exec wrapper
-- Windows impl: AppContainer + Job Objects
-- Path checking (always-deny patterns)
-- Network allowlist enforcement
-
-**Dependencies:**
-```toml
-[dependencies]
-core = { path = "../core" }
-landlock = { version = "0.4", optional = true }    # Linux only
-
-[target.'cfg(target_os = "linux")'.dependencies]
-landlock = "0.4"
-```
+The engine records launch settings, sandbox settings, and approval/elevation events, but it does not implement Landlock, AppContainer, `sandbox-exec`, `nsjail`, DNS interception, or filesystem policy enforcement itself.
 
 ### `telegram` — bot service
 
@@ -318,20 +303,20 @@ strip = false
 ## Binary outputs
 
 Built binaries (debug or release):
-- `vibe` — CLI (the main binary users invoke)
-- `vibe-editor` — editor GUI
-- `vibe-runtime` — runtime GUI
-- `vibe-tg` — Telegram bot service (daemon)
+- `surge` — CLI (the main binary users invoke)
+- `surge-editor` — editor GUI
+- `surge-runtime` — runtime GUI
+- `surge-tg` — Telegram bot service (daemon)
 
-CLI can spawn the others when needed (e.g., `vibe replay` opens `vibe-runtime`).
+CLI can spawn the others when needed (e.g., `surge replay` opens `surge-runtime`).
 
 ## Dependency rules
 
 Strict layering enforced via Cargo.toml:
 
 - `core` depends on nothing (in our codebase)
-- `storage`, `acp`, `sandbox` depend on `core`
-- `engine` depends on `core`, `storage`, `acp`, `sandbox`
+- `storage`, `acp` depend on `core`
+- `engine` depends on `core`, `storage`, `acp`
 - `telegram` depends on `core`, `storage`
 - `editor` depends on `core`, `storage`
 - `runtime-ui` depends on `core`, `storage`, `engine`
@@ -356,9 +341,7 @@ strategy:
 All crates must build on all OS × stable. Nightly informational only.
 
 Skipped per OS:
-- Linux Landlock support: only ubuntu (others use no-op sandbox)
-- macOS sandbox-exec: only macOS
-- Windows Job Objects: only Windows
+- Provider availability differs by OS. CI uses mock ACP agents for sandbox/permission behavior and runs provider-specific smoke tests only where the provider binary is installed.
 
 ## Dependency philosophy
 
@@ -381,7 +364,6 @@ members = [
     "crates/engine",
     "crates/storage",
     "crates/acp",
-    "crates/sandbox",
     "crates/telegram",
     "crates/editor",
     "crates/runtime-ui",
@@ -395,7 +377,7 @@ edition = "2021"
 rust-version = "1.75"
 authors = ["..."]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/vanyastaff/vibe-flow"
+repository = "https://github.com/vanyastaff/surge"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -62,7 +62,7 @@ define_id!(SpecId, "spec");
 define_id!(TaskId, "task");
 define_id!(SubtaskId, "sub");
 
-// New runtime IDs added in M1 for vibe-flow data model.
+// New runtime IDs added in M1 for Surge data model.
 define_id!(RunId, "run");
 define_id!(SessionId, "session");
 

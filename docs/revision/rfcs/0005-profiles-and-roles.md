@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **profile** is a reusable configuration for an Agent node. It encapsulates everything that defines an agent's role: system prompt, allowed tools, sandbox policy, default outcomes, recommended model. Profiles are TOML files in `~/.vibe/profiles/` (and shipped defaults).
+A **profile** is a reusable configuration for an Agent node. It encapsulates everything that defines an agent's role: system prompt, allowed tools, agent launch configuration, agent-native sandbox intent, default outcomes, recommended model. Profiles are TOML files in `~/.surge/profiles/` (and shipped defaults).
 
 A **role** is the user-facing concept: "Implementer", "Reviewer", "Spec Author". Each role corresponds to one (or more, versioned) profile.
 
@@ -15,7 +15,7 @@ This document specifies:
 
 ## Why profiles are first-class
 
-Without profiles, every Agent node would carry its full configuration inline (system prompt, tools, sandbox, etc.) — duplicated across runs and projects. Updating the "Implementer" prompt would require touching every pipeline. Profiles solve this:
+Without profiles, every Agent node would carry its full configuration inline (system prompt, tools, launch settings, sandbox intent, etc.) — duplicated across runs and projects. Updating the "Implementer" prompt would require touching every pipeline. Profiles solve this:
 
 - **DRY**: One profile, many nodes referencing it
 - **Versioning**: Profile updates propagate to nodes via semver
@@ -41,11 +41,17 @@ recommended_model = "claude-opus-4-7"
 default_temperature = 0.2
 default_max_tokens = 200000
 
+[launch]
+provider = "claude-code"              # claude-code | codex | gemini | custom
+mode = "local"                        # provider-default | local | cloud | sandbox
+config_profile = "default"            # provider-specific launch/config profile
+extra_args = []                       # provider-specific CLI/ACP args
+
 [sandbox]
-default_mode = "workspace-write"      # read-only | workspace-write | workspace+network | full-access
-default_writable_roots = []           # additional paths beyond worktree
+default_mode = "workspace-write"      # provider-default | read-only | workspace-write | workspace+network | full-access
+default_writable_roots = []           # advisory unless provider supports path policy
 default_network_allowlist = ["crates.io", "github.com", "*.githubusercontent.com"]
-default_protected_paths = [".git", ".vibe", "~/.ssh", "~/.config"]
+default_protected_paths = [".git", ".surge", "~/.ssh", "~/.config"]
 
 [tools]
 default_mcp = ["filesystem", "shell", "git"]
@@ -154,11 +160,17 @@ default = true
 
 ### `[runtime]`
 
-Sets defaults for the agent invocation. Per-node overrides exist.
+Sets model and generation defaults for the agent invocation. Per-node overrides exist.
+
+### `[launch]`
+
+Defines how the agent is started when no named agent is selected from `agents.yml`. `provider` selects the agent family, `mode` selects the provider-supported execution target (`local`, `cloud`, `sandbox`, or provider default), and `config_profile`/`extra_args` pass through provider-specific launch configuration. This is separate from `[sandbox]`: launch mode says where/how the agent runs, sandbox says what permissions it should request inside that run.
+
+Launch config is resolved per node. Profile defaults are only defaults: a flow can select a named agent from `agents.yml` or override the provider/launch mode on a specific Agent node when the user wants different agents for different stages, such as Claude for implementation and Codex or Gemini for review.
 
 ### `[sandbox]`
 
-Default sandbox configuration. Maps to RFC-0006 sandbox modes. Per-node overrides allowed for power users.
+Default sandbox intent. Maps to RFC-0006 agent-native sandbox modes and is passed to the selected provider when supported. Per-node overrides are allowed for power users.
 
 ### `[tools]`
 
@@ -197,8 +209,8 @@ Definitions of custom fields shown in the node Inspector when a node uses this p
 
 When a node references `profile = "implementer@1.0"`:
 
-1. Engine looks up `~/.vibe/profiles/implementer-1.0.toml` (most specific path)
-2. Falls back to `~/.vibe/profiles/implementer.toml` (latest version) with semver compatibility check
+1. Engine looks up `~/.surge/profiles/implementer-1.0.toml` (most specific path)
+2. Falls back to `~/.surge/profiles/implementer.toml` (latest version) with semver compatibility check
 3. Falls back to bundled profile in app distribution
 4. Errors out if not found
 
@@ -239,7 +251,7 @@ Inheritance is **shallow merge**: child overrides parent for each key, except fo
 
 ## Bundled v1 profiles
 
-Shipped in `vibe-flow/profiles/` directory of the repo, installed to `~/.vibe/profiles/` on first run.
+Shipped in `surge/profiles/` directory of the repo, installed to `~/.surge/profiles/` on first run.
 
 ### Bootstrap profiles (under `_bootstrap/`)
 
@@ -269,12 +281,12 @@ These are special — `category = "_bootstrap"`, hidden from user node library b
 ## Profile registry CLI
 
 ```
-vibe profile list                     # list all installed profiles
-vibe profile show <id>                # show profile details
-vibe profile install <path-or-url>    # install a profile from file or URL
-vibe profile uninstall <id>           # remove a profile
-vibe profile validate <path>          # check profile is valid
-vibe profile diff <id> <id>           # compare two versions
+surge profile list                     # list all installed profiles
+surge profile show <id>                # show profile details
+surge profile install <path-or-url>    # install a profile from file or URL
+surge profile uninstall <id>           # remove a profile
+surge profile validate <path>          # check profile is valid
+surge profile diff <id> <id>           # compare two versions
 ```
 
 ## Profile authoring guidelines
@@ -350,9 +362,9 @@ Pipelines should reference profiles with caret semver (`^1.0`) for auto-updates 
 The profile system is correctly implemented when:
 
 1. All 7 v1 profiles validate, load, and produce coherent agent behavior on test inputs.
-2. A new profile (e.g., `linter@1.0`) can be added by dropping a TOML file in `~/.vibe/profiles/` with no code changes; it appears in the editor's Node Library and is selectable by Flow Generator.
+2. A new profile (e.g., `linter@1.0`) can be added by dropping a TOML file in `~/.surge/profiles/` with no code changes; it appears in the editor's Node Library and is selectable by Flow Generator.
 3. Profile inheritance works correctly: a child profile gets parent's defaults plus its own overrides.
-4. Per-node overrides (e.g., overriding `default_temperature`) take precedence over profile defaults.
-5. `vibe profile diff implementer@1.0 implementer@1.1` shows a clear comparison of changed fields.
+4. Per-node overrides (e.g., overriding `default_temperature`, launch provider, or launch mode) take precedence over profile defaults.
+5. `surge profile diff implementer@1.0 implementer@1.1` shows a clear comparison of changed fields.
 6. Flow Generator's prompt receives the profile registry as structured context and selects appropriate profiles for each milestone/task.
 7. Inspector UI custom fields render correctly in the node config dialog when a node uses a profile that defines them.

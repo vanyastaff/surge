@@ -221,7 +221,7 @@ Modal dialog when "Fork from here" clicked:
 │ □ Change profile of next node                                     │
 │ □ Skip next node entirely                                         │
 │                                                                   │
-│ Branch name: [vibe/run-fork-abc123____________]                   │
+│ Branch name: [surge/run-fork-abc123____________]                   │
 │                                                                   │
 │                              [Cancel]  [Create fork]              │
 └──────────────────────────────────────────────────────────────────┘
@@ -311,7 +311,7 @@ Same color palette as editor (control-room dark theme). Color tokens defined in 
 
 ## Persistence
 
-UI state in `~/.vibe/ui-state.toml`:
+UI state in `~/.surge/ui-state.toml`:
 
 ```toml
 [runtime]

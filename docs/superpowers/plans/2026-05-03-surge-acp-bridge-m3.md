@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `surge-acp::bridge` submodule (AcpBridge, BridgeClient, BridgeEvent broadcast, sandbox stub, mock ACP agent) to enable vibe-flow ACP integration without disturbing the legacy ACP stack.
+**Goal:** Add `surge-acp::bridge` submodule (AcpBridge, BridgeClient, BridgeEvent broadcast, sandbox stub, mock ACP agent) to enable Surge ACP integration without disturbing the legacy ACP stack.
 
 **Architecture:** Pure-addition strategy following the M1/M2 precedent. New `bridge/` submodule lives inside `surge-acp` next to legacy modules; private `shared/` helpers are extracted from legacy `client.rs` so both legacy and bridge can reuse them. Bridge runs its own dedicated OS thread with current-thread tokio runtime + `LocalSet` for the `!Send` ACP futures, isolated from the legacy `AgentPool`. Two-method `Sandbox` trait surface (`visibility` + `allows_tool`) ships with `AlwaysAllowSandbox` and `DenyListSandbox`; tier-3 OS enforcement deferred to M4. Engine integration (translating `BridgeEvent` → `EventPayload` and appending via `RunWriter`) lives in M5; M3 ships only the bridge layer plus a mock ACP agent that drives every code path end-to-end.
 
@@ -96,7 +96,7 @@ The binary file lands in Phase 9. Cargo will refuse to compile right now because
 Create `crates/surge-acp/src/bridge/mod.rs`:
 
 ```rust
-//! Vibe-flow ACP bridge.
+//! Surge ACP bridge.
 //!
 //! Pure-addition submodule introduced in M3. Coexists with the legacy
 //! `AgentPool` / `SurgeClient` stack at the crate root; consumers pick the
@@ -127,7 +127,7 @@ Create `crates/surge-acp/src/bridge/mod.rs`:
 Open `crates/surge-acp/src/lib.rs`. After the existing `pub mod transport;` line (currently the last `pub mod`), add:
 
 ```rust
-// New (M3) — vibe-flow ACP bridge. Pure addition, legacy modules untouched.
+// New (M3) — Surge ACP bridge. Pure addition, legacy modules untouched.
 pub mod bridge;
 mod shared;
 ```

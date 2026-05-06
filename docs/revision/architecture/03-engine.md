@@ -2,7 +2,7 @@
 
 ## Overview
 
-The engine is the heart of vibe-flow. It consumes events, advances run state, executes nodes, and produces new events. This document specifies the engine's internal structure, the executor's main loop, scheduling, and error recovery.
+The engine is the heart of surge. It consumes events, advances run state, executes nodes, and produces new events. This document specifies the engine's internal structure, the executor's main loop, scheduling, and error recovery.
 
 This is implementation-level detail building on RFC-0002 (execution model).
 
@@ -46,7 +46,6 @@ pub struct Executor {
     run_id: RunId,
     storage: Arc<Storage>,
     acp_bridge: Arc<AcpBridge>,
-    sandbox: Arc<dyn Sandbox>,
     state: RunState,
     config: RunConfig,
 }
@@ -110,12 +109,14 @@ async fn execute_agent_stage(&mut self, node: &Node) -> Result<()> {
     // 2. Build agent invocation context
     let profile = self.load_profile(&cfg.profile).await?;
     let prompt = self.render_prompt(&profile, &bindings, cfg.prompt_overrides.as_ref())?;
-    let sandbox_cfg = self.compute_sandbox(&profile, cfg.sandbox_override.as_ref())?;
+    let launch_cfg = self.compute_agent_launch_config(&profile, cfg.launch_override.as_ref())?;
+    let sandbox_cfg = self.compute_agent_sandbox_intent(&profile, cfg.sandbox_override.as_ref())?;
     let tools = self.compute_tools(&profile, cfg.tool_overrides.as_ref(), &sandbox_cfg)?;
     
     // 3. Open ACP session
     let session = self.acp_bridge.open_session(SessionConfig {
-        agent: profile.runtime.recommended_model.clone(),
+        launch: launch_cfg.clone(),
+        model: profile.runtime.recommended_model.clone(),
         system_prompt: prompt,
         tools: tools.clone(),
         sandbox: sandbox_cfg.clone(),
@@ -125,7 +126,9 @@ async fn execute_agent_stage(&mut self, node: &Node) -> Result<()> {
     self.write_event(EventPayload::SessionOpened {
         node: node.id.clone(),
         session: session.id.clone(),
-        agent: profile.runtime.recommended_model.clone(),
+        agent: launch_cfg.provider.clone(),
+        launch_mode: launch_cfg.mode.clone(),
+        sandbox_mode: sandbox_cfg.mode.clone(),
     }).await?;
     
     // 4. Run pre_tool_use hooks (none yet, will be triggered per-tool by ACP bridge)
@@ -518,7 +521,7 @@ pub async fn spawn_daemon(run_id: RunId, config: RunConfig) -> Result<u32> {
 
 ## Crash recovery
 
-On engine startup (called from `vibe doctor` or `vibe attach`):
+On engine startup (called from `surge doctor` or `surge attach`):
 
 ```rust
 pub async fn recover_runs(storage: &Storage) -> Result<Vec<RecoveryAction>> {
@@ -681,7 +684,9 @@ pub enum EngineError {
     StageTimeout { node: NodeId },
     HookExhaustion,
     SessionFailed(AcpError),
-    SandboxViolation { capability: String },
+    ProviderLaunchUnsupported { provider: String, requested: String },
+    ProviderSandboxUnsupported { provider: String, requested: String },
+    PermissionDenied { capability: String },
     MaxTraversalsExceeded,
     ReplanRequested,
     

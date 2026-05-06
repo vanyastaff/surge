@@ -1,4 +1,4 @@
-# M2 — `surge-persistence` storage layer for vibe-flow event log
+# M2 — `surge-persistence` storage layer for Surge event log
 
 **Status:** Design
 **Date:** 2026-05-02

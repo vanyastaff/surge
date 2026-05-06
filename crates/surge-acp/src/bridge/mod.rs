@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Vibe-flow ACP bridge.
+//! Surge ACP bridge.
 //!
 //! Pure-addition submodule introduced in M3. Coexists with the legacy
 //! `AgentPool` / `SurgeClient` stack at the crate root; consumers pick the

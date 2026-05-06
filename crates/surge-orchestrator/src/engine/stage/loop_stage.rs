@@ -120,7 +120,7 @@ async fn resolve_iterable(
             })?;
 
             // M6 supports TOML artifacts with a simple dotted path.
-            // (JSON support could be added later; current vibe-flow artifacts
+            // (JSON support could be added later; current Surge artifacts
             // are TOML by convention — see CLAUDE.md.)
             let content = std::str::from_utf8(&bytes).map_err(|e| {
                 StageError::Internal(format!(

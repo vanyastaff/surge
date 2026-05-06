@@ -2,7 +2,7 @@
 
 ## Overview
 
-vibe-flow has two desktop UIs:
+surge has two desktop UIs:
 
 1. **Editor** — for building and editing pipeline graphs (canvas-based, egui)
 2. **Runtime / Replay** — for monitoring active runs and reviewing finished ones (gpui)
@@ -42,7 +42,7 @@ Build and edit pipeline graphs visually. Open existing `flow.toml`, modify, save
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ TOP BAR · vibe·flow editor · ~/projects/myapp/flow.toml [💾]│
+│ TOP BAR · surge editor · ~/projects/myapp/flow.toml [💾]│
 ├──────────┬──────────────────────────────────┬───────────────┤
 │ SIDEBAR  │                                  │ INSPECTOR     │
 │          │                                  │               │
@@ -266,20 +266,20 @@ Sidebar shows list of active and recent runs. Switching between them swaps the e
 ### Commands
 
 ```
-vibe init                         # initialize project (creates pipeline.toml or selects template)
-vibe run <description>            # start a new run
-vibe run --template <name> <desc> # use specific template, skip bootstrap
-vibe list                         # list runs (active + recent)
-vibe status <run_id>              # show current state of a run
-vibe attach <run_id>              # tail logs of a running run
-vibe cancel <run_id>              # abort a run
-vibe replay <run_id>              # open replay mode in runtime UI
-vibe fork <run_id> --at <seq>     # fork from event seq
-vibe profile <subcmd>             # profile management
-vibe template <subcmd>            # template management
-vibe telegram setup               # set up Telegram bot
-vibe telegram test                # send test message
-vibe doctor                       # diagnose common issues
+surge init                         # initialize project (creates pipeline.toml or selects template)
+surge run <description>            # start a new run
+surge run --template <name> <desc> # use specific template, skip bootstrap
+surge list                         # list runs (active + recent)
+surge status <run_id>              # show current state of a run
+surge attach <run_id>              # tail logs of a running run
+surge cancel <run_id>              # abort a run
+surge replay <run_id>              # open replay mode in runtime UI
+surge fork <run_id> --at <seq>     # fork from event seq
+surge profile <subcmd>             # profile management
+surge template <subcmd>            # template management
+surge telegram setup               # set up Telegram bot
+surge telegram test                # send test message
+surge doctor                       # diagnose common issues
 ```
 
 ### Output formats
@@ -290,13 +290,13 @@ vibe doctor                       # diagnose common issues
 
 ### Daemon mode
 
-`vibe run` starts a daemon subprocess for the run that persists across CLI invocations. CLI returns control immediately after run starts. Subsequent `vibe attach` reconnects to view live progress.
+`surge run` starts a daemon subprocess for the run that persists across CLI invocations. CLI returns control immediately after run starts. Subsequent `surge attach` reconnects to view live progress.
 
 Daemon lifecycle:
 - Linux/macOS: daemon detaches via `setsid`, parent process can exit
 - Windows: spawned as detached process
 
-Daemon writes PID + status to `~/.vibe/runs/<run_id>/.daemon`. CLI uses this to communicate.
+Daemon writes PID + status to `~/.surge/runs/<run_id>/.daemon`. CLI uses this to communicate.
 
 ## Cross-cutting concerns
 
@@ -347,7 +347,7 @@ Runtime remembers:
 - Per-run scrubber position
 - Selected bottom panel tab
 
-State stored in `~/.vibe/ui-state.toml`.
+State stored in `~/.surge/ui-state.toml`.
 
 ## Implementation phasing
 
@@ -399,7 +399,7 @@ The UI architecture is correctly implemented when:
 
 1. Editor binary opens any valid `flow.toml` and renders it correctly with all node types, edges, and positions.
 2. Editing on canvas (add/move/delete nodes, connect ports) saves valid `flow.toml`.
-3. Runtime binary connects to a live run within 2 seconds of `vibe attach`.
+3. Runtime binary connects to a live run within 2 seconds of `surge attach`.
 4. Live updates render at 60fps for runs producing up to 10 events/second.
 5. Replay scrubber smoothly transitions between events with state correctly snapshotted at any cursor position.
 6. Fork-from-here creates a new run with state matching the cursor position, verified by event log comparison.
