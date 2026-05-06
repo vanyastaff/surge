@@ -195,12 +195,97 @@ impl InboxActionConsumer {
         Ok(())
     }
 
-    async fn handle_snooze(&self, _row: &InboxActionRow) -> Result<(), String> {
-        Err("not implemented (Task 6.3)".into())
+    async fn handle_snooze(&self, row: &InboxActionRow) -> Result<(), String> {
+        let ticket_row = {
+            let conn = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|e| e.to_string())?;
+            IntakeRepo::new(&conn)
+                .fetch_by_callback_token(&row.callback_token)
+                .map_err(|e| e.to_string())?
+        };
+        let ticket_row = match ticket_row {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        if !matches!(ticket_row.state, TicketState::InboxNotified) {
+            return Ok(());
+        }
+        let until = match row.snooze_until {
+            Some(u) => u,
+            None => return Err("snooze action without snooze_until".into()),
+        };
+        let conn = self
+            .storage
+            .acquire_registry_conn()
+            .map_err(|e| e.to_string())?;
+        let repo = IntakeRepo::new(&conn);
+        match repo.update_state_validated(&ticket_row.task_id, TicketState::Snoozed) {
+            Ok(()) => {}
+            Err(IntakeError::InvalidTransition { .. }) => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+        }
+        repo.set_snooze_until(&ticket_row.task_id, until)
+            .map_err(|e| e.to_string())?;
+        info!(task_id = %ticket_row.task_id, ?until, "inbox Snooze applied");
+        Ok(())
     }
 
-    async fn handle_skip(&self, _row: &InboxActionRow) -> Result<(), String> {
-        Err("not implemented (Task 6.3)".into())
+    async fn handle_skip(&self, row: &InboxActionRow) -> Result<(), String> {
+        let ticket_row = {
+            let conn = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|e| e.to_string())?;
+            IntakeRepo::new(&conn)
+                .fetch_by_callback_token(&row.callback_token)
+                .map_err(|e| e.to_string())?
+        };
+        let ticket_row = match ticket_row {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        if !matches!(
+            ticket_row.state,
+            TicketState::InboxNotified | TicketState::Snoozed
+        ) {
+            return Ok(());
+        }
+        let source = self
+            .sources
+            .get(&ticket_row.source_id)
+            .ok_or_else(|| format!("source {} not registered", ticket_row.source_id))?;
+
+        {
+            let conn = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|e| e.to_string())?;
+            let repo = IntakeRepo::new(&conn);
+            match repo.update_state_validated(&ticket_row.task_id, TicketState::Skipped) {
+                Ok(()) => {}
+                Err(IntakeError::InvalidTransition { .. }) => return Ok(()),
+                Err(e) => return Err(e.to_string()),
+            }
+            // Clear token + tg refs (no longer actionable).
+            repo.clear_callback_token(&ticket_row.task_id)
+                .map_err(|e| e.to_string())?;
+        }
+
+        let task_id = TaskId::try_new(ticket_row.task_id.clone())
+            .map_err(|e| format!("task_id: {e}"))?;
+        if let Err(e) = source.set_label(&task_id, "surge:skipped", true).await {
+            warn!(error = %e, task_id = %task_id, "set_label surge:skipped failed");
+        }
+        if let Err(e) = source
+            .post_comment(&task_id, "Surge: ticket skipped by user.")
+            .await
+        {
+            warn!(error = %e, task_id = %task_id, "tracker comment on Skip failed");
+        }
+        info!(task_id = %task_id, "inbox Skip applied");
+        Ok(())
     }
 }
 
