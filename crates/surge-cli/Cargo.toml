@@ -16,6 +16,7 @@ surge-git = { workspace = true }
 surge-orchestrator = { workspace = true }
 surge-persistence = { workspace = true }
 surge-notify = { workspace = true }
+surge-intake = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

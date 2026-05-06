@@ -10,6 +10,7 @@ pub mod memory;
 pub mod pipeline;
 pub mod registry;
 pub mod spec;
+pub mod tracker;
 
 /// Load a spec by ID or filename.
 pub fn load_spec_by_id(id: &str) -> anyhow::Result<surge_spec::SpecFile> {
