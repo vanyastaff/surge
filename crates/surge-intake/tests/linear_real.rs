@@ -9,8 +9,8 @@
 
 use std::env;
 use std::time::Duration;
-use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
 use surge_intake::TaskSource;
+use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
 
 fn env_or_skip(key: &str) -> Option<String> {
     match env::var(key) {
@@ -18,7 +18,7 @@ fn env_or_skip(key: &str) -> Option<String> {
         _ => {
             eprintln!("{key} not set; skipping");
             None
-        }
+        },
     }
 }
 

@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use surge_intake::TaskSource;
 use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
 use surge_intake::types::TaskEventKind;
-use surge_intake::TaskSource;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -248,6 +248,6 @@ async fn linear_source_rejects_empty_token() {
                 "expected auth error, got: {}",
                 err_str
             );
-        }
+        },
     }
 }

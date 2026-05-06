@@ -204,7 +204,7 @@ impl TaskSource for GitHubIssuesTaskSource {
                     let mapped = Self::map_octocrab_error(&e);
                     tokio::time::sleep(this.poll_interval).await;
                     Some((Err(mapped), this))
-                }
+                },
             }
         }))
     }

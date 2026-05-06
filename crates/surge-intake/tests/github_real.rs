@@ -9,8 +9,8 @@
 
 use std::env;
 use std::time::Duration;
-use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 use surge_intake::TaskSource;
+use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 
 fn env_or_skip(key: &str) -> Option<String> {
     match env::var(key) {
@@ -18,7 +18,7 @@ fn env_or_skip(key: &str) -> Option<String> {
         _ => {
             eprintln!("{key} not set; skipping");
             None
-        }
+        },
     }
 }
 

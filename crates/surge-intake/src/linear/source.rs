@@ -57,8 +57,8 @@ impl LinearTaskSource {
     ///
     /// Returns `Error::AuthFailed` if the token is invalid or empty.
     pub fn new(config: LinearConfig) -> Result<Self> {
-        let client = Client::from_token(&config.api_token)
-            .map_err(|e| Error::AuthFailed(e.to_string()))?;
+        let client =
+            Client::from_token(&config.api_token).map_err(|e| Error::AuthFailed(e.to_string()))?;
         Ok(Self {
             id: config.id,
             display_name: config.display_name,
@@ -134,7 +134,8 @@ impl LinearTaskSource {
             ..Default::default()
         };
 
-        let labels = self.client
+        let labels = self
+            .client
             .issue_labels::<IssueLabel>()
             .filter(filter)
             .first(1)
@@ -181,11 +182,11 @@ impl TaskSource for LinearTaskSource {
                 match result {
                     Ok(events) if !events.is_empty() => {
                         return Some((Ok(events[0].clone()), ()));
-                    }
+                    },
                     Err(e) => {
                         warn!("error polling linear issues: {}", e);
                         return Some((Err(e), ()));
-                    }
+                    },
                     Ok(_) => continue,
                 }
             }
@@ -201,7 +202,8 @@ impl TaskSource for LinearTaskSource {
             .ok_or_else(|| Error::InvalidTaskId(id.as_str().into()))?
             .to_string();
 
-        let issue = self.client
+        let issue = self
+            .client
             .issue::<Issue>(identifier)
             .await
             .map_err(map_err)?;
@@ -231,7 +233,8 @@ impl TaskSource for LinearTaskSource {
             IssueFilter::default()
         };
 
-        let result = self.client
+        let result = self
+            .client
             .issues::<Issue>()
             .filter(filter)
             .first(25)
@@ -282,10 +285,7 @@ impl TaskSource for LinearTaskSource {
             ..Default::default()
         };
 
-        let _: Comment = self.client
-            .comment_create(input)
-            .await
-            .map_err(map_err)?;
+        let _: Comment = self.client.comment_create(input).await.map_err(map_err)?;
 
         Ok(())
     }
@@ -317,7 +317,8 @@ impl TaskSource for LinearTaskSource {
             }
         };
 
-        let _: Issue = self.client
+        let _: Issue = self
+            .client
             .issue_update(update, identifier)
             .await
             .map_err(map_err)?;
@@ -361,7 +362,8 @@ impl LinearTaskSource {
             });
         }
 
-        let result = self.client
+        let result = self
+            .client
             .issues::<Issue>()
             .filter(filter)
             .first(25)
@@ -400,17 +402,16 @@ impl LinearTaskSource {
 /// Map `lineark_sdk::LinearError` to `crate::Error`.
 fn map_err(e: LinearError) -> Error {
     match e {
-        LinearError::Authentication(msg) | LinearError::Forbidden(msg) => {
-            Error::AuthFailed(msg)
-        }
-        LinearError::RateLimited { retry_after, message: _ } => {
+        LinearError::Authentication(msg) | LinearError::Forbidden(msg) => Error::AuthFailed(msg),
+        LinearError::RateLimited {
+            retry_after,
+            message: _,
+        } => {
             let retry_after_secs = retry_after.map(|f| f as u64).unwrap_or(60);
             Error::RateLimited { retry_after_secs }
-        }
+        },
         LinearError::Network(e) => Error::Network(e.to_string()),
-        LinearError::HttpError { status, .. } if status >= 500 => {
-            Error::Network(e.to_string())
-        }
+        LinearError::HttpError { status, .. } if status >= 500 => Error::Network(e.to_string()),
         _ => Error::Internal(e.to_string()),
     }
 }
