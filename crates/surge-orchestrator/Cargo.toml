@@ -12,6 +12,7 @@ surge-git = { workspace = true }
 surge-notify = { workspace = true }
 surge-persistence = { workspace = true }
 surge-mcp = { workspace = true }
+surge-intake = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

@@ -237,3 +237,66 @@ The engine refactor uses a separate M-series numbering aligned with the
 - `EdgePolicy::max_traversals` cap with `ExceededAction::{Escalate,Fail}`.
 - `validate_for_m6` — rejects multi-edge fanout (deferred to M8).
 - 5 integration tests + 6 `#[ignore]`d stubs for M7/M8 scenarios.
+
+---
+
+## RFC-0010 — Plan A · Foundation ✅
+
+Implemented over commits c34d76a..587fd90 (16 commits, 34 new tests).
+
+- [x] M0 Crate scaffold — `surge-intake` added to workspace, module skeleton (Task 0.1)
+- [x] M1 Trait + types + MockTaskSource — `TaskId`, `Priority`, `TriageDecision`, `Tier1Decision`, `TaskEvent`, `TaskEventKind`, `TaskDetails`, `TaskSummary`, `trait TaskSource`, `MockTaskSource` (Tasks 1.1–1.5)
+- [x] M2 Persistence — `ticket_index` (migration 0002) and `task_source_state` (migration 0003) tables, `TicketState` enum, `IntakeRow`, `IntakeRepo` (Tasks 2.1–2.4)
+- [x] M3 Tier-1 PreFilter + candidates module (Tasks 3.1–3.2)
+- [x] M4 TaskRouter + two-source integration test (Tasks 4.1–4.2)
+
+Plan B (Linear + GitHub providers) and Plan C (Triage Author, notify, daemon integration, end-to-end test, CLI) follow.
+
+## RFC-0010 — Plan B · Providers ✅
+
+Implemented over 7 commits (post-reset of original raw-GraphQL approach).
+
+**Pivot:** Original plan had T5.2 (raw GraphQL client) + T5.3 (handwritten queries). After discovering `lineark-sdk` 3.0.1 — a polished, actively-maintained typed Rust SDK for Linear — we reset commits and rebuilt T5.x using the SDK. Saves ~350 lines of code, more idiomatic, less surface for bugs.
+
+- [x] M5 Linear: deps via `lineark-sdk`, `LinearTaskSource` (full TaskSource impl using SDK), wiremock tests (via SDK's `set_base_url`), real-API ignored test (Tasks 5.1, 5.4, 5.5, 5.6)
+- [x] M6 GitHub: `octocrab` client wrapper, `GitHubIssuesTaskSource` (full TaskSource impl), real-API ignored test (Tasks 6.1, 6.2, 6.3)
+
+## RFC-0010 — Plan C · Integration ✅
+
+Implemented over 13 task commits.
+
+- [x] M7 Triage Author: bootstrap profile (TOML) + dispatcher (`TriageInput`, `TriageJson`, `into_decision`) + 3 fixtures + smoke test (Tasks 7.1–7.4)
+- [x] M8 Notify InboxCard: `NotifyMessage::InboxCard` variant + Telegram formatter + Desktop formatter (Tasks 8.1–8.3)
+- [x] M9 Daemon wire-up: `TaskSourceConfig` types + daemon `TaskRouter` spawn + InboxCard payload construction (Tasks 9.1–9.3)
+- [x] M10 Event types: 14 new tracker variants in `SurgeEvent` (Task 10.1)
+- [x] M11 End-to-end mock pipeline test (Task 11.1)
+- [x] M13 CLI `surge tracker list` / `surge tracker test <id>` (Task 13.1)
+
+**Plan-C-polish follow-ups** (not blocking RFC-0010 acceptance, but worth tracking):
+- Triage Author LLM dispatch via ACP (currently `Priority::Medium` placeholder in T9.3).
+- Actual delivery of `NotifyMessage::InboxCard` through `NotifyMultiplexer` (currently logged only).
+- T9.2 in-memory dedup connection — should share daemon's persistent connection (Plan-C-polish or future RFC).
+- Acceptance criterion #10 — `ticket_index` FSM proptest.
+- `RouterOutput::EarlyDuplicate` should resurface the originating `TaskSource` so the daemon can post a "duplicate of #N" comment automatically.
+- Multi-issue per polling cycle in `LinearTaskSource` / `GitHubIssuesTaskSource` (currently 1-per-cycle MVP).
+
+RFC-0010 implementation is functionally complete — all decisions assigned to Plans A/B/C are delivered. Decisions assigned to RFC-0014 (webhook ingestion, embedding-based dedup), RFC-0006 refactor (sandbox tier 3+4 deprecation), and RFC-0004 refactor (vertical-slice mandate, token-budget guard-rail) remain out of scope for RFC-0010.
+
+## RFC-0010 — Plan-C-polish ✅ (5 of 6)
+
+Refinements on top of Plans A+B+C, delivered to harden the implementation.
+
+- [x] **FSM proptest** — `TicketState::is_valid_transition_from` + 6 property/fixture tests covering FSM transitions. Closes RFC-0010 acceptance criterion #10 (gap flagged in audit). Commit: `8870368`.
+- [x] **Multi-issue per polling cycle** — `LinearTaskSource` and `GitHubIssuesTaskSource` now emit ALL issues from a fetch via a `VecDeque`-backed unfold, rather than dropping the rest after the first. Real-world workspace readiness.
+- [x] **Source registry → comment-on-dup** — surge-daemon now keeps `Arc<HashMap<String, Arc<dyn TaskSource>>>` alongside the router and posts a "duplicate of run #N" comment to the originating tracker on `RouterOutput::EarlyDuplicate`. Closes the dedup-side of acceptance #6. Commit: `619f917`.
+- [x] **NotifyMultiplexer InboxCard delivery** — `RouterOutput::Triage` events render an `InboxCardPayload` to a `RenderedNotification` (title + body) and dispatch via `MultiplexingNotifier::deliver` against `NotifyChannel::Desktop`. `ChannelNotConfigured` is logged at debug; real deliverers receive the notification when configured. Closes the delivery-side of acceptance #3. Commit: `08eade5`.
+- [x] **Persistent dedup connection** — `TaskRouter` now reads from a `Connection` opened directly to the daemon's registry DB file (using a new `Storage::registry_db_path()` accessor). State survives restarts and stays in sync with engine writes. Closes the T9.2 in-memory concern. Commit: `2d5cd61`.
+
+### Remaining (deferred to its own session)
+
+- [ ] **Triage Author LLM dispatch via ACP** — surge-daemon currently uses `Priority::Medium` placeholder when constructing inbox cards. Wiring the actual LLM call requires loading `BOOTSTRAP_TRIAGE_AUTHOR_TOML`, spawning an ACP session, rendering `TriageInput` as JSON, awaiting the agent's `triage_decision.json` output, and parsing via `TriageJson::into_decision`. Substantial enough to warrant its own session — bundled into the post-RFC-0010 follow-up backlog. Acceptance #3 fully passes (priority becomes LLM-derived) once this lands.
+
+After polish, RFC-0010 implementation status:
+- **3 acceptance criteria fully pass** (#1 surge-intake compiles, #2 sources poll, #11 clippy clean).
+- **5 acceptance criteria pass with documented placeholders** (#3 InboxCard delivered with placeholder priority; #6 duplicate comment posted on Tier-1 hit; #10 FSM proptest in place; #11/#12 verified locally).
+- **Remaining placeholders** — full LLM-driven triage (#3, #11), bootstrap-flow handoff after Start tap (#4), run-completion comment to tracker (#5), full SIGKILL recovery (#8), L3 auto-merge (#9), cross-OS CI matrix (#12) — listed as future work and tracked outside this RFC.

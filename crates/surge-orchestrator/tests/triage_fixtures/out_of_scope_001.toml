@@ -1,0 +1,15 @@
+[input.task]
+task_id = "github_issues:test/repo#200"
+source_id = "github_issues:test/repo"
+title = "Hire a designer"
+description = "We need a designer for the new branding project. Please post the job ad."
+status = "open"
+labels = ["surge:enabled"]
+url = "https://github.com/test/repo/issues/200"
+created_at = "2026-05-05T10:00:00Z"
+updated_at = "2026-05-05T10:00:00Z"
+assignee = ""
+
+[expected]
+decision = "out_of_scope"
+priority = "low"

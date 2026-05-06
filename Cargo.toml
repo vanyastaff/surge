@@ -12,6 +12,7 @@ members = [
     "crates/surge-notify",
     "crates/surge-daemon",
     "crates/surge-mcp",
+    "crates/surge-intake",
 ]
 
 [workspace.package]
@@ -68,6 +69,7 @@ semver = { version = "1", features = ["serde"] }
 proptest = "1"
 insta = { version = "1", features = ["yaml", "redactions", "json"] }
 criterion = "0.5"
+wiremock = "0.6"
 
 # Graph
 petgraph = "0.7"
@@ -86,6 +88,12 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 
 # Async trait support
 async-trait = "0.1"
+
+# Linear GraphQL SDK
+lineark-sdk = "3"
+
+# GitHub REST client
+octocrab = "0.42"
 
 # Notification channels (surge-notify)
 notify-rust = "4"
@@ -108,6 +116,12 @@ tokio-stream = "0.1"
 tempfile = "3"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
+# Futures utilities
+futures = "0.3"
+
+# Tokio testing utilities
+tokio-test = "0.4"
+
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
@@ -118,6 +132,7 @@ surge-orchestrator = { path = "crates/surge-orchestrator" }
 surge-notify = { path = "crates/surge-notify" }
 surge-daemon = { path = "crates/surge-daemon" }
 surge-mcp = { path = "crates/surge-mcp" }
+surge-intake = { path = "crates/surge-intake" }
 
 # M7 dependencies
 rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process"] }

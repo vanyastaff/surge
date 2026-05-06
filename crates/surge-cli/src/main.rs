@@ -17,7 +17,7 @@ mod commands;
 use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, config::ConfigCommands,
     insights::InsightsCommands, memory::MemoryCommands, registry::RegistryCommands,
-    spec::SpecCommands,
+    spec::SpecCommands, tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -197,6 +197,12 @@ enum Commands {
         command: commands::engine::EngineCommands,
     },
 
+    /// Manage issue-tracker integration (list sources, test connectivity).
+    Tracker {
+        #[command(subcommand)]
+        cmd: TrackerCommand,
+    },
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -325,6 +331,7 @@ async fn main() -> Result<()> {
             | Commands::Clean { .. }
             | Commands::Config { .. }
             | Commands::Engine { .. }
+            | Commands::Tracker { .. }
             | Commands::Daemon { .. }
     );
 
@@ -523,6 +530,11 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Engine { command } => {
             commands::engine::run(command).await?;
+        },
+
+        Commands::Tracker { cmd } => {
+            let config = SurgeConfig::load_or_default()?;
+            commands::tracker::run(cmd, config).await?;
         },
 
         Commands::Daemon { command } => {

@@ -117,6 +117,10 @@ pub struct SurgeConfig {
     pub log: LogConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    /// Configured external task sources (Linear, GitHub Issues, ...).
+    /// Empty by default — task-tracker integration is opt-in.
+    #[serde(default)]
+    pub task_sources: Vec<TaskSourceConfig>,
 }
 
 /// Configuration for a single MCP (Model Context Protocol) server passed to an agent.
@@ -136,6 +140,79 @@ pub struct McpServerConfig {
     /// Extra environment variables for the MCP server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+}
+
+/// Configuration for a task source (Linear, GitHub Issues, ...).
+///
+/// Serialised in `surge.toml` as `[[task_sources]]` entries with a `type`
+/// discriminator. The provider implementation is selected by `type`; each
+/// variant carries provider-specific fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskSourceConfig {
+    /// Linear (linear.app) GraphQL workspace.
+    Linear(LinearSourceConfig),
+    /// GitHub Issues for a single repository.
+    GithubIssues(GitHubIssuesSourceConfig),
+}
+
+/// Linear-specific task source configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearSourceConfig {
+    /// Stable identifier (e.g. `"linear-acme"`).
+    pub id: String,
+    /// Linear workspace ID this source targets.
+    pub workspace_id: String,
+    /// Name of the env var holding the Linear API token (e.g. `"LINEAR_API_TOKEN"`).
+    pub api_token_env: String,
+    /// Polling interval in seconds.
+    #[serde(
+        rename = "poll_interval_seconds",
+        with = "duration_seconds",
+        default = "default_poll_interval"
+    )]
+    pub poll_interval: std::time::Duration,
+    /// Labels that gate which Linear issues this source ingests.
+    #[serde(default)]
+    pub label_filters: Vec<String>,
+}
+
+/// GitHub Issues-specific task source configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubIssuesSourceConfig {
+    /// Stable identifier (e.g. `"github-myapp"`).
+    pub id: String,
+    /// Repository in `owner/repo` form (e.g. `"user/myapp"`).
+    pub repo: String,
+    /// Name of the env var holding the GitHub PAT (e.g. `"GITHUB_TOKEN"`).
+    pub api_token_env: String,
+    /// Polling interval in seconds.
+    #[serde(
+        rename = "poll_interval_seconds",
+        with = "duration_seconds",
+        default = "default_poll_interval"
+    )]
+    pub poll_interval: std::time::Duration,
+    /// Labels that gate which GitHub issues this source ingests.
+    #[serde(default)]
+    pub label_filters: Vec<String>,
+}
+
+fn default_poll_interval() -> std::time::Duration {
+    std::time::Duration::from_secs(60)
+}
+
+mod duration_seconds {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(d: &std::time::Duration, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u64(d.as_secs())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<std::time::Duration, D::Error> {
+        let secs = u64::deserialize(d)?;
+        Ok(std::time::Duration::from_secs(secs))
+    }
 }
 
 /// Configuration for a single coding agent (Claude Code, Copilot CLI, etc.).
@@ -669,6 +746,7 @@ impl Default for SurgeConfig {
             resilience: ResilienceConfig::default(),
             log: LogConfig::default(),
             analytics: AnalyticsConfig::default(),
+            task_sources: Vec::new(),
         }
     }
 }
@@ -1605,14 +1683,7 @@ after_spec = false
         // Test that empty agents map with any default_agent is valid
         let config = SurgeConfig {
             default_agent: "nonexistent".to_string(),
-            agents: HashMap::new(),
-            pipeline: PipelineConfig::default(),
-            routing: RoutingConfig::default(),
-            cleanup: CleanupPolicy::default(),
-            ide: IdeConfig::default(),
-            resilience: ResilienceConfig::default(),
-            log: LogConfig::default(),
-            analytics: AnalyticsConfig::default(),
+            ..Default::default()
         };
         // Should be valid because agents map is empty
         assert!(config.validate().is_ok());
@@ -2029,5 +2100,80 @@ default_agent = "test"
             }
             .is_terminal()
         );
+    }
+
+    #[test]
+    fn task_sources_round_trip_toml() {
+        let toml_str = r#"
+default_agent = "claude-acp"
+
+[[task_sources]]
+type = "linear"
+id = "linear-acme"
+workspace_id = "wsp_acme_123"
+api_token_env = "LINEAR_API_TOKEN"
+poll_interval_seconds = 60
+label_filters = ["surge:enabled", "surge:auto"]
+
+[[task_sources]]
+type = "github_issues"
+id = "github-myapp"
+repo = "user/myapp"
+api_token_env = "GITHUB_TOKEN"
+poll_interval_seconds = 120
+label_filters = ["surge:enabled"]
+"#;
+        let cfg: SurgeConfig = toml::from_str(toml_str).expect("parse SurgeConfig");
+        assert_eq!(cfg.task_sources.len(), 2);
+        match &cfg.task_sources[0] {
+            TaskSourceConfig::Linear(l) => {
+                assert_eq!(l.id, "linear-acme");
+                assert_eq!(l.workspace_id, "wsp_acme_123");
+                assert_eq!(l.api_token_env, "LINEAR_API_TOKEN");
+                assert_eq!(l.poll_interval, std::time::Duration::from_secs(60));
+                assert_eq!(l.label_filters.len(), 2);
+                assert_eq!(l.label_filters[0], "surge:enabled");
+                assert_eq!(l.label_filters[1], "surge:auto");
+            },
+            other => panic!("expected Linear, got {other:?}"),
+        }
+        match &cfg.task_sources[1] {
+            TaskSourceConfig::GithubIssues(g) => {
+                assert_eq!(g.id, "github-myapp");
+                assert_eq!(g.repo, "user/myapp");
+                assert_eq!(g.api_token_env, "GITHUB_TOKEN");
+                assert_eq!(g.poll_interval, std::time::Duration::from_secs(120));
+                assert_eq!(g.label_filters.len(), 1);
+                assert_eq!(g.label_filters[0], "surge:enabled");
+            },
+            other => panic!("expected GithubIssues, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn poll_interval_default_is_60s() {
+        let toml_str = r#"
+default_agent = "claude-acp"
+
+[[task_sources]]
+type = "linear"
+id = "x"
+workspace_id = "y"
+api_token_env = "LINEAR_API_TOKEN"
+"#;
+        let cfg: SurgeConfig = toml::from_str(toml_str).expect("parse");
+        match &cfg.task_sources[0] {
+            TaskSourceConfig::Linear(l) => {
+                assert_eq!(l.poll_interval, std::time::Duration::from_secs(60));
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn empty_task_sources_is_default() {
+        let toml_str = r#"default_agent = "claude-acp""#;
+        let cfg: SurgeConfig = toml::from_str(toml_str).expect("parse empty");
+        assert!(cfg.task_sources.is_empty());
     }
 }

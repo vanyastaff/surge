@@ -29,12 +29,15 @@ tracing-subscriber.workspace = true
 interprocess.workspace = true
 sysinfo.workspace = true
 dirs.workspace = true
+rusqlite.workspace = true
 
 surge-core.workspace = true
 surge-orchestrator.workspace = true
 surge-acp.workspace = true
 surge-persistence.workspace = true
 surge-notify.workspace = true
+surge-intake.workspace = true
+ulid.workspace = true
 
 # Unix signal handling
 [target.'cfg(unix)'.dependencies]

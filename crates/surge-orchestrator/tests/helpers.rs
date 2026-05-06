@@ -126,6 +126,7 @@ pub fn test_surge_config(agent_name: &str, command: &str) -> SurgeConfig {
         resilience: surge_core::config::ResilienceConfig::default(),
         log: surge_core::config::LogConfig::default(),
         analytics: surge_core::config::AnalyticsConfig::default(),
+        task_sources: vec![],
     }
 }
 
