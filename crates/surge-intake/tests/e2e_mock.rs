@@ -16,21 +16,20 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::sync::Arc;
 use std::time::Duration;
+use surge_intake::TaskSource;
 use surge_intake::router::{RouterOutput, TaskRouter};
 use surge_intake::testing::MockTaskSource;
 use surge_intake::types::{TaskEvent, TaskEventKind, TaskId};
-use surge_intake::TaskSource;
 use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// Initialise an in-memory database with the schema needed by the router.
 fn db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
         .unwrap();
-    let sql = include_str!(
-        "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
-    );
+    let sql =
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
     conn.execute_batch(sql).unwrap();
     conn
 }
@@ -64,7 +63,7 @@ async fn e2e_new_task_then_dup() {
         match out {
             RouterOutput::Triage { event } => {
                 assert_eq!(event.task_id.as_str(), "mock:t#1");
-            }
+            },
             other => panic!("expected Triage, got {other:?}"),
         }
         // Drop receiver so router exits cleanly.
@@ -110,7 +109,7 @@ async fn e2e_new_task_then_dup() {
             RouterOutput::EarlyDuplicate { run_id, event } => {
                 assert_eq!(run_id, "run_xyz");
                 assert_eq!(event.task_id.as_str(), "mock:t#1");
-            }
+            },
             other => panic!("expected EarlyDuplicate, got {other:?}"),
         }
         drop(rx);

@@ -7,14 +7,14 @@ use std::time::Duration;
 use surge_acp::bridge::AcpBridge;
 use surge_core::config::TaskSourceConfig;
 use surge_daemon::{ServerConfig, lifecycle, pidfile, run_server};
+use surge_intake::TaskSource;
 use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
 use surge_intake::router::{RouterOutput, TaskRouter};
-use surge_intake::TaskSource;
 use surge_orchestrator::engine::facade::LocalEngineFacade;
 use surge_orchestrator::engine::{Engine, EngineConfig};
 use surge_persistence::runs::Storage;
-use tokio::sync::{mpsc, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -245,7 +245,11 @@ fn surge_runs_dir() -> std::path::PathBuf {
 async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
     use rusqlite::Connection;
 
-    info!(count = sources.len(), "spawning TaskRouter for {} task sources", sources.len());
+    info!(
+        count = sources.len(),
+        "spawning TaskRouter for {} task sources",
+        sources.len()
+    );
 
     let (tx, mut rx) = mpsc::channel::<RouterOutput>(64);
 
@@ -255,20 +259,21 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
     // an in-memory connection as a proof-of-concept. In production (T10+), the Tier1
     // dedup logic should move to the daemon's persistence layer so both the router
     // and the engine share the same DB, eliminating this duplicative connection.
-    let conn = Connection::open_in_memory().expect("failed to create in-memory registry for router");
+    let conn =
+        Connection::open_in_memory().expect("failed to create in-memory registry for router");
 
     // Apply the same schema as the pool-backed registry so dedup queries work.
-    conn.execute_batch(
-        include_str!("../../surge-persistence/src/runs/migrations/registry/0001_initial.sql"),
-    )
+    conn.execute_batch(include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0001_initial.sql"
+    ))
     .expect("failed to initialize router registry schema");
-    conn.execute_batch(
-        include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"),
-    )
+    conn.execute_batch(include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"
+    ))
     .expect("failed to initialize ticket_index schema");
-    conn.execute_batch(
-        include_str!("../../surge-persistence/src/runs/migrations/registry/0003_task_source_state.sql"),
-    )
+    conn.execute_batch(include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0003_task_source_state.sql"
+    ))
     .expect("failed to initialize task_source_state schema");
 
     let conn_arc = Arc::new(TokioMutex::new(conn));
@@ -326,7 +331,7 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
                     // for actual delivery to Telegram + Desktop channels. For MVP
                     // we just log to confirm the pipeline reaches this point.
                     let _ = msg; // silence "unused" lint until delivery wires up
-                }
+                },
                 surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
                     // TODO Plan-C-polish: invoke source.post_comment with prefix
                     // "Surge run #N: detected duplicate of active run …" and update
@@ -338,7 +343,7 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
                         %run_id,
                         "router output: early duplicate (comment posting is Plan-C-polish)"
                     );
-                }
+                },
             }
         }
     });

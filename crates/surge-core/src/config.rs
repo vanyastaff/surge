@@ -205,10 +205,7 @@ fn default_poll_interval() -> std::time::Duration {
 mod duration_seconds {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(
-        d: &std::time::Duration,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(d: &std::time::Duration, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_u64(d.as_secs())
     }
 
@@ -2137,7 +2134,7 @@ label_filters = ["surge:enabled"]
                 assert_eq!(l.label_filters.len(), 2);
                 assert_eq!(l.label_filters[0], "surge:enabled");
                 assert_eq!(l.label_filters[1], "surge:auto");
-            }
+            },
             other => panic!("expected Linear, got {other:?}"),
         }
         match &cfg.task_sources[1] {
@@ -2148,7 +2145,7 @@ label_filters = ["surge:enabled"]
                 assert_eq!(g.poll_interval, std::time::Duration::from_secs(120));
                 assert_eq!(g.label_filters.len(), 1);
                 assert_eq!(g.label_filters[0], "surge:enabled");
-            }
+            },
             other => panic!("expected GithubIssues, got {other:?}"),
         }
     }
@@ -2168,7 +2165,7 @@ api_token_env = "LINEAR_API_TOKEN"
         match &cfg.task_sources[0] {
             TaskSourceConfig::Linear(l) => {
                 assert_eq!(l.poll_interval, std::time::Duration::from_secs(60));
-            }
+            },
             _ => unreachable!(),
         }
     }

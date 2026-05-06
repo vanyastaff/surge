@@ -79,9 +79,8 @@ pub use project::{ProjectConfig, ProjectExecutor, ProjectResult};
 /// Used by `surge-orchestrator::triage` (T7.2) to spawn the agent without
 /// requiring the user to install profiles into `~/.surge/profiles/_bootstrap/`
 /// before first run.
-pub const BOOTSTRAP_TRIAGE_AUTHOR_TOML: &str = include_str!(
-    "../profiles/_bootstrap/triage-author-1.0.toml"
-);
+pub const BOOTSTRAP_TRIAGE_AUTHOR_TOML: &str =
+    include_str!("../profiles/_bootstrap/triage-author-1.0.toml");
 
 #[cfg(test)]
 mod bootstrap_profile_tests {

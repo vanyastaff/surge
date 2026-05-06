@@ -5,9 +5,9 @@ use clap::Subcommand;
 use std::env;
 use std::time::Duration;
 use surge_core::config::{SurgeConfig, TaskSourceConfig};
+use surge_intake::TaskSource;
 use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
-use surge_intake::TaskSource;
 
 /// Subcommands for `surge tracker`.
 #[derive(Subcommand, Debug)]
@@ -47,7 +47,7 @@ fn list(config: SurgeConfig) -> Result<()> {
                     l.api_token_env,
                     l.poll_interval.as_secs()
                 );
-            }
+            },
             TaskSourceConfig::GithubIssues(g) => {
                 println!(
                     "  · github_issues · id={} repo={} env={} interval={}s",
@@ -56,7 +56,7 @@ fn list(config: SurgeConfig) -> Result<()> {
                     g.api_token_env,
                     g.poll_interval.as_secs()
                 );
-            }
+            },
         }
     }
     Ok(())
@@ -86,8 +86,12 @@ async fn test(config: SurgeConfig, target_id: &str) -> Result<()> {
             };
             let src = LinearTaskSource::new(cfg)?;
             let summaries = src.list_open_tasks().await?;
-            println!("✓ Linear source {} reachable: {} open tasks", l.id, summaries.len());
-        }
+            println!(
+                "✓ Linear source {} reachable: {} open tasks",
+                l.id,
+                summaries.len()
+            );
+        },
         TaskSourceConfig::GithubIssues(g) => {
             let token = env::var(&g.api_token_env)
                 .with_context(|| format!("env var {} not set", g.api_token_env))?;
@@ -106,8 +110,12 @@ async fn test(config: SurgeConfig, target_id: &str) -> Result<()> {
             };
             let src = GitHubIssuesTaskSource::new(cfg)?;
             let summaries = src.list_open_tasks().await?;
-            println!("✓ GitHub source {} reachable: {} open issues", g.id, summaries.len());
-        }
+            println!(
+                "✓ GitHub source {} reachable: {} open issues",
+                g.id,
+                summaries.len()
+            );
+        },
     }
     Ok(())
 }

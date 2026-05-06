@@ -259,4 +259,3 @@ mod inbox_format_tests {
         assert!(url.is_url);
     }
 }
-

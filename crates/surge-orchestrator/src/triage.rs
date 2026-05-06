@@ -80,12 +80,14 @@ impl TriageJson {
                     of: id,
                     reasoning: self.priority_reasoning.unwrap_or_default(),
                 })
-            }
+            },
             "out_of_scope" => Ok(TriageDecision::OutOfScope {
                 reasoning: self.priority_reasoning.unwrap_or_default(),
             }),
             "unclear" => Ok(TriageDecision::Unclear {
-                question: self.question.unwrap_or_else(|| "no question provided".into()),
+                question: self
+                    .question
+                    .unwrap_or_else(|| "no question provided".into()),
             }),
             other => Err(format!("unknown decision: {other}")),
         }

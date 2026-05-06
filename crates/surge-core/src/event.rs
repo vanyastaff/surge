@@ -350,15 +350,12 @@ pub enum SurgeEvent {
     InboxDecided {
         task_id: String,
         run_id: String,
-        decision: String, // "start"|"snooze"|"skip"
+        decision: String,    // "start"|"snooze"|"skip"
         decided_via: String, // "telegram"|"desktop"|...
     },
 
     /// Comment posted to the originating tracker.
-    TrackerCommentPosted {
-        task_id: String,
-        purpose: String,
-    },
+    TrackerCommentPosted { task_id: String, purpose: String },
 
     /// Failed to post a comment to the originating tracker.
     TrackerCommentPostFailed {
@@ -390,10 +387,7 @@ pub enum SurgeEvent {
     },
 
     /// `TaskSource` rejected our credentials (401/403).
-    TaskSourceAuthFailed {
-        source_id: String,
-        error: String,
-    },
+    TaskSourceAuthFailed { source_id: String, error: String },
 
     /// Triage Author session failed to produce a decision.
     TriageAuthorFailed {
@@ -519,9 +513,7 @@ mod tests {
     }
 
     // ── RFC-0010 tracker variant tests ──
-    fn tracker_roundtrip<T: serde::Serialize + serde::de::DeserializeOwned>(
-        val: &T,
-    ) -> T {
+    fn tracker_roundtrip<T: serde::Serialize + serde::de::DeserializeOwned>(val: &T) -> T {
         let json = serde_json::to_string(val).expect("serialize JSON");
         serde_json::from_str(&json).expect("deserialize JSON")
     }

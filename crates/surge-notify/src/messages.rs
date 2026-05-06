@@ -64,7 +64,7 @@ mod inbox_card_tests {
             NotifyMessage::InboxCard(p) => {
                 assert_eq!(p.task_id, payload.task_id);
                 assert_eq!(p.priority, Priority::High);
-            }
+            },
         }
     }
 }
