@@ -16,5 +16,7 @@ pub mod types;
 
 pub use error::{Error, Result};
 pub use source::TaskSource;
-
-// Re-exports for types are added by tasks T1.1–T1.5.
+pub use types::{
+    Priority, TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary, Tier1Decision,
+    TriageDecision,
+};
