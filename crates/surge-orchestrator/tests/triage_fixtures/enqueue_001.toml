@@ -1,0 +1,23 @@
+[input.task]
+task_id = "github_issues:test/repo#42"
+source_id = "github_issues:test/repo"
+title = "Add tracing to auth middleware"
+description = "We have no observability into the auth flow. Add tracing spans for login, token issue, and logout paths."
+status = "open"
+labels = ["surge:enabled", "area/auth"]
+url = "https://github.com/test/repo/issues/42"
+created_at = "2026-05-01T10:00:00Z"
+updated_at = "2026-05-05T12:00:00Z"
+assignee = ""
+
+[[input.candidates]]
+task_id = "github_issues:test/repo#10"
+title = "Update README"
+
+[[input.candidates]]
+task_id = "github_issues:test/repo#23"
+title = "Fix typo in CLI help"
+
+[expected]
+decision = "enqueued"
+priority = "medium"

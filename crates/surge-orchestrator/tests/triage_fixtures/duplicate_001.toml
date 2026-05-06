@@ -1,0 +1,20 @@
+[input.task]
+task_id = "github_issues:test/repo#100"
+source_id = "github_issues:test/repo"
+title = "Parser crashes with deeply nested JSON"
+description = "Stack overflow when JSON has more than 16 nested levels."
+status = "open"
+labels = ["surge:enabled"]
+url = "https://github.com/test/repo/issues/100"
+created_at = "2026-05-05T10:00:00Z"
+updated_at = "2026-05-05T10:00:00Z"
+assignee = ""
+
+[[input.candidates]]
+task_id = "github_issues:test/repo#85"
+title = "Fix parser panic on nested objects"
+
+[expected]
+decision = "duplicate"
+duplicate_of = "github_issues:test/repo#85"
+priority = "high"
