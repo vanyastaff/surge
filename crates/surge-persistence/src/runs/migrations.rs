@@ -33,6 +33,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0004-inbox-callback-columns",
         include_str!("migrations/registry/0004_inbox_callback_columns.sql"),
     ),
+    (
+        "registry-0005-inbox-queues",
+        include_str!("migrations/registry/0005_inbox_queues.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
