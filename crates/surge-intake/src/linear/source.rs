@@ -231,10 +231,13 @@ impl TaskSource for LinearTaskSource {
     /// List currently open tasks (up to 25).
     async fn list_open_tasks(&self) -> Result<Vec<TaskSummary>> {
         let filter = if !self.label_filters.is_empty() {
-            let label_name = &self.label_filters[0];
+            // OR semantics across all configured labels: an issue matches if
+            // it has SOME label whose name is IN the filter set. Linear's
+            // GraphQL `StringComparator.in` provides exactly this — we don't
+            // need a per-label union pass.
             let label_filter = IssueLabelFilter {
                 name: MaybeUndefined::Value(StringComparator {
-                    eq: MaybeUndefined::Value(label_name.to_string()),
+                    r#in: MaybeUndefined::Value(self.label_filters.clone()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -364,10 +367,10 @@ impl LinearTaskSource {
 
     async fn fetch_and_emit_events(&self) -> Result<Vec<TaskEvent>> {
         let mut filter = if !self.label_filters.is_empty() {
-            let label_name = &self.label_filters[0];
+            // OR semantics across all configured labels (see `list_open_tasks`).
             let label_filter = IssueLabelFilter {
                 name: MaybeUndefined::Value(StringComparator {
-                    eq: MaybeUndefined::Value(label_name.to_string()),
+                    r#in: MaybeUndefined::Value(self.label_filters.clone()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -385,8 +388,11 @@ impl LinearTaskSource {
 
         let last_seen = *self.last_seen_updated_at.lock().await;
         if let Some(ts) = last_seen {
+            // Strict `gt` (not `gte`) so we never re-emit an issue whose
+            // `updated_at` equals our watermark — that boundary was already
+            // returned in the previous cycle.
             filter.updated_at = MaybeUndefined::Value(DateComparator {
-                gte: MaybeUndefined::Value(serde_json::json!(ts.to_rfc3339())),
+                gt: MaybeUndefined::Value(serde_json::json!(ts.to_rfc3339())),
                 ..Default::default()
             });
         }
@@ -400,10 +406,14 @@ impl LinearTaskSource {
             .await
             .map_err(map_err)?;
 
-        if let Some(latest_issue) = result.nodes.first() {
-            if let Some(updated_at) = latest_issue.updated_at {
-                let mut last_seen_guard = self.last_seen_updated_at.lock().await;
-                *last_seen_guard = Some(updated_at);
+        // Advance the watermark to max(updated_at) across all returned nodes.
+        // `nodes.first()` is not guaranteed to be the most recent — Linear's
+        // default ordering may be ascending, descending, or unspecified.
+        let max_updated = result.nodes.iter().filter_map(|n| n.updated_at).max();
+        if let Some(latest) = max_updated {
+            let mut last_seen_guard = self.last_seen_updated_at.lock().await;
+            if last_seen_guard.map(|prev| latest > prev).unwrap_or(true) {
+                *last_seen_guard = Some(latest);
             }
         }
 

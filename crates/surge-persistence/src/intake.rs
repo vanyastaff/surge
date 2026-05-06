@@ -165,11 +165,12 @@ impl FromStr for TicketState {
 /// task run and tracks its lifecycle state and metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntakeRow {
-    /// Internal task ID assigned to this ticket.
+    /// External ticket identifier in `provider:scope#id` form (PK of `ticket_index`),
+    /// e.g. `"github_issues:user/repo#1234"` or `"linear:wsp_acme/ABC-42"`.
     pub task_id: String,
-    /// External ticket identifier (e.g., GitHub issue #, Jira key).
+    /// Configured source instance id (e.g. `"linear-acme"`, `"github-myapp"`).
     pub source_id: String,
-    /// Provider name (e.g., "github", "jira", "email").
+    /// Provider name (e.g., `"linear"`, `"github_issues"`).
     pub provider: String,
     /// Associated run ID if this ticket spawned a `surge-run`.
     pub run_id: Option<String>,
@@ -317,7 +318,7 @@ impl<'a> IntakeRepo<'a> {
             "SELECT run_id FROM ticket_index \
              WHERE task_id = ?1 \
                AND run_id IS NOT NULL \
-               AND state NOT IN ('Completed','Aborted','Skipped','Stale','TriagedDup','TriagedOOS')",
+               AND state NOT IN ('Completed','Failed','Aborted','Skipped','Stale','TriagedDup','TriagedOOS')",
             params![task_id],
             |r| r.get::<_, Option<String>>(0),
         );

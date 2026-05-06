@@ -103,15 +103,15 @@ impl GitHubIssuesTaskSource {
         Error::Network(e.to_string())
     }
 
-    async fn build_events_from_page(
+    async fn build_events_from_page_items(
         &self,
-        items: octocrab::Page<octocrab::models::issues::Issue>,
+        items: Vec<octocrab::models::issues::Issue>,
         since: Option<DateTime<Utc>>,
     ) -> VecDeque<Result<TaskEvent>> {
         let mut queue = VecDeque::new();
         let mut last_updated = since;
 
-        for issue in items.items.iter() {
+        for issue in items.iter() {
             let is_newer = last_updated.map(|u| issue.updated_at > u).unwrap_or(true);
             if is_newer {
                 last_updated = Some(issue.updated_at);
@@ -193,31 +193,73 @@ impl TaskSource for GitHubIssuesTaskSource {
                 tokio::time::sleep(this.poll_interval).await;
                 let since = *this.last_seen_updated_at.lock().await;
 
-                // Build the paginated request
+                // Build the paginated request(s).
+                //
+                // octocrab's `.labels(&[a, b])` joins labels with a comma which
+                // GitHub interprets as AND. The RFC's L0/L1/L3 levels (e.g.
+                // `surge:enabled` vs `surge:auto`) are alternatives, so when
+                // we have more than one label filter we issue one request per
+                // label and union the results by issue id.
                 let owner = this.client.owner.clone();
                 let repo = this.client.repo.clone();
                 let labels = this.label_filters.clone();
                 let issue_handler = this.client.octocrab.issues(&owner, &repo);
-                let mut page_builder = issue_handler
-                    .list()
-                    .state(octocrab::params::State::Open)
-                    .labels(&labels);
-                if let Some(s) = since {
-                    page_builder = page_builder.since(s);
-                }
 
-                match page_builder.send().await {
-                    Ok(items) => {
-                        queue = this.build_events_from_page(items, since).await;
-                        if let Some(item) = queue.pop_front() {
-                            return Some((item, (this, queue)));
+                let pages = if labels.is_empty() {
+                    let mut b = issue_handler.list().state(octocrab::params::State::Open);
+                    if let Some(s) = since {
+                        b = b.since(s);
+                    }
+                    match b.send().await {
+                        Ok(p) => vec![p],
+                        Err(e) => {
+                            warn!(error = %e, "github poll failed");
+                            let mapped = Self::map_octocrab_error(&e);
+                            return Some((Err(mapped), (this, queue)));
+                        },
+                    }
+                } else {
+                    let mut all = Vec::new();
+                    let mut error: Option<octocrab::Error> = None;
+                    for label in labels.iter() {
+                        let one_label = vec![label.clone()];
+                        let mut b = issue_handler
+                            .list()
+                            .state(octocrab::params::State::Open)
+                            .labels(&one_label);
+                        if let Some(s) = since {
+                            b = b.since(s);
                         }
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "github poll failed");
+                        match b.send().await {
+                            Ok(p) => all.push(p),
+                            Err(e) => {
+                                warn!(error = %e, label = %label, "github poll for label failed");
+                                error = Some(e);
+                                break;
+                            },
+                        }
+                    }
+                    if let Some(e) = error {
                         let mapped = Self::map_octocrab_error(&e);
                         return Some((Err(mapped), (this, queue)));
-                    },
+                    }
+                    all
+                };
+
+                // Union: dedup by issue.id.
+                let mut seen_ids = std::collections::HashSet::new();
+                let mut union_items = Vec::new();
+                for page in pages {
+                    for issue in page.items {
+                        if seen_ids.insert(issue.id.into_inner()) {
+                            union_items.push(issue);
+                        }
+                    }
+                }
+
+                queue = this.build_events_from_page_items(union_items, since).await;
+                if let Some(item) = queue.pop_front() {
+                    return Some((item, (this, queue)));
                 }
             }
         }))
@@ -250,27 +292,55 @@ impl TaskSource for GitHubIssuesTaskSource {
     ///
     /// Returns `Error::Network` if the API call fails.
     async fn list_open_tasks(&self) -> Result<Vec<TaskSummary>> {
-        let page = self
+        let issue_handler = self
             .client
             .octocrab
-            .issues(&self.client.owner, &self.client.repo)
-            .list()
-            .state(octocrab::params::State::Open)
-            .labels(&self.label_filters)
-            .send()
-            .await
-            .map_err(|e| Error::Network(e.to_string()))?;
-        Ok(page
-            .items
-            .iter()
-            .map(|i| TaskSummary {
-                task_id: self.task_id(i.number),
-                title: i.title.clone(),
-                status: Self::issue_state_to_string(&i.state),
-                url: i.html_url.to_string(),
-                updated_at: i.updated_at,
-            })
-            .collect())
+            .issues(&self.client.owner, &self.client.repo);
+
+        // Same OR-semantics handling as `watch_for_tasks`: if multiple labels
+        // are configured, query each separately and union by issue id.
+        let pages = if self.label_filters.is_empty() {
+            vec![
+                issue_handler
+                    .list()
+                    .state(octocrab::params::State::Open)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Network(e.to_string()))?,
+            ]
+        } else {
+            let mut all = Vec::new();
+            for label in &self.label_filters {
+                let one_label = vec![label.clone()];
+                let page = issue_handler
+                    .list()
+                    .state(octocrab::params::State::Open)
+                    .labels(&one_label)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Network(e.to_string()))?;
+                all.push(page);
+            }
+            all
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        let mut summaries = Vec::new();
+        for page in pages {
+            for i in page.items {
+                if !seen.insert(i.id.into_inner()) {
+                    continue;
+                }
+                summaries.push(TaskSummary {
+                    task_id: self.task_id(i.number),
+                    title: i.title.clone(),
+                    status: Self::issue_state_to_string(&i.state),
+                    url: i.html_url.to_string(),
+                    updated_at: i.updated_at,
+                });
+            }
+        }
+        Ok(summaries)
     }
 
     /// Acknowledge receipt of a task.

@@ -324,7 +324,8 @@ async fn spawn_task_router(
                         .unwrap_or("")
                         .to_string();
                     let provider = event
-                        .source_id
+                        .task_id
+                        .as_str()
                         .split(':')
                         .next()
                         .unwrap_or("unknown")

@@ -63,10 +63,21 @@ impl TaskRouter {
         while let Some(item) = multiplex.next().await {
             match item {
                 Ok(event) => {
-                    let decision = {
+                    let decision_result = {
                         let conn = self.conn.lock().await;
                         let pre = Tier1PreFilter::new(&conn);
-                        pre.check(&event)?
+                        pre.check(&event)
+                    };
+                    let decision = match decision_result {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                task_id = %event.task_id,
+                                "Tier-1 dedup failed; skipping event"
+                            );
+                            continue;
+                        },
                     };
 
                     let out = match decision {
