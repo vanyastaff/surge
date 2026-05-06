@@ -251,3 +251,14 @@ Implemented over commits c34d76a..587fd90 (16 commits, 34 new tests).
 - [x] M4 TaskRouter + two-source integration test (Tasks 4.1–4.2)
 
 Plan B (Linear + GitHub providers) and Plan C (Triage Author, notify, daemon integration, end-to-end test, CLI) follow.
+
+## RFC-0010 — Plan B · Providers ✅
+
+Implemented over 7 commits (post-reset of original raw-GraphQL approach).
+
+**Pivot:** Original plan had T5.2 (raw GraphQL client) + T5.3 (handwritten queries). After discovering `lineark-sdk` 3.0.1 — a polished, actively-maintained typed Rust SDK for Linear — we reset commits and rebuilt T5.x using the SDK. Saves ~350 lines of code, more idiomatic, less surface for bugs.
+
+- [x] M5 Linear: deps via `lineark-sdk`, `LinearTaskSource` (full TaskSource impl using SDK), wiremock tests (via SDK's `set_base_url`), real-API ignored test (Tasks 5.1, 5.4, 5.5, 5.6)
+- [x] M6 GitHub: `octocrab` client wrapper, `GitHubIssuesTaskSource` (full TaskSource impl), real-API ignored test (Tasks 6.1, 6.2, 6.3)
+
+Plan C (Triage Author + InboxCard notify + daemon integration + e2e mock + CLI) follows.
