@@ -283,7 +283,7 @@ async fn spawn_task_router(
                 "failed to open persistent registry DB for TaskRouter; intake disabled"
             );
             return;
-        }
+        },
     };
 
     // Enable foreign keys for consistency with the registry pool's pragmas.
@@ -347,7 +347,8 @@ async fn spawn_task_router(
                     );
 
                     // Render to RenderedNotification using the desktop formatter
-                    let rendered_desktop = surge_notify::desktop::format_inbox_card_desktop(&payload);
+                    let rendered_desktop =
+                        surge_notify::desktop::format_inbox_card_desktop(&payload);
                     let rendered = surge_notify::RenderedNotification {
                         severity: surge_core::notify_config::NotifySeverity::Info,
                         title: rendered_desktop.title.clone(),
@@ -361,14 +362,14 @@ async fn spawn_task_router(
                         Err(e) => {
                             tracing::warn!(error = %e, "failed to parse run_id as RunId; skipping delivery");
                             continue;
-                        }
+                        },
                     };
                     let node_key = match surge_core::keys::NodeKey::try_new("intake") {
                         Ok(key) => key,
                         Err(e) => {
                             tracing::warn!(error = %e, "failed to construct intake NodeKey; skipping delivery");
                             continue;
-                        }
+                        },
                     };
 
                     // Attempt delivery through Desktop channel
@@ -378,11 +379,15 @@ async fn spawn_task_router(
                         node: &node_key,
                     };
                     match notifier.deliver(&ctx, &channel, &rendered).await {
-                        Ok(()) => tracing::info!(task_id = %event.task_id, "InboxCard delivered to Desktop"),
+                        Ok(()) => {
+                            tracing::info!(task_id = %event.task_id, "InboxCard delivered to Desktop")
+                        },
                         Err(surge_notify::NotifyError::ChannelNotConfigured) => {
                             tracing::debug!(task_id = %event.task_id, "Desktop channel not configured; skipping");
-                        }
-                        Err(e) => tracing::warn!(error = %e, task_id = %event.task_id, "InboxCard delivery to Desktop failed"),
+                        },
+                        Err(e) => {
+                            tracing::warn!(error = %e, task_id = %event.task_id, "InboxCard delivery to Desktop failed")
+                        },
                     }
                     let _ = msg; // keep msg in scope for now
                 },

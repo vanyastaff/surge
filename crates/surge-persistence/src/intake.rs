@@ -110,23 +110,16 @@ impl TicketState {
             | (InboxNotified, Stale) => true,
 
             // Snoozed can return to inbox when timer fires, or skip/stale.
-            (Snoozed, InboxNotified)
-            | (Snoozed, Skipped)
-            | (Snoozed, Stale) => true,
+            (Snoozed, InboxNotified) | (Snoozed, Skipped) | (Snoozed, Stale) => true,
 
             // Run started -> active or abort/stale recovery.
-            (RunStarted, Active)
-            | (RunStarted, TriageStale)
-            | (RunStarted, Aborted) => true,
+            (RunStarted, Active) | (RunStarted, TriageStale) | (RunStarted, Aborted) => true,
 
             // Active -> terminal states.
-            (Active, Completed)
-            | (Active, Failed)
-            | (Active, Aborted) => true,
+            (Active, Completed) | (Active, Failed) | (Active, Aborted) => true,
 
             // Recovery: stale-triage path.
-            (TriageStale, Triaged)
-            | (TriageStale, Aborted) => true,
+            (TriageStale, Triaged) | (TriageStale, Aborted) => true,
 
             // Tier1Dup is terminal-ish for this ticket but allow Aborted.
             (Tier1Dup, Aborted) => true,

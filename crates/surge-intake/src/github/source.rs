@@ -103,7 +103,6 @@ impl GitHubIssuesTaskSource {
         Error::Network(e.to_string())
     }
 
-
     async fn build_events_from_page(
         &self,
         items: octocrab::Page<octocrab::models::issues::Issue>,
