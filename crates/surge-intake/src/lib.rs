@@ -15,5 +15,6 @@ pub mod testing;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use source::TaskSource;
 
-// Re-exports for trait + types are added by tasks T1.1–T1.5.
+// Re-exports for types are added by tasks T1.1–T1.5.
