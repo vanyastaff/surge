@@ -69,6 +69,7 @@ semver = { version = "1", features = ["serde"] }
 proptest = "1"
 insta = { version = "1", features = ["yaml", "redactions", "json"] }
 criterion = "0.5"
+wiremock = "0.6"
 
 # Graph
 petgraph = "0.7"
@@ -87,6 +88,12 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 
 # Async trait support
 async-trait = "0.1"
+
+# Linear GraphQL SDK
+lineark-sdk = "3"
+
+# GitHub REST client
+octocrab = "0.42"
 
 # Notification channels (surge-notify)
 notify-rust = "4"
