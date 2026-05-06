@@ -120,7 +120,7 @@ fn main() -> std::process::ExitCode {
             bridge,
             storage,
             tool_dispatcher,
-            notifier,
+            Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
             EngineConfig::default(),
         ));
@@ -208,7 +208,7 @@ fn main() -> std::process::ExitCode {
         }
 
         if !sources.is_empty() {
-            spawn_task_router(sources, source_map).await;
+            spawn_task_router(sources, source_map, Arc::clone(&notifier)).await;
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
@@ -255,6 +255,7 @@ fn surge_runs_dir() -> std::path::PathBuf {
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: HashMap<String, Arc<dyn TaskSource>>,
+    notifier: Arc<dyn surge_notify::NotifyDeliverer>,
 ) {
     use rusqlite::Connection;
 
@@ -326,25 +327,62 @@ async fn spawn_task_router(
                         .next()
                         .unwrap_or("unknown")
                         .to_string();
+                    let run_id_str = ulid::Ulid::new().to_string();
                     let payload = surge_notify::messages::InboxCardPayload {
                         task_id: event.task_id.clone(),
                         source_id: event.source_id.clone(),
-                        provider,
-                        title,
+                        provider: provider.clone(),
+                        title: title.clone(),
                         summary: String::new(),
                         priority: surge_intake::types::Priority::Medium,
                         task_url,
-                        run_id: ulid::Ulid::new().to_string(),
+                        run_id: run_id_str.clone(),
                     };
-                    let msg = surge_notify::messages::NotifyMessage::InboxCard(payload);
+                    let msg = surge_notify::messages::NotifyMessage::InboxCard(payload.clone());
                     tracing::info!(
                         task_id = %event.task_id,
-                        "router output: triage → InboxCard built (delivery is Plan-C-polish)"
+                        "router output: triage → InboxCard built"
                     );
-                    // TODO Plan-C-polish: send `msg` through NotifyMultiplexer
-                    // for actual delivery to Telegram + Desktop channels. For MVP
-                    // we just log to confirm the pipeline reaches this point.
-                    let _ = msg; // silence "unused" lint until delivery wires up
+
+                    // Render to RenderedNotification using the desktop formatter
+                    let rendered_desktop = surge_notify::desktop::format_inbox_card_desktop(&payload);
+                    let rendered = surge_notify::RenderedNotification {
+                        severity: surge_core::notify_config::NotifySeverity::Info,
+                        title: rendered_desktop.title.clone(),
+                        body: rendered_desktop.body.clone(),
+                        artifact_paths: vec![],
+                    };
+
+                    // Parse run_id and construct NodeKey for delivery context
+                    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to parse run_id as RunId; skipping delivery");
+                            continue;
+                        }
+                    };
+                    let node_key = match surge_core::keys::NodeKey::try_new("intake") {
+                        Ok(key) => key,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to construct intake NodeKey; skipping delivery");
+                            continue;
+                        }
+                    };
+
+                    // Attempt delivery through Desktop channel
+                    let channel = surge_core::notify_config::NotifyChannel::Desktop;
+                    let ctx = surge_notify::NotifyDeliveryContext {
+                        run_id,
+                        node: &node_key,
+                    };
+                    match notifier.deliver(&ctx, &channel, &rendered).await {
+                        Ok(()) => tracing::info!(task_id = %event.task_id, "InboxCard delivered to Desktop"),
+                        Err(surge_notify::NotifyError::ChannelNotConfigured) => {
+                            tracing::debug!(task_id = %event.task_id, "Desktop channel not configured; skipping");
+                        }
+                        Err(e) => tracing::warn!(error = %e, task_id = %event.task_id, "InboxCard delivery to Desktop failed"),
+                    }
+                    let _ = msg; // keep msg in scope for now
                 },
                 surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
                     let source_id = event.source_id.clone();
