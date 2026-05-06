@@ -41,7 +41,11 @@ jobs:
       # speeds up the rustc invocations that DO need to run (e.g.
       # after a Cargo.lock bump that invalidates rust-cache).
       - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
+        uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Verify sccache on PATH
+        shell: bash
+        run: |
+          which sccache && sccache --version || (echo "sccache not found"; exit 1)
 
       # `Swatinem/rust-cache@v2` is significantly smarter than the
       # manual `actions/cache@v4` it replaces:
