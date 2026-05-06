@@ -108,7 +108,7 @@ Single-OS workflow that gives every PR a full signal in ~2 minutes. Five real jo
 - **check** — `cargo check --workspace --all-targets --all-features --locked` (timeout 10 min). Catches cases where `--all-features` fails to compile but the default build was fine.
 - **required** — empty job that lists `needs: [fmt, clippy, test, doctests, check]`. Branch protection requires this single job; under the hood it gates on all five.
 
-`surge-ui` is still excluded from clippy/test (gpui is a heavy dependency with no automated tests yet).
+`surge-ui` is excluded from `test` and `doctests` (no automated tests today; gpui is a heavy dependency that we don't want to compile a test binary against). It **is** kept in `clippy` and `check` coverage — the crate is currently warning-free, and including it prevents new debt from accumulating silently. If gpui compile time ever dominates clippy/check wall time, revisit.
 
 ### 3.3 cross-platform.yml (separate workflow, 3 OS smoke)
 
@@ -123,7 +123,9 @@ on:
       - 'crates/surge-acp/**'      # subprocess + ACP transport
       - 'crates/surge-mcp/**'      # interprocess sockets
       - 'crates/surge-daemon/**'   # IPC, process lifecycle
-      - 'Cargo.lock'
+      - 'Cargo.lock'               # any dep change
+      - 'Cargo.toml'               # workspace lints/profiles, MSRV pin
+      - 'rust-toolchain.toml'      # toolchain bump may surface OS-specific
       - '.github/workflows/cross-platform.yml'
   merge_group:
   schedule:
