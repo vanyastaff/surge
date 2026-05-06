@@ -68,6 +68,14 @@ impl SurgeNotification {
             .title("Run Aborted")
             .autohide(false)
     }
+
+    pub fn daemon_shutting_down() -> Notification {
+        Notification::warning(SharedString::from(
+            "Daemon is shutting down — active runs will be interrupted",
+        ))
+        .title("Daemon Shutting Down")
+        .autohide(false)
+    }
 }
 
 // ── OS-level native notifications ──────────────────────────────────
@@ -152,8 +160,12 @@ pub fn os_notify_global(event: &surge_orchestrator::engine::ipc::GlobalDaemonEve
                 _ => ("Run Finished".into(), format!("Run {short} finished")),
             }
         },
+        G::DaemonShuttingDown => (
+            "Daemon Shutting Down".into(),
+            "Active runs will be interrupted".into(),
+        ),
         // `GlobalDaemonEvent` is `#[non_exhaustive]`. Silently drop
-        // unknown variants here; add cases as new ones land.
+        // unknown future variants here; add cases as new ones land.
         _ => return,
     };
 

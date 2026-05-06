@@ -373,6 +373,7 @@ impl SurgeApp {
                     _ => None,
                 }
             },
+            G::DaemonShuttingDown => Some(SurgeNotification::daemon_shutting_down()),
             _ => None,
         };
 
@@ -455,7 +456,19 @@ impl SurgeApp {
             let mut rx = match facade.subscribe_global().await {
                 Ok(rx) => rx,
                 Err(e) => {
+                    // The Connected state we set above implied an active
+                    // subscription; without it the UI would lie about
+                    // receiving events. Roll back to Failed so the
+                    // status pill is honest.
                     tracing::warn!("daemon subscribe_global failed: {e}");
+                    let reason = e.to_string();
+                    let _ = cx.update(|cx| {
+                        let _ = state_for_task.update(cx, |state, cx| {
+                            state.daemon_state =
+                                crate::daemon_link::ConnectionState::Failed(reason);
+                            cx.notify();
+                        });
+                    });
                     return;
                 },
             };

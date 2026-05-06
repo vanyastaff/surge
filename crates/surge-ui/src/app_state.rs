@@ -170,22 +170,41 @@ impl AppState {
                 }
             },
             GlobalDaemonEvent::RunFinished { run_id, outcome } => {
+                // `RunOutcome` is `#[non_exhaustive]`. For known variants
+                // we map to the matching `RunStatus`. For an unknown
+                // future variant we deliberately do NOT collapse to
+                // `Aborted` — that would misrepresent e.g. a future
+                // `TimedOut` outcome as user-cancelled. Instead, leave
+                // the existing status untouched (typical case: it was
+                // `Active`, so it stays `Active`; the UI will surface
+                // the staleness when it next refreshes via `ListRuns`)
+                // and emit a tracing::debug so the gap is visible.
                 let new_status = match outcome {
-                    RunOutcome::Completed { .. } => RunStatus::Completed,
-                    RunOutcome::Failed { .. } => RunStatus::Failed,
-                    RunOutcome::Aborted { .. } => RunStatus::Aborted,
-                    // `RunOutcome` is `#[non_exhaustive]` — fall through to
-                    // a sane neutral status; refine when new variants land.
-                    _ => RunStatus::Aborted,
+                    RunOutcome::Completed { .. } => Some(RunStatus::Completed),
+                    RunOutcome::Failed { .. } => Some(RunStatus::Failed),
+                    RunOutcome::Aborted { .. } => Some(RunStatus::Aborted),
+                    _ => {
+                        tracing::debug!(
+                            run_id = %run_id,
+                            "RunFinished with unknown RunOutcome variant; keeping current status"
+                        );
+                        None
+                    },
                 };
                 if let Some(existing) = self.runs.iter_mut().find(|r| &r.run_id == run_id) {
-                    existing.status = new_status;
+                    if let Some(status) = new_status {
+                        existing.status = status;
+                    }
                 } else {
-                    // Unknown run id — synthesize a stub so the user sees
-                    // *something*. Real `started_at` is unrecoverable here.
+                    // Unknown run id AND unknown outcome — synthesize a
+                    // stub with our best guess (Aborted is least
+                    // misleading for "we don't know what happened, but
+                    // we know it ended"). Real `started_at` is
+                    // unrecoverable here.
+                    let stub_status = new_status.unwrap_or(RunStatus::Aborted);
                     self.runs.push(UiRun {
                         run_id: *run_id,
-                        status: new_status,
+                        status: stub_status,
                         started_at: chrono::Utc::now(),
                         last_event_seq: None,
                     });
