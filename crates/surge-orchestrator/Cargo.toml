@@ -40,3 +40,6 @@ insta = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"
+
+[features]
+_bootstrap_llm_test = []
