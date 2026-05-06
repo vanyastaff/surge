@@ -108,6 +108,16 @@ jobs:
         with:
           components: clippy
 
+      # `RUSTC_WRAPPER: sccache` is set at workflow scope, so this job
+      # also needs sccache on PATH or every cargo invocation will fail
+      # with "could not execute process `sccache ...`: No such file".
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Verify sccache on PATH
+        shell: bash
+        run: |
+          which sccache && sccache --version || (echo "sccache not found"; exit 1)
+
       - name: Cache Rust toolchain + target
         uses: Swatinem/rust-cache@v2
         with:
