@@ -133,7 +133,11 @@ impl TicketState {
             | (InboxNotified, Stale) => true,
 
             // Snoozed can return to inbox when timer fires, or skip/stale.
-            (Snoozed, InboxNotified) | (Snoozed, Skipped) | (Snoozed, Stale) => true,
+            // Also allows direct Start on a snoozed card (spec §3.2.1).
+            (Snoozed, InboxNotified)
+            | (Snoozed, RunStarted)
+            | (Snoozed, Skipped)
+            | (Snoozed, Stale) => true,
 
             // Run started -> active or abort/stale recovery.
             (RunStarted, Active) | (RunStarted, TriageStale) | (RunStarted, Aborted) => true,
@@ -887,6 +891,21 @@ mod repo_tests {
     }
 
     #[test]
+    fn update_state_validated_snoozed_to_run_started() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/SR-1", TicketState::Snoozed);
+        row.snooze_until = Some(Utc::now() + chrono::Duration::hours(24));
+        repo.insert(&row).unwrap();
+        repo.update_state_validated("linear:wsp1/SR-1", TicketState::RunStarted)
+            .expect("Snoozed -> RunStarted is valid");
+        assert_eq!(
+            repo.fetch("linear:wsp1/SR-1").unwrap().unwrap().state,
+            TicketState::RunStarted
+        );
+    }
+
+    #[test]
     fn fetch_due_snoozed_returns_only_due_rows() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
@@ -997,6 +1016,14 @@ mod fsm_proptests {
                 "happy path step {from:?} -> {to:?} should be valid"
             );
         }
+    }
+
+    #[test]
+    fn snoozed_can_transition_to_run_started() {
+        assert!(
+            TicketState::RunStarted.is_valid_transition_from(TicketState::Snoozed),
+            "User can tap Start on a snoozed card directly"
+        );
     }
 
     /// Hand-coded invalid: Seen -> Active (skips bootstrap entirely)
