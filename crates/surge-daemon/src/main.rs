@@ -207,11 +207,27 @@ fn main() -> std::process::ExitCode {
             }
         }
 
+        let source_registry: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>> =
+            Arc::new(source_map);
+
         if !sources.is_empty() {
-            spawn_task_router(sources, source_map, Arc::clone(&notifier), Arc::clone(&storage)).await;
+            spawn_task_router(
+                sources,
+                Arc::clone(&source_registry),
+                Arc::clone(&notifier),
+                Arc::clone(&storage),
+            ).await;
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
+
+        spawn_inbox_subsystems(
+            Arc::clone(&storage),
+            Arc::clone(&source_registry),
+            Arc::clone(&facade),
+            &config,
+            shutdown.clone(),
+        ).await;
 
         let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
         let server_cfg = ServerConfig {
@@ -251,11 +267,11 @@ fn surge_runs_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from(".surge"))
 }
 
-/// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
+/// Spawn the TaskRouter and its output consumer.
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
-    source_map: HashMap<String, Arc<dyn TaskSource>>,
-    notifier: Arc<dyn surge_notify::NotifyDeliverer>,
+    source_map: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
+    _notifier: Arc<dyn surge_notify::NotifyDeliverer>,
     storage: Arc<Storage>,
 ) {
     use rusqlite::Connection;
@@ -303,14 +319,13 @@ async fn spawn_task_router(
         }
     });
 
-    // Consume router output and build InboxCard payloads (T9.3).
-    let source_map_for_consumer = Arc::new(source_map);
+    // Consume router output and enqueue InboxCard payloads.
+    let source_map_for_consumer = source_map;
+    let storage_for_router = storage;
     tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             match out {
                 surge_intake::router::RouterOutput::Triage { event } => {
-                    // MVP placeholder: build an InboxCardPayload and log it.
-                    // Triage Author LLM dispatch + actual delivery are Plan-C-polish.
                     let title = event
                         .raw_payload
                         .get("title")
@@ -334,61 +349,18 @@ async fn spawn_task_router(
                     let payload = surge_notify::messages::InboxCardPayload {
                         task_id: event.task_id.clone(),
                         source_id: event.source_id.clone(),
-                        provider: provider.clone(),
-                        title: title.clone(),
+                        provider,
+                        title,
                         summary: String::new(),
                         priority: surge_intake::types::Priority::Medium,
                         task_url,
-                        callback_token: callback_token.clone(),
+                        callback_token,
                     };
-                    let msg = surge_notify::messages::NotifyMessage::InboxCard(payload.clone());
-                    tracing::info!(
-                        task_id = %event.task_id,
-                        "router output: triage → InboxCard built"
-                    );
-
-                    // Render to RenderedNotification using the desktop formatter
-                    let rendered_desktop =
-                        surge_notify::desktop::format_inbox_card_desktop(&payload);
-                    let rendered = surge_notify::RenderedNotification {
-                        severity: surge_core::notify_config::NotifySeverity::Info,
-                        title: rendered_desktop.title.clone(),
-                        body: rendered_desktop.body.clone(),
-                        artifact_paths: vec![],
-                    };
-
-                    // Delivery context needs a RunId; the inbox card itself doesn't
-                    // belong to any real run yet (the user hasn't tapped Start). Use
-                    // a fresh placeholder RunId for delivery telemetry only — the
-                    // actual run is created later in InboxActionConsumer::handle_start.
-                    let run_id = surge_core::id::RunId::new();
-                    let _ = callback_token; // silence unused-binding lint for now
-                    let node_key = match surge_core::keys::NodeKey::try_new("intake") {
-                        Ok(key) => key,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to construct intake NodeKey; skipping delivery");
-                            continue;
-                        },
-                    };
-
-                    // Attempt delivery through Desktop channel
-                    let channel = surge_core::notify_config::NotifyChannel::Desktop;
-                    let ctx = surge_notify::NotifyDeliveryContext {
-                        run_id,
-                        node: &node_key,
-                    };
-                    match notifier.deliver(&ctx, &channel, &rendered).await {
-                        Ok(()) => {
-                            tracing::info!(task_id = %event.task_id, "InboxCard delivered to Desktop")
-                        },
-                        Err(surge_notify::NotifyError::ChannelNotConfigured) => {
-                            tracing::debug!(task_id = %event.task_id, "Desktop channel not configured; skipping");
-                        },
-                        Err(e) => {
-                            tracing::warn!(error = %e, task_id = %event.task_id, "InboxCard delivery to Desktop failed")
-                        },
+                    if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(&storage_for_router, &payload).await {
+                        tracing::warn!(error = %e, task_id = %event.task_id, "failed to enqueue inbox card");
+                    } else {
+                        tracing::info!(task_id = %event.task_id, "inbox card enqueued");
                     }
-                    let _ = msg; // keep msg in scope for now
                 },
                 surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
                     let source_id = event.source_id.clone();
@@ -419,4 +391,83 @@ async fn spawn_task_router(
             }
         }
     });
+}
+
+async fn spawn_inbox_subsystems(
+    storage: Arc<surge_persistence::runs::storage::Storage>,
+    sources: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
+    engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    config: &surge_core::config::SurgeConfig,
+    shutdown: CancellationToken,
+) {
+    use surge_daemon::inbox::{
+        consumer::InboxActionConsumer, desktop_listener::DesktopActionListener,
+        snooze_scheduler::SnoozeScheduler, tg_bot::TgInboxBot,
+    };
+    use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, MinimalBootstrapGraphBuilder};
+
+    let bootstrap: Arc<dyn BootstrapGraphBuilder> =
+        Arc::new(MinimalBootstrapGraphBuilder::new());
+    let worktrees_root = surge_runs_dir().join("worktrees");
+    if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
+        tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
+    }
+
+    // Consumer.
+    let consumer = InboxActionConsumer {
+        storage: Arc::clone(&storage),
+        bootstrap: Arc::clone(&bootstrap),
+        engine: Arc::clone(&engine),
+        sources: Arc::clone(&sources),
+        worktrees_root,
+        poll_interval: std::time::Duration::from_millis(500),
+    };
+    let shutdown_for_consumer = shutdown.clone();
+    tokio::spawn(consumer.run(shutdown_for_consumer));
+
+    // Snooze scheduler.
+    let scheduler = SnoozeScheduler {
+        storage: Arc::clone(&storage),
+        poll_interval: config.inbox.snooze_poll_interval,
+    };
+    let shutdown_for_scheduler = shutdown.clone();
+    tokio::spawn(scheduler.run(shutdown_for_scheduler));
+
+    // Desktop listener.
+    let desktop = DesktopActionListener::new(Arc::clone(&storage));
+    let shutdown_for_desktop = shutdown.clone();
+    tokio::spawn(desktop.run(shutdown_for_desktop));
+
+    // Telegram bot (only if config provides a chat ID + token).
+    if let Some(tg_cfg) = config.telegram.as_ref() {
+        let chat_id = tg_cfg.chat_id.or_else(|| {
+            tg_cfg
+                .chat_id_env
+                .as_deref()
+                .and_then(|env| std::env::var(env).ok().and_then(|s| s.parse::<i64>().ok()))
+        });
+        let token = tg_cfg
+            .bot_token_env
+            .as_deref()
+            .and_then(|env| std::env::var(env).ok());
+        match (chat_id, token) {
+            (Some(chat_id), Some(token)) => {
+                let bot = teloxide::Bot::new(token);
+                let tg = TgInboxBot::new(
+                    bot,
+                    teloxide::types::ChatId(chat_id),
+                    Arc::clone(&storage),
+                );
+                let shutdown_for_tg = shutdown.clone();
+                tokio::spawn(tg.run(shutdown_for_tg));
+            }
+            _ => {
+                tracing::warn!(
+                    "telegram config present but chat_id or bot_token missing — TgInboxBot not spawned"
+                );
+            }
+        }
+    } else {
+        tracing::info!("no [telegram] config — TgInboxBot skipped");
+    }
 }
