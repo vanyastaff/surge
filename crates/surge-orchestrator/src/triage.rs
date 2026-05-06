@@ -6,6 +6,8 @@
 //! the typed interface.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
 use surge_intake::types::{Priority, TaskDetails, TaskId, TaskSummary, TriageDecision};
 
 /// Full input bundle handed to Triage Author at the start of its session.
@@ -92,6 +94,59 @@ impl TriageJson {
             other => Err(format!("unknown decision: {other}")),
         }
     }
+}
+
+/// Tunable parameters for [`dispatch_triage`].
+///
+/// Construct via [`Self::with_scratch_root`] for the typical case of
+/// passing only the per-task scratch root and Claude binary path.
+#[derive(Debug, Clone)]
+pub struct TriageOptions {
+    /// Resolved Claude binary path. If `None`, the dispatcher
+    /// returns `Ok(TriageDecision::Unclear)` immediately on the
+    /// first attempt with a configuration-hint message.
+    pub claude_binary: Option<PathBuf>,
+    /// Per-attempt timeout. Default: 5 min (matches RFC-0010 §"Bootstrap stage failures").
+    pub attempt_timeout: Duration,
+    /// Maximum attempts before falling back to `Unclear`. Default: 3.
+    pub max_attempts: u32,
+    /// Root directory for per-call scratch dirs.
+    pub scratch_root: PathBuf,
+    /// Whether to keep scratch on Unclear / TriageError for post-mortem.
+    pub keep_scratch_on_failure: bool,
+}
+
+impl TriageOptions {
+    /// Build options with sensible defaults given a scratch root and
+    /// (optional) Claude binary path.
+    #[must_use]
+    pub fn with_scratch_root(scratch_root: PathBuf, claude_binary: Option<PathBuf>) -> Self {
+        Self {
+            claude_binary,
+            attempt_timeout: Duration::from_secs(300),
+            max_attempts: 3,
+            scratch_root,
+            keep_scratch_on_failure: true,
+        }
+    }
+}
+
+/// Errors returned from [`dispatch_triage`] for invariant violations.
+///
+/// Note: retry-eligible failures (timeout, agent crash, malformed JSON)
+/// are NOT surfaced as `TriageError` — they retry up to
+/// `opts.max_attempts` times and on exhaustion become
+/// `Ok(TriageDecision::Unclear { question })`. `TriageError` is
+/// reserved for failures that prevent any forward progress.
+#[derive(Debug, thiserror::Error)]
+pub enum TriageError {
+    /// Could not create or write to the per-call scratch directory.
+    #[error("scratch dir setup failed: {0}")]
+    Scratch(#[from] std::io::Error),
+    /// Bridge facade itself failed at the JSON-RPC / process level
+    /// (open_session / send_message / close_session).
+    #[error("acp bridge: {0}")]
+    Bridge(String),
 }
 
 #[cfg(test)]
