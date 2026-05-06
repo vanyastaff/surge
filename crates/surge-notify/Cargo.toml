@@ -14,6 +14,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true }
 surge-core.workspace = true
+surge-intake = { workspace = true }
 
 # Channel impls
 notify-rust.workspace = true
