@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pin nextest to a known-good release. Bump when we want a newer one.
+  NEXTEST_VERSION: 0.9.85
 
 jobs:
   test:
@@ -25,29 +27,40 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # `Swatinem/rust-cache@v2` is significantly smarter than the
+      # manual `actions/cache@v4` it replaces:
+      #   * keys on rustc version + Cargo.lock + workspace metadata,
+      #     so a toolchain bump invalidates rather than poisons,
+      #   * prunes target/ artefacts that the registry no longer
+      #     references (avoids the cache growing without bound),
+      #   * shares a key shape across jobs on the same OS so the
+      #     test + clippy jobs hit each other's warm targets.
+      - name: Cache Rust toolchain + target
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          # Same cache key on test and clippy jobs (per OS) so they
+          # share the build artefacts they would otherwise duplicate.
+          shared-key: surge-${{ matrix.os }}
+          # Save the cache from main pushes only — PR builds restore
+          # but don't push, which prevents PRs from poisoning the
+          # baseline cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Cache target directory
-        uses: actions/cache@v4
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
         with:
-          path: target/
-          key: ${{ runner.os }}-target-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-test-
-            ${{ runner.os }}-target-
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
-      - name: Run tests
-        run: cargo test --workspace --exclude surge-ui --verbose
+      # `cargo nextest run` is typically ~2× faster than `cargo test`
+      # because it runs each test in its own process across a thread
+      # pool sized to the host's CPU count. We keep the `--exclude
+      # surge-ui` filter (the GUI crate has no automated tests today
+      # and pulling its gpui deps into the test target is wasteful).
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace --exclude surge-ui --no-fail-fast
+
+      - name: Run doctests (nextest skips these)
+        run: cargo test --workspace --exclude surge-ui --doc
 
       - name: Build mock_acp_agent for engine integration tests
         if: matrix.os == 'ubuntu-latest'
@@ -55,7 +68,7 @@ jobs:
 
       - name: Run M5 engine integration tests (--ignored)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p surge-orchestrator --tests -- --ignored
+        run: cargo nextest run -p surge-orchestrator --run-ignored=ignored-only
         timeout-minutes: 10
         continue-on-error: true  # known M5 limitation: some tests hang on bridge worker reply routing (M5.1)
 
@@ -75,27 +88,13 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust toolchain + target
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: |
-            target/
-          key: ${{ runner.os }}-target-clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-clippy-
-            ${{ runner.os }}-target-
+          # Same shared-key as the test job above so we hit its warm
+          # target/ cache instead of building from scratch.
+          shared-key: surge-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Strict: M1's surge-core crate must be warning-free.
       - name: Run clippy (strict on surge-core)
