@@ -282,7 +282,7 @@ Implemented over 13 task commits.
 
 RFC-0010 implementation is functionally complete — all decisions assigned to Plans A/B/C are delivered. Decisions assigned to RFC-0014 (webhook ingestion, embedding-based dedup), RFC-0006 refactor (sandbox tier 3+4 deprecation), and RFC-0004 refactor (vertical-slice mandate, token-budget guard-rail) remain out of scope for RFC-0010.
 
-## RFC-0010 — Plan-C-polish ✅ (5 of 6)
+## RFC-0010 — Plan-C-polish ✅ (6 of 6)
 
 Refinements on top of Plans A+B+C, delivered to harden the implementation.
 
@@ -291,10 +291,7 @@ Refinements on top of Plans A+B+C, delivered to harden the implementation.
 - [x] **Source registry → comment-on-dup** — surge-daemon now keeps `Arc<HashMap<String, Arc<dyn TaskSource>>>` alongside the router and posts a "duplicate of run #N" comment to the originating tracker on `RouterOutput::EarlyDuplicate`. Closes the dedup-side of acceptance #6. Commit: `619f917`.
 - [x] **NotifyMultiplexer InboxCard delivery** — `RouterOutput::Triage` events render an `InboxCardPayload` to a `RenderedNotification` (title + body) and dispatch via `MultiplexingNotifier::deliver` against `NotifyChannel::Desktop`. `ChannelNotConfigured` is logged at debug; real deliverers receive the notification when configured. Closes the delivery-side of acceptance #3. Commit: `08eade5`.
 - [x] **Persistent dedup connection** — `TaskRouter` now reads from a `Connection` opened directly to the daemon's registry DB file (using a new `Storage::registry_db_path()` accessor). State survives restarts and stays in sync with engine writes. Closes the T9.2 in-memory concern. Commit: `2d5cd61`.
-
-### Remaining (deferred to its own session)
-
-- [ ] **Triage Author LLM dispatch via ACP** — surge-daemon currently uses `Priority::Medium` placeholder when constructing inbox cards. Wiring the actual LLM call requires loading `BOOTSTRAP_TRIAGE_AUTHOR_TOML`, spawning an ACP session, rendering `TriageInput` as JSON, awaiting the agent's `triage_decision.json` output, and parsing via `TriageJson::into_decision`. Substantial enough to warrant its own session — bundled into the post-RFC-0010 follow-up backlog. Acceptance #3 fully passes (priority becomes LLM-derived) once this lands.
+- [x] **Triage Author LLM dispatch via ACP** — Replaces the `Priority::Medium` placeholder in surge-daemon with a real ACP-driven Triage Author call. File-artifact return path (`triage_decision.json` + `inbox_summary.md`) matching the Description Author pattern. Layer 1 of two-layer plan; Layer 2 promotes Triage to a graph node (separate RFC). See: [docs/superpowers/specs/2026-05-06-triage-author-llm-dispatch-design.md](superpowers/specs/2026-05-06-triage-author-llm-dispatch-design.md).
 
 After polish, RFC-0010 implementation status:
 - **3 acceptance criteria fully pass** (#1 surge-intake compiles, #2 sources poll, #11 clippy clean).
