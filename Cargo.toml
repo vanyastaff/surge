@@ -12,6 +12,7 @@ members = [
     "crates/surge-notify",
     "crates/surge-daemon",
     "crates/surge-mcp",
+    "crates/surge-intake",
 ]
 
 [workspace.package]
@@ -108,6 +109,9 @@ tokio-stream = "0.1"
 tempfile = "3"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
+# Futures utilities
+futures = "0.3"
+
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
@@ -118,6 +122,7 @@ surge-orchestrator = { path = "crates/surge-orchestrator" }
 surge-notify = { path = "crates/surge-notify" }
 surge-daemon = { path = "crates/surge-daemon" }
 surge-mcp = { path = "crates/surge-mcp" }
+surge-intake = { path = "crates/surge-intake" }
 
 # M7 dependencies
 rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process"] }
