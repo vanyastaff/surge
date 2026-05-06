@@ -409,6 +409,36 @@ pub enum SurgeEvent {
         comment_id: String,
         body: String,
     },
+
+    /// User tapped Start on an inbox card; queued for InboxActionConsumer.
+    InboxRunStartRequested {
+        task_id: String,
+        callback_token: String,
+        /// "telegram" | "desktop"
+        decided_via: String,
+    },
+
+    /// User tapped Snooze on an inbox card.
+    InboxSnoozeRequested {
+        task_id: String,
+        callback_token: String,
+        /// RFC-3339 absolute timestamp until which the card is snoozed.
+        until_rfc3339: String,
+        decided_via: String,
+    },
+
+    /// User tapped Skip on an inbox card.
+    InboxSkipRequested {
+        task_id: String,
+        callback_token: String,
+        decided_via: String,
+    },
+
+    /// Inbox-initiated run was successfully started by `Engine::start_run`.
+    InboxRunStarted {
+        task_id: String,
+        run_id: String,
+    },
 }
 
 /// Versioned wrapper for `SurgeEvent` — used by `surge-persistence` for durable
@@ -622,5 +652,56 @@ mod tests {
                 retry_in_secs: 240
             } if sid == "linear:wsp" && err == "timeout"
         ));
+    }
+
+    #[test]
+    fn inbox_run_start_requested_round_trip() {
+        let event = SurgeEvent::InboxRunStartRequested {
+            task_id: "linear:wsp1/T-1".into(),
+            callback_token: "01HKGZTOK1".into(),
+            decided_via: "telegram".into(),
+        };
+        let rt = tracker_roundtrip(&event);
+        match rt {
+            SurgeEvent::InboxRunStartRequested { task_id, callback_token, decided_via } => {
+                assert_eq!(task_id, "linear:wsp1/T-1");
+                assert_eq!(callback_token, "01HKGZTOK1");
+                assert_eq!(decided_via, "telegram");
+            }
+            other => panic!("expected InboxRunStartRequested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inbox_snooze_requested_round_trip() {
+        let event = SurgeEvent::InboxSnoozeRequested {
+            task_id: "linear:wsp1/T-2".into(),
+            callback_token: "01HKGZTOK2".into(),
+            until_rfc3339: "2030-01-01T00:00:00Z".into(),
+            decided_via: "desktop".into(),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(rt, SurgeEvent::InboxSnoozeRequested { .. }));
+    }
+
+    #[test]
+    fn inbox_skip_requested_round_trip() {
+        let event = SurgeEvent::InboxSkipRequested {
+            task_id: "linear:wsp1/T-3".into(),
+            callback_token: "01HKGZTOK3".into(),
+            decided_via: "telegram".into(),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(rt, SurgeEvent::InboxSkipRequested { .. }));
+    }
+
+    #[test]
+    fn inbox_run_started_round_trip() {
+        let event = SurgeEvent::InboxRunStarted {
+            task_id: "linear:wsp1/T-4".into(),
+            run_id: "01ABCRUN0001".into(),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(rt, SurgeEvent::InboxRunStarted { .. }));
     }
 }
