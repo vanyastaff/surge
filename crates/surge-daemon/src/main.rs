@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use surge_acp::bridge::AcpBridge;
 use surge_core::config::TaskSourceConfig;
-use surge_daemon::{ServerConfig, lifecycle, pidfile, run_server};
+use surge_daemon::broadcast::BroadcastRegistry;
+use surge_daemon::{ServerConfig, intake_completion, lifecycle, pidfile, run_with_registry};
 use surge_intake::TaskSource;
 use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
 use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
@@ -207,8 +208,21 @@ fn main() -> std::process::ExitCode {
             }
         }
 
+        // The broadcast registry is owned by main so that the run-completion
+        // consumer (RFC-0010 acceptance #5) can subscribe to global events
+        // alongside the wire-level subscribers handled by `run_with_registry`.
+        let broadcast_registry = Arc::new(BroadcastRegistry::new());
+        let completion_rx = broadcast_registry.subscribe_global();
+
         if !sources.is_empty() {
-            spawn_task_router(sources, source_map, Arc::clone(&notifier), Arc::clone(&storage)).await;
+            if let Some((source_map_arc, conn_arc)) =
+                spawn_task_router(sources, source_map, Arc::clone(&notifier), Arc::clone(&storage))
+                    .await
+            {
+                intake_completion::spawn(completion_rx, source_map_arc, conn_arc);
+            } else {
+                info!("intake disabled; run-completion → tracker-comment hook not started");
+            }
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
@@ -226,8 +240,11 @@ fn main() -> std::process::ExitCode {
             // cancels the outer shutdown token — otherwise lifecycle::drain
             // waits forever holding the pid lock.
             let shutdown_for_cancel = shutdown.clone();
+            let broadcast = Arc::clone(&broadcast_registry);
             async move {
-                if let Err(e) = run_server(server_cfg, facade, shutdown_for_server).await {
+                if let Err(e) =
+                    run_with_registry(server_cfg, facade, broadcast, shutdown_for_server).await
+                {
                     tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
                     shutdown_for_cancel.cancel();
                 }
@@ -252,12 +269,21 @@ fn surge_runs_dir() -> std::path::PathBuf {
 }
 
 /// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
+///
+/// Returns `Some((source_map, conn))` so callers can plug additional
+/// consumers (e.g., the run-completion → tracker-comment hook) into the
+/// same source registry and SQLite connection. Returns `None` when
+/// intake setup fails (registry DB open / pragma failure); the caller
+/// should skip wiring downstream consumers in that case.
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: HashMap<String, Arc<dyn TaskSource>>,
     notifier: Arc<dyn surge_notify::NotifyDeliverer>,
     storage: Arc<Storage>,
-) {
+) -> Option<(
+    Arc<HashMap<String, Arc<dyn TaskSource>>>,
+    Arc<TokioMutex<rusqlite::Connection>>,
+)> {
     use rusqlite::Connection;
 
     info!(
@@ -282,14 +308,14 @@ async fn spawn_task_router(
                 path = ?registry_db_path,
                 "failed to open persistent registry DB for TaskRouter; intake disabled"
             );
-            return;
+            return None;
         },
     };
 
     // Enable foreign keys for consistency with the registry pool's pragmas.
     if let Err(e) = conn.execute("PRAGMA foreign_keys = ON;", []) {
         tracing::error!(error = %e, "failed to enable foreign keys on dedup connection; intake disabled");
-        return;
+        return None;
     }
 
     let conn_arc = Arc::new(TokioMutex::new(conn));
@@ -305,6 +331,8 @@ async fn spawn_task_router(
 
     // Consume router output and build InboxCard payloads (T9.3).
     let source_map_for_consumer = Arc::new(source_map);
+    let source_map_for_caller = Arc::clone(&source_map_for_consumer);
+    let conn_for_caller = Arc::clone(&conn_arc);
     tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             match out {
@@ -421,4 +449,6 @@ async fn spawn_task_router(
             }
         }
     });
+
+    Some((source_map_for_caller, conn_for_caller))
 }

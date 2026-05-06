@@ -76,15 +76,33 @@ pub struct ServerConfig {
 
 /// Wires together the engine facade, admission, broadcast registry,
 /// and the IPC listener. Called by `main.rs` (Phase 6.3).
+///
+/// This entry point creates a fresh [`BroadcastRegistry`] internally; for
+/// callers that need to subscribe to global daemon events themselves
+/// (e.g., the run-completion → tracker-comment hook in `surge-daemon`'s
+/// `main.rs`), use [`run_with_registry`] instead.
 pub async fn run(
     cfg: ServerConfig,
     facade: Arc<dyn EngineFacade>,
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
+    let broadcast = Arc::new(BroadcastRegistry::new());
+    run_with_registry(cfg, facade, broadcast, shutdown).await
+}
+
+/// Like [`run`], but accepts a pre-built [`BroadcastRegistry`] so the
+/// caller can `subscribe_global()` for daemon-internal listeners. The
+/// caller is responsible for keeping its `Arc` clone alive for as long
+/// as it wants subscriptions to keep receiving events.
+pub async fn run_with_registry(
+    cfg: ServerConfig,
+    facade: Arc<dyn EngineFacade>,
+    broadcast: Arc<BroadcastRegistry>,
+    shutdown: CancellationToken,
+) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
 
     let admission = Arc::new(AdmissionController::new(cfg.max_active, cfg.max_queue));
-    let broadcast = Arc::new(BroadcastRegistry::new());
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
     // F2: Unlink any stale socket file from a previous unclean exit.
