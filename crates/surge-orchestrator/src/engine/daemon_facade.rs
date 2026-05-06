@@ -86,14 +86,12 @@ impl DaemonClient {
                     Ok(Some(InboundServerFrame::Event(ev))) => match ev {
                         DaemonEvent::PerRun { run_id, event } => {
                             let is_terminal = matches!(event, EngineRunEvent::Terminal(_));
-                            if is_terminal {
-                                if let EngineRunEvent::Terminal(outcome) = &event {
-                                    if let Some(tx) =
-                                        dispatcher_for_task.completion.lock().await.remove(&run_id)
-                                    {
-                                        let _ = tx.send(outcome.clone());
-                                    }
-                                }
+                            if is_terminal
+                                && let EngineRunEvent::Terminal(outcome) = &event
+                                && let Some(tx) =
+                                    dispatcher_for_task.completion.lock().await.remove(&run_id)
+                            {
+                                let _ = tx.send(outcome.clone());
                             }
                             // Forward event to per-run broadcast (if subscribed).
                             {

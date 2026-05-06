@@ -53,7 +53,7 @@ pub struct EngineRunConfig {
 impl Default for EngineRunConfig {
     fn default() -> Self {
         Self {
-            human_input_timeout: Duration::from_secs(300),
+            human_input_timeout: Duration::from_mins(5),
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
         }
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn run_config_default_human_input_is_5_minutes() {
         let c = EngineRunConfig::default();
-        assert_eq!(c.human_input_timeout, Duration::from_secs(300));
+        assert_eq!(c.human_input_timeout, Duration::from_mins(5));
     }
 
     #[test]
@@ -88,13 +88,13 @@ mod tests {
     #[test]
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
-            human_input_timeout: Duration::from_secs(120),
+            human_input_timeout: Duration::from_mins(2),
             stage_timeout_override: None,
             mcp_servers: vec![McpServerRef::new(
                 "playwright".into(),
                 McpTransportConfig::stdio(PathBuf::from("mcp-playwright"), vec![], HashMap::new()),
                 None,
-                Duration::from_secs(60),
+                Duration::from_mins(1),
                 true,
             )],
         };

@@ -197,7 +197,7 @@ mod tests {
             "playwright".into(),
             McpTransportConfig::stdio(PathBuf::from("mcp-playwright"), vec![], HashMap::new()),
             Some(vec!["browser_navigate".into()]),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             true,
         );
 

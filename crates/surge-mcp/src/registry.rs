@@ -202,7 +202,7 @@ mod tests {
                 Map::new(),
             ),
             None,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             true,
         )];
         let r = McpRegistry::from_config(&refs);

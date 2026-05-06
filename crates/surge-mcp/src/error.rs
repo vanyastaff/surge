@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn timeout_format_includes_duration() {
-        let e = McpError::Timeout(Duration::from_secs(60));
+        let e = McpError::Timeout(Duration::from_mins(1));
         let s = format!("{e}");
         assert!(
             s.contains("60s"),

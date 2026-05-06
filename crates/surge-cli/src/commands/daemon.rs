@@ -193,16 +193,16 @@ async fn wait_for_daemon_exit(max_wait: Duration) -> Result<()> {
 }
 
 fn daemon_binary_path() -> Result<PathBuf> {
-    if let Ok(my_exe) = std::env::current_exe() {
-        if let Some(parent) = my_exe.parent() {
-            let candidate = parent.join(if cfg!(windows) {
-                "surge-daemon.exe"
-            } else {
-                "surge-daemon"
-            });
-            if candidate.exists() {
-                return Ok(candidate);
-            }
+    if let Ok(my_exe) = std::env::current_exe()
+        && let Some(parent) = my_exe.parent()
+    {
+        let candidate = parent.join(if cfg!(windows) {
+            "surge-daemon.exe"
+        } else {
+            "surge-daemon"
+        });
+        if candidate.exists() {
+            return Ok(candidate);
         }
     }
     which::which("surge-daemon").context("surge-daemon binary not found in PATH or alongside surge")

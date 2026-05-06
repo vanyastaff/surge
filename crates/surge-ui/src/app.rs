@@ -166,16 +166,16 @@ impl SurgeApp {
                     prompt: Some("Select project directory".into()),
                 });
                 cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    if let Ok(Ok(Some(paths))) = receiver.await {
-                        if let Some(path) = paths.first() {
-                            let path = path.clone();
-                            cx.update(|cx| {
-                                this.update(cx, |this: &mut Self, cx| {
-                                    this.open_project(&path, cx);
-                                })
+                    if let Ok(Ok(Some(paths))) = receiver.await
+                        && let Some(path) = paths.first()
+                    {
+                        let path = path.clone();
+                        cx.update(|cx| {
+                            this.update(cx, |this: &mut Self, cx| {
+                                this.open_project(&path, cx);
                             })
-                            .ok();
-                        }
+                        })
+                        .ok();
                     }
                 })
                 .detach();
@@ -190,16 +190,16 @@ impl SurgeApp {
                     prompt: Some("Select project directory".into()),
                 });
                 cx.spawn(async |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    if let Ok(Ok(Some(paths))) = receiver.await {
-                        if let Some(path) = paths.first() {
-                            let path = path.clone();
-                            cx.update(|cx| {
-                                this.update(cx, |this: &mut Self, cx| {
-                                    this.open_project(&path, cx);
-                                })
+                    if let Ok(Ok(Some(paths))) = receiver.await
+                        && let Some(path) = paths.first()
+                    {
+                        let path = path.clone();
+                        cx.update(|cx| {
+                            this.update(cx, |this: &mut Self, cx| {
+                                this.open_project(&path, cx);
                             })
-                            .ok();
-                        }
+                        })
+                        .ok();
                     }
                 })
                 .detach();
@@ -1122,17 +1122,17 @@ impl Render for SurgeApp {
                     }))
                     .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
                         // If on gate approval screen, approve the current gate
-                        if this.active_screen == Screen::GateApproval {
-                            if let Some(gate_approval) = &this.gate_approval {
-                                gate_approval.update(cx, |ga, cx| {
-                                    // Trigger approve button click programmatically
-                                    cx.emit(GateDecision {
-                                        task_id: ga.task_id.clone(),
-                                        approved: true,
-                                    });
-                                    cx.notify();
+                        if this.active_screen == Screen::GateApproval
+                            && let Some(gate_approval) = &this.gate_approval
+                        {
+                            gate_approval.update(cx, |ga, cx| {
+                                // Trigger approve button click programmatically
+                                cx.emit(GateDecision {
+                                    task_id: ga.task_id.clone(),
+                                    approved: true,
                                 });
-                            }
+                                cx.notify();
+                            });
                         }
                     }))
                     .child(

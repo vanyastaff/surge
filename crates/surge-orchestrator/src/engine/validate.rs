@@ -41,10 +41,10 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
         }
 
         // Subgraph reference must exist.
-        if let surge_core::node::NodeConfig::Subgraph(cfg) = &node.config {
-            if !graph.subgraphs.contains_key(&cfg.inner) {
-                return Err(EngineError::SubgraphMissing(cfg.inner.clone()));
-            }
+        if let surge_core::node::NodeConfig::Subgraph(cfg) = &node.config
+            && !graph.subgraphs.contains_key(&cfg.inner)
+        {
+            return Err(EngineError::SubgraphMissing(cfg.inner.clone()));
         }
     }
 
@@ -107,10 +107,10 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
                     return Err(EngineError::LoopBodyMissing(cfg.body.clone()));
                 }
             }
-            if let surge_core::node::NodeConfig::Subgraph(cfg) = &node.config {
-                if !graph.subgraphs.contains_key(&cfg.inner) {
-                    return Err(EngineError::SubgraphMissing(cfg.inner.clone()));
-                }
+            if let surge_core::node::NodeConfig::Subgraph(cfg) = &node.config
+                && !graph.subgraphs.contains_key(&cfg.inner)
+            {
+                return Err(EngineError::SubgraphMissing(cfg.inner.clone()));
             }
         }
     }

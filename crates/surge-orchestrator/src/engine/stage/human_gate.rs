@@ -254,7 +254,7 @@ mod tests {
             writer: &writer,
             run_memory: &mem,
             resolution_rx: Some(rx),
-            default_timeout: Duration::from_secs(60),
+            default_timeout: Duration::from_mins(1),
         })
         .await
         .unwrap();

@@ -69,7 +69,7 @@ impl RoutingToolDispatcher {
             let timeout = per_server_timeouts
                 .get(&entry.server)
                 .copied()
-                .unwrap_or(Duration::from_secs(60));
+                .unwrap_or(Duration::from_mins(1));
             table.insert(
                 entry.tool.clone(),
                 ToolOrigin::Mcp {

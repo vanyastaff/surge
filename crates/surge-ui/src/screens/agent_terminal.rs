@@ -1048,23 +1048,23 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
     );
 
     // Removed lines (red)
-    if let Some(old) = &diff.old_text {
-        if !old.is_empty() {
-            let mut old_block = div().w_full();
-            for line in old.lines() {
-                old_block = old_block.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(1.0))
-                        .bg(hsla(0.0, 0.4, 0.15, 1.0))
-                        .font_family("Consolas")
-                        .text_xs()
-                        .text_color(hsla(0.0, 0.7, 0.7, 1.0))
-                        .child(format!("- {line}")),
-                );
-            }
-            container = container.child(old_block);
+    if let Some(old) = &diff.old_text
+        && !old.is_empty()
+    {
+        let mut old_block = div().w_full();
+        for line in old.lines() {
+            old_block = old_block.child(
+                div()
+                    .px(px(10.0))
+                    .py(px(1.0))
+                    .bg(hsla(0.0, 0.4, 0.15, 1.0))
+                    .font_family("Consolas")
+                    .text_xs()
+                    .text_color(hsla(0.0, 0.7, 0.7, 1.0))
+                    .child(format!("- {line}")),
+            );
         }
+        container = container.child(old_block);
     }
 
     // Added lines (green)

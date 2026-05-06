@@ -131,10 +131,10 @@ impl InitWizard {
         self.has_git = path.join(".git").exists();
 
         // Auto-detect name from directory.
-        if self.project_name.is_empty() {
-            if let Some(name) = path.file_name() {
-                self.project_name = name.to_string_lossy().to_string();
-            }
+        if self.project_name.is_empty()
+            && let Some(name) = path.file_name()
+        {
+            self.project_name = name.to_string_lossy().to_string();
         }
 
         // Auto-detect language.

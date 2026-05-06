@@ -26,10 +26,10 @@ impl ActiveWriters {
     /// Returns `None` if another live writer is currently holding the slot.
     pub async fn try_acquire(&self, run_id: RunId) -> Option<Arc<WriterToken>> {
         let mut g = self.inner.lock().await;
-        if let Some(weak) = g.get(&run_id) {
-            if weak.strong_count() > 0 {
-                return None;
-            }
+        if let Some(weak) = g.get(&run_id)
+            && weak.strong_count() > 0
+        {
+            return None;
         }
         let token = Arc::new(WriterToken);
         g.insert(run_id, Arc::downgrade(&token));

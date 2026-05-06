@@ -465,10 +465,10 @@ fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {
 /// one. Idempotent if a daemon is already alive.
 async fn ensure_daemon_running() -> Result<()> {
     use surge_daemon::pidfile;
-    if let Some(p) = pidfile::read_pid(&pidfile::pid_path()?)? {
-        if pidfile::is_alive(p) {
-            return Ok(());
-        }
+    if let Some(p) = pidfile::read_pid(&pidfile::pid_path()?)?
+        && pidfile::is_alive(p)
+    {
+        return Ok(());
     }
     eprintln!("note: daemon not running; auto-spawning…");
     crate::commands::daemon::run(crate::commands::daemon::DaemonCommands::Start {

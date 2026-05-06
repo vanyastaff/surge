@@ -210,10 +210,10 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     // Per-server allowed_tools whitelist: outer Some = entry
                     // exists in the HashMap; inner Some = the field is set.
                     // If allowed_tools is None, no filtering is applied.
-                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str()) {
-                        if !whitelist.iter().any(|w| w == &t.tool) {
-                            return false;
-                        }
+                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str())
+                        && !whitelist.iter().any(|w| w == &t.tool)
+                    {
+                        return false;
                     }
                     true
                 })

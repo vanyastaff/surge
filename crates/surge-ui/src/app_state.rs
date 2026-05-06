@@ -233,22 +233,22 @@ impl AppState {
 
         // Try loading surge.toml config and create AgentPool.
         let config_path = path.join("surge.toml");
-        if config_path.exists() {
-            if let Ok(config) = SurgeConfig::load(&config_path) {
-                // Create AgentPool from config if agents are configured.
-                if !config.agents.is_empty() {
-                    if let Ok(pool) = AgentPool::new(
-                        config.agents.clone(),
-                        config.default_agent.clone(),
-                        path.to_path_buf(),
-                        PermissionPolicy::default(),
-                        config.resilience.clone(),
-                    ) {
-                        self.agent_pool = Some(Arc::new(pool));
-                    }
-                }
-                self.config = Some(config);
+        if config_path.exists()
+            && let Ok(config) = SurgeConfig::load(&config_path)
+        {
+            // Create AgentPool from config if agents are configured.
+            if !config.agents.is_empty()
+                && let Ok(pool) = AgentPool::new(
+                    config.agents.clone(),
+                    config.default_agent.clone(),
+                    path.to_path_buf(),
+                    PermissionPolicy::default(),
+                    config.resilience.clone(),
+                )
+            {
+                self.agent_pool = Some(Arc::new(pool));
             }
+            self.config = Some(config);
         }
 
         // Re-detect installed agents (might have changed).
@@ -361,10 +361,10 @@ impl EventEmitter<SurgeEvent> for AppState {}
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {
     let head_file = path.join(".git").join("HEAD");
-    if let Ok(content) = std::fs::read_to_string(head_file) {
-        if let Some(ref_str) = content.strip_prefix("ref: refs/heads/") {
-            return Some(ref_str.trim().to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string(head_file)
+        && let Some(ref_str) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(ref_str.trim().to_string());
     }
     None
 }

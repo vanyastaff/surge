@@ -209,19 +209,18 @@ impl Storage {
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
         let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
         for r in &mut runs {
-            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping) {
-                if let Some(pid) = r.daemon_pid {
-                    if !self.process_probe.is_alive(pid) {
-                        r.status = RunStatus::Crashed;
-                        r.ended_at_ms = Some(self.clock.now_ms());
-                        let _ = registry::update_status(
-                            &self.registry_pool,
-                            &r.id,
-                            RunStatus::Crashed,
-                            r.ended_at_ms,
-                        );
-                    }
-                }
+            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping)
+                && let Some(pid) = r.daemon_pid
+                && !self.process_probe.is_alive(pid)
+            {
+                r.status = RunStatus::Crashed;
+                r.ended_at_ms = Some(self.clock.now_ms());
+                let _ = registry::update_status(
+                    &self.registry_pool,
+                    &r.id,
+                    RunStatus::Crashed,
+                    r.ended_at_ms,
+                );
             }
         }
         Ok(runs)
@@ -238,19 +237,17 @@ impl Storage {
         if matches!(
             summary.status,
             RunStatus::Running | RunStatus::Bootstrapping
-        ) {
-            if let Some(pid) = summary.daemon_pid {
-                if !self.process_probe.is_alive(pid) {
-                    summary.status = RunStatus::Crashed;
-                    summary.ended_at_ms = Some(self.clock.now_ms());
-                    let _ = registry::update_status(
-                        &self.registry_pool,
-                        &summary.id,
-                        RunStatus::Crashed,
-                        summary.ended_at_ms,
-                    );
-                }
-            }
+        ) && let Some(pid) = summary.daemon_pid
+            && !self.process_probe.is_alive(pid)
+        {
+            summary.status = RunStatus::Crashed;
+            summary.ended_at_ms = Some(self.clock.now_ms());
+            let _ = registry::update_status(
+                &self.registry_pool,
+                &summary.id,
+                RunStatus::Crashed,
+                summary.ended_at_ms,
+            );
         }
         Ok(Some(summary))
     }

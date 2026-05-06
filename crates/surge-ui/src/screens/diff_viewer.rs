@@ -135,10 +135,10 @@ impl DiffViewerScreen {
                         this.active_filter = filter;
                         // Reset selection if current file is filtered out
                         let visible = this.filtered_files();
-                        if !visible.iter().any(|(i, _)| *i == this.selected_file) {
-                            if let Some((i, _)) = visible.first() {
-                                this.selected_file = *i;
-                            }
+                        if !visible.iter().any(|(i, _)| *i == this.selected_file)
+                            && let Some((i, _)) = visible.first()
+                        {
+                            this.selected_file = *i;
                         }
                         cx.notify();
                     }))

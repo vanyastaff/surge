@@ -419,10 +419,10 @@ impl MarkdownRenderer {
                 }
             },
             TagEnd::TableRow => {
-                if let Some(t) = &mut self.table {
-                    if !t.in_head {
-                        t.rows.push(t.current_row.clone());
-                    }
+                if let Some(t) = &mut self.table
+                    && !t.in_head
+                {
+                    t.rows.push(t.current_row.clone());
                 }
             },
             TagEnd::TableCell => {
