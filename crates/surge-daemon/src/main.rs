@@ -117,7 +117,7 @@ fn main() -> std::process::ExitCode {
         );
 
         let engine = Arc::new(Engine::new_with_mcp(
-            bridge,
+            Arc::clone(&bridge),
             Arc::clone(&storage),
             tool_dispatcher,
             Arc::clone(&notifier),
@@ -208,7 +208,14 @@ fn main() -> std::process::ExitCode {
         }
 
         if !sources.is_empty() {
-            spawn_task_router(sources, source_map, Arc::clone(&notifier), Arc::clone(&storage)).await;
+            spawn_task_router(
+                sources,
+                source_map,
+                Arc::clone(&notifier),
+                Arc::clone(&storage),
+                Arc::clone(&bridge),
+            )
+            .await;
         } else {
             info!("no task sources configured; skipping TaskRouter spawn");
         }
@@ -257,7 +264,6 @@ fn surge_runs_dir() -> std::path::PathBuf {
 /// know `event.source_id`, (b) `source.fetch_task` fails, or (c)
 /// `dispatch_triage` returns `TriageError`. Preserves Plan-C-MVP
 /// behaviour for unrecoverable provider errors.
-#[allow(dead_code)] // wired in T11
 async fn deliver_fallback_inbox(
     notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
     event: &surge_intake::types::TaskEvent,
@@ -327,12 +333,236 @@ async fn deliver_fallback_inbox(
     }
 }
 
-/// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
+/// Deliver a rendered notification through the Desktop channel.
+///
+/// Shared by the Enqueued and Unclear paths to avoid repeating the
+/// `run_id` / `node_key` boilerplate inline.
+async fn deliver_desktop(
+    notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
+    task_id: &surge_intake::types::TaskId,
+    rendered: surge_notify::RenderedNotification,
+) {
+    let run_id_str = ulid::Ulid::new().to_string();
+    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "skipping desktop delivery: bad run_id");
+            return;
+        },
+    };
+    let node_key = match surge_core::keys::NodeKey::try_new("intake") {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!(error = %e, "skipping desktop delivery: bad NodeKey");
+            return;
+        },
+    };
+    let channel = surge_core::notify_config::NotifyChannel::Desktop;
+    let ctx = surge_notify::NotifyDeliveryContext {
+        run_id,
+        node: &node_key,
+    };
+    match notifier.deliver(&ctx, &channel, &rendered).await {
+        Ok(()) => tracing::info!(task_id = %task_id, "desktop notification delivered"),
+        Err(surge_notify::NotifyError::ChannelNotConfigured) => {
+            tracing::debug!(task_id = %task_id, "Desktop channel not configured")
+        },
+        Err(e) => tracing::warn!(error = %e, task_id = %task_id, "desktop delivery failed"),
+    }
+}
+
+/// Handle one `RouterOutput::Triage` event end-to-end.
+///
+/// Returns `true` if the caller loop should `continue` (i.e. if we already
+/// fell back and the outer iteration should not do further processing). Returns
+/// `false` only in the `Enqueued` path when `run_id` / `node_key` parsing
+/// fails — in that case the caller skips delivery but doesn't need a `continue`.
+/// In practice the loop always calls `continue` after this returns.
+async fn handle_triage_event(
+    event: surge_intake::types::TaskEvent,
+    source_map: &std::collections::HashMap<String, Arc<dyn TaskSource>>,
+    notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
+    storage: &Arc<Storage>,
+    bridge: &Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
+) {
+    // Step 1: look up source.
+    let source = match source_map.get(&event.source_id).cloned() {
+        Some(s) => s,
+        None => {
+            tracing::warn!(
+                source_id = %event.source_id,
+                "no source registered for triage event; falling back"
+            );
+            deliver_fallback_inbox(notifier, &event).await;
+            return;
+        },
+    };
+
+    // Step 2: fetch full task details.
+    let task_details = match source.fetch_task(&event.task_id).await {
+        Ok(td) => td,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %event.task_id, "fetch_task failed; falling back");
+            deliver_fallback_inbox(notifier, &event).await;
+            return;
+        },
+    };
+
+    // Step 3: candidates (soft failure → empty).
+    let candidates = surge_intake::candidates::build_for_task(&*source, &task_details, 15)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                task_id = %event.task_id,
+                "build_for_task failed; using empty candidates"
+            );
+            Vec::new()
+        });
+
+    // Step 4: active runs (soft failure → empty).
+    let active_run_rows = storage.snapshot_active_runs(32).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "snapshot_active_runs failed; using empty list");
+        Vec::new()
+    });
+
+    // Step 5: map rows → orchestrator type.
+    let active_runs: Vec<surge_orchestrator::triage::ActiveRunSummary> = active_run_rows
+        .into_iter()
+        .map(|r| surge_orchestrator::triage::ActiveRunSummary {
+            run_id: r.run_id,
+            task_id: r.task_id,
+            status: r.status,
+            started_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(r.started_at_ms)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    // Step 6: build input + options.
+    let input = surge_orchestrator::triage::TriageInput {
+        task: task_details.clone(),
+        candidates,
+        active_runs,
+    };
+    let scratch_root = surge_runs_dir().join("intake").join("triage");
+    let opts = surge_orchestrator::triage::TriageOptions::with_scratch_root(
+        scratch_root,
+        surge_orchestrator::triage::find_claude_binary(),
+    );
+
+    // Step 7: dispatch and route the four-way decision.
+    let decision =
+        match surge_orchestrator::triage::dispatch_triage(Arc::clone(bridge), input, opts).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    task_id = %event.task_id,
+                    "triage invariant failure; falling back"
+                );
+                deliver_fallback_inbox(notifier, &event).await;
+                return;
+            },
+        };
+
+    dispatch_triage_decision(decision, &event, &task_details, &source, notifier).await;
+}
+
+/// Route a `TriageDecision` to the appropriate output channel.
+async fn dispatch_triage_decision(
+    decision: surge_intake::types::TriageDecision,
+    event: &surge_intake::types::TaskEvent,
+    task_details: &surge_intake::types::TaskDetails,
+    source: &Arc<dyn TaskSource>,
+    notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
+) {
+    use surge_intake::types::TriageDecision;
+    match decision {
+        TriageDecision::Enqueued {
+            priority, summary, ..
+        } => {
+            let provider = event
+                .task_id
+                .as_str()
+                .split(':')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+            let run_id_str = ulid::Ulid::new().to_string();
+            let payload = surge_notify::messages::InboxCardPayload {
+                task_id: event.task_id.clone(),
+                source_id: event.source_id.clone(),
+                provider,
+                title: task_details.title.clone(),
+                summary,
+                priority,
+                task_url: task_details.url.clone(),
+                run_id: run_id_str,
+            };
+            let rendered_desktop = surge_notify::desktop::format_inbox_card_desktop(&payload);
+            let rendered = surge_notify::RenderedNotification {
+                severity: surge_core::notify_config::NotifySeverity::Info,
+                title: rendered_desktop.title,
+                body: rendered_desktop.body,
+                artifact_paths: vec![],
+            };
+            tracing::info!(
+                task_id = %event.task_id,
+                priority = ?payload.priority,
+                "delivering LLM-derived InboxCard"
+            );
+            deliver_desktop(notifier, &event.task_id, rendered).await;
+        },
+        TriageDecision::Duplicate { of, reasoning } => {
+            let body = format!(
+                "Surge: detected duplicate of {}. {}",
+                of.as_str(),
+                reasoning
+            );
+            match source.post_comment(&event.task_id, &body).await {
+                Ok(()) => {
+                    tracing::info!(task_id = %event.task_id, duplicate_of = %of, "duplicate comment posted")
+                },
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    task_id = %event.task_id,
+                    "duplicate comment post failed"
+                ),
+            }
+        },
+        TriageDecision::OutOfScope { reasoning } => {
+            let body = format!("Surge: out of scope. {}", reasoning);
+            match source.post_comment(&event.task_id, &body).await {
+                Ok(()) => {
+                    tracing::info!(task_id = %event.task_id, "out_of_scope comment posted")
+                },
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    task_id = %event.task_id,
+                    "out_of_scope comment post failed"
+                ),
+            }
+        },
+        TriageDecision::Unclear { question } => {
+            let rendered = surge_notify::RenderedNotification {
+                severity: surge_core::notify_config::NotifySeverity::Warn,
+                title: format!("Triage unclear · {}", event.task_id.as_str()),
+                body: question,
+                artifact_paths: vec![],
+            };
+            deliver_desktop(notifier, &event.task_id, rendered).await;
+        },
+    }
+}
+
+/// Spawn the TaskRouter and its output consumer.
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: HashMap<String, Arc<dyn TaskSource>>,
     notifier: Arc<dyn surge_notify::NotifyDeliverer>,
     storage: Arc<Storage>,
+    bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
 ) {
     use rusqlite::Connection;
 
@@ -379,94 +609,23 @@ async fn spawn_task_router(
         }
     });
 
-    // Consume router output and build InboxCard payloads (T9.3).
+    // Consume router output and build InboxCard payloads.
     let source_map_for_consumer = Arc::new(source_map);
+    let bridge_for_consumer = Arc::clone(&bridge);
+    let storage_for_consumer = Arc::clone(&storage);
+    let notifier_for_consumer = Arc::clone(&notifier);
     tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             match out {
                 surge_intake::router::RouterOutput::Triage { event } => {
-                    // MVP placeholder: build an InboxCardPayload and log it.
-                    // Triage Author LLM dispatch + actual delivery are Plan-C-polish.
-                    let title = event
-                        .raw_payload
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("New ticket")
-                        .to_string();
-                    let task_url = event
-                        .raw_payload
-                        .get("url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let provider = event
-                        .task_id
-                        .as_str()
-                        .split(':')
-                        .next()
-                        .unwrap_or("unknown")
-                        .to_string();
-                    let run_id_str = ulid::Ulid::new().to_string();
-                    let payload = surge_notify::messages::InboxCardPayload {
-                        task_id: event.task_id.clone(),
-                        source_id: event.source_id.clone(),
-                        provider: provider.clone(),
-                        title: title.clone(),
-                        summary: String::new(),
-                        priority: surge_intake::types::Priority::Medium,
-                        task_url,
-                        run_id: run_id_str.clone(),
-                    };
-                    let msg = surge_notify::messages::NotifyMessage::InboxCard(payload.clone());
-                    tracing::info!(
-                        task_id = %event.task_id,
-                        "router output: triage → InboxCard built"
-                    );
-
-                    // Render to RenderedNotification using the desktop formatter
-                    let rendered_desktop =
-                        surge_notify::desktop::format_inbox_card_desktop(&payload);
-                    let rendered = surge_notify::RenderedNotification {
-                        severity: surge_core::notify_config::NotifySeverity::Info,
-                        title: rendered_desktop.title.clone(),
-                        body: rendered_desktop.body.clone(),
-                        artifact_paths: vec![],
-                    };
-
-                    // Parse run_id and construct NodeKey for delivery context
-                    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to parse run_id as RunId; skipping delivery");
-                            continue;
-                        },
-                    };
-                    let node_key = match surge_core::keys::NodeKey::try_new("intake") {
-                        Ok(key) => key,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to construct intake NodeKey; skipping delivery");
-                            continue;
-                        },
-                    };
-
-                    // Attempt delivery through Desktop channel
-                    let channel = surge_core::notify_config::NotifyChannel::Desktop;
-                    let ctx = surge_notify::NotifyDeliveryContext {
-                        run_id,
-                        node: &node_key,
-                    };
-                    match notifier.deliver(&ctx, &channel, &rendered).await {
-                        Ok(()) => {
-                            tracing::info!(task_id = %event.task_id, "InboxCard delivered to Desktop")
-                        },
-                        Err(surge_notify::NotifyError::ChannelNotConfigured) => {
-                            tracing::debug!(task_id = %event.task_id, "Desktop channel not configured; skipping");
-                        },
-                        Err(e) => {
-                            tracing::warn!(error = %e, task_id = %event.task_id, "InboxCard delivery to Desktop failed")
-                        },
-                    }
-                    let _ = msg; // keep msg in scope for now
+                    handle_triage_event(
+                        event,
+                        &source_map_for_consumer,
+                        &notifier_for_consumer,
+                        &storage_for_consumer,
+                        &bridge_for_consumer,
+                    )
+                    .await;
                 },
                 surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
                     let source_id = event.source_id.clone();
