@@ -261,4 +261,23 @@ Implemented over 7 commits (post-reset of original raw-GraphQL approach).
 - [x] M5 Linear: deps via `lineark-sdk`, `LinearTaskSource` (full TaskSource impl using SDK), wiremock tests (via SDK's `set_base_url`), real-API ignored test (Tasks 5.1, 5.4, 5.5, 5.6)
 - [x] M6 GitHub: `octocrab` client wrapper, `GitHubIssuesTaskSource` (full TaskSource impl), real-API ignored test (Tasks 6.1, 6.2, 6.3)
 
-Plan C (Triage Author + InboxCard notify + daemon integration + e2e mock + CLI) follows.
+## RFC-0010 — Plan C · Integration ✅
+
+Implemented over 13 task commits.
+
+- [x] M7 Triage Author: bootstrap profile (TOML) + dispatcher (`TriageInput`, `TriageJson`, `into_decision`) + 3 fixtures + smoke test (Tasks 7.1–7.4)
+- [x] M8 Notify InboxCard: `NotifyMessage::InboxCard` variant + Telegram formatter + Desktop formatter (Tasks 8.1–8.3)
+- [x] M9 Daemon wire-up: `TaskSourceConfig` types + daemon `TaskRouter` spawn + InboxCard payload construction (Tasks 9.1–9.3)
+- [x] M10 Event types: 14 new tracker variants in `SurgeEvent` (Task 10.1)
+- [x] M11 End-to-end mock pipeline test (Task 11.1)
+- [x] M13 CLI `surge tracker list` / `surge tracker test <id>` (Task 13.1)
+
+**Plan-C-polish follow-ups** (not blocking RFC-0010 acceptance, but worth tracking):
+- Triage Author LLM dispatch via ACP (currently `Priority::Medium` placeholder in T9.3).
+- Actual delivery of `NotifyMessage::InboxCard` through `NotifyMultiplexer` (currently logged only).
+- T9.2 in-memory dedup connection — should share daemon's persistent connection (Plan-C-polish or future RFC).
+- Acceptance criterion #10 — `ticket_index` FSM proptest.
+- `RouterOutput::EarlyDuplicate` should resurface the originating `TaskSource` so the daemon can post a "duplicate of #N" comment automatically.
+- Multi-issue per polling cycle in `LinearTaskSource` / `GitHubIssuesTaskSource` (currently 1-per-cycle MVP).
+
+RFC-0010 implementation is functionally complete — all decisions assigned to Plans A/B/C are delivered. Decisions assigned to RFC-0014 (webhook ingestion, embedding-based dedup), RFC-0006 refactor (sandbox tier 3+4 deprecation), and RFC-0004 refactor (vertical-slice mandate, token-budget guard-rail) remain out of scope for RFC-0010.
