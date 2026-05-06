@@ -93,7 +93,9 @@ impl SurgeApp {
         )
         .detach();
 
-        // Subscribe to SurgeEvents from AppState → queue notifications
+        // Subscribe to SurgeEvents from AppState → queue notifications.
+        // (Currently dormant — no in-process emitter; kept for the
+        // in-process orchestrator path that may surface later.)
         cx.subscribe(
             &state,
             |this, _state, event: &surge_core::SurgeEvent, cx| {
@@ -102,6 +104,14 @@ impl SurgeApp {
             },
         )
         .detach();
+
+        // Spawn the daemon connect + global-event subscription task.
+        // The runtime UI is a daemon client (per
+        // `docs/revision/rfcs/0008-ui-architecture.md`): it watches runs
+        // hosted by `surge-daemon` rather than running them in-process.
+        // This task: try_connect → list_runs → subscribe_global → loop
+        // pumping `GlobalDaemonEvent` into AppState + UI notifications.
+        Self::spawn_daemon_link(&state, cx);
 
         // Start in Welcome mode.
         let welcome = cx.new(WelcomeScreen::new);
@@ -333,6 +343,175 @@ impl SurgeApp {
         if let Some(notif) = notification {
             self.pending_notifications.push(notif);
         }
+    }
+
+    /// Queue a notification for a `GlobalDaemonEvent` (run lifecycle).
+    /// Mirrors `queue_notification_for_event` for the SurgeEvent path
+    /// but consumes daemon-side run lifecycle events instead.
+    fn queue_notification_for_global(
+        &mut self,
+        event: &surge_orchestrator::engine::ipc::GlobalDaemonEvent,
+    ) {
+        // Also send OS-level notification.
+        crate::notifications::os_notify_global(event);
+
+        use surge_orchestrator::engine::handle::RunOutcome;
+        use surge_orchestrator::engine::ipc::GlobalDaemonEvent as G;
+
+        let notification = match event {
+            G::RunAccepted { run_id } => Some(SurgeNotification::run_accepted(&run_id.short())),
+            G::RunFinished { run_id, outcome } => {
+                let short = run_id.short();
+                match outcome {
+                    RunOutcome::Completed { .. } => Some(SurgeNotification::run_completed(&short)),
+                    RunOutcome::Failed { error } => {
+                        Some(SurgeNotification::run_failed(&short, error))
+                    },
+                    RunOutcome::Aborted { reason } => {
+                        Some(SurgeNotification::run_aborted(&short, reason))
+                    },
+                    _ => None,
+                }
+            },
+            G::DaemonShuttingDown => Some(SurgeNotification::daemon_shutting_down()),
+            _ => None,
+        };
+
+        if let Some(notif) = notification {
+            self.pending_notifications.push(notif);
+        }
+    }
+
+    /// Spawn the daemon connection + global-event subscription task.
+    ///
+    /// Lifecycle on success:
+    ///   1. State flips to `Connecting`.
+    ///   2. `try_connect` opens the local socket; on failure flips
+    ///      to `Failed(reason)` and exits without retrying. (User-driven
+    ///      retry is a phase-2 affordance.)
+    ///   3. State flips to `Connected(facade)`. `list_runs` populates
+    ///      the run list once.
+    ///   4. `subscribe_global` opens the lifecycle event stream; the
+    ///      task loops on `recv` until the channel closes (daemon
+    ///      shutdown / connection drop).
+    ///   5. Each event lands in three places: `apply_global_event`
+    ///      mutates the run list, `queue_notification_for_global`
+    ///      queues an in-app banner, and `os_notify_global` fires an
+    ///      OS toast.
+    fn spawn_daemon_link(state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let state_for_task = state.downgrade();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            // Set Connecting.
+            let _ = cx.update(|cx| {
+                let _ = state_for_task.update(cx, |state, cx| {
+                    state.daemon_state = crate::daemon_link::ConnectionState::Connecting;
+                    cx.notify();
+                });
+            });
+
+            // Try to connect.
+            let facade = match crate::daemon_link::try_connect().await {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::info!("daemon not reachable on startup ({e}); UI continues offline");
+                    let _ = cx.update(|cx| {
+                        let _ = state_for_task.update(cx, |state, cx| {
+                            state.daemon_state =
+                                crate::daemon_link::ConnectionState::Failed(e.to_string());
+                            cx.notify();
+                        });
+                    });
+                    return;
+                },
+            };
+
+            // Connected — flip state, then list runs once.
+            let facade_for_state = facade.clone();
+            let _ = cx.update(|cx| {
+                let _ = state_for_task.update(cx, |state, cx| {
+                    state.daemon_state =
+                        crate::daemon_link::ConnectionState::Connected(facade_for_state);
+                    cx.notify();
+                });
+            });
+
+            {
+                use surge_orchestrator::engine::facade::EngineFacade as _;
+                match facade.list_runs().await {
+                    Ok(summaries) => {
+                        let _ = cx.update(|cx| {
+                            let _ = state_for_task.update(cx, |state, cx| {
+                                state.set_runs_from_summaries(&summaries);
+                                cx.notify();
+                            });
+                        });
+                    },
+                    Err(e) => {
+                        tracing::warn!("daemon list_runs failed: {e}");
+                    },
+                }
+            }
+
+            // Subscribe to the global lifecycle event stream.
+            let mut rx = match facade.subscribe_global().await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    // The Connected state we set above implied an active
+                    // subscription; without it the UI would lie about
+                    // receiving events. Roll back to Failed so the
+                    // status pill is honest.
+                    tracing::warn!("daemon subscribe_global failed: {e}");
+                    let reason = e.to_string();
+                    let _ = cx.update(|cx| {
+                        let _ = state_for_task.update(cx, |state, cx| {
+                            state.daemon_state =
+                                crate::daemon_link::ConnectionState::Failed(reason);
+                            cx.notify();
+                        });
+                    });
+                    return;
+                },
+            };
+            tracing::info!("daemon link: subscribed to global events");
+
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let event_for_state = event.clone();
+                        let event_for_app = event.clone();
+                        let _ = cx.update(|cx| {
+                            let _ = state_for_task.update(cx, |state, cx| {
+                                state.apply_global_event(&event_for_state);
+                                cx.notify();
+                            });
+                            let _ = this.update(cx, |this, cx| {
+                                this.queue_notification_for_global(&event_for_app);
+                                cx.notify();
+                            });
+                        });
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!(
+                            "daemon link: global event channel closed; ending subscription"
+                        );
+                        break;
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(dropped = n, "daemon link: global event subscriber lagged");
+                    },
+                }
+            }
+
+            // Channel closed — flip back to Disconnected so the UI can
+            // surface a "reconnect" affordance later.
+            let _ = cx.update(|cx| {
+                let _ = state_for_task.update(cx, |state, cx| {
+                    state.daemon_state = crate::daemon_link::ConnectionState::Disconnected;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// Flush queued notifications (called from render where Window is available).

@@ -44,6 +44,38 @@ impl SurgeNotification {
         .title("Rate Limit")
         .autohide(false)
     }
+
+    pub fn run_accepted(run_short: &str) -> Notification {
+        Notification::info(SharedString::from(format!("Run {run_short} accepted")))
+            .title("Run Started")
+    }
+
+    pub fn run_completed(run_short: &str) -> Notification {
+        Notification::success(SharedString::from(format!(
+            "Run {run_short} completed successfully"
+        )))
+        .title("Run Completed")
+    }
+
+    pub fn run_failed(run_short: &str, reason: &str) -> Notification {
+        Notification::error(SharedString::from(format!("{run_short}: {reason}")))
+            .title("Run Failed")
+            .autohide(false)
+    }
+
+    pub fn run_aborted(run_short: &str, reason: &str) -> Notification {
+        Notification::warning(SharedString::from(format!("{run_short}: {reason}")))
+            .title("Run Aborted")
+            .autohide(false)
+    }
+
+    pub fn daemon_shutting_down() -> Notification {
+        Notification::warning(SharedString::from(
+            "Daemon is shutting down — active runs will be interrupted",
+        ))
+        .title("Daemon Shutting Down")
+        .autohide(false)
+    }
 }
 
 // ── OS-level native notifications ──────────────────────────────────
@@ -97,6 +129,47 @@ pub fn send_os_notification(title: &str, body: &str) {
             "OS notification queue full; dropping notification"
         );
     }
+}
+
+/// Send OS notification for a `GlobalDaemonEvent` from the daemon
+/// runtime. Mirrors the `SurgeNotification::run_*` taxonomy used for
+/// in-app banners so the OS toast and the in-app card line up.
+pub fn os_notify_global(event: &surge_orchestrator::engine::ipc::GlobalDaemonEvent) {
+    use surge_orchestrator::engine::handle::RunOutcome;
+    use surge_orchestrator::engine::ipc::GlobalDaemonEvent as G;
+
+    let (title, body): (String, String) = match event {
+        G::RunAccepted { run_id } => (
+            "Run Started".into(),
+            format!("Run {} accepted", run_id.short()),
+        ),
+        G::RunFinished { run_id, outcome } => {
+            let short = run_id.short();
+            match outcome {
+                RunOutcome::Completed { .. } => (
+                    "Run Completed".into(),
+                    format!("Run {short} completed successfully"),
+                ),
+                RunOutcome::Failed { error } => ("Run Failed".into(), format!("{short}: {error}")),
+                RunOutcome::Aborted { reason } => {
+                    ("Run Aborted".into(), format!("{short}: {reason}"))
+                },
+                // `RunOutcome` is `#[non_exhaustive]`. Surface the new
+                // variant as a generic "finished" toast until the
+                // taxonomy here grows to match.
+                _ => ("Run Finished".into(), format!("Run {short} finished")),
+            }
+        },
+        G::DaemonShuttingDown => (
+            "Daemon Shutting Down".into(),
+            "Active runs will be interrupted".into(),
+        ),
+        // `GlobalDaemonEvent` is `#[non_exhaustive]`. Silently drop
+        // unknown future variants here; add cases as new ones land.
+        _ => return,
+    };
+
+    send_os_notification(&title, &body);
 }
 
 /// Send OS notification for a SurgeEvent.

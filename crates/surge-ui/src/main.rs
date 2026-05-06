@@ -10,6 +10,7 @@ mod actions;
 mod app;
 mod app_state;
 mod command_palette;
+mod daemon_link;
 mod markdown;
 mod notifications;
 mod project;
