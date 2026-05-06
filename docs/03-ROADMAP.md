@@ -237,3 +237,17 @@ The engine refactor uses a separate M-series numbering aligned with the
 - `EdgePolicy::max_traversals` cap with `ExceededAction::{Escalate,Fail}`.
 - `validate_for_m6` — rejects multi-edge fanout (deferred to M8).
 - 5 integration tests + 6 `#[ignore]`d stubs for M7/M8 scenarios.
+
+---
+
+## RFC-0010 — Plan A · Foundation ✅
+
+Implemented over commits c34d76a..587fd90 (16 commits, 34 new tests).
+
+- [x] M0 Crate scaffold — `surge-intake` added to workspace, module skeleton (Task 0.1)
+- [x] M1 Trait + types + MockTaskSource — `TaskId`, `Priority`, `TriageDecision`, `Tier1Decision`, `TaskEvent`, `TaskEventKind`, `TaskDetails`, `TaskSummary`, `trait TaskSource`, `MockTaskSource` (Tasks 1.1–1.5)
+- [x] M2 Persistence — `ticket_index` (migration 0002) and `task_source_state` (migration 0003) tables, `TicketState` enum, `IntakeRow`, `IntakeRepo` (Tasks 2.1–2.4)
+- [x] M3 Tier-1 PreFilter + candidates module (Tasks 3.1–3.2)
+- [x] M4 TaskRouter + two-source integration test (Tasks 4.1–4.2)
+
+Plan B (Linear + GitHub providers) and Plan C (Triage Author, notify, daemon integration, end-to-end test, CLI) follow.
