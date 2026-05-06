@@ -282,7 +282,7 @@ Implemented over 13 task commits.
 
 RFC-0010 implementation is functionally complete — all decisions assigned to Plans A/B/C are delivered. Decisions assigned to RFC-0014 (webhook ingestion, embedding-based dedup), RFC-0006 refactor (sandbox tier 3+4 deprecation), and RFC-0004 refactor (vertical-slice mandate, token-budget guard-rail) remain out of scope for RFC-0010.
 
-## RFC-0010 — Plan-C-polish ✅ (5 of 6)
+## RFC-0010 — Plan-C-polish ✅ (6 of 6)
 
 Refinements on top of Plans A+B+C, delivered to harden the implementation.
 
@@ -291,6 +291,7 @@ Refinements on top of Plans A+B+C, delivered to harden the implementation.
 - [x] **Source registry → comment-on-dup** — surge-daemon now keeps `Arc<HashMap<String, Arc<dyn TaskSource>>>` alongside the router and posts a "duplicate of run #N" comment to the originating tracker on `RouterOutput::EarlyDuplicate`. Closes the dedup-side of acceptance #6. Commit: `619f917`.
 - [x] **NotifyMultiplexer InboxCard delivery** — `RouterOutput::Triage` events render an `InboxCardPayload` to a `RenderedNotification` (title + body) and dispatch via `MultiplexingNotifier::deliver` against `NotifyChannel::Desktop`. `ChannelNotConfigured` is logged at debug; real deliverers receive the notification when configured. Closes the delivery-side of acceptance #3. Commit: `08eade5`.
 - [x] **Persistent dedup connection** — `TaskRouter` now reads from a `Connection` opened directly to the daemon's registry DB file (using a new `Storage::registry_db_path()` accessor). State survives restarts and stays in sync with engine writes. Closes the T9.2 in-memory concern. Commit: `2d5cd61`.
+- [x] **Inbox-card callback handler** — Telegram + Desktop taps on Start/Snooze/Skip drive `Engine::start_run`, FSM transitions, tracker comments. `BootstrapGraphBuilder` trait + `MinimalBootstrapGraphBuilder` (single-Agent graph; RFC-0004 will replace with Staged). Closes RFC-0010 acceptance #4 (deferred Plan-C-polish item). Plan: [docs/superpowers/plans/2026-05-06-inbox-callback-handler.md](superpowers/plans/2026-05-06-inbox-callback-handler.md). Spec: [docs/superpowers/specs/2026-05-06-inbox-callback-handler-design.md](superpowers/specs/2026-05-06-inbox-callback-handler-design.md).
 
 ### Remaining (deferred to its own session)
 
@@ -298,5 +299,6 @@ Refinements on top of Plans A+B+C, delivered to harden the implementation.
 
 After polish, RFC-0010 implementation status:
 - **3 acceptance criteria fully pass** (#1 surge-intake compiles, #2 sources poll, #11 clippy clean).
-- **5 acceptance criteria pass with documented placeholders** (#3 InboxCard delivered with placeholder priority; #6 duplicate comment posted on Tier-1 hit; #10 FSM proptest in place; #11/#12 verified locally).
-- **Remaining placeholders** — full LLM-driven triage (#3, #11), bootstrap-flow handoff after Start tap (#4), run-completion comment to tracker (#5), full SIGKILL recovery (#8), L3 auto-merge (#9), cross-OS CI matrix (#12) — listed as future work and tracked outside this RFC.
+- **6 acceptance criteria pass with documented placeholders** (#3 InboxCard delivered with placeholder priority; #4 bootstrap-flow handoff via `MinimalBootstrapGraphBuilder`; #6 duplicate comment posted on Tier-1 hit; #10 FSM proptest in place; #11/#12 verified locally).
+- **Bootstrap-flow handoff after Start tap (#4)** — ✅ shipped via Plan-C-polish (`MinimalBootstrapGraphBuilder` produces a single-Agent graph; RFC-0004's multi-stage `Description→Roadmap→Flow` chain replaces it via the same trait without callback-handler changes).
+- **Remaining placeholders** — full LLM-driven triage (#3, #11), run-completion comment to tracker (#5), full SIGKILL recovery (#8), L3 auto-merge (#9), cross-OS CI matrix (#12) — listed as future work and tracked outside this RFC.
