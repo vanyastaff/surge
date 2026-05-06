@@ -265,27 +265,26 @@ impl Storage {
             .registry_pool
             .get()
             .map_err(|e| crate::runs::error::StorageError::Pool(e.to_string()))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, status, started_at FROM runs
-                 WHERE status IN ('Running', 'Bootstrapping')
-                 ORDER BY started_at DESC
-                 LIMIT ?1",
-            )
-            .map_err(|e| crate::runs::error::StorageError::Pool(e.to_string()))?;
-        let rows = stmt
-            .query_map([limit as i64], |row| {
-                Ok(ActiveRunRow {
-                    run_id: row.get::<_, String>(0)?,
-                    task_id: None,
-                    status: row.get::<_, String>(1)?,
-                    started_at_ms: row.get::<_, i64>(2)?,
-                })
+        // SQLite errors propagate via the `From<rusqlite::Error>` impl on
+        // `StorageError`, surfacing as `StorageError::Sqlite`. Pool-acquire
+        // failures above keep the `StorageError::Pool` mapping.
+        let mut stmt = conn.prepare(
+            "SELECT id, status, started_at FROM runs
+             WHERE status IN ('Running', 'Bootstrapping')
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            Ok(ActiveRunRow {
+                run_id: row.get::<_, String>(0)?,
+                task_id: None,
+                status: row.get::<_, String>(1)?,
+                started_at_ms: row.get::<_, i64>(2)?,
             })
-            .map_err(|e| crate::runs::error::StorageError::Pool(e.to_string()))?;
+        })?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| crate::runs::error::StorageError::Pool(e.to_string()))?);
+            out.push(r?);
         }
         Ok(out)
     }

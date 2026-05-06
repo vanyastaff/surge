@@ -163,14 +163,6 @@ pub enum TriageError {
     Bridge(String),
 }
 
-/// Bridge-level sandbox for sessions where Surge delegates isolation
-/// to the agent itself (per Vision-2026 §"Sandbox-delegated").
-///
-/// Returns `AlwaysAllowSandbox` — the bridge applies no tool filtering,
-/// because each ACP-conformant agent (Claude Code, Codex CLI, etc.)
-/// already has its own native sandbox enforcement. The profile's
-/// `[sandbox] mode = ...` field is a semantic marker the agent reads,
-/// not a directive the bridge enforces.
 /// Best-effort discovery of the Claude binary path.
 ///
 /// Probe order:
@@ -208,6 +200,14 @@ pub fn find_claude_binary() -> Option<PathBuf> {
     None
 }
 
+/// Bridge-level sandbox for sessions where Surge delegates isolation
+/// to the agent itself (per Vision-2026 §"Sandbox-delegated").
+///
+/// Returns `AlwaysAllowSandbox` — the bridge applies no tool filtering,
+/// because each ACP-conformant agent (Claude Code, Codex CLI, etc.)
+/// already has its own native sandbox enforcement. The profile's
+/// `[sandbox] mode = ...` field is a semantic marker the agent reads,
+/// not a directive the bridge enforces.
 fn delegated_sandbox() -> Box<dyn surge_acp::bridge::sandbox::Sandbox> {
     Box::new(surge_acp::bridge::sandbox::AlwaysAllowSandbox)
 }
@@ -472,18 +472,26 @@ pub async fn dispatch_triage(
         .await
         {
             Ok(decision) => {
-                // Cleanup logic: remove scratch dir when we got a decisive outcome AND
-                // the caller didn't ask us to keep it. `Unclear` is treated as a non-decisive
-                // outcome (the agent expressed uncertainty), so we keep its artifacts for
-                // post-mortem regardless of `keep_scratch_on_failure`.
-                if !opts.keep_scratch_on_failure
-                    && !matches!(decision, TriageDecision::Unclear { .. })
-                {
+                // Cleanup policy:
+                // - Decisive success (Enqueued / Duplicate / OutOfScope): always
+                //   remove scratch (best-effort) so the per-call dir doesn't leak.
+                // - Unclear (agent-reported): keep iff `keep_scratch_on_failure`,
+                //   otherwise remove. Unclear is non-decisive — the operator may
+                //   want the artifacts for post-mortem.
+                let is_unclear = matches!(decision, TriageDecision::Unclear { .. });
+                if !is_unclear || !opts.keep_scratch_on_failure {
                     let _ = std::fs::remove_dir_all(&scratch_dir);
                 }
                 return Ok(decision);
             },
-            Err(AttemptError::Bridge(e)) => return Err(TriageError::Bridge(e)),
+            Err(AttemptError::Bridge(e)) => {
+                // Bridge invariant failure — keep scratch for post-mortem when
+                // the caller asked us to.
+                if !opts.keep_scratch_on_failure {
+                    let _ = std::fs::remove_dir_all(&scratch_dir);
+                }
+                return Err(TriageError::Bridge(e));
+            },
             Err(AttemptError::Retryable(msg)) => {
                 tracing::warn!(attempt, error = %msg, "triage attempt failed; will retry");
                 last_err = Some(msg);
@@ -491,6 +499,11 @@ pub async fn dispatch_triage(
         }
     }
 
+    // Retry exhaustion → synthetic Unclear. Same cleanup rule as agent-reported
+    // Unclear: keep artifacts iff `keep_scratch_on_failure`.
+    if !opts.keep_scratch_on_failure {
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+    }
     let question = format!(
         "Triage failed after {} attempts: {}",
         opts.max_attempts,

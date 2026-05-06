@@ -351,20 +351,15 @@ async fn deliver_fallback_inbox(
 /// Deliver a rendered notification through the Desktop channel.
 ///
 /// Shared by the Enqueued and Unclear paths to avoid repeating the
-/// `run_id` / `node_key` boilerplate inline.
+/// `node_key` / channel-construction boilerplate inline. Callers
+/// supply the `run_id` so it stays consistent with whatever id is
+/// embedded in the rendered card (e.g., `InboxCardPayload.run_id`).
 async fn deliver_desktop(
     notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
     task_id: &surge_intake::types::TaskId,
+    run_id: surge_core::id::RunId,
     rendered: surge_notify::RenderedNotification,
 ) {
-    let run_id_str = ulid::Ulid::new().to_string();
-    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::warn!(error = %e, "skipping desktop delivery: bad run_id");
-            return;
-        },
-    };
     let node_key = match surge_core::keys::NodeKey::try_new("intake") {
         Ok(k) => k,
         Err(e) => {
@@ -507,6 +502,16 @@ async fn dispatch_triage_decision(
                 .unwrap_or("unknown")
                 .to_string();
             let run_id_str = ulid::Ulid::new().to_string();
+            // Parse before constructing the payload so we can fail-early and
+            // share the same RunId between payload.run_id and the delivery
+            // context (avoids drift the inline path used to have).
+            let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping enqueued delivery: bad run_id");
+                    return;
+                },
+            };
             let payload = surge_notify::messages::InboxCardPayload {
                 task_id: event.task_id.clone(),
                 source_id: event.source_id.clone(),
@@ -529,7 +534,7 @@ async fn dispatch_triage_decision(
                 priority = ?payload.priority,
                 "delivering LLM-derived InboxCard"
             );
-            deliver_desktop(notifier, &event.task_id, rendered).await;
+            deliver_desktop(notifier, &event.task_id, run_id, rendered).await;
         },
         TriageDecision::Duplicate { of, reasoning } => {
             let body = format!(
@@ -562,13 +567,23 @@ async fn dispatch_triage_decision(
             }
         },
         TriageDecision::Unclear { question } => {
+            // Unclear has no associated InboxCardPayload (no payload run_id
+            // to mirror), so we mint a fresh ulid for the delivery context.
+            let run_id_str = ulid::Ulid::new().to_string();
+            let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unclear delivery: bad run_id");
+                    return;
+                },
+            };
             let rendered = surge_notify::RenderedNotification {
                 severity: surge_core::notify_config::NotifySeverity::Warn,
                 title: format!("Triage unclear · {}", event.task_id.as_str()),
                 body: question,
                 artifact_paths: vec![],
             };
-            deliver_desktop(notifier, &event.task_id, rendered).await;
+            deliver_desktop(notifier, &event.task_id, run_id, rendered).await;
         },
     }
 }
