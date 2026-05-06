@@ -328,6 +328,70 @@ impl<'a> IntakeRepo<'a> {
             Err(e) => Err(e),
         }
     }
+
+    /// Reverse of `lookup_active_run`: returns the ticket row whose `run_id`
+    /// matches, regardless of state. Used when an engine run finishes and we
+    /// need to find the originating ticket (if any) so we can post a tracker
+    /// comment + update the ticket FSM. Returns `Ok(None)` when no row has
+    /// this `run_id` (e.g., the run was not tracker-originated).
+    pub fn lookup_ticket_by_run_id(&self, run_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
+                    priority, state, first_seen, last_seen, snooze_until \
+             FROM ticket_index WHERE run_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![run_id])?;
+        let Some(r) = rows.next()? else {
+            return Ok(None);
+        };
+
+        let state_str: String = r.get(7)?;
+        let state: TicketState = state_str.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, e.into())
+        })?;
+        let first_seen: String = r.get(8)?;
+        let last_seen: String = r.get(9)?;
+        let snooze_until: Option<String> = r.get(10)?;
+
+        Ok(Some(IntakeRow {
+            task_id: r.get(0)?,
+            source_id: r.get(1)?,
+            provider: r.get(2)?,
+            run_id: r.get(3)?,
+            triage_decision: r.get(4)?,
+            duplicate_of: r.get(5)?,
+            priority: r.get(6)?,
+            state,
+            first_seen: DateTime::parse_from_rfc3339(&first_seen)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        8,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?
+                .with_timezone(&Utc),
+            last_seen: DateTime::parse_from_rfc3339(&last_seen)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        9,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?
+                .with_timezone(&Utc),
+            snooze_until: snooze_until
+                .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
+                .transpose()
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        10,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -475,6 +539,42 @@ mod repo_tests {
             .unwrap();
         let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Triaged);
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_returns_row() {
+        let conn = db_with_schema();
+        conn.execute("INSERT INTO runs(id) VALUES ('run_xyz')", [])
+            .unwrap();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/ABC-9", TicketState::Active);
+        row.run_id = Some("run_xyz".into());
+        repo.insert(&row).unwrap();
+
+        let fetched = repo.lookup_ticket_by_run_id("run_xyz").unwrap();
+        assert!(fetched.is_some());
+        let fetched = fetched.unwrap();
+        assert_eq!(fetched.task_id, "linear:wsp1/ABC-9");
+        assert_eq!(fetched.state, TicketState::Active);
+        assert_eq!(fetched.run_id, Some("run_xyz".into()));
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_returns_none_when_absent() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let res = repo.lookup_ticket_by_run_id("does_not_exist").unwrap();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn lookup_ticket_by_run_id_skips_rows_without_run_id() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/ABC-10", TicketState::Seen))
+            .unwrap();
+        let res = repo.lookup_ticket_by_run_id("anything").unwrap();
+        assert!(res.is_none());
     }
 }
 
