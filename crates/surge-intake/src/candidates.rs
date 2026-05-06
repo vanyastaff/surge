@@ -101,7 +101,7 @@ impl CandidateInput {
 /// The source's full open-task list is bounded by the source impl
 /// (typically ≤200 entries); this helper reduces to the top `limit`.
 pub async fn build_for_task(
-    source: &std::sync::Arc<dyn crate::TaskSource>,
+    source: &dyn crate::TaskSource,
     target: &crate::types::TaskDetails,
     limit: usize,
 ) -> crate::Result<Vec<crate::types::TaskSummary>> {
@@ -110,6 +110,10 @@ pub async fn build_for_task(
     let scored = top_by_keyword_overlap(target, &inputs, limit);
     Ok(scored
         .into_iter()
+        // Linear lookup back into `open` to recover the full TaskSummary
+        // for each scored result. Acceptable: scored.len() <= limit (≤15)
+        // and open.len() is bounded by the source impl (≤200), so this
+        // is at most ~3000 comparisons per triage call.
         .filter_map(|s| {
             open.iter()
                 .find(|t| t.task_id.as_str() == s.task_id)
@@ -247,7 +251,7 @@ mod build_for_task_tests {
         );
 
         let arc: Arc<dyn crate::TaskSource> = src.clone();
-        let result = build_for_task(&arc, &target, 5).await.unwrap();
+        let result = build_for_task(&*arc, &target, 5).await.unwrap();
 
         // The semantically-close candidate should appear; readme typo should not
         // (Jaccard score = 0 against parser/json/nested tokens).
@@ -266,7 +270,7 @@ mod build_for_task_tests {
         let target = td("mock:t#100", "parser crash", "nested json");
 
         let arc: Arc<dyn crate::TaskSource> = src.clone();
-        let result = build_for_task(&arc, &target, 5).await.unwrap();
+        let result = build_for_task(&*arc, &target, 5).await.unwrap();
         assert!(result.iter().all(|s| s.task_id.as_str() != "mock:t#100"));
     }
 
@@ -275,7 +279,7 @@ mod build_for_task_tests {
         let src = Arc::new(MockTaskSource::new("mock:t", "mock"));
         let target = td("mock:t#1", "anything", "");
         let arc: Arc<dyn crate::TaskSource> = src.clone();
-        let result = build_for_task(&arc, &target, 5).await.unwrap();
+        let result = build_for_task(&*arc, &target, 5).await.unwrap();
         assert!(result.is_empty());
     }
 }
