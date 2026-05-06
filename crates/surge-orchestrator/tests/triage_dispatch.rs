@@ -11,7 +11,7 @@ use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::{OutcomeKey, SessionId};
 use surge_intake::types::{Priority, TaskDetails, TaskId, TriageDecision};
-use surge_orchestrator::triage::{dispatch_triage, TriageInput, TriageOptions};
+use surge_orchestrator::triage::{TriageInput, TriageOptions, dispatch_triage};
 use tempfile::TempDir;
 
 fn task_details(id: &str) -> TaskDetails {
@@ -84,20 +84,16 @@ async fn enqueued_happy_path() {
         bridge_for_drive.pump_scripted_events().await;
     });
 
-    let result = dispatch_triage(
-        Arc::clone(&bridge) as Arc<dyn BridgeFacade>,
-        input(),
-        opts,
-    )
-    .await
-    .expect("dispatch_triage should succeed");
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .expect("dispatch_triage should succeed");
 
     drive.await.unwrap();
 
     match result {
         TriageDecision::Enqueued { priority, .. } => {
             assert_eq!(priority, Priority::High);
-        }
+        },
         other => panic!("expected Enqueued, got {other:?}"),
     }
 }

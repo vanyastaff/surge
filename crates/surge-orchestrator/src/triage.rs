@@ -192,23 +192,29 @@ fn render_prompt(input: &TriageInput, feedback: Option<&str>) -> String {
     let mut out = String::new();
     out.push_str(crate::BOOTSTRAP_TRIAGE_AUTHOR_TOML);
     out.push_str("\n\n# Inputs\n\nThe triage input is encoded as JSON. The shape is:\n");
-    out.push_str("- task: TaskDetails\n- candidates: TaskSummary[]\n- active_runs: ActiveRunSummary[]\n\n");
+    out.push_str(
+        "- task: TaskDetails\n- candidates: TaskSummary[]\n- active_runs: ActiveRunSummary[]\n\n",
+    );
     out.push_str("The literal JSON follows:\n\n");
     out.push_str(&json);
-    out.push_str("\n\n# Task\n\nDecide whether this ticket is a duplicate, out-of-scope, unclear, \
+    out.push_str(
+        "\n\n# Task\n\nDecide whether this ticket is a duplicate, out-of-scope, unclear, \
                   or should be enqueued. Then, in your working directory:\n\n\
                   1. Write your structured decision to `triage_decision.json` (schema below).\n\
                   2. Write a 3-5 line markdown blurb to `inbox_summary.md` (used as the body of \
                      the inbox card on `enqueued`; safe to omit otherwise).\n\
                   3. Call `report_stage_outcome` with the matching `outcome` and \
-                     `artifacts_produced = [\"triage_decision.json\", \"inbox_summary.md\"]`.\n\n");
-    out.push_str("triage_decision.json schema:\n\
+                     `artifacts_produced = [\"triage_decision.json\", \"inbox_summary.md\"]`.\n\n",
+    );
+    out.push_str(
+        "triage_decision.json schema:\n\
                   - decision: \"enqueued\" | \"duplicate\" | \"out_of_scope\" | \"unclear\"\n\
                   - duplicate_of: string (task id) or null\n\
                   - priority: \"urgent\" | \"high\" | \"medium\" | \"low\"\n\
                   - priority_reasoning: one sentence\n\
                   - summary: one sentence\n\
-                  - question: string (only when decision = \"unclear\")\n");
+                  - question: string (only when decision = \"unclear\")\n",
+    );
     if let Some(fb) = feedback {
         out.push_str("\n# Feedback from previous attempt\n\n");
         out.push_str(fb);
@@ -240,7 +246,10 @@ async fn try_one_attempt(
     ];
 
     let mut bindings = BTreeMap::new();
-    bindings.insert("intake.task_id".into(), input.task.task_id.as_str().to_string());
+    bindings.insert(
+        "intake.task_id".into(),
+        input.task.task_id.as_str().to_string(),
+    );
     bindings.insert("intake.attempt".into(), attempt.to_string());
 
     let cfg = SessionConfig {
@@ -282,20 +291,20 @@ async fn try_one_attempt(
                         BridgeEvent::OutcomeReported { outcome, .. } => return Ok(outcome),
                         BridgeEvent::SessionEnded { reason, .. } => match reason {
                             SessionEndReason::AgentCrashed { .. } => {
-                                return Err(format!("agent crashed: {reason:?}"))
-                            }
+                                return Err(format!("agent crashed: {reason:?}"));
+                            },
                             SessionEndReason::Timeout { .. } => {
-                                return Err("session timeout".into())
-                            }
+                                return Err("session timeout".into());
+                            },
                             _ => continue,
                         },
                         _ => continue,
                     }
-                }
+                },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err("event stream closed".into())
-                }
+                    return Err("event stream closed".into());
+                },
             }
         }
     })
@@ -395,12 +404,12 @@ pub async fn dispatch_triage(
                     let _ = std::fs::remove_dir_all(&scratch_dir);
                 }
                 return Ok(decision);
-            }
+            },
             Err(AttemptError::Bridge(e)) => return Err(TriageError::Bridge(e)),
             Err(AttemptError::Retryable(msg)) => {
                 tracing::warn!(attempt, error = %msg, "triage attempt failed; will retry");
                 last_err = Some(msg);
-            }
+            },
         }
     }
 
