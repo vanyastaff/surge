@@ -510,11 +510,7 @@ SessionConfig {
     ],
     allows_escalation: false,
     tools: vec![],                        // ACP-native fs tools are enough
-    sandbox: Box::new(AlwaysAllowSandbox), // see note below — bridge-level
-                                           // sandbox is for tool filtering;
-                                           // profile's "read-only" mode is a
-                                           // semantic marker handled by Layer 2's
-                                           // profile loader.
+    sandbox: delegated_sandbox(),         // see note below
     permission_policy: PermissionPolicy::default(),
     bindings: BTreeMap::from([
         ("intake.task_id".into(), task_id_str),
@@ -526,6 +522,27 @@ SessionConfig {
 For unit tests, the test harness constructs `SessionConfig` with
 `AgentKind::Mock { args: ... }` directly — Mock is a test
 mechanism, not a production fallback path.
+
+**Sandbox-delegated convention.** `delegated_sandbox()` is a helper
+that returns `Box::new(AlwaysAllowSandbox)`. The bridge-level
+`Sandbox` trait field is required by `SessionConfig`'s shape but
+the no-op `AlwaysAllowSandbox` implementation means **the bridge
+applies no filtering**: tool-list and per-call decisions pass
+through to the agent. This matches `docs/revision/VISION-2026.md`
+§"Sandbox-delegated":
+
+> Each agent has its own native sandbox (Codex CLI sandbox modes,
+> Claude Code Skills isolation, etc.). Surge configures it via ACP,
+> the agent enforces it.
+
+The profile's `[sandbox] mode = "read-only"` field is a **semantic
+marker** read by the agent itself (or by a future Layer 2 profile
+loader that translates it to ACP-level capability flags). Surge's
+bridge does not enforce it — the agent does. Globalising this
+convention (e.g., a `delegate_sandbox_to_agent: bool` toggle in
+`SurgeConfig` and removing `DenyListSandbox` surface) is the
+subject of the RFC-0006 refactor (Tier 3+4 deprecation) called out
+in Vision-2026; it is out of scope here.
 
 `bindings` carry the task id and attempt number for correlation in
 `BridgeEvent::SessionEstablished` — useful for the future tracing
