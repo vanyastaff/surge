@@ -95,6 +95,29 @@ impl CandidateInput {
     }
 }
 
+/// Build a top-`limit` candidate set for a given task by calling the
+/// source's `list_open_tasks` and filtering via Jaccard similarity.
+///
+/// The source's full open-task list is bounded by the source impl
+/// (typically ≤200 entries); this helper reduces to the top `limit`.
+pub async fn build_for_task(
+    source: &std::sync::Arc<dyn crate::TaskSource>,
+    target: &crate::types::TaskDetails,
+    limit: usize,
+) -> crate::Result<Vec<crate::types::TaskSummary>> {
+    let open = source.list_open_tasks().await?;
+    let inputs: Vec<CandidateInput> = open.iter().map(CandidateInput::from_summary).collect();
+    let scored = top_by_keyword_overlap(target, &inputs, limit);
+    Ok(scored
+        .into_iter()
+        .filter_map(|s| {
+            open.iter()
+                .find(|t| t.task_id.as_str() == s.task_id)
+                .cloned()
+        })
+        .collect())
+}
+
 /// One ranked candidate with its similarity score.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoredCandidate {
@@ -177,5 +200,82 @@ mod tests {
             .collect();
         let top = top_by_keyword_overlap(&target, &cs, 5);
         assert_eq!(top.len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod build_for_task_tests {
+    use super::*;
+    use crate::testing::MockTaskSource;
+    use crate::types::TaskId;
+    use chrono::Utc;
+    use std::sync::Arc;
+
+    fn td(id: &str, title: &str, body: &str) -> TaskDetails {
+        TaskDetails {
+            task_id: TaskId::try_new(id).unwrap(),
+            source_id: "mock:t".into(),
+            title: title.into(),
+            description: body.into(),
+            status: "open".into(),
+            labels: vec![],
+            url: format!("https://x/{id}"),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            assignee: None,
+            raw_payload: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_top_n_by_jaccard_similarity() {
+        let src = Arc::new(MockTaskSource::new("mock:t", "mock"));
+        // Two candidates exist: one closely related, one unrelated.
+        src.put_task(td(
+            "mock:t#10",
+            "fix parser panic on nested objects",
+            "stack overflow",
+        ))
+        .await;
+        src.put_task(td("mock:t#20", "update readme typo", "docs only"))
+            .await;
+
+        let target = td(
+            "mock:t#100",
+            "parser crashes with deeply nested json",
+            "stack overflow when JSON has more than 16 nested levels",
+        );
+
+        let arc: Arc<dyn crate::TaskSource> = src.clone();
+        let result = build_for_task(&arc, &target, 5).await.unwrap();
+
+        // The semantically-close candidate should appear; readme typo should not
+        // (Jaccard score = 0 against parser/json/nested tokens).
+        let ids: Vec<&str> = result.iter().map(|s| s.task_id.as_str()).collect();
+        assert!(ids.contains(&"mock:t#10"));
+        assert!(!ids.contains(&"mock:t#20"));
+    }
+
+    #[tokio::test]
+    async fn excludes_target_itself() {
+        let src = Arc::new(MockTaskSource::new("mock:t", "mock"));
+        // Insert the target as if it's also "open" — common in real trackers.
+        src.put_task(td("mock:t#100", "parser crash", "nested json"))
+            .await;
+
+        let target = td("mock:t#100", "parser crash", "nested json");
+
+        let arc: Arc<dyn crate::TaskSource> = src.clone();
+        let result = build_for_task(&arc, &target, 5).await.unwrap();
+        assert!(result.iter().all(|s| s.task_id.as_str() != "mock:t#100"));
+    }
+
+    #[tokio::test]
+    async fn empty_open_set_returns_empty() {
+        let src = Arc::new(MockTaskSource::new("mock:t", "mock"));
+        let target = td("mock:t#1", "anything", "");
+        let arc: Arc<dyn crate::TaskSource> = src.clone();
+        let result = build_for_task(&arc, &target, 5).await.unwrap();
+        assert!(result.is_empty());
     }
 }
