@@ -18,4 +18,4 @@ pub mod pidfile;
 pub mod server;
 
 pub use error::DaemonError;
-pub use server::{ServerConfig, run as run_server};
+pub use server::{ServerConfig, run as run_server, run_with_registry};
