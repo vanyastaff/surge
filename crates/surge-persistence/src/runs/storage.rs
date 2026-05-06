@@ -378,8 +378,9 @@ mod snapshot_active_runs_tests {
 
         let snap = storage.snapshot_active_runs(32).await.unwrap();
         assert_eq!(snap.len(), 2, "only Running + Bootstrapping should appear");
-        assert!(snap.iter().all(|r| matches!(
-            r.status.as_str(), "Running" | "Bootstrapping"
-        )));
+        assert!(
+            snap.iter()
+                .all(|r| matches!(r.status.as_str(), "Running" | "Bootstrapping"))
+        );
     }
 }
