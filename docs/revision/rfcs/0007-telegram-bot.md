@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Telegram bot is the primary approval channel for vibe-flow runs. It implements the "describe and walk away" experience by delivering inline-keyboard approval cards on the user's phone, allowing them to make decisions in seconds without a computer.
+The Telegram bot is the primary approval channel for surge runs. It implements the "describe and walk away" experience by delivering inline-keyboard approval cards on the user's phone, allowing them to make decisions in seconds without a computer.
 
 This document specifies:
 - Bot architecture and lifecycle
@@ -18,16 +18,16 @@ This document specifies:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ vibe-flow daemon (per-run subprocess)           │
+│ surge daemon (per-run subprocess)           │
 │  ↓ "approval needed" event                       │
 │                                                  │
-│ vibe-flow telegram service (singleton)           │
+│ surge telegram service (singleton)           │
 │  ├─ Outgoing: format card, send via Bot API      │
 │  └─ Incoming: webhook or long-poll for replies   │
 │       ↓ user tapped button                       │
 │  ↓ "approval decided" event                      │
 │                                                  │
-│ vibe-flow daemon                                 │
+│ surge daemon                                 │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -54,25 +54,25 @@ This avoids needing a network connection between bot service and daemon — they
 
 First-time bot connection (one-time per user):
 
-1. User runs `vibe telegram setup`
+1. User runs `surge telegram setup`
 2. CLI shows a URL: `https://t.me/<your-bot-name>?start=<ephemeral-token>`
 3. User opens URL on phone, taps "Start"
 4. Bot receives `/start <token>` and binds the user's chat_id to the token
-5. CLI polls for binding completion, stores `chat_id` in `~/.vibe/config.toml`
+5. CLI polls for binding completion, stores `chat_id` in `~/.surge/config.toml`
 6. CLI displays "Connected — chat ID 12345" and exits
 
 After this, all approvals route to that chat_id by default.
 
 ### Token rotation
 
-The bot's API token is read from environment variable `VIBE_TELEGRAM_BOT_TOKEN` or from `~/.vibe/secrets.toml` (mode 0600). Rotation: update the secret, restart bot service.
+The bot's API token is read from environment variable `SURGE_TELEGRAM_BOT_TOKEN` or from `~/.surge/secrets.toml` (mode 0600). Rotation: update the secret, restart bot service.
 
 ### Multiple users
 
 For a single user, single chat_id — sufficient for v1. For shared projects (future), configurable per-project chat IDs:
 
 ```toml
-# ~/.vibe/config.toml
+# ~/.surge/config.toml
 default_chat_id = 123456789
 
 [[chat_overrides]]
@@ -296,7 +296,7 @@ Initiates a run from Telegram chat:
 3. Engine starts daemon, run begins
 4. Description Author proceeds, bot will send approval cards as usual
 
-The "current project" is the project most recently used (tracked in `~/.vibe/state.toml`). To run in a different project, user can specify:
+The "current project" is the project most recently used (tracked in `~/.surge/state.toml`). To run in a different project, user can specify:
 
 ```
 /run --project /path/to/other "fix bug in parser"
@@ -336,11 +336,11 @@ For local-first single-user setup, **long-poll** is recommended:
 
 For users running on a server with public IP:
 - Webhook recommended (more efficient)
-- Configurable in `~/.vibe/config.toml`:
+- Configurable in `~/.surge/config.toml`:
   ```toml
   [telegram]
   mode = "webhook"
-  webhook_url = "https://my-domain.com/vibe/tg-webhook"
+  webhook_url = "https://my-domain.com/surge/tg-webhook"
   webhook_secret_token = "..."  # for request validation
   ```
 
@@ -414,7 +414,7 @@ Filtering is best-effort. Users should not embed secrets in approval-relevant ar
 
 ## Bot identity
 
-The bot displays as `vibe·flow` with profile image (custom avatar shipped with project). Bot username is unique per user (e.g., `vibe_flow_<user_initials>_bot`) to avoid conflicts.
+The bot displays as `surge` with profile image (custom avatar shipped with project). Bot username is unique per user (e.g., `surge_<user_initials>_bot`) to avoid conflicts.
 
 For multi-user installations on shared servers: each user creates their own bot via @BotFather, gets unique token.
 
@@ -422,7 +422,7 @@ For multi-user installations on shared servers: each user creates their own bot 
 
 The Telegram bot is correctly implemented when:
 
-1. `vibe telegram setup` completes binding within 30 seconds.
+1. `surge telegram setup` completes binding within 30 seconds.
 2. Bootstrap approval cards arrive within 5 seconds of stage completion.
 3. Inline button taps result in `ApprovalDecided` event within 2 seconds.
 4. Slash commands `/run`, `/list`, `/status`, `/cancel`, `/replay`, `/help` all work as specified.

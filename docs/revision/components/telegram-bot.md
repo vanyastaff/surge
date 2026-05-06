@@ -8,9 +8,9 @@ This document specifies the bot's process structure, message handlers, callback 
 
 ## Process model
 
-The bot runs as a **singleton daemon process** (`vibe-tg`), independent from per-run engine daemons. Started:
-- Automatically on first `vibe run` invocation
-- Manually via `vibe telegram start`
+The bot runs as a **singleton daemon process** (`surge-tg`), independent from per-run engine daemons. Started:
+- Automatically on first `surge run` invocation
+- Manually via `surge telegram start`
 - Auto-restart on crash (via systemd-style supervisor or simple loop)
 
 Process lifecycle:
@@ -416,7 +416,7 @@ pub async fn setup(home: &Path) -> Result<()> {
     
     println!("\n✓ Bound to chat {}", chat_id);
     println!("  Sending test message...");
-    bot.send_message(ChatId(chat_id), "vibe·flow connected. You'll receive approval cards here.").await?;
+    bot.send_message(ChatId(chat_id), "surge connected. You'll receive approval cards here.").await?;
     
     dispatcher_task.abort();
     Ok(())
@@ -433,7 +433,7 @@ async fn start_polling(bot: Bot, handler: ...) {
 }
 ```
 
-Webhook (configured via `~/.vibe/config.toml`):
+Webhook (configured via `~/.surge/config.toml`):
 
 ```rust
 async fn start_webhook(bot: Bot, handler: ..., webhook_url: &str, secret_token: &str) {
@@ -518,9 +518,9 @@ Bot logs:
 - All received callbacks (with action, run ID)
 - Errors and rate-limit hits
 
-Logs go to `~/.vibe/logs/telegram.log` with rotation.
+Logs go to `~/.surge/logs/telegram.log` with rotation.
 
-`vibe telegram status` shows:
+`surge telegram status` shows:
 - Service uptime
 - Messages sent/received
 - Pending approvals queue size

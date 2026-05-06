@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `vibe` CLI is the primary entry point for users. It must be:
+The `surge` CLI is the primary entry point for users. It must be:
 - **Fast** to start (<100ms cold start)
 - **Scriptable** (JSON output, exit codes)
 - **Self-documenting** (`--help` everywhere, examples)
@@ -13,11 +13,11 @@ This document specifies the full CLI surface, command behavior, and output forma
 ## Command structure
 
 ```
-vibe [GLOBAL OPTIONS] <COMMAND> [SUBCOMMAND] [OPTIONS] [ARGS]
+surge [GLOBAL OPTIONS] <COMMAND> [SUBCOMMAND] [OPTIONS] [ARGS]
 ```
 
 Global options (any command):
-- `--config <path>` — alternate config file (default: `~/.vibe/config.toml`)
+- `--config <path>` — alternate config file (default: `~/.surge/config.toml`)
 - `--verbose, -v` — increase logging (repeat for more)
 - `--quiet, -q` — suppress non-essential output
 - `--json` — JSON output format
@@ -26,24 +26,26 @@ Global options (any command):
 
 ## Commands
 
-### `vibe init`
+### `surge init`
 
-Initialize vibe-flow for a project (creates `.vibe/` dir, optionally selects template).
+Initialize surge for a project (creates `.surge/` dir, optionally selects template).
 
 ```
-vibe init [--template <name>] [--dry-run]
+surge init [--template <name>] [--agents-preset <name>] [--dry-run]
 ```
 
 Options:
 - `--template <name>` — use specific template (e.g., `rust-crate-tdd`)
+- `--agents-preset <name>` — create `.surge/agents.yml` from a preset (e.g., `claude-write-codex-review`)
 - `--dry-run` — show what would be created without writing
 
 Behavior:
 1. Detect project type (language, structure)
 2. If `--template` not specified, prompt user (or auto-select if confidence high)
-3. Create `.vibe/` directory in project
-4. Symlink to bundled template's pipeline.toml or copy as starting point
-5. Print success message with next steps
+3. Create `.surge/` directory in project
+4. Create `.surge/agents.yml` with friendly compose-like agent routing
+5. Symlink to bundled template's pipeline.toml or copy as starting point
+6. Print success message with next steps
 
 Exit codes:
 - 0: success
@@ -51,12 +53,12 @@ Exit codes:
 - 2: project not detected
 - 3: template not found
 
-### `vibe run`
+### `surge run`
 
 Start a new run.
 
 ```
-vibe run [OPTIONS] [DESCRIPTION]
+surge run [OPTIONS] [DESCRIPTION]
 ```
 
 Arguments:
@@ -74,20 +76,20 @@ Options:
 
 Examples:
 ```
-vibe run "add CLI flag for verbose mode"
-vibe run --template rust-crate-tdd "build JSON5 parser"
-vibe run --auto "fix typo in README"
-vibe run --from-file task.md
+surge run "add CLI flag for verbose mode"
+surge run --template rust-crate-tdd "build JSON5 parser"
+surge run --auto "fix typo in README"
+surge run --from-file task.md
 ```
 
 Output (default):
 ```
 ✓ Run #0083 started (id: 0190a4b2-...)
   Pipeline: rust-crate-tdd@1.0
-  Worktree: /path/to/.vibe-worktrees/abc123
+  Worktree: /path/to/.surge-worktrees/abc123
   
 Run is now executing. To follow progress:
-  vibe attach 0083
+  surge attach 0083
   
 You'll be pinged on Telegram when approval is needed.
 ```
@@ -99,17 +101,17 @@ Output (--json):
   "short_id": "0083",
   "status": "started",
   "pipeline": "rust-crate-tdd@1.0",
-  "worktree": "/path/to/.vibe-worktrees/abc123",
+  "worktree": "/path/to/.surge-worktrees/abc123",
   "daemon_pid": 12345
 }
 ```
 
-### `vibe list`
+### `surge list`
 
 List runs (active and recent).
 
 ```
-vibe list [OPTIONS]
+surge list [OPTIONS]
 ```
 
 Options:
@@ -127,12 +129,12 @@ ID    STATUS    PROJECT             DESCRIPTION                ELAPSED   COST
 0080  ✓ done   myproject           Update deps                3m 11s    $0.42
 ```
 
-### `vibe status`
+### `surge status`
 
 Show current state of a run.
 
 ```
-vibe status <RUN_ID>
+surge status <RUN_ID>
 ```
 
 Run ID can be:
@@ -147,7 +149,7 @@ Run #0083 · sample-app
 Status:     ⚡ running
 Started:    14:28:42 (24m ago)
 Pipeline:   rust-crate-tdd@1.0
-Worktree:   .vibe-worktrees/abc123 (branch: vibe/run-abc123)
+Worktree:   .surge-worktrees/abc123 (branch: surge/run-abc123)
 
 Progress: ████████████████░░░░░░░ 4 / 7 stages
 
@@ -159,12 +161,12 @@ Pending approvals: 0
 Total cost: $3.18
 ```
 
-### `vibe attach`
+### `surge attach`
 
 Tail the live output of a running run.
 
 ```
-vibe attach <RUN_ID> [OPTIONS]
+surge attach <RUN_ID> [OPTIONS]
 ```
 
 Options:
@@ -173,12 +175,12 @@ Options:
 
 Output is streaming; Ctrl+C detaches without affecting the run.
 
-### `vibe cancel`
+### `surge cancel`
 
 Abort a running run.
 
 ```
-vibe cancel <RUN_ID> [--force]
+surge cancel <RUN_ID> [--force]
 ```
 
 Behavior:
@@ -186,26 +188,26 @@ Behavior:
 - With `--force`: immediate cancel
 - Sends SIGTERM to daemon, daemon writes `RunAborted` event, exits
 
-### `vibe replay`
+### `surge replay`
 
 Open replay UI for a finished run.
 
 ```
-vibe replay <RUN_ID> [OPTIONS]
+surge replay <RUN_ID> [OPTIONS]
 ```
 
 Options:
 - `--at <seq>` — open at specific event seq
 - `--no-ui` — print event log to stdout instead
 
-Default: spawns `vibe-runtime` GUI in replay mode.
+Default: spawns `surge-runtime` GUI in replay mode.
 
-### `vibe fork`
+### `surge fork`
 
 Create a new run forked from an existing run at a specific point.
 
 ```
-vibe fork <RUN_ID> --at <SEQ> [OPTIONS]
+surge fork <RUN_ID> --at <SEQ> [OPTIONS]
 ```
 
 Options:
@@ -219,14 +221,14 @@ Behavior:
 - Optional edits applied to nodes that haven't yet executed
 - New run starts execution from fork point
 
-### `vibe profile`
+### `surge profile`
 
 Manage profile registry.
 
-#### `vibe profile list`
+#### `surge profile list`
 
 ```
-vibe profile list [--category <cat>]
+surge profile list [--category <cat>]
 ```
 
 Output:
@@ -238,52 +240,52 @@ spec-author              1.0      agents    Writes specs from descriptions
 ...
 ```
 
-#### `vibe profile show <ID>`
+#### `surge profile show <ID>`
 
 ```
-vibe profile show implementer@1.0
+surge profile show implementer@1.0
 ```
 
 Output: full profile contents (TOML), validated.
 
-#### `vibe profile install <SOURCE>`
+#### `surge profile install <SOURCE>`
 
 ```
-vibe profile install ./my-profile.toml
-vibe profile install https://example.com/profile.toml
-vibe profile install gh:user/repo/path/profile.toml
+surge profile install ./my-profile.toml
+surge profile install https://example.com/profile.toml
+surge profile install gh:user/repo/path/profile.toml
 ```
 
 Behavior:
 - Validates the profile
 - Asks user to confirm trust (untrusted sources)
-- Installs to `~/.vibe/profiles/`
+- Installs to `~/.surge/profiles/`
 
-#### `vibe profile uninstall <ID>[@VERSION]`
+#### `surge profile uninstall <ID>[@VERSION]`
 
 ```
-vibe profile uninstall implementer@1.0
+surge profile uninstall implementer@1.0
 ```
 
-#### `vibe profile validate <PATH>`
+#### `surge profile validate <PATH>`
 
 Validates a profile file without installing.
 
-#### `vibe profile diff <ID1> <ID2>`
+#### `surge profile diff <ID1> <ID2>`
 
 Shows differences between two profile versions.
 
-### `vibe template`
+### `surge template`
 
 Manage template registry.
 
-Same subcommands as `vibe profile`: `list`, `show`, `install`, `uninstall`, `validate`.
+Same subcommands as `surge profile`: `list`, `show`, `install`, `uninstall`, `validate`.
 
-### `vibe telegram`
+### `surge telegram`
 
 Telegram bot management.
 
-#### `vibe telegram setup`
+#### `surge telegram setup`
 
 Interactive setup wizard:
 1. Asks for bot token (or reads from env)
@@ -292,25 +294,26 @@ Interactive setup wizard:
 4. Polls for user to tap "Start"
 5. Stores chat_id, exits
 
-#### `vibe telegram test`
+#### `surge telegram test`
 
 Sends a test message to the configured chat.
 
-#### `vibe telegram unbind`
+#### `surge telegram unbind`
 
 Removes the chat_id binding (next setup re-registers).
 
-### `vibe doctor`
+### `surge doctor`
 
 Diagnose common issues.
 
 ```
-vibe doctor [--fix]
+surge doctor [--fix]
 ```
 
 Checks:
 - Git installed and accessible
 - ACP-compatible agents available (claude-code, codex, gemini)
+- `agents.yml` parses, all named agents resolve, role routes are valid
 - Telegram bot configured
 - Storage permissions OK
 - No orphaned daemon processes
@@ -318,14 +321,16 @@ Checks:
 
 Output:
 ```
-Checking vibe-flow setup...
+Checking surge setup...
 
-✓ Storage:        ~/.vibe/ (7 runs, 2.4GB)
+✓ Storage:        ~/.surge/ (7 runs, 2.4GB)
 ✓ Agents:         claude-code (1.5.2), codex (0.8.1)
+✓ Agent config:   .surge/agents.yml (3 agents, 4 role routes)
+✓ Launch modes:   codex local/cloud/sandbox, claude-code local
 ✓ Telegram bot:   bound to chat 123456789
-✓ Sandbox:        Landlock available
+✓ Sandbox:        provider-native (codex: workspace-write + approvals)
 ⚠ Worktrees:     2 orphaned worktrees from completed runs (8 days old)
-                  Run `vibe gc` to clean up.
+                  Run `surge gc` to clean up.
 
 Found 1 warning. Use --fix to attempt automatic fixes.
 ```
@@ -335,12 +340,12 @@ With `--fix`:
 - Rebuilds materialized views if corrupted
 - Restarts telegram service if not running
 
-### `vibe gc`
+### `surge gc`
 
 Garbage collect old runs and worktrees.
 
 ```
-vibe gc [--older-than <duration>] [--dry-run]
+surge gc [--older-than <duration>] [--dry-run]
 ```
 
 Options:
@@ -354,7 +359,7 @@ Behavior:
 
 ## Daemon mode
 
-When `vibe run` is invoked, it spawns a detached daemon and returns. The CLI's role is:
+When `surge run` is invoked, it spawns a detached daemon and returns. The CLI's role is:
 
 1. Parse arguments
 2. Validate config
@@ -362,9 +367,9 @@ When `vibe run` is invoked, it spawns a detached daemon and returns. The CLI's r
 4. Spawn daemon subprocess (detached)
 5. Return run ID to user
 
-The daemon is a separate process running `vibe-engine` (the engine binary or `vibe --daemon` mode). It owns the run from start to terminal.
+The daemon is a separate process running `surge-engine` (the engine binary or `surge --daemon` mode). It owns the run from start to terminal.
 
-CLI commands like `vibe attach`, `vibe status`, `vibe cancel` communicate with the daemon via the event log (read pending state, append cancel events).
+CLI commands like `surge attach`, `surge status`, `surge cancel` communicate with the daemon via the event log (read pending state, append cancel events).
 
 ## Output formatting
 
@@ -391,9 +396,13 @@ For long-running operations (file uploads, etc.), `indicatif` progress bars. Sup
 
 CLI reads config in this priority order (later overrides earlier):
 1. Built-in defaults
-2. `~/.vibe/config.toml`
-3. Environment variables (prefixed `VIBE_*`)
-4. Command-line flags
+2. `~/.surge/config.toml`
+3. `~/.surge/agents.yml`
+4. `<project>/.surge/agents.yml`
+5. Environment variables (prefixed `SURGE_*`)
+6. Command-line flags
+
+`config.toml` stores global app settings. `agents.yml` stores agent launch/routing settings.
 
 Example `config.toml`:
 
@@ -407,25 +416,57 @@ chat_id = 123456789
 mode = "long-poll"
 
 [agents]
-default = "claude-code"
+compose_file = "~/.surge/agents.yml"
 
 [runs]
 max_concurrent = 4
-auto_attach = false             # whether `vibe run` auto-attaches
+auto_attach = false             # whether `surge run` auto-attaches
 
 [storage]
-home = "~/.vibe"
+home = "~/.surge"
 worktrees_location = "auto"     # or absolute path
 
 [gc]
 auto_gc_after_days = 30
 ```
 
+Example `agents.yml`:
+
+```yaml
+version: 1
+
+agents:
+  claude-writer:
+    provider: claude-code
+    launch:
+      mode: local
+      profile: default
+    sandbox:
+      mode: workspace-write
+
+  codex-review:
+    provider: codex
+    launch:
+      mode: sandbox
+      profile: strict-review
+    sandbox:
+      mode: read-only
+
+roles:
+  implementer: claude-writer
+  reviewer: codex-review
+  verifier: codex-review
+
+defaults:
+  agent: claude-writer
+```
+
 Environment variables:
-- `VIBE_HOME` — alternate vibe-flow home (default `~/.vibe`)
-- `VIBE_TELEGRAM_BOT_TOKEN` — bot token (overrides config)
-- `VIBE_DEFAULT_AGENT` — default agent
-- `VIBE_LOG` — log level (e.g., `vibe=debug`)
+- `SURGE_HOME` — alternate surge home (default `~/.surge`)
+- `SURGE_TELEGRAM_BOT_TOKEN` — bot token (overrides config)
+- `SURGE_DEFAULT_AGENT` — default named agent from `agents.yml`
+- `SURGE_AGENTS_FILE` — alternate `agents.yml`
+- `SURGE_LOG` — log level (e.g., `surge=debug`)
 
 ## Exit codes
 
@@ -454,16 +495,16 @@ Every command supports `--help`. Help text includes:
 - Options (with defaults and types)
 - Examples (at least 2)
 
-`vibe --help` shows top-level commands. `vibe run --help` shows run-specific.
+`surge --help` shows top-level commands. `surge run --help` shows run-specific.
 
 ## Shell completion
 
 Generated via `clap`'s built-in completion support:
 
 ```
-vibe completion bash > /etc/bash_completion.d/vibe
-vibe completion zsh > ~/.zfunc/_vibe
-vibe completion fish > ~/.config/fish/completions/vibe.fish
+surge completion bash > /etc/bash_completion.d/surge
+surge completion zsh > ~/.zfunc/_surge
+surge completion fish > ~/.config/fish/completions/surge.fish
 ```
 
 ## Implementation notes
@@ -481,12 +522,12 @@ The CLI binary should be small and start fast — defer most loading to when com
 The CLI is correctly implemented when:
 
 1. All commands listed work with proper output formatting in text and JSON modes.
-2. `vibe --help` shows all commands; each command's `--help` is informative.
-3. Cold-start time of `vibe --help` is < 100ms on a 2024 laptop.
-4. Daemon mode: `vibe run` returns within 2 seconds, daemon continues independently.
-5. `vibe attach` correctly tails events from a running daemon in real-time.
+2. `surge --help` shows all commands; each command's `--help` is informative.
+3. Cold-start time of `surge --help` is < 100ms on a 2024 laptop.
+4. Daemon mode: `surge run` returns within 2 seconds, daemon continues independently.
+5. `surge attach` correctly tails events from a running daemon in real-time.
 6. Shell completion works for all commands and major options.
 7. Exit codes follow the documented schema.
 8. End-to-end: scripted (no TTY) invocation works correctly with `--quiet --json`.
 9. Cross-platform: identical behavior on Linux, macOS, Windows for all commands.
-10. `vibe doctor --fix` resolves at least 80% of common issues automatically.
+10. `surge doctor --fix` resolves at least 80% of common issues automatically.

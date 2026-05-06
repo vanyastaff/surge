@@ -2,14 +2,14 @@
 
 ## Overview
 
-ACP (Agent Client Protocol) is the standard interface for invoking AI coding agents. vibe-flow uses ACP to remain agent-agnostic — the same engine can drive Claude Code, Codex CLI, Gemini CLI, or any future ACP-compatible agent.
+ACP (Agent Client Protocol) is the standard interface for invoking AI coding agents. surge uses ACP to remain agent-agnostic — the same engine can drive Claude Code, Codex CLI, Gemini CLI, or any future ACP-compatible agent.
 
 This document specifies the ACP bridge architecture, session lifecycle, tool injection mechanism, and the `report_stage_outcome` contract.
 
 ## Why agent-agnostic via ACP
 
 Alternatives:
-- **Direct Anthropic SDK calls**: locks vibe-flow to Anthropic. No way for users to use Codex or Gemini.
+- **Direct Anthropic SDK calls**: locks surge to Anthropic. No way for users to use Codex or Gemini.
 - **Custom protocol per agent**: explosion of integration code, brittle to upstream changes.
 - **ACP**: industry standard (zed, sourcegraph, etc. participate). One integration, many agents.
 
@@ -19,7 +19,7 @@ The cost is some indirection, but it's the right architectural decision long-ter
 
 The ACP SDK (Rust crate) has `!Send` futures in places. Combined with our preference for async/Tokio multi-threaded runtime, this requires the **bridge pattern**: a dedicated OS thread running a single-threaded Tokio runtime with `LocalSet`, communicating with the rest of the engine via channels.
 
-This pattern is what the author has used in `surge-acp` — we either reuse it or reimplement it in vibe-flow's `acp` crate.
+This pattern is what the author has used in `surge-acp` — we either reuse it or reimplement it in surge's `acp` crate.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -57,8 +57,32 @@ pub enum BridgeEvent {
     AgentMessage { session: SessionId, content: String },
     ToolCall { session: SessionId, tool: String, args: Value, call_id: String },
     ToolResult { session: SessionId, call_id: String, result: ToolResult },
+    PermissionRequest { session: SessionId, capability: String, reason: String },
     SessionEnded { session: SessionId, reason: SessionEndReason },
     Error { session: Option<SessionId>, error: String },
+}
+
+pub struct SessionConfig {
+    pub launch: AgentLaunchConfig,
+    pub model: String,
+    pub system_prompt: String,
+    pub tools: Vec<ToolDefinition>,
+    pub sandbox: SandboxConfig,
+    pub run_dir: PathBuf,
+}
+
+pub struct AgentLaunchConfig {
+    pub provider: AgentProvider,
+    pub mode: LaunchMode,
+    pub config_profile: Option<String>,
+    pub extra_args: Vec<String>,
+}
+
+pub enum LaunchMode {
+    ProviderDefault,
+    Local,
+    Cloud,
+    Sandbox,
 }
 
 impl AcpBridge {
@@ -130,9 +154,9 @@ async fn bridge_loop(
 
 1. Engine constructs `SessionConfig` for the agent stage.
 2. Engine calls `AcpBridge::open_session(config)`.
-3. Bridge spawns ACP-specific subprocess (e.g., `claude-code --acp` or `codex --acp`).
+3. Bridge starts the provider using `config.launch`: local process, provider cloud mode, provider sandbox mode, or provider default.
 4. Bridge negotiates ACP handshake (protocol version, capabilities).
-5. Bridge declares **injected tools** including `report_stage_outcome` and sandbox-filtered MCP servers.
+5. Bridge declares **injected tools** including `report_stage_outcome` and provider-supported MCP servers.
 6. Returns `SessionId` to engine.
 7. Engine writes `SessionOpened` event.
 
@@ -152,8 +176,9 @@ acp_bridge.send_message(session_id, initial_message).await?;
 The bridge emits `BridgeEvent`s as the agent works:
 
 - `AgentMessage` — text the agent produced (informational, logged but doesn't drive routing)
-- `ToolCall` — agent invoked a tool. Engine validates against sandbox + records as event
+- `ToolCall` — agent invoked a tool exposed through ACP/MCP. Engine records the event and may run hooks when the provider exposes the call before execution.
 - `ToolResult` — tool returned. Engine records as event
+- `PermissionRequest` — provider-native request for sandbox/permission elevation, when supported
 
 ### Tool call flow
 
@@ -177,26 +202,16 @@ match event {
             return Ok(());
         }
         
-        // 3. Validate against sandbox
-        let allowed = engine.sandbox.check_tool_call(&tool, &args)?;
-        if !allowed {
-            // Trigger sandbox elevation flow
-            let elevated = engine.request_sandbox_elevation(&tool, &args).await?;
-            if !elevated {
-                acp_bridge.send_tool_result(session, call_id, ToolResult::Error("Sandbox denied")).await?;
-                return Ok(());
-            }
-        }
-        
-        // 4. Special tool: report_stage_outcome
+        // 3. Special tool: report_stage_outcome
         if tool == "report_stage_outcome" {
             return engine.handle_outcome_report(args).await;
         }
         
-        // 5. Forward to actual tool implementation (MCP server)
+        // 4. Forward to actual tool implementation (MCP server) if surge owns it.
+        // Provider-native tools are executed by the provider runtime under its own sandbox.
         let result = engine.execute_tool(&tool, &args).await?;
         
-        // 6. Record ToolResultReceived
+        // 5. Record ToolResultReceived
         engine.write_event(EventPayload::ToolResultReceived {
             session: session.clone(),
             success: result.is_success(),
@@ -232,7 +247,7 @@ If the agent process dies unexpectedly:
 
 ## Tool injection
 
-vibe-flow injects two categories of tools into every ACP session:
+surge injects two categories of tools into every ACP session:
 
 ### 1. Engine-provided tools
 
@@ -290,9 +305,9 @@ Allows agent to escalate mid-stage if it hits genuine ambiguity.
 
 When invoked, engine triggers a HumanGate-like flow (Telegram card with the question), waits for response, returns it as tool result.
 
-### 2. Sandbox-filtered MCP tools
+### 2. Provider-aware MCP tools
 
-The engine determines which MCP servers and tools are accessible per the node's sandbox + tools config, and exposes only those:
+The engine determines which MCP servers and tools should be offered based on node/profile tool config and provider capability metadata. Sandboxing remains provider-native; surge does not promise OS-level enforcement for tools executed by the provider runtime.
 
 ```rust
 fn compute_available_tools(profile: &Profile, sandbox: &SandboxConfig) -> Vec<ToolDefinition> {
@@ -308,7 +323,7 @@ fn compute_available_tools(profile: &Profile, sandbox: &SandboxConfig) -> Vec<To
     for mcp_id in &profile.tools.default_mcp {
         let mcp_tools = mcp_registry.tools_for(mcp_id)?;
         for tool in mcp_tools {
-            if sandbox.allows_tool(&tool, mcp_id) {
+            if provider_capabilities.can_expose_tool_under_intent(&tool, mcp_id, sandbox) {
                 tools.push(tool);
             }
         }
@@ -317,53 +332,80 @@ fn compute_available_tools(profile: &Profile, sandbox: &SandboxConfig) -> Vec<To
     // Skill-based tools (if any)
     for skill_id in &profile.tools.default_skills {
         let skill = skills_registry.get(skill_id)?;
-        tools.extend(skill.tools_under_sandbox(sandbox));
+        tools.extend(skill.tools_for_provider_intent(sandbox));
     }
     
     tools
 }
 ```
 
-The agent literally doesn't see tools it can't use. This is the primary sandbox enforcement layer.
+The agent should not see tools that are outside the requested intent when the provider/tool surface allows filtering. This is a usability and policy layer, not a replacement for provider-native sandboxing.
 
-## ACP variants
+## ACP variants and launch modes
 
 Different agents have slightly different ACP implementations. The bridge handles per-agent quirks:
 
 ```rust
-pub enum AgentKind {
+pub enum AgentProvider {
     ClaudeCode,
     Codex,
     GeminiCli,
     Custom { binary: PathBuf, args: Vec<String> },
 }
 
-impl AgentKind {
-    fn invocation(&self) -> Command {
-        match self {
-            Self::ClaudeCode => Command::new("claude-code").arg("--acp"),
-            Self::Codex => Command::new("codex").arg("acp"),
-            Self::GeminiCli => Command::new("gemini").arg("--acp"),
+impl AgentProvider {
+    fn invocation(&self, launch: &AgentLaunchConfig) -> Command {
+        let mut cmd = match self {
+            Self::ClaudeCode => Command::new("claude-code"),
+            Self::Codex => Command::new("codex"),
+            Self::GeminiCli => Command::new("gemini"),
             Self::Custom { binary, args } => {
                 let mut cmd = Command::new(binary);
                 cmd.args(args);
-                cmd
+                return cmd;
             }
-        }
+        };
+        apply_provider_acp_args(&mut cmd, self);
+        apply_provider_launch_mode(&mut cmd, self, launch.mode);
+        cmd.args(&launch.extra_args);
+        cmd
     }
 }
 ```
 
-Discovery: engine checks `PATH` for known agent binaries, lists available ones at `vibe doctor`. User configures preferences in `~/.vibe/config.toml`:
+Discovery: engine checks `PATH` and provider config for known agent launch modes, lists available ones at `surge doctor`. User configures agent services and role routing in `agents.yml`:
 
-```toml
-[agents]
-default = "claude-code"
+```yaml
+version: 1
 
-[agents.preferred_per_role]
-implementer = "claude-code"
-reviewer = "codex"
+agents:
+  claude-writer:
+    provider: claude-code
+    launch: { mode: local, profile: default }
+    sandbox: { mode: workspace-write }
+
+  codex-review:
+    provider: codex
+    launch: { mode: sandbox, profile: strict-review }
+    sandbox: { mode: read-only }
+
+roles:
+  implementer: claude-writer
+  reviewer: codex-review
+
+defaults:
+  agent: claude-writer
 ```
+
+The selected provider is resolved independently for every Agent node:
+
+1. Node `agent = "name"` from `flow.toml`, resolved through project/global `agents.yml`.
+2. Node `launch_override`, if present.
+3. Role route in `agents.yml` based on the node profile's role ID.
+4. Profile `[launch]` defaults.
+5. Global default agent and launch mode.
+
+This allows a flow like `Spec Author → Implementer(Claude local) → Reviewer(Codex sandbox) → Verifier(Gemini local) → PR Composer` without special multi-agent coordination logic.
 
 ## Streaming
 
@@ -398,7 +440,8 @@ Resource limits: configurable max concurrent sessions (default: 4). Beyond this,
 
 ```rust
 pub enum AcpError {
-    AgentNotFound { kind: AgentKind },
+    AgentNotFound { provider: AgentProvider },
+    LaunchModeUnsupported { provider: AgentProvider, mode: LaunchMode },
     HandshakeFailed { reason: String },
     SessionTimeout { duration: Duration },
     AgentCrashed { exit_code: Option<i32>, stderr: String },
@@ -409,6 +452,7 @@ pub enum AcpError {
 
 Each maps to engine-level handling:
 - `AgentNotFound` — fail run start, instruct user to install agent
+- `LaunchModeUnsupported` — fail validation/start with a provider-specific message
 - `HandshakeFailed` — fail stage, check if agent is supported version
 - `SessionTimeout` — fail stage with timeout reason, allow retry
 - `AgentCrashed` — fail stage, retry available

@@ -157,7 +157,9 @@ pub enum ExceededAction {
 ```rust
 pub struct AgentConfig {
     pub profile: ProfileRef,
+    pub agent: Option<String>, // named service from agents.yml
     pub prompt_overrides: Option<PromptOverride>,
+    pub launch_override: Option<AgentLaunchConfig>,
     pub tool_overrides: Option<ToolOverride>,
     pub sandbox_override: Option<SandboxConfig>,
     pub approvals_override: Option<ApprovalConfig>,
@@ -242,7 +244,13 @@ pub enum EventPayload {
     // Stage execution
     StageEntered { node: NodeId, attempt: u32 },
     StageInputsResolved { node: NodeId, bindings: HashMap<String, ArtifactId> },
-    SessionOpened { node: NodeId, session: SessionId, agent: String },
+    SessionOpened {
+        node: NodeId,
+        session: SessionId,
+        agent: String,
+        launch_mode: String,
+        sandbox_mode: String,
+    },
     ToolCalled { session: SessionId, tool: String, args_redacted: Value },
     ToolResultReceived { session: SessionId, success: bool, result_hash: String },
     ArtifactProduced { node: NodeId, artifact_id: ArtifactId, path: PathBuf },
@@ -288,6 +296,8 @@ pub enum BootstrapDecision {
     Reject,
 }
 ```
+
+`launch_override` is per-node by design. A graph can run different stages on different providers or execution targets while preserving deterministic routing through explicit graph edges.
 
 ## TOML schemas (user-facing files)
 
@@ -338,6 +348,15 @@ is_terminal = false
 
 # ... more nodes ...
 
+[[nodes]]
+id = "review_1"
+kind = "agent"
+position = { x = 700.0, y = 100.0 }
+
+[nodes.config]
+profile = "reviewer@1.0"
+agent = "codex-review"                # named agent from agents.yml
+
 # === Edges ===
 
 [[edges]]
@@ -360,7 +379,7 @@ kind = "escalate"
 
 ### Profile TOML
 
-See RFC-0005 for full schema. Stored at `~/.vibe/profiles/<id>-<version>.toml`.
+See RFC-0005 for full schema. Stored at `~/.surge/profiles/<id>-<version>.toml`.
 
 ### Template TOML (`template.toml`)
 
@@ -385,9 +404,66 @@ expected_complexity = "medium"
 # The actual flow.toml is in ./pipeline.toml in the same directory
 ```
 
+### Agent Compose (`agents.yml`)
+
+`agents.yml` is the friendly, LLM-readable configuration layer. It is intentionally shaped like a small `docker-compose.yml`: named agent services, shared defaults, and role routing. Humans and LLMs should edit this file; generated `flow.toml` can then reference stable agent names instead of repeating provider-specific flags.
+
+Locations, in precedence order:
+
+1. `<project>/.surge/agents.yml`
+2. `~/.surge/agents.yml`
+3. built-in defaults
+
+Example:
+
+```yaml
+version: 1
+
+agents:
+  claude-writer:
+    provider: claude-code
+    launch:
+      mode: local
+      profile: default
+    sandbox:
+      mode: workspace-write
+    approvals:
+      policy: on-request
+
+  codex-review:
+    provider: codex
+    launch:
+      mode: sandbox
+      profile: strict-review
+    sandbox:
+      mode: read-only
+
+  gemini-verify:
+    provider: gemini
+    launch:
+      mode: local
+    sandbox:
+      mode: workspace-write
+
+roles:
+  implementer: claude-writer
+  reviewer: codex-review
+  verifier: gemini-verify
+
+defaults:
+  agent: claude-writer
+```
+
+Resolution:
+
+- `nodes.config.agent = "codex-review"` selects a named agent from `agents.yml`.
+- `nodes.config.launch_override` can still override one node for power users.
+- Profile `[launch]` defaults are used when neither `agent` nor role routing selects a named agent.
+- `surge doctor` validates that every named agent maps to an installed provider and supported launch mode.
+
 ### Run config (per-run runtime config)
 
-Stored at `~/.vibe/runs/<run_id>/config.toml`:
+Stored at `~/.surge/runs/<run_id>/config.toml`:
 
 ```toml
 [run]
@@ -397,9 +473,14 @@ created_at = "2026-05-01T14:28:00Z"
 pipeline_template = "rust-crate-tdd@1.0"
 
 [policy]
+launch_default = "local"
 sandbox_default = "workspace+network"
 approval_default = "on-request"
 auto_pr = true
+
+[agents]
+compose_file = "/home/user/projects/json5-parser/.surge/agents.yml"
+default_agent = "claude-writer"
 
 [telegram]
 chat_id = 123456789
@@ -408,7 +489,7 @@ muted = false
 
 ## SQLite schema
 
-Database file: `~/.vibe/db/vibe.sqlite`. Per-run databases also in `~/.vibe/runs/<run_id>/events.sqlite`.
+Database file: `~/.surge/db/surge.sqlite`. Per-run databases also in `~/.surge/runs/<run_id>/events.sqlite`.
 
 ### Main database (registry)
 
@@ -468,7 +549,7 @@ CREATE TABLE user_config (
 
 ### Per-run database (event log)
 
-Each run has its own SQLite file: `~/.vibe/runs/<run_id>/events.sqlite`. This isolates large event logs and allows individual runs to be archived/exported atomically.
+Each run has its own SQLite file: `~/.surge/runs/<run_id>/events.sqlite`. This isolates large event logs and allows individual runs to be archived/exported atomically.
 
 ```sql
 -- Append-only event log
@@ -583,15 +664,16 @@ Each migration is a numbered SQL file in `crates/storage/migrations/`:
 ## Filesystem layout
 
 ```
-~/.vibe/
+~/.surge/
 ├── config.toml                        (user config)
+├── agents.yml                         (global compose-like agent routing)
 ├── secrets.toml                       (mode 0600: bot tokens, etc.)
 ├── trust.toml
 ├── ui-state.toml                      (last-opened file, window positions)
 ├── state.toml                         (runtime state: current project, etc.)
 │
 ├── db/
-│   └── vibe.sqlite                    (registry DB)
+│   └── surge.sqlite                    (registry DB)
 │
 ├── runs/
 │   └── <run_id>/
@@ -623,7 +705,7 @@ Each migration is a numbered SQL file in `crates/storage/migrations/`:
 │   └── generic-tdd/
 │
 ├── AGENTS.md                          (global rules)
-├── global-deny.toml                   (always-protected paths)
+├── global-deny.toml                   (protected-path warnings / provider deny hints)
 └── logs/
     ├── engine.log
     ├── telegram.log
@@ -637,14 +719,15 @@ Each migration is a numbered SQL file in `crates/storage/migrations/`:
 ├── ... (their code)
 ├── AGENTS.md                          (project rules, optional)
 ├── flow.toml                          (saved pipeline, optional, generated/edited)
-└── .vibe/
+└── .surge/
+    ├── agents.yml                     (project compose-like agent routing, optional)
     ├── hooks/                         (project-local hooks)
     │   ├── check_guard.sh
     │   └── ...
-    └── runs/                          (symlinks to ~/.vibe/runs/<id> for runs in this project)
+    └── runs/                          (symlinks to ~/.surge/runs/<id> for runs in this project)
 ```
 
-The `.vibe/` directory in the project is small — just hooks and convenience symlinks. Real run data is in `~/.vibe/runs/`.
+The `.surge/` directory in the project is small — agent routing, hooks, and convenience symlinks. Real run data is in `~/.surge/runs/`.
 
 ## Acceptance criteria
 
@@ -655,6 +738,6 @@ The data model is correctly implemented when:
 3. Round-trip: serialize all `EventPayload` variants to bincode → deserialize → equality.
 4. SQLite schema can be created from migration files on a fresh DB.
 5. Triggers correctly maintain materialized views: insert 100 events of various types, query views, verify they match expected aggregates.
-6. Filesystem layout: starting from empty `~/.vibe/`, completing a full run produces all expected directories and files.
+6. Filesystem layout: starting from empty `~/.surge/`, completing a full run produces all expected directories and files.
 7. Foreign-key-like consistency: every `node_id` in events references a node in the materialized graph (caught by validation).
 8. Schema versioning: an old-version event log can be upgraded to current via migration chain.

@@ -29,7 +29,7 @@ pub mod roadmap;
 pub mod spec;
 pub mod state;
 
-// New modules — vibe-flow data model.
+// New modules — Surge data model.
 pub mod agent_config;
 pub mod approvals;
 pub mod branch_config;
@@ -65,7 +65,7 @@ pub use roadmap::{Priority, RoadmapItem, RoadmapStatus, Timeline, TimelineBatch}
 pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, SubtaskState};
 pub use state::TaskState;
 
-// ── New re-exports (vibe-flow data model) ──
+// ── New re-exports (Surge data model) ──
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};

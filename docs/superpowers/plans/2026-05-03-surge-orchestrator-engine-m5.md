@@ -6877,7 +6877,7 @@ Expected: every step succeeds. M5 complete.
 
 ```bash
 git push -u origin claude/m5-engine
-gh pr create --title "M5: surge-orchestrator engine — closes vibe-flow loop" --body "$(cat <<'EOF'
+gh pr create --title "M5: surge-orchestrator engine — closes Surge loop" --body "$(cat <<'EOF'
 ## Summary
 - Engine drives a `Graph` through `AcpBridge` sessions and persists to `surge-persistence`
 - Sequential pipeline; parallel/loops/subgraphs deferred to M6

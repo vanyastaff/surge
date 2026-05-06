@@ -25,7 +25,7 @@ Cost is three LLM calls instead of one (~$0.50–$1.50 extra per run). Acceptabl
 
 ## Bootstrap stages as graph nodes
 
-Bootstrap stages are not hidden pre-stages. They are first-class Agent nodes in the run's graph, just shipped in `~/.vibe/profiles/_bootstrap/`. This means:
+Bootstrap stages are not hidden pre-stages. They are first-class Agent nodes in the run's graph, just shipped in `~/.surge/profiles/_bootstrap/`. This means:
 
 - Same execution mechanics (event log, replay, fork-from-here) apply
 - Bootstrap nodes can be customized by power users (override the profile)
@@ -97,7 +97,7 @@ The agent:
 
 ### System prompt outline
 
-The Description Author profile lives in `~/.vibe/profiles/_bootstrap/description-author.toml`. Key elements:
+The Description Author profile lives in `~/.surge/profiles/_bootstrap/description-author.toml`. Key elements:
 
 - Role: "You convert vague human task descriptions into structured technical specifications."
 - Constraints: "Do not propose implementation. Do not suggest tools or libraries unless user mentioned them."
@@ -242,9 +242,9 @@ Step 5: Validate output.
 
 **Flow Generator must select from existing profiles only.** It cannot invent new roles. This is the determinism boundary — agents do work, but they don't define new types of agents at runtime. This is encoded heavily in the system prompt.
 
-## Profile registry as Flow Generator's input
+## Profile registry and agent compose as Flow Generator input
 
-For Flow Generator to make good choices, it needs to know what profiles exist and what they do. The profile registry is exposed to the Flow Generator in its prompt context:
+For Flow Generator to make good choices, it needs to know what profiles exist and which named agents are available. The profile registry and `agents.yml` are exposed to the Flow Generator in its prompt context:
 
 ```toml
 # This is what gets injected into Flow Generator's system prompt as context
@@ -263,9 +263,30 @@ id = "reviewer"
 display_name = "Reviewer"
 description = "Reads diff, reviews for logic errors and architecture issues."
 # ... etc
+
+[[available_agents]]
+name = "claude-writer"
+provider = "claude-code"
+launch_mode = "local"
+sandbox_mode = "workspace-write"
+intended_roles = ["implementer", "architect"]
+
+[[available_agents]]
+name = "codex-review"
+provider = "codex"
+launch_mode = "sandbox"
+sandbox_mode = "read-only"
+intended_roles = ["reviewer", "verifier"]
+
+[role_routes]
+implementer = "claude-writer"
+reviewer = "codex-review"
+verifier = "codex-review"
 ```
 
-This is generated dynamically from the profile registry on each Flow Generator invocation. Add a new profile → it's automatically available for Flow Generator to consider.
+This is generated dynamically from the profile registry plus project/global `agents.yml` on each Flow Generator invocation. Add a new profile or named agent → it's automatically available for Flow Generator to consider.
+
+Flow Generator should prefer role routes and named agents over raw launch overrides. Raw launch overrides are reserved for cases where the user explicitly asked for a one-off provider/mode change.
 
 ## Edit feedback loop
 
@@ -292,7 +313,7 @@ This makes correction conversational, not menu-driven. Most edits are 1–2 sent
 For experienced users with a stable template that works well for them:
 
 ```bash
-vibe run "<description>" --template=rust-crate-tdd
+surge run "<description>" --template=rust-crate-tdd
 ```
 
 This skips Description and Roadmap stages, directly uses the named template's pre-baked flow, and starts execution. Description equivalent is auto-generated from `<description>` argument as a single paragraph; no human approval.
@@ -369,15 +390,15 @@ If user keeps editing and re-running same stage indefinitely, that's their choic
 
 Default: no timeout on approval gates. User may walk away for hours. Run sits as daemon. On return, taps approve.
 
-Configurable per-user policy: `~/.vibe/config.toml` can set `bootstrap_approval_timeout_hours = 24` to auto-fail after 24h. Default `None`.
+Configurable per-user policy: `~/.surge/config.toml` can set `bootstrap_approval_timeout_hours = 24` to auto-fail after 24h. Default `None`.
 
 ## Acceptance criteria
 
 The bootstrap and flow generation are correctly implemented when:
 
-1. Running `vibe run "fix typo in README"` produces a 3–4 node linear flow after bootstrap.
-2. Running `vibe run "build a JSON5 parser library with serde support"` produces a multi-milestone nested-loop flow.
-3. Running `vibe run "fix the panic in parse_object"` produces a bug-fix archetype flow with reproduce + regression test stages.
+1. Running `surge run "fix typo in README"` produces a 3–4 node linear flow after bootstrap.
+2. Running `surge run "build a JSON5 parser library with serde support"` produces a multi-milestone nested-loop flow.
+3. Running `surge run "fix the panic in parse_object"` produces a bug-fix archetype flow with reproduce + regression test stages.
 4. Description, Roadmap, and Flow stages are visible as nodes in canvas, can be inspected, and their outputs are stored as artifacts.
 5. Editing each stage with free-text feedback produces a revised artifact and second approval card.
 6. Flow Generator's output passes graph validation (RFC-0003) for 100% of test cases (unit tests with 50+ scenarios).

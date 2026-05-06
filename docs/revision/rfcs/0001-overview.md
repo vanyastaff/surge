@@ -4,7 +4,7 @@
 
 A solo developer with a full-time job describes a coding task in natural language. Several minutes later, after approving a brief description and proposed plan via Telegram, walks away. Hours later receives a Telegram notification that a Pull Request is ready. Total time spent: 60–120 seconds across the run.
 
-This is what `vibe-flow` enables: **truly autonomous AI coding pipelines** where the human is the architect-of-architecture (defines templates, sets policies) but not the operator-of-each-decision.
+This is what `surge` enables: **truly autonomous AI coding pipelines** where the human is the architect-of-architecture (defines templates, sets policies) but not the operator-of-each-decision.
 
 ## Why graphs
 
@@ -14,7 +14,7 @@ Existing AI coding tools fall into two camps:
 
 2. **Multi-agent swarms** (BridgeSwarm, AutoGPT) — agents talk to each other through LLM calls to coordinate. Expensive in tokens, non-deterministic, hard to debug. When something fails, you don't know why.
 
-`vibe-flow` takes a third path: **explicit directed graphs with typed handoffs**. The graph is the workflow. Each node is an isolated agent session with declared outcome ports (e.g., `done`, `blocked`, `escalate`). Edges route outcomes to next nodes. The engine is a deterministic state machine — agents only do work, the graph decides routing.
+`surge` takes a third path: **explicit directed graphs with typed handoffs**. The graph is the workflow. Each node is an isolated agent session with declared outcome ports (e.g., `done`, `blocked`, `escalate`). Edges route outcomes to next nodes. The engine is a deterministic state machine — agents only do work, the graph decides routing.
 
 This gives:
 
@@ -53,7 +53,7 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 - 7 built-in roles (Spec Author, Architect, Implementer, Test Author, Verifier, Reviewer, PR Composer)
 - Event-sourced engine with SQLite persistence
 - ACP bridge for agent-agnostic execution (Claude Code / Codex / Gemini CLI)
-- Sandbox modes with per-node configuration
+- Agent-native sandbox modes with per-node configuration
 - Worktree-per-run isolation
 - Visual graph editor (egui) for viewing/editing pipelines
 - Runtime view (gpui) with live progress, logs, artifacts
@@ -73,7 +73,7 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 - Cross-machine sync of runs
 - Manager/coordinator agents that do LLM-based routing
 - Auto-fixing failed runs without human input
-- Auto-detection of project type for `vibe init` (per-run flow generation only)
+- Auto-detection of project type for `surge init` (per-run flow generation only)
 
 ## Glossary
 
@@ -81,10 +81,11 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 |------|------------|
 | **Run** | One execution of a pipeline from start to terminal node. Has unique ID, immutable event log, lives in single git worktree. |
 | **Pipeline** | A graph definition (`flow.toml`). May be ephemeral (per-run generated) or saved as template. |
-| **Template** | A reusable pipeline blueprint. Lives in `~/.vibe/templates/` or shipped in-box. Used as few-shot example by Flow Generator. |
+| **Template** | A reusable pipeline blueprint. Lives in `~/.surge/templates/` or shipped in-box. Used as few-shot example by Flow Generator. |
 | **Node** | A vertex in the graph. Has `id`, `NodeKind`, configuration. Cannot be reused across runs (each run gets fresh node instances). |
 | **NodeKind** | Closed enum: `Agent`, `HumanGate`, `Branch`, `Terminal`, `Notify`, `Loop`, `Subgraph`. |
-| **Profile** / **Role** | A reusable Agent configuration (system prompt, tools, sandbox, outcomes). Lives in `~/.vibe/profiles/`. Examples: `implementer`, `reviewer`, `spec-author`. |
+| **Profile** / **Role** | A reusable Agent configuration (system prompt, launch settings, tools, sandbox, outcomes). Lives in `~/.surge/profiles/`. Examples: `implementer`, `reviewer`, `spec-author`. |
+| **Launch config** | Provider-native session startup settings: agent provider plus execution target such as `local`, `cloud`, `sandbox`, or provider default. This is passed through to Codex, Claude Code, Gemini CLI, or a custom ACP agent. |
 | **Outcome** | A typed result an Agent reports via `report_stage_outcome` tool. Each declared outcome on a node is an output port that maps to an edge. |
 | **Edge** | A connection from a node's outcome port to another node's input. Has `EdgeKind`: `Forward`, `Backtrack`, `Escalate`. |
 | **HumanGate** | A node type that pauses execution waiting for human decision via Telegram or UI. |
@@ -92,7 +93,7 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 | **Flow Generator** | The bootstrap agent that produces the run-specific graph based on user description and roadmap. |
 | **Worktree** | Git worktree branch dedicated to a single run. Created at run start, optionally merged at run end. |
 | **Event** | Immutable record in the run's event log. Examples: `RunStarted`, `StageEntered`, `OutcomeReported`, `ApprovalRequested`. |
-| **Sandbox** | Per-node policy controlling filesystem/network/shell access. Modes: `read-only`, `workspace-write`, `workspace+network`, `full-access`. See RFC-0006 for full semantics. |
+| **Sandbox** | Per-node policy passed to the selected agent runtime. surge does not implement OS sandboxing itself; it maps modes like `read-only`, `workspace-write`, `workspace+network`, and `full-access` to the capabilities supported by Codex, Claude Code, Gemini CLI, or a custom ACP agent. See RFC-0006 for full semantics. |
 | **AGENTS.md** | Markdown rules file format (Linux Foundation standard). Loaded into agent context based on scope (global/profile/project/subdir). |
 | **ACP** | Agent Client Protocol. Standard interface for invoking AI coding agents (Claude Code, Codex, Gemini). |
 
@@ -100,9 +101,9 @@ For richer interactions (full diff review, prompt editing) — deeplink to deskt
 
 The product is "done enough" when:
 
-1. A user can run `vibe init` in an empty Rust project and get a working `pipeline.toml` after answering 0 questions (auto-detection)
-2. A user can run `vibe run "build a JSON5 parser library"` and receive a merged PR within 30 minutes with no terminal interaction beyond 3 Telegram taps
+1. A user can run `surge init` in an empty Rust project and get a working `pipeline.toml` after answering 0 questions (auto-detection)
+2. A user can run `surge run "build a JSON5 parser library"` and receive a merged PR within 30 minutes with no terminal interaction beyond 3 Telegram taps
 3. A failed run can be replayed and forked from the failure point without redoing successful stages
-4. A new role can be contributed by creating a single TOML file in `~/.vibe/profiles/` without code changes
+4. A new role can be contributed by creating a single TOML file in `~/.surge/profiles/` without code changes
 5. The graph editor opens an existing `flow.toml` and renders it correctly with live edit/save
 6. End-to-end test suite covering all 7 default roles runs in CI on Linux/macOS/Windows

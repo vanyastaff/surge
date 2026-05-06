@@ -1,4 +1,4 @@
-# M3 — `surge-acp` bridge for vibe-flow ACP integration
+# M3 — `surge-acp` bridge for Surge ACP integration
 
 **Status:** Design
 **Date:** 2026-05-03
@@ -9,7 +9,7 @@
 
 ## 1. Goal
 
-Add a vibe-flow-shaped ACP bridge to `surge-acp` as a new `bridge` submodule, alongside the existing legacy stack (`AgentPool`, `AgentConnection`, `SurgeClient`, `Registry`, `AgentDiscovery`, `HealthTracker`, `AgentRouter`). Pure-addition strategy, same as M1 and M2.
+Add a Surge-shaped ACP bridge to `surge-acp` as a new `bridge` submodule, alongside the existing legacy stack (`AgentPool`, `AgentConnection`, `SurgeClient`, `Registry`, `AgentDiscovery`, `HealthTracker`, `AgentRouter`). Pure-addition strategy, same as M1 and M2.
 
 This milestone unblocks M5 (engine), which needs to:
 
@@ -64,7 +64,7 @@ Per the migration-strategy decision (no parallel "v1"/"v2" crates), all M3 code 
 
 The legacy `AgentPool::worker` thread runs its own `LocalSet`. The bridge spawns a **separate** OS thread with a fresh current-thread tokio runtime + `LocalSet`. Reasons:
 
-1. **Lifecycle independence.** Legacy `AgentPool` and the new `AcpBridge` are owned by different consumers (legacy orchestrator vs vibe-flow engine). Sharing one worker would couple their lifetimes — dropping the bridge would have to consider whether legacy callers are still using the same worker.
+1. **Lifecycle independence.** Legacy `AgentPool` and the new `AcpBridge` are owned by different consumers (legacy orchestrator vs Surge engine). Sharing one worker would couple their lifetimes — dropping the bridge would have to consider whether legacy callers are still using the same worker.
 2. **State isolation.** Legacy `WorkerState` (connections keyed by agent name, health, resilience config) is structurally different from `BridgeState` (sessions keyed by `SessionId`, tool injection per session, sandbox per session). Trying to share would force a union type.
 3. **Backpressure independence.** `mpsc::channel(64)` for the bridge can fill up under heavy session traffic without blocking legacy ping/prompt commands or vice versa.
 
@@ -903,7 +903,7 @@ impl Sandbox for AlwaysAllowSandbox {
 }
 ```
 
-Used by mock-agent integration tests, by `vibe doctor` smoke tests, and by the local development default (`SessionConfig::dev()` factory in M5).
+Used by mock-agent integration tests, by `surge doctor` smoke tests, and by the local development default (`SessionConfig::dev()` factory in M5).
 
 ### 6.2 `DenyListSandbox`
 

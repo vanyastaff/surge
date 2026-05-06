@@ -246,7 +246,7 @@ In `crates/surge-core/src/lib.rs`, after the `pub mod run_state;` line, add:
 pub mod run_status;
 ```
 
-In the "New re-exports (vibe-flow data model)" block near the bottom of `lib.rs`, add:
+In the "New re-exports (Surge data model)" block near the bottom of `lib.rs`, add:
 
 ```rust
 pub use run_status::{ParseRunStatusError, RunStatus};
@@ -389,7 +389,7 @@ Also add `workspace = true` for `surge-core` if not already, and update `[packag
 `crates/surge-persistence/src/runs/mod.rs`:
 
 ```rust
-//! Per-run SQLite event store and registry for the vibe-flow architecture.
+//! Per-run SQLite event store and registry for the Surge architecture.
 //!
 //! This module is the M2 milestone of the surge-persistence layer. It lives
 //! alongside the existing legacy persistence (aggregator/budget/memory/
@@ -657,7 +657,7 @@ mod tests {
 In `crates/surge-persistence/src/lib.rs`, after the existing `pub mod store;` line, add:
 
 ```rust
-/// New M2 vibe-flow storage layer (per-run event log, registry, worktree integration).
+/// New M2 Surge storage layer (per-run event log, registry, worktree integration).
 pub mod runs;
 ```
 
@@ -684,7 +684,7 @@ Expected: both clean.
 git add crates/surge-persistence/Cargo.toml crates/surge-persistence/src/lib.rs crates/surge-persistence/src/runs/
 git commit -m "M2(persistence): scaffold runs/ module with errors, EventSeq, Clock
 
-Empty skeleton for the new vibe-flow storage layer. Adds error enums
+Empty skeleton for the new Surge storage layer. Adds error enums
 (OpenError, StorageError, WriterError, CloseError), EventSeq newtype,
 and a small Clock trait (SystemClock + MockClock) for deterministic
 test timestamps. Legacy modules untouched."
@@ -5348,7 +5348,7 @@ cargo clippy -p surge-core --all-targets -- -D warnings ✓
 cargo doc with -D warnings on persistence/git/core ✓
 rustfmt --check on new files ✓
 
-Closes M2 milestone of vibe-flow roadmap."
+Closes M2 milestone of Surge roadmap."
 ```
 
 ---

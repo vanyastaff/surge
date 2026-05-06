@@ -31,10 +31,10 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("vibe·flow editor"),
+            .with_title("surge editor"),
         ..Default::default()
     };
-    eframe::run_native("vibe-editor", options, Box::new(|cc| Box::new(App::new(cc))))
+    eframe::run_native("surge-editor", options, Box::new(|cc| Box::new(App::new(cc))))
 }
 
 struct App {
@@ -68,7 +68,7 @@ impl eframe::App for App {
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ TOP BAR · vibe·flow · ~/projects/myapp/flow.toml · [💾] · validation   │
+│ TOP BAR · surge · ~/projects/myapp/flow.toml · [💾] · validation   │
 ├──────────┬─────────────────────────────────────────────────┬───────────────┤
 │ SIDEBAR  │                                                 │ INSPECTOR     │
 │          │                                                 │               │
@@ -161,7 +161,7 @@ Primary work surface. Built on egui-snarl which provides:
 Each node is rendered with:
 
 ```rust
-impl SnarlViewer<NodeData> for VibeFlowViewer {
+impl SnarlViewer<NodeData> for SurgeViewer {
     fn show_header(&mut self, node: NodeId, ...) {
         ui.horizontal(|ui| {
             ui.label(node.icon());
@@ -395,7 +395,7 @@ If a flow.toml is currently running (active run uses this graph), the editor can
 
 - Top bar: "📡 Connected to run #0083"
 - Canvas: nodes show real-time status (running with pulse, completed teal, failed red)
-- Click "Open in runtime" → spawns vibe-runtime in a new window for that run
+- Click "Open in runtime" → spawns surge-runtime in a new window for that run
 
 Editor doesn't allow saving changes to a flow that's actively running (changes would create inconsistency). User must either save as different file or wait for run to finish.
 
@@ -434,7 +434,7 @@ History stored in memory (not persisted). Limit: 100 operations.
 
 ## Persistence
 
-UI state stored in `~/.vibe/ui-state.toml`:
+UI state stored in `~/.surge/ui-state.toml`:
 
 ```toml
 [editor]

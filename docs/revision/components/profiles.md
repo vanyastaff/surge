@@ -2,16 +2,16 @@
 
 ## Overview
 
-This document specifies the **bundled profiles** shipped with vibe-flow v1.0. Each profile includes the full system prompt, tool configuration, sandbox defaults, and outcomes.
+This document specifies the **bundled profiles** shipped with surge v1.0. Each profile includes the full system prompt, tool configuration, agent-native sandbox defaults, and outcomes.
 
-**This is the most important document in the spec.** The quality of every vibe-flow run depends on these prompts. They have been written to be:
+**This is the most important document in the spec.** The quality of every surge run depends on these prompts. They have been written to be:
 - **Specific** — clear instructions, no fluff
 - **Anti-fragile** — explicit anti-patterns to avoid
 - **Tool-aware** — instruct correct tool usage
 - **Outcome-disciplined** — agents must use `report_stage_outcome` correctly
 - **Conservative** — agents prefer to escalate rather than guess
 
-Profiles ship in `vibe-flow/profiles/` (relative to repo root) and are copied to `~/.vibe/profiles/` on first run.
+Profiles ship in `surge/profiles/` (relative to repo root) and are copied to `~/.surge/profiles/` on first run.
 
 ## Bootstrap profiles (`_bootstrap/`)
 
@@ -42,7 +42,7 @@ default_max_tokens = 50000
 default_mode = "read-only"
 default_writable_roots = []
 default_network_allowlist = []        # web search added per-run if user opts in
-default_protected_paths = [".git", ".vibe", ".env", "**/secrets*"]
+default_protected_paths = [".git", ".surge", ".env", "**/secrets*"]
 
 [tools]
 default_mcp = ["filesystem"]
@@ -75,12 +75,12 @@ expected = []
 [[hooks.entries]]
 trigger = "on_outcome"
 matcher = 'outcome == "done"'
-command = "test -f $WORKTREE/.vibe/runs/$RUN_ID/artifacts/description.md"
+command = "test -f $WORKTREE/.surge/runs/$RUN_ID/artifacts/description.md"
 on_failure = "reject_outcome"
 
 [prompt]
 system = """
-You are the Description Author for vibe-flow. Your job is to convert a user's natural language task description into a structured, technical specification document.
+You are the Description Author for surge. Your job is to convert a user's natural language task description into a structured, technical specification document.
 
 # What you receive
 
@@ -215,12 +215,12 @@ expected = [
 [[hooks.entries]]
 trigger = "on_outcome"
 matcher = 'outcome == "done"'
-command = "test -f $WORKTREE/.vibe/runs/$RUN_ID/artifacts/roadmap.md"
+command = "test -f $WORKTREE/.surge/runs/$RUN_ID/artifacts/roadmap.md"
 on_failure = "reject_outcome"
 
 [prompt]
 system = """
-You are the Roadmap Planner for vibe-flow. Your job is to decompose a task description into milestones and tasks suitable for autonomous execution by AI coding agents.
+You are the Roadmap Planner for surge. Your job is to decompose a task description into milestones and tasks suitable for autonomous execution by AI coding agents.
 
 # What you receive
 
@@ -367,12 +367,12 @@ expected = [
 [[hooks.entries]]
 trigger = "on_outcome"
 matcher = 'outcome == "done"'
-command = "vibe internal validate-flow $WORKTREE/.vibe/runs/$RUN_ID/artifacts/flow.toml"
+command = "surge internal validate-flow $WORKTREE/.surge/runs/$RUN_ID/artifacts/flow.toml"
 on_failure = "reject_outcome"
 
 [prompt]
 system = """
-You are the Flow Generator for vibe-flow. Your job is to convert a roadmap into an executable graph (`flow.toml`) using existing profiles.
+You are the Flow Generator for surge. Your job is to convert a roadmap into an executable graph (`flow.toml`) using existing profiles.
 
 # What you receive
 
@@ -445,6 +445,8 @@ For each Agent node, select a profile from the registry. Match:
 
 CRITICAL: You can ONLY use profiles that are in the registry. Do not invent new profile names.
 
+Provider choice is per Agent node. Prefer named agents from `agents.yml` and role routes. Use raw node launch overrides only when the user, project config, or roadmap explicitly requests a one-off provider/mode change. Example: implementation may run on `claude-writer`, review may run on `codex-review`, and verification may run on `gemini-verify`. This is expressed as `agent = "..."` or node launch overrides, not as new profiles.
+
 ## Step 6: Wire bindings
 
 For each Agent node, declare bindings to the artifacts it needs:
@@ -482,11 +484,26 @@ when_to_use = "Standard implementation work where plan and spec exist"
 inputs_expected = ["spec.md", "plan.md", "adrs"]
 outputs_produced = ["modified source files", "git commits"]
 declared_outcomes = ["done", "blocked", "escalate"]
+default_launch = { provider = "claude-code", mode = "local" }
 
 # ... more profiles
+
+[[available_agents]]
+name = "claude-writer"
+provider = "claude-code"
+launch_mode = "local"
+sandbox_mode = "workspace-write"
+intended_roles = ["implementer", "architect"]
+
+[[available_agents]]
+name = "codex-review"
+provider = "codex"
+launch_mode = "sandbox"
+sandbox_mode = "read-only"
+intended_roles = ["reviewer", "verifier"]
 ```
 
-Use the `when_to_use` field to choose between similar profiles.
+Use the `when_to_use` field to choose between similar profiles. Use `available_agents` and role routes to choose the execution provider for each node.
 
 # Critical anti-patterns
 
@@ -900,10 +917,10 @@ These are non-negotiable:
 
 # Constraints
 
-- Modify only files in the run's worktree (sandbox enforces this).
-- Don't add dependencies not listed in the plan. If you genuinely need one, request sandbox elevation with rationale.
+- Modify only files in the run's worktree. The selected agent runtime is expected to enforce or request approval for this according to its sandbox model.
+- Don't add dependencies not listed in the plan. If you genuinely need one, request permission/elevation with rationale.
 - Don't change public API beyond what the spec authorizes.
-- Don't modify `.git/`, `.vibe/`, secrets, or protected paths.
+- Don't modify `.git/`, `.surge/`, secrets, or protected paths.
 
 # Outcome reporting
 
@@ -1216,7 +1233,7 @@ You are the PR Composer. Compose a PR description from the run's history and ope
 - Run ID: #N
 - Duration: Xm Ys
 - Cost: $Z
-- Generated by: vibe-flow
+- Generated by: surge
 ```
 
 5. Push the branch to origin (if remote exists).

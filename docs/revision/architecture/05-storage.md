@@ -5,7 +5,7 @@
 Storage layer responsibilities:
 - Persist event logs (per-run SQLite databases)
 - Maintain registry database (cross-run queries, profiles, templates)
-- Manage artifacts on filesystem (under `~/.vibe/runs/<run_id>/artifacts/`)
+- Manage artifacts on filesystem (under `~/.surge/runs/<run_id>/artifacts/`)
 - Manage git worktrees (one per run)
 - Support concurrent reads (UI tailing live runs) with single writer (daemon)
 
@@ -15,10 +15,10 @@ This document specifies the storage crate's API, persistence patterns, and workt
 
 ```rust
 pub struct Storage {
-    registry_pool: SqlitePool,           // ~/.vibe/db/vibe.sqlite
-    runs_dir: PathBuf,                   // ~/.vibe/runs/
-    profiles_dir: PathBuf,               // ~/.vibe/profiles/
-    templates_dir: PathBuf,              // ~/.vibe/templates/
+    registry_pool: SqlitePool,           // ~/.surge/db/surge.sqlite
+    runs_dir: PathBuf,                   // ~/.surge/runs/
+    profiles_dir: PathBuf,               // ~/.surge/profiles/
+    templates_dir: PathBuf,              // ~/.surge/templates/
 }
 
 impl Storage {
@@ -119,7 +119,7 @@ Event payloads are stored as binary BLOB using `bincode`. Reasons:
 - Compact (smaller storage)
 - Type-safe via Rust types
 
-For human inspection (debugging, `vibe show event`), payloads are deserialized and pretty-printed as JSON.
+For human inspection (debugging, `surge show event`), payloads are deserialized and pretty-printed as JSON.
 
 ```rust
 pub fn payload_to_blob(payload: &EventPayload) -> Result<Vec<u8>> {
@@ -263,7 +263,7 @@ pub async fn rebuild_views(&self) -> Result<()> {
 }
 ```
 
-This is exposed via `vibe doctor --rebuild-views <run_id>`.
+This is exposed via `surge doctor --rebuild-views <run_id>`.
 
 ## Artifact storage
 
@@ -272,7 +272,7 @@ Artifacts (description.md, spec.md, source files modified, etc.) are stored on f
 ### Layout
 
 ```
-~/.vibe/runs/<run_id>/artifacts/
+~/.surge/runs/<run_id>/artifacts/
 ├── 01-bootstrap/
 │   ├── description.md
 │   ├── roadmap.md
@@ -333,16 +333,16 @@ Each run gets its own git worktree branch.
 ```rust
 pub struct Worktree {
     pub root: PathBuf,           // path to worktree dir
-    pub branch: String,          // branch name (e.g., "vibe/run-abc123")
+    pub branch: String,          // branch name (e.g., "surge/run-abc123")
     pub source_repo: PathBuf,    // original repo
 }
 
 impl Worktree {
     pub async fn create(source_repo: &Path, run_id: &RunId) -> Result<Self> {
         let short_id = run_id.short();
-        let branch = format!("vibe/run-{}", short_id);
+        let branch = format!("surge/run-{}", short_id);
         let target = source_repo.parent().unwrap()
-            .join(format!(".vibe-worktrees/{}", short_id));
+            .join(format!(".surge-worktrees/{}", short_id));
         
         // git worktree add <target> -b <branch> HEAD
         Command::new("git").args(&["-C", source_repo.to_str().unwrap(),
@@ -377,12 +377,12 @@ impl Worktree {
 
 ### Worktree placement
 
-By default: `<repo_parent>/.vibe-worktrees/<short_id>`. Reasons:
+By default: `<repo_parent>/.surge-worktrees/<short_id>`. Reasons:
 - Outside the source repo, so it's not visible to `git status` of source
 - Sibling to source, so file permissions are typically the same
 - Hidden directory
 
-User can override via `~/.vibe/config.toml`:
+User can override via `~/.surge/config.toml`:
 
 ```toml
 [worktrees]
@@ -396,14 +396,14 @@ After a run terminates:
 - Branch is preserved
 - After `prune_after_days = 30` (configurable), engine offers to clean up
 
-`vibe gc` command runs cleanup explicitly.
+`surge gc` command runs cleanup explicitly.
 
 ## Backups and exports
 
 ### Run export
 
 ```bash
-vibe export <run_id> [--output <file.tar.gz>]
+surge export <run_id> [--output <file.tar.gz>]
 ```
 
 Creates a tar.gz containing:
@@ -415,7 +415,7 @@ Creates a tar.gz containing:
 ### Run import
 
 ```bash
-vibe import <file.tar.gz>
+surge import <file.tar.gz>
 ```
 
 Imports a previously exported run. Useful for:
@@ -426,11 +426,11 @@ Imports a previously exported run. Useful for:
 ### Backup strategy
 
 For backup, recommended approach:
-- `~/.vibe/profiles/`, `~/.vibe/templates/` — user-edited content; back up
-- `~/.vibe/db/vibe.sqlite` — registry; back up
-- `~/.vibe/runs/` — selectively back up specific runs via `vibe export`
+- `~/.surge/profiles/`, `~/.surge/templates/` — user-edited content; back up
+- `~/.surge/db/surge.sqlite` — registry; back up
+- `~/.surge/runs/` — selectively back up specific runs via `surge export`
 
-A `vibe backup` command (future) automates this into a single tarball.
+A `surge backup` command (future) automates this into a single tarball.
 
 ## Performance budgets
 

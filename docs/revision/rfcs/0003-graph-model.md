@@ -113,7 +113,9 @@ The most common node. Runs an ACP session to do agent work.
 ```rust
 struct AgentConfig {
     profile: ProfileRef,               // mandatory — references registry
+    agent: Option<String>,             // named agent from agents.yml
     prompt_overrides: Option<PromptOverride>,
+    launch_override: Option<AgentLaunchConfig>,
     tool_overrides: Option<ToolOverride>,
     sandbox_override: Option<SandboxConfig>,
     bindings: Vec<Binding>,            // input artifacts
@@ -141,6 +143,10 @@ struct NodeLimits {
     max_tokens: u32,                   // default 200_000
 }
 ```
+
+Each Agent node is an independent session. A single flow may mix providers and launch modes by using named agents from `agents.yml`, profile defaults, or per-node `launch_override`: for example, an Implementer node can run Claude Code locally, a Reviewer node can run Codex in sandbox mode, and a Verifier node can run Gemini. This is still a deterministic graph, not a swarm: agents do not coordinate with each other directly; artifacts and outcomes move through edges.
+
+Recommended generated `flow.toml` should prefer `agent = "name-from-agents-yml"` over raw provider flags because named agents are easier for humans and LLMs to read and edit.
 
 **Outcomes** — declared per-node, common patterns:
 - `done` (success, forward) + `blocked` (backtrack to plan) + `escalate` (HumanGate)

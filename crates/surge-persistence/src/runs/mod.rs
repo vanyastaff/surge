@@ -1,4 +1,4 @@
-//! Per-run SQLite event store and registry for the vibe-flow architecture.
+//! Per-run SQLite event store and registry for the Surge architecture.
 //!
 //! This module is the M2 milestone of the surge-persistence layer. It lives
 //! alongside the existing legacy persistence (aggregator/budget/memory/

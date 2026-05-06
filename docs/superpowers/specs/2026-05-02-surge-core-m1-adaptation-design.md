@@ -1,4 +1,4 @@
-# M1 — `surge-core` adaptation toward vibe-flow data model
+# M1 — `surge-core` adaptation toward Surge data model
 
 > Status: design (approved 2026-05-02)
 > Scope: milestone M1 from [docs/revision/ROADMAP.md](../../revision/ROADMAP.md) — adapted for in-place evolution of Surge.
@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-Add the foundational data model for the new vibe-flow architecture (graph-based pipelines, event-sourced runs, profile registry) into `surge-core` **without breaking any existing consumer**. After this milestone:
+Add the foundational data model for the new Surge architecture (graph-based pipelines, event-sourced runs, profile registry) into `surge-core` **without breaking any existing consumer**. After this milestone:
 
 - New types `Graph`, `Node`, `Edge`, `Profile`, `RunEvent`, `RunState` are public API of `surge-core`.
 - TOML round-trip for `Graph` and `Profile` works.
@@ -15,7 +15,7 @@ Add the foundational data model for the new vibe-flow architecture (graph-based 
 - The fold function `apply(state, &event) -> RunState` is pure and deterministic.
 - All existing types (`SurgeConfig`, `TaskState`, `Spec`, `SurgeEvent`, etc.) remain unchanged and untouched.
 
-The vibe-flow name is an internal codename for the new architecture; the project, crate names, and public branding stay **Surge**.
+The old internal codename has been retired; the project, crate names, and public branding stay **Surge**.
 
 ## 2. Strategy
 
@@ -24,7 +24,7 @@ The vibe-flow name is an internal codename for the new architecture; the project
 Decisions locked in during brainstorming:
 
 - **Pure addition.** No `#[deprecated]` attributes, no module renames. Both old and new types coexist in `surge-core`. Migration of consumers (orchestrator, CLI, persistence) happens in later milestones, file by file.
-- **Flat module structure.** All new modules live directly under `surge-core/src/` next to existing files. No `vibe::` / `flow::` sub-namespace. Rationale: simpler imports, IDE navigation by filename, consistent with the existing flat layout.
+- **Flat module structure.** All new modules live directly under `surge-core/src/` next to existing files. No `surge::` / `flow::` sub-namespace. Rationale: simpler imports, IDE navigation by filename, consistent with the existing flat layout.
 - **One spec, phased implementation.** This document is the single design contract for all of M1; the implementation plan (produced via `superpowers:writing-plans` after this spec is approved) sequences the work into reviewable chunks.
 
 ### 2.2 ID strategy — split by semantics
