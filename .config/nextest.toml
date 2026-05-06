@@ -1,0 +1,20 @@
+# cargo-nextest configuration.
+# Docs: https://nexte.st/book/configuration.html
+
+[profile.default]
+# Print "SLOW" once after 60s of wall-clock test time, then kill the
+# test after a further 60s (total 120s wall-clock). Without this any
+# test that deadlocks or busy-loops eats CI time forever; with it,
+# a hang fails fast and visibly instead of timing out the whole job.
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# Fail the run with a non-zero exit if any test runs over the
+# `slow-timeout * terminate-after` budget — turns "killed for hang"
+# into a CI red flag rather than a silent skip.
+fail-fast = false
+
+# Profile used by the workflow's --ignored step. Looser timeout
+# because the M5.1 ignored bridge tests are deliberately long-running.
+[profile.ignored]
+slow-timeout = { period = "120s", terminate-after = 4 }
+fail-fast = false

@@ -17,6 +17,13 @@ use surge_core::OutcomeKey;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+// Ignored: M5.1 bridge-worker reply-routing limitation surfaces here as
+// a hang. The internal tokio::time::timeout(30s) does not unwind cleanly
+// because close_session_impl + the kill_tx mechanism deadlocks against
+// the worker. Re-enable (drop #[ignore]) once M5.1 lands; until then
+// CI runs this only via `cargo nextest run --run-ignored=ignored-only`
+// in the dedicated step.
+#[ignore = "M5.1 hang: bridge worker reply routing — re-enable when M5.1 lands"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_against_stuck_mock_times_out() {
     // Hard outer timeout — if close_session_impl + the kill_tx mechanism is
