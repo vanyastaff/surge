@@ -161,6 +161,43 @@ pub enum TriageError {
 /// already has its own native sandbox enforcement. The profile's
 /// `[sandbox] mode = ...` field is a semantic marker the agent reads,
 /// not a directive the bridge enforces.
+/// Best-effort discovery of the Claude binary path.
+///
+/// Probe order:
+/// 1. `SURGE_CLAUDE_BINARY` env var (must point to an existing file).
+/// 2. `CLAUDE_PATH` env var (existing convention from `surge-acp::discovery`).
+/// 3. Standard install locations for the current platform: e.g.
+///    `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `~/.local/bin/claude`,
+///    `%USERPROFILE%\AppData\Local\Programs\claude\claude.exe`.
+///
+/// Returns `None` if no candidate exists. The dispatcher then surfaces
+/// a configuration-hint Unclear notification.
+#[must_use]
+pub fn find_claude_binary() -> Option<PathBuf> {
+    for var in ["SURGE_CLAUDE_BINARY", "CLAUDE_PATH"] {
+        if let Ok(v) = std::env::var(var) {
+            let p = PathBuf::from(v);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    use surge_acp::discovery::Platform;
+    let bin_name = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+    for base in Platform::current().standard_paths() {
+        let candidate = base.join(bin_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn delegated_sandbox() -> Box<dyn surge_acp::bridge::sandbox::Sandbox> {
     Box::new(surge_acp::bridge::sandbox::AlwaysAllowSandbox)
 }
@@ -584,5 +621,61 @@ mod tests {
         let rendered = super::render_prompt(&input, Some("previous attempt malformed JSON"));
         assert!(rendered.contains("# Feedback from previous attempt"));
         assert!(rendered.contains("previous attempt malformed JSON"));
+    }
+
+    #[test]
+    fn find_claude_binary_returns_env_when_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = tmp.path().join("claude-fake");
+        std::fs::write(&fake, b"#!/bin/sh\necho fake\n").unwrap();
+        // SAFETY: setting an env var in a single-threaded test is fine, though
+        // Rust 2024 marks std::env::set_var as unsafe due to potential data races
+        // when other threads are running. We are inside a #[test] which Cargo
+        // executes single-threaded for unit tests by default, but if the harness
+        // ever runs tests in parallel (which it does), this is best-effort. Other
+        // tests should not depend on this var. Restore at end.
+        let _prev = std::env::var("SURGE_CLAUDE_BINARY").ok();
+        unsafe {
+            std::env::set_var("SURGE_CLAUDE_BINARY", &fake);
+        }
+        let result = super::find_claude_binary();
+        unsafe {
+            std::env::remove_var("SURGE_CLAUDE_BINARY");
+        }
+        if let Some(prev) = _prev {
+            unsafe {
+                std::env::set_var("SURGE_CLAUDE_BINARY", prev);
+            }
+        }
+        assert_eq!(result, Some(fake));
+    }
+
+    #[test]
+    fn find_claude_binary_returns_none_when_not_found() {
+        // Clear both env vars to ensure we test the standard-paths fallback.
+        let prev_surge = std::env::var("SURGE_CLAUDE_BINARY").ok();
+        let prev_claude = std::env::var("CLAUDE_PATH").ok();
+        unsafe {
+            std::env::remove_var("SURGE_CLAUDE_BINARY");
+            std::env::remove_var("CLAUDE_PATH");
+        }
+
+        // Relaxed assertion: we can't 100% guarantee `claude` isn't on PATH on
+        // this machine; if Some is returned, it must exist on disk. None is
+        // also a valid outcome.
+        if let Some(p) = super::find_claude_binary() {
+            assert!(p.exists(), "discovery returned a non-existent path: {p:?}");
+        }
+
+        if let Some(p) = prev_surge {
+            unsafe {
+                std::env::set_var("SURGE_CLAUDE_BINARY", p);
+            }
+        }
+        if let Some(p) = prev_claude {
+            unsafe {
+                std::env::set_var("CLAUDE_PATH", p);
+            }
+        }
     }
 }
