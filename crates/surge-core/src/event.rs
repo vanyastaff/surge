@@ -314,6 +314,107 @@ pub enum SurgeEvent {
         /// Estimated cost in USD, populated by `surge-persistence`.
         estimated_cost_usd: Option<f64>,
     },
+
+    // === RFC-0010 tracker integration ===
+    /// A new ticket from an external `TaskSource` was observed by the router.
+    TicketDetected {
+        task_id: String,
+        source_id: String,
+        provider: String,
+    },
+
+    /// Tier-1 (computational) dedup pre-filter completed for a ticket.
+    Tier1DedupDecided {
+        task_id: String,
+        decision: String, // "Pass" | "EarlyDuplicate"
+        duplicate_run_id: Option<String>,
+    },
+
+    /// Triage Author produced a structured decision for a ticket.
+    TriageDecided {
+        task_id: String,
+        decision: String, // "enqueued"|"duplicate"|"out_of_scope"|"unclear"
+        priority: Option<String>,
+        duplicate_of: Option<String>,
+        reasoning: String,
+    },
+
+    /// Inbox card was sent to one or more notification channels.
+    InboxCardSent {
+        task_id: String,
+        run_id: String,
+        channels: Vec<String>,
+    },
+
+    /// User responded to an inbox card via a notification channel.
+    InboxDecided {
+        task_id: String,
+        run_id: String,
+        decision: String, // "start"|"snooze"|"skip"
+        decided_via: String, // "telegram"|"desktop"|...
+    },
+
+    /// Comment posted to the originating tracker.
+    TrackerCommentPosted {
+        task_id: String,
+        purpose: String,
+    },
+
+    /// Failed to post a comment to the originating tracker.
+    TrackerCommentPostFailed {
+        task_id: String,
+        attempt: u32,
+        error: String,
+    },
+
+    /// Label added or removed on a ticket.
+    TrackerLabelChanged {
+        task_id: String,
+        label: String,
+        present: bool,
+    },
+
+    /// Failed to set a label on a ticket.
+    TrackerLabelSetFailed {
+        task_id: String,
+        label: String,
+        error: String,
+    },
+
+    /// Polling against a `TaskSource` failed.
+    TaskSourcePollFailed {
+        source_id: String,
+        attempt: u32,
+        error: String,
+        retry_in_secs: u64,
+    },
+
+    /// `TaskSource` rejected our credentials (401/403).
+    TaskSourceAuthFailed {
+        source_id: String,
+        error: String,
+    },
+
+    /// Triage Author session failed to produce a decision.
+    TriageAuthorFailed {
+        task_id: String,
+        attempt: u32,
+        error: String,
+    },
+
+    /// Daemon detected stale triage state on restart and recovered.
+    TriageStaleRecovery {
+        task_id: String,
+        run_id: String,
+        reason: String,
+    },
+
+    /// Tracker comment with `@surge` mention received from user.
+    UserMentionReceived {
+        task_id: String,
+        comment_id: String,
+        body: String,
+    },
 }
 
 /// Versioned wrapper for `SurgeEvent` — used by `surge-persistence` for durable
@@ -415,5 +516,119 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    // ── RFC-0010 tracker variant tests ──
+    fn tracker_roundtrip<T: serde::Serialize + serde::de::DeserializeOwned>(
+        val: &T,
+    ) -> T {
+        let json = serde_json::to_string(val).expect("serialize JSON");
+        serde_json::from_str(&json).expect("deserialize JSON")
+    }
+
+    #[test]
+    fn test_ticket_detected_roundtrip() {
+        let event = SurgeEvent::TicketDetected {
+            task_id: "github_issues:user/repo#1".to_string(),
+            source_id: "github_issues:user/repo".to_string(),
+            provider: "github_issues".to_string(),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(
+            rt,
+            SurgeEvent::TicketDetected {
+                task_id: ref tid,
+                source_id: ref sid,
+                provider: ref prov
+            } if tid == "github_issues:user/repo#1"
+                && sid == "github_issues:user/repo"
+                && prov == "github_issues"
+        ));
+    }
+
+    #[test]
+    fn test_tier1_dedup_decided_roundtrip() {
+        let event = SurgeEvent::Tier1DedupDecided {
+            task_id: "linear:wsp/A-1".to_string(),
+            decision: "EarlyDuplicate".to_string(),
+            duplicate_run_id: Some("run_abc".to_string()),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(
+            rt,
+            SurgeEvent::Tier1DedupDecided {
+                task_id: ref tid,
+                decision: ref dec,
+                duplicate_run_id: ref run_id
+            } if tid == "linear:wsp/A-1"
+                && dec == "EarlyDuplicate"
+                && run_id == &Some("run_abc".to_string())
+        ));
+    }
+
+    #[test]
+    fn test_triage_decided_roundtrip() {
+        let event = SurgeEvent::TriageDecided {
+            task_id: "linear:wsp/A-1".to_string(),
+            decision: "enqueued".to_string(),
+            priority: Some("high".to_string()),
+            duplicate_of: None,
+            reasoning: "production crash".to_string(),
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(
+            rt,
+            SurgeEvent::TriageDecided {
+                task_id: ref tid,
+                decision: ref dec,
+                priority: ref pri,
+                duplicate_of: ref dup,
+                reasoning: ref reas
+            } if tid == "linear:wsp/A-1"
+                && dec == "enqueued"
+                && pri == &Some("high".to_string())
+                && dup.is_none()
+                && reas == "production crash"
+        ));
+    }
+
+    #[test]
+    fn test_inbox_card_sent_roundtrip() {
+        let event = SurgeEvent::InboxCardSent {
+            task_id: "linear:wsp/A-1".to_string(),
+            run_id: "run_x".to_string(),
+            channels: vec!["telegram:default".to_string(), "desktop".to_string()],
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(
+            rt,
+            SurgeEvent::InboxCardSent {
+                task_id: ref tid,
+                run_id: ref rid,
+                channels: ref chans
+            } if tid == "linear:wsp/A-1"
+                && rid == "run_x"
+                && chans.len() == 2
+        ));
+    }
+
+    #[test]
+    fn test_task_source_poll_failed_roundtrip() {
+        let event = SurgeEvent::TaskSourcePollFailed {
+            source_id: "linear:wsp".to_string(),
+            attempt: 3,
+            error: "timeout".to_string(),
+            retry_in_secs: 240,
+        };
+        let rt = tracker_roundtrip(&event);
+        assert!(matches!(
+            rt,
+            SurgeEvent::TaskSourcePollFailed {
+                source_id: ref sid,
+                attempt: 3,
+                error: ref err,
+                retry_in_secs: 240
+            } if sid == "linear:wsp" && err == "timeout"
+        ));
     }
 }
