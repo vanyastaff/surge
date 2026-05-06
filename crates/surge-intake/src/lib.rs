@@ -9,6 +9,7 @@
 pub mod candidates;
 pub mod dedup;
 pub mod error;
+pub mod github;
 pub mod linear;
 pub mod router;
 pub mod source;
