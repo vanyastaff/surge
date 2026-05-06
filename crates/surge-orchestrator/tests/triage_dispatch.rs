@@ -7,7 +7,7 @@ use chrono::Utc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_acp::bridge::event::BridgeEvent;
+use surge_acp::bridge::event::{BridgeEvent, SessionEndReason};
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::{OutcomeKey, SessionId};
 use surge_intake::types::{Priority, TaskDetails, TaskId, TriageDecision};
@@ -330,4 +330,117 @@ async fn exhaust_retries_yields_unclear() {
         },
         other => panic!("expected Unclear, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn timeout_yields_unclear() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let s = SessionId::new();
+    bridge.pin_session_ids(vec![s]).await;
+
+    let tmp = TempDir::new().unwrap();
+    let opts = TriageOptions {
+        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
+        attempt_timeout: Duration::from_millis(150),
+        max_attempts: 1,
+        scratch_root: tmp.path().to_path_buf(),
+        keep_scratch_on_failure: true,
+    };
+
+    // No drive task — bridge never emits OutcomeReported, so the
+    // dispatcher hits its tokio::time::timeout.
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .unwrap();
+
+    match result {
+        TriageDecision::Unclear { question } => {
+            assert!(
+                question.contains("timeout"),
+                "expected 'timeout' in diagnostic, got: {question}"
+            );
+        },
+        other => panic!("expected Unclear, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn agent_crashed_yields_unclear() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let s = SessionId::new();
+    bridge.pin_session_ids(vec![s]).await;
+
+    let tmp = TempDir::new().unwrap();
+    let opts = TriageOptions {
+        claude_binary: Some(std::path::PathBuf::from("/dev/null")),
+        attempt_timeout: Duration::from_secs(2),
+        max_attempts: 1,
+        scratch_root: tmp.path().to_path_buf(),
+        keep_scratch_on_failure: true,
+    };
+
+    let drive = {
+        let bridge = Arc::clone(&bridge);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            bridge
+                .enqueue_event(BridgeEvent::SessionEnded {
+                    session: s,
+                    reason: SessionEndReason::AgentCrashed {
+                        exit_code: Some(137),
+                        stderr_tail: "killed".into(),
+                    },
+                })
+                .await;
+            bridge.pump_scripted_events().await;
+        })
+    };
+
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .unwrap();
+    drive.await.unwrap();
+
+    match result {
+        TriageDecision::Unclear { question } => {
+            assert!(
+                question.contains("agent crashed") || question.contains("AgentCrashed"),
+                "expected 'agent crashed' in diagnostic, got: {question}"
+            );
+        },
+        other => panic!("expected Unclear, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn binary_missing_short_circuits() {
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new());
+
+    let tmp = TempDir::new().unwrap();
+    let opts = TriageOptions {
+        claude_binary: None, // explicit
+        attempt_timeout: Duration::from_secs(5),
+        max_attempts: 3,
+        scratch_root: tmp.path().to_path_buf(),
+        keep_scratch_on_failure: false,
+    };
+
+    let result = dispatch_triage(Arc::clone(&bridge) as Arc<dyn BridgeFacade>, input(), opts)
+        .await
+        .unwrap();
+
+    match &result {
+        TriageDecision::Unclear { question } => {
+            assert!(
+                question.to_lowercase().contains("claude binary"),
+                "expected 'claude binary' in hint, got: {question}"
+            );
+        },
+        other => panic!("expected Unclear, got {other:?}"),
+    }
+
+    // The bridge should NEVER have been called — the function returned
+    // before any open_session.
+    let calls = bridge.recorded_calls.lock().await;
+    assert!(calls.is_empty(), "no bridge calls expected, got {calls:?}");
 }
