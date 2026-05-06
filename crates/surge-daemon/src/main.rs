@@ -1,14 +1,22 @@
 //! `surge-daemon` binary entry point.
 
 use clap::Parser;
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use surge_acp::bridge::AcpBridge;
+use surge_core::config::TaskSourceConfig;
 use surge_daemon::{ServerConfig, lifecycle, pidfile, run_server};
+use surge_intake::github::source::{GitHubConfig, GitHubIssuesTaskSource};
+use surge_intake::linear::source::{LinearConfig, LinearTaskSource};
+use surge_intake::router::{RouterOutput, TaskRouter};
+use surge_intake::TaskSource;
 use surge_orchestrator::engine::facade::LocalEngineFacade;
 use surge_orchestrator::engine::{Engine, EngineConfig};
 use surge_persistence::runs::Storage;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "surge-daemon — long-running engine host")]
@@ -124,6 +132,77 @@ fn main() -> std::process::ExitCode {
             let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
         }
 
+        // --- Plan C T9.2: Load surge.toml and spawn TaskRouter ---
+        let config = match surge_core::config::SurgeConfig::discover() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load surge.toml; skipping TaskRouter spawn");
+                surge_core::config::SurgeConfig::default()
+            }
+        };
+
+        let mut sources: Vec<Arc<dyn TaskSource>> = Vec::new();
+        for src_cfg in &config.task_sources {
+            match src_cfg {
+                TaskSourceConfig::Linear(l) => {
+                    let token = env::var(&l.api_token_env).unwrap_or_default();
+                    if token.is_empty() {
+                        warn!(env = %l.api_token_env, "env not set; skipping Linear source");
+                        continue;
+                    }
+                    let cfg = LinearConfig {
+                        id: l.id.clone(),
+                        display_name: format!("Linear · {}", l.workspace_id),
+                        workspace_id: l.workspace_id.clone(),
+                        api_token: token,
+                        poll_interval: l.poll_interval,
+                        label_filters: l.label_filters.clone(),
+                    };
+                    match LinearTaskSource::new(cfg) {
+                        Ok(s) => sources.push(Arc::new(s)),
+                        Err(e) => {
+                            warn!(error = %e, source_id = %l.id, "failed to init Linear source");
+                        }
+                    }
+                }
+                TaskSourceConfig::GithubIssues(g) => {
+                    let token = env::var(&g.api_token_env).unwrap_or_default();
+                    if token.is_empty() {
+                        warn!(env = %g.api_token_env, "env not set; skipping GitHub source");
+                        continue;
+                    }
+                    let (owner, repo) = match g.repo.split_once('/') {
+                        Some((o, r)) => (o.to_string(), r.to_string()),
+                        None => {
+                            warn!(repo = %g.repo, "invalid repo format (expected owner/repo); skipping");
+                            continue;
+                        }
+                    };
+                    let cfg = GitHubConfig {
+                        id: g.id.clone(),
+                        display_name: format!("GitHub · {}", g.repo),
+                        owner,
+                        repo,
+                        api_token: token,
+                        poll_interval: g.poll_interval,
+                        label_filters: g.label_filters.clone(),
+                    };
+                    match GitHubIssuesTaskSource::new(cfg) {
+                        Ok(s) => sources.push(Arc::new(s)),
+                        Err(e) => {
+                            warn!(error = %e, source_id = %g.id, "failed to init GitHub source");
+                        }
+                    }
+                }
+            }
+        }
+
+        if !sources.is_empty() {
+            spawn_task_router(sources).await;
+        } else {
+            info!("no task sources configured; skipping TaskRouter spawn");
+        }
+
         let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
         let server_cfg = ServerConfig {
             max_active: args.max_active,
@@ -160,4 +239,65 @@ fn surge_runs_dir() -> std::path::PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".surge"))
         .unwrap_or_else(|| std::path::PathBuf::from(".surge"))
+}
+
+/// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
+async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
+    use rusqlite::Connection;
+
+    info!(count = sources.len(), "spawning TaskRouter for {} task sources", sources.len());
+
+    let (tx, mut rx) = mpsc::channel::<RouterOutput>(64);
+
+    // CONCERN (T9.2): TaskRouter expects Arc<Mutex<Connection>> but Storage owns a
+    // connection pool (registry_pool: Pool<SqliteConnectionManager>). The pool is
+    // crate-private and cannot be directly shared with surge-daemon. For now we use
+    // an in-memory connection as a proof-of-concept. In production (T10+), the Tier1
+    // dedup logic should move to the daemon's persistence layer so both the router
+    // and the engine share the same DB, eliminating this duplicative connection.
+    let conn = Connection::open_in_memory().expect("failed to create in-memory registry for router");
+
+    // Apply the same schema as the pool-backed registry so dedup queries work.
+    conn.execute_batch(
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0001_initial.sql"),
+    )
+    .expect("failed to initialize router registry schema");
+    conn.execute_batch(
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql"),
+    )
+    .expect("failed to initialize ticket_index schema");
+    conn.execute_batch(
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0003_task_source_state.sql"),
+    )
+    .expect("failed to initialize task_source_state schema");
+
+    let conn_arc = Arc::new(TokioMutex::new(conn));
+    let router = TaskRouter::new(sources, Arc::clone(&conn_arc), tx);
+
+    tokio::spawn(async move {
+        if let Err(e) = router.run().await {
+            tracing::error!(error = %e, "task router exited with error");
+        } else {
+            info!("task router exited cleanly");
+        }
+    });
+
+    // Placeholder consumer — T9.3 replaces this with inbox-notify wiring.
+    tokio::spawn(async move {
+        while let Some(out) = rx.recv().await {
+            consume_router_output(out);
+        }
+    });
+}
+
+/// Log router output (placeholder for T9.3).
+fn consume_router_output(out: RouterOutput) {
+    match out {
+        RouterOutput::Triage { event } => {
+            info!(task_id = %event.task_id, "router output: triage (placeholder)");
+        }
+        RouterOutput::EarlyDuplicate { event, run_id } => {
+            info!(task_id = %event.task_id, %run_id, "router output: early duplicate (placeholder)");
+        }
+    }
 }
