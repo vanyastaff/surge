@@ -25,6 +25,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0002-ticket-index",
         include_str!("migrations/registry/0002_ticket_index.sql"),
     ),
+    (
+        "registry-0003-task-source-state",
+        include_str!("migrations/registry/0003_task_source_state.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
