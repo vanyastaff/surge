@@ -62,3 +62,55 @@ mod tests {
         assert!(ActionChannel::parse("").is_none());
     }
 }
+
+use std::sync::Arc;
+use surge_notify::messages::InboxCardPayload;
+use surge_persistence::inbox_queue;
+use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+use surge_persistence::runs::storage::Storage;
+
+/// Enqueue an inbox card for delivery and persist the callback_token on
+/// the existing `ticket_index` row. Idempotent at the row level: if the
+/// row doesn't exist yet, it's inserted with state=`InboxNotified`.
+pub async fn enqueue_inbox_card(
+    storage: &Arc<Storage>,
+    payload: &InboxCardPayload,
+) -> Result<(), String> {
+    let conn = storage.acquire_registry_conn().map_err(|e| e.to_string())?;
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = repo.fetch(payload.task_id.as_str()).map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now();
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: payload.task_id.as_str().into(),
+            source_id: payload.source_id.clone(),
+            provider: payload.provider.clone(),
+            run_id: None,
+            triage_decision: None,
+            duplicate_of: None,
+            priority: Some(payload.priority.label().into()),
+            state: TicketState::InboxNotified,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: Some(payload.callback_token.clone()),
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        repo.insert(&row).map_err(|e| e.to_string())?;
+    } else {
+        repo.set_callback_token(payload.task_id.as_str(), &payload.callback_token)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let payload_json = serde_json::to_string(payload).map_err(|e| e.to_string())?;
+    inbox_queue::append_delivery(
+        &conn,
+        payload.task_id.as_str(),
+        &payload.callback_token,
+        &payload_json,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
