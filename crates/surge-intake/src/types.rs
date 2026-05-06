@@ -1,5 +1,6 @@
 //! Shared types for `surge-intake`.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -192,8 +193,11 @@ mod triage_decision_tests {
     }
 }
 
-use chrono::{DateTime, Utc};
-
+/// Kind of change observed on a task by a `TaskSource`.
+///
+/// `NewTask` is the default for first-time observation; `StatusChanged`
+/// and `LabelsChanged` carry deltas; `TaskClosed` indicates the task is
+/// no longer active in the source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskEventKind {
@@ -206,6 +210,13 @@ pub enum TaskEventKind {
     TaskClosed,
 }
 
+/// One observation of an external task at a point in time.
+///
+/// Emitted by a `TaskSource` from its polling or webhook stream and
+/// consumed by the `TaskRouter` (Tier-1 dedup → Triage Author).
+/// `raw_payload` is the unmodified provider response body, kept so
+/// downstream components can read provider-specific fields without
+/// inflating the typed schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskEvent {
     pub source_id: String,
@@ -215,6 +226,11 @@ pub struct TaskEvent {
     pub raw_payload: serde_json::Value,
 }
 
+/// Full snapshot of an external task, fetched on demand.
+///
+/// Contains everything Triage Author needs to reason about a ticket.
+/// Like `TaskEvent`, `raw_payload` retains provider-specific fields
+/// outside the typed schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskDetails {
     pub task_id: TaskId,
@@ -230,6 +246,10 @@ pub struct TaskDetails {
     pub raw_payload: serde_json::Value,
 }
 
+/// Compact representation of a task for list views.
+///
+/// Subset of `TaskDetails`; used for candidate enumeration and the
+/// `list_open_tasks` API where the body and labels aren't needed yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskSummary {
     pub task_id: TaskId,
