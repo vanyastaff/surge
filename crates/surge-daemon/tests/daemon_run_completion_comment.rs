@@ -31,7 +31,8 @@ fn db_with_schema() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
         .unwrap();
-    let sql = include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
+    let sql =
+        include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
     conn.execute_batch(sql).unwrap();
     conn
 }

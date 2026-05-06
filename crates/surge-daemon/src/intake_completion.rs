@@ -38,6 +38,10 @@ use tracing::{info, warn};
 /// receives are logged and dropped — losing a `RunFinished` event in this
 /// path is recoverable: the ticket stays in `Active` until manual intervention
 /// or the next daemon restart's recovery sweep.
+// `clippy::implicit_hasher`: the daemon owns the source map; consumers don't
+// need to be generic over `BuildHasher`. The map uses the default
+// `RandomState` everywhere, including the daemon's `main.rs` call site.
+#[allow(clippy::implicit_hasher)]
 pub fn spawn(
     rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,
