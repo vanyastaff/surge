@@ -27,10 +27,10 @@ pub struct InboxCardPayload {
     pub priority: Priority,
     /// Tracker URL of the originating ticket (deep-link).
     pub task_url: String,
-    /// Short ULID — embedded in callback_data of inline buttons. The
+    /// Short ULID — embedded in `callback_data` of inline buttons. The
     /// daemon resolves this to a `task_id` via
     /// `IntakeRepo::fetch_by_callback_token`. Replaces the prior `run_id`
-    /// field (the actual `RunId` is generated only when Engine::start_run
+    /// field (the actual `RunId` is generated only when `Engine::start_run`
     /// runs; pre-creating one violated the FK on `ticket_index.run_id`).
     pub callback_token: String,
 }

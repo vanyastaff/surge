@@ -25,7 +25,7 @@ impl SnoozeScheduler {
         let mut interval = tokio::time::interval(self.poll_interval);
         loop {
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                () = shutdown.cancelled() => return,
                 _ = interval.tick() => {}
             }
             if let Err(e) = self.tick().await {
@@ -58,7 +58,9 @@ impl SnoozeScheduler {
                     .acquire_registry_conn()
                     .map_err(|e| e.to_string())?;
                 let repo = IntakeRepo::new(&conn);
-                if let Err(e) = repo.update_state_validated(&row.task_id, TicketState::InboxNotified) {
+                if let Err(e) =
+                    repo.update_state_validated(&row.task_id, TicketState::InboxNotified)
+                {
                     warn!(error = %e, task_id = %row.task_id, "snooze re-emit transition failed");
                     continue;
                 }
@@ -73,9 +75,8 @@ impl SnoozeScheduler {
             }
 
             // Build a fresh InboxCardPayload from the row data.
-            let task_id = match TaskId::try_new(row.task_id.clone()) {
-                Ok(id) => id,
-                Err(_) => continue,
+            let Ok(task_id) = TaskId::try_new(row.task_id.clone()) else {
+                continue;
             };
             let priority = row
                 .priority

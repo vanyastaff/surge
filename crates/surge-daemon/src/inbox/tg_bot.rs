@@ -5,11 +5,11 @@ use chrono::{Duration as ChronoDuration, Utc};
 use std::sync::Arc;
 use surge_persistence::inbox_queue::{self, InboxActionKind};
 use surge_persistence::runs::storage::Storage;
+use teloxide::Bot;
 use teloxide::dispatching::{Dispatcher, UpdateFilterExt};
 use teloxide::dptree;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatId, Update};
-use teloxide::Bot;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -24,7 +24,11 @@ impl TgInboxBot {
     /// Construct with the bot, target chat, and storage.
     #[must_use]
     pub fn new(bot: Bot, chat_id: ChatId, storage: Arc<Storage>) -> Self {
-        Self { bot, chat_id, storage }
+        Self {
+            bot,
+            chat_id,
+            storage,
+        }
     }
 
     /// Drive both legs (outgoing + incoming) until cancellation.
@@ -41,7 +45,7 @@ impl TgInboxBot {
             tokio::spawn(incoming_loop(bot, storage))
         };
         tokio::select! {
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 info!("TgInboxBot: shutdown signalled");
             }
             _ = outgoing => {}
@@ -59,7 +63,7 @@ async fn outgoing_loop(
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
     loop {
         tokio::select! {
-            _ = shutdown.cancelled() => return,
+            () = shutdown.cancelled() => return,
             _ = interval.tick() => {}
         }
         if let Err(e) = tick_outgoing(&bot, chat_id, &storage).await {
@@ -68,19 +72,31 @@ async fn outgoing_loop(
     }
 }
 
-async fn tick_outgoing(
-    bot: &Bot,
-    chat_id: ChatId,
-    storage: &Storage,
-) -> Result<(), String> {
+/// Convert a single `surge_notify` keyboard button descriptor into a teloxide
+/// `InlineKeyboardButton`. URL buttons whose `data` field fails to parse fall
+/// back to a callback button so the outgoing loop never crashes.
+fn build_keyboard_button(
+    btn: &surge_notify::telegram::InboxKeyboardButton,
+) -> teloxide::types::InlineKeyboardButton {
+    use teloxide::types::InlineKeyboardButton;
+    if btn.is_url {
+        if let Ok(url) = btn.data.parse::<reqwest::Url>() {
+            return InlineKeyboardButton::url(btn.label.clone(), url);
+        }
+        warn!(label = %btn.label, data = %btn.data, "URL button has invalid URL; rendering as text");
+        InlineKeyboardButton::callback(btn.label.clone(), format!("invalid_url:{}", btn.data))
+    } else {
+        InlineKeyboardButton::callback(btn.label.clone(), btn.data.clone())
+    }
+}
+
+async fn tick_outgoing(bot: &Bot, chat_id: ChatId, storage: &Storage) -> Result<(), String> {
     use surge_notify::messages::InboxCardPayload;
     use surge_notify::telegram::format_inbox_card;
     use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
     let pending = {
-        let conn = storage
-            .acquire_registry_conn()
-            .map_err(|e| e.to_string())?;
+        let conn = storage.acquire_registry_conn().map_err(|e| e.to_string())?;
         inbox_queue::list_pending_telegram_deliveries(&conn).map_err(|e| e.to_string())?
     };
     for row in pending {
@@ -89,34 +105,13 @@ async fn tick_outgoing(
             Err(e) => {
                 warn!(error = %e, seq = row.seq, "failed to parse delivery payload; skipping");
                 continue;
-            }
+            },
         };
         let rendered = format_inbox_card(&payload);
         let kb_rows: Vec<Vec<InlineKeyboardButton>> = rendered
             .keyboard
             .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|btn| {
-                        if btn.is_url {
-                            // Parse the URL string; if invalid, fall back to a callback
-                            // button with the URL as label so we don't crash the loop.
-                            match btn.data.parse::<reqwest::Url>() {
-                                Ok(url) => InlineKeyboardButton::url(btn.label.clone(), url),
-                                Err(_) => {
-                                    warn!(label = %btn.label, data = %btn.data, "URL button has invalid URL; rendering as text");
-                                    InlineKeyboardButton::callback(
-                                        btn.label.clone(),
-                                        format!("invalid_url:{}", btn.data),
-                                    )
-                                }
-                            }
-                        } else {
-                            InlineKeyboardButton::callback(btn.label.clone(), btn.data.clone())
-                        }
-                    })
-                    .collect()
-            })
+            .map(|row| row.iter().map(build_keyboard_button).collect())
             .collect();
         let kb = InlineKeyboardMarkup::new(kb_rows);
         match bot
@@ -125,16 +120,9 @@ async fn tick_outgoing(
             .await
         {
             Ok(msg) => {
-                let conn = storage
-                    .acquire_registry_conn()
+                let conn = storage.acquire_registry_conn().map_err(|e| e.to_string())?;
+                inbox_queue::record_telegram_delivered(&conn, row.seq, chat_id.0, msg.id.0)
                     .map_err(|e| e.to_string())?;
-                inbox_queue::record_telegram_delivered(
-                    &conn,
-                    row.seq,
-                    chat_id.0,
-                    msg.id.0,
-                )
-                .map_err(|e| e.to_string())?;
                 let repo = surge_persistence::intake::IntakeRepo::new(&conn);
                 if let Err(e) = repo.set_tg_message_ref(&row.task_id, chat_id.0, msg.id.0) {
                     // The row may not exist yet (if enqueue_inbox_card was skipped or
@@ -146,11 +134,11 @@ async fn tick_outgoing(
                     seq = row.seq,
                     "InboxCard delivered to Telegram"
                 );
-            }
+            },
             Err(e) => {
                 warn!(error = %e, task_id = %row.task_id, "Telegram send failed; will retry");
                 // Don't mark as delivered — next tick retries.
-            }
+            },
         }
     }
     Ok(())
@@ -158,44 +146,48 @@ async fn tick_outgoing(
 
 async fn incoming_loop(bot: Bot, storage: Arc<Storage>) {
     let handler = Update::filter_callback_query().endpoint(on_callback);
-    Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![storage])
-        .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
+    Box::pin(
+        Dispatcher::builder(bot, handler)
+            .dependencies(dptree::deps![storage])
+            .enable_ctrlc_handler()
+            .build()
+            .dispatch(),
+    )
+    .await;
 }
 
-async fn on_callback(
-    bot: Bot,
-    q: CallbackQuery,
-    storage: Arc<Storage>,
-) -> ResponseResult<()> {
+async fn on_callback(bot: Bot, q: CallbackQuery, storage: Arc<Storage>) -> ResponseResult<()> {
     let data = q.data.as_deref().unwrap_or("");
     match parse_callback_data(data) {
         Some((action, token)) => {
             match handle_action(&storage, action, token, ActionChannel::Telegram).await {
                 Ok(()) => {
-                    let _ = bot.answer_callback_query(q.id.clone()).text("Recorded").await;
-                }
+                    let _ = bot
+                        .answer_callback_query(q.id.clone())
+                        .text("Recorded")
+                        .await;
+                },
                 Err(CallbackHandleError::TokenNotFound) => {
-                    let _ = bot.answer_callback_query(q.id.clone()).text("Card expired").await;
-                }
+                    let _ = bot
+                        .answer_callback_query(q.id.clone())
+                        .text("Card expired")
+                        .await;
+                },
                 Err(CallbackHandleError::Persistence(e)) => {
                     warn!(error = %e, "inbox callback persistence error");
                     let _ = bot
                         .answer_callback_query(q.id.clone())
                         .text("Internal error — see daemon logs")
                         .await;
-                }
+                },
             }
-        }
+        },
         None => {
             let _ = bot
                 .answer_callback_query(q.id.clone())
                 .text("Invalid action")
                 .await;
-        }
+        },
     }
     Ok(())
 }
@@ -225,6 +217,7 @@ pub(crate) enum CallbackHandleError {
 /// Verify the token resolves to a ticket, then enqueue the action.
 ///
 /// Shared by Telegram and Desktop receivers.
+#[allow(clippy::unused_async)]
 pub(crate) async fn handle_action(
     storage: &Storage,
     action: InboxActionKind,
@@ -253,15 +246,8 @@ pub(crate) async fn handle_action(
     let conn = storage
         .acquire_registry_conn()
         .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
-    inbox_queue::append_action(
-        &conn,
-        action,
-        &task_id,
-        token,
-        via.as_str(),
-        snooze_until,
-    )
-    .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
+    inbox_queue::append_action(&conn, action, &task_id, token, via.as_str(), snooze_until)
+        .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
     info!(task_id = %task_id, action = action.as_str(), via = via.as_str(), "inbox action enqueued");
     Ok(())
 }
@@ -279,8 +265,14 @@ mod tests {
 
     #[test]
     fn parse_callback_data_valid_snooze_skip() {
-        assert_eq!(parse_callback_data("inbox:snooze:t").unwrap().0, InboxActionKind::Snooze);
-        assert_eq!(parse_callback_data("inbox:skip:t").unwrap().0, InboxActionKind::Skip);
+        assert_eq!(
+            parse_callback_data("inbox:snooze:t").unwrap().0,
+            InboxActionKind::Snooze
+        );
+        assert_eq!(
+            parse_callback_data("inbox:skip:t").unwrap().0,
+            InboxActionKind::Skip
+        );
     }
 
     #[test]

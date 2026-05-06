@@ -356,7 +356,9 @@ async fn spawn_task_router(
                         task_url,
                         callback_token,
                     };
-                    if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(&storage_for_router, &payload).await {
+                    if let Err(e) =
+                        surge_daemon::inbox::enqueue_inbox_card(&storage_for_router, &payload).await
+                    {
                         tracing::warn!(error = %e, task_id = %event.task_id, "failed to enqueue inbox card");
                     } else {
                         tracing::info!(task_id = %event.task_id, "inbox card enqueued");
@@ -406,8 +408,7 @@ async fn spawn_inbox_subsystems(
     };
     use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, MinimalBootstrapGraphBuilder};
 
-    let bootstrap: Arc<dyn BootstrapGraphBuilder> =
-        Arc::new(MinimalBootstrapGraphBuilder::new());
+    let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
     let worktrees_root = surge_runs_dir().join("worktrees");
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
@@ -453,19 +454,16 @@ async fn spawn_inbox_subsystems(
         match (chat_id, token) {
             (Some(chat_id), Some(token)) => {
                 let bot = teloxide::Bot::new(token);
-                let tg = TgInboxBot::new(
-                    bot,
-                    teloxide::types::ChatId(chat_id),
-                    Arc::clone(&storage),
-                );
+                let tg =
+                    TgInboxBot::new(bot, teloxide::types::ChatId(chat_id), Arc::clone(&storage));
                 let shutdown_for_tg = shutdown.clone();
                 tokio::spawn(tg.run(shutdown_for_tg));
-            }
+            },
             _ => {
                 tracing::warn!(
                     "telegram config present but chat_id or bot_token missing — TgInboxBot not spawned"
                 );
-            }
+            },
         }
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");

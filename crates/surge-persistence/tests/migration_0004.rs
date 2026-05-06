@@ -60,7 +60,10 @@ fn migration_0004_partial_unique_index_rejects_duplicate_non_null_tokens() {
         "UPDATE ticket_index SET callback_token = ? WHERE task_id = ?",
         params!["tok-shared", "linear:wsp1/A-2"],
     );
-    assert!(dup_err.is_err(), "duplicate non-NULL callback_token must violate the UNIQUE index");
+    assert!(
+        dup_err.is_err(),
+        "duplicate non-NULL callback_token must violate the UNIQUE index"
+    );
 }
 
 #[test]

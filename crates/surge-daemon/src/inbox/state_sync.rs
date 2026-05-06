@@ -18,7 +18,7 @@ pub struct TicketStateSync {
 }
 
 impl TicketStateSync {
-    /// Construct with the originating ticket and the registered TaskSource.
+    /// Construct with the originating ticket and the registered `TaskSource`.
     #[must_use]
     pub fn new(task_id: TaskId, storage: Arc<Storage>, source: Arc<dyn TaskSource>) -> Self {
         Self {
@@ -36,31 +36,30 @@ impl TicketStateSync {
         let mut went_active = false;
         loop {
             match handle.events.recv().await {
-                Ok(EngineRunEvent::Persisted { .. }) => {
-                    if !went_active {
-                        if let Err(e) = self.set_state(TicketState::Active).await {
-                            warn!(error = %e, "transition to Active failed");
-                        }
-                        went_active = true;
+                Ok(EngineRunEvent::Persisted { .. }) if !went_active => {
+                    if let Err(e) = self.set_state(TicketState::Active).await {
+                        warn!(error = %e, "transition to Active failed");
                     }
-                }
+                    went_active = true;
+                },
                 Ok(EngineRunEvent::Terminal(outcome)) => {
                     self.on_terminal(&outcome).await;
                     return;
-                }
+                },
                 Ok(_) => {
                     // Unknown future variant — ignore and keep looping.
-                }
+                },
                 Err(_) => {
                     // Sender dropped — engine has exited. We exit silently
                     // (the engine will have written its own RunCompleted /
                     // RunFailed event already if it terminated normally).
                     return;
-                }
+                },
             }
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn set_state(&self, to: TicketState) -> Result<(), String> {
         let conn = self
             .storage
@@ -73,25 +72,22 @@ impl TicketStateSync {
 
     async fn on_terminal(&self, outcome: &RunOutcome) {
         let (state, comment) = match outcome {
-            RunOutcome::Completed { .. } => (
-                TicketState::Completed,
-                "✅ Surge run complete.".to_string(),
-            ),
-            RunOutcome::Failed { error } => (
-                TicketState::Failed,
-                format!("❌ Surge run failed: {error}"),
-            ),
-            RunOutcome::Aborted { reason } => (
-                TicketState::Aborted,
-                format!("Surge run aborted: {reason}"),
-            ),
+            RunOutcome::Completed { .. } => {
+                (TicketState::Completed, "✅ Surge run complete.".to_string())
+            },
+            RunOutcome::Failed { error } => {
+                (TicketState::Failed, format!("❌ Surge run failed: {error}"))
+            },
+            RunOutcome::Aborted { reason } => {
+                (TicketState::Aborted, format!("Surge run aborted: {reason}"))
+            },
             _ => {
                 warn!(task_id = %self.task_id, "on_terminal: unknown RunOutcome variant; defaulting to Failed");
                 (
                     TicketState::Failed,
                     "Surge run ended with unknown outcome.".to_string(),
                 )
-            }
+            },
         };
         if let Err(e) = self.set_state(state).await {
             warn!(error = %e, ?state, "transition to terminal state failed");

@@ -2250,12 +2250,21 @@ delivery_channels = ["telegram", "desktop"]
 "#;
         let cfg: SurgeConfig = toml::from_str(toml_str).expect("must parse");
         let telegram = cfg.telegram.expect("telegram section");
-        assert_eq!(telegram.chat_id_env.as_deref(), Some("SURGE_TELEGRAM_CHAT_ID"));
-        assert_eq!(telegram.bot_token_env.as_deref(), Some("SURGE_TELEGRAM_BOT_TOKEN"));
+        assert_eq!(
+            telegram.chat_id_env.as_deref(),
+            Some("SURGE_TELEGRAM_CHAT_ID")
+        );
+        assert_eq!(
+            telegram.bot_token_env.as_deref(),
+            Some("SURGE_TELEGRAM_BOT_TOKEN")
+        );
         assert_eq!(telegram.chat_id, None);
         let inbox = cfg.inbox;
         assert_eq!(inbox.snooze_poll_interval.as_secs(), 600);
-        assert_eq!(inbox.delivery_channels, vec!["telegram".to_string(), "desktop".to_string()]);
+        assert_eq!(
+            inbox.delivery_channels,
+            vec!["telegram".to_string(), "desktop".to_string()]
+        );
     }
 
     #[test]

@@ -379,7 +379,9 @@ impl<'a> IntakeRepo<'a> {
             params![token, task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
@@ -394,20 +396,19 @@ impl<'a> IntakeRepo<'a> {
             params![task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
 
     /// Look up a ticket row by callback_token. Used by inbox-action receivers
     /// to map a callback_data string back to the ticket.
-    pub fn fetch_by_callback_token(
-        &self,
-        token: &str,
-    ) -> rusqlite::Result<Option<IntakeRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT task_id FROM ticket_index WHERE callback_token = ?1",
-        )?;
+    pub fn fetch_by_callback_token(&self, token: &str) -> rusqlite::Result<Option<IntakeRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id FROM ticket_index WHERE callback_token = ?1")?;
         let task_id: Option<String> = stmt
             .query_row(params![token], |r| r.get::<_, String>(0))
             .map(Some)
@@ -435,7 +436,9 @@ impl<'a> IntakeRepo<'a> {
             params![chat_id, msg_id, task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
@@ -461,11 +464,9 @@ impl<'a> IntakeRepo<'a> {
         task_id: &str,
         to: TicketState,
     ) -> Result<(), IntakeError> {
-        let current = self
-            .fetch(task_id)?
-            .ok_or_else(|| IntakeError::NotFound {
-                task_id: task_id.into(),
-            })?;
+        let current = self.fetch(task_id)?.ok_or_else(|| IntakeError::NotFound {
+            task_id: task_id.into(),
+        })?;
         if !to.is_valid_transition_from(current.state) {
             return Err(IntakeError::InvalidTransition {
                 from: current.state,
@@ -479,17 +480,15 @@ impl<'a> IntakeRepo<'a> {
     /// Set the `snooze_until` timestamp for a ticket.
     ///
     /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
-    pub fn set_snooze_until(
-        &self,
-        task_id: &str,
-        until: DateTime<Utc>,
-    ) -> Result<(), IntakeError> {
+    pub fn set_snooze_until(&self, task_id: &str, until: DateTime<Utc>) -> Result<(), IntakeError> {
         let affected = self.conn.execute(
             "UPDATE ticket_index SET snooze_until = ?1 WHERE task_id = ?2",
             params![until.to_rfc3339(), task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
@@ -503,7 +502,9 @@ impl<'a> IntakeRepo<'a> {
             params![task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
@@ -517,7 +518,9 @@ impl<'a> IntakeRepo<'a> {
             params![run_id, task_id],
         )?;
         if affected == 0 {
-            return Err(IntakeError::NotFound { task_id: task_id.into() });
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
         }
         Ok(())
     }
@@ -701,7 +704,8 @@ mod repo_tests {
         repo.insert(&sample_row("linear:wsp1/T-1", TicketState::InboxNotified))
             .unwrap();
 
-        repo.set_callback_token("linear:wsp1/T-1", "01HKGZTOK1").unwrap();
+        repo.set_callback_token("linear:wsp1/T-1", "01HKGZTOK1")
+            .unwrap();
         let row = repo.fetch_by_callback_token("01HKGZTOK1").unwrap().unwrap();
         assert_eq!(row.task_id, "linear:wsp1/T-1");
         assert_eq!(row.callback_token.as_deref(), Some("01HKGZTOK1"));
@@ -722,9 +726,13 @@ mod repo_tests {
             .unwrap();
         repo.insert(&sample_row("linear:wsp1/T-3", TicketState::InboxNotified))
             .unwrap();
-        repo.set_callback_token("linear:wsp1/T-2", "01HKGZSAME").unwrap();
+        repo.set_callback_token("linear:wsp1/T-2", "01HKGZSAME")
+            .unwrap();
         let dup_err = repo.set_callback_token("linear:wsp1/T-3", "01HKGZSAME");
-        assert!(dup_err.is_err(), "duplicate callback_token must fail UNIQUE");
+        assert!(
+            dup_err.is_err(),
+            "duplicate callback_token must fail UNIQUE"
+        );
     }
 
     #[test]
@@ -733,7 +741,8 @@ mod repo_tests {
         let repo = IntakeRepo::new(&conn);
         repo.insert(&sample_row("linear:wsp1/T-4", TicketState::InboxNotified))
             .unwrap();
-        repo.set_tg_message_ref("linear:wsp1/T-4", -1001234567890, 4242).unwrap();
+        repo.set_tg_message_ref("linear:wsp1/T-4", -1001234567890, 4242)
+            .unwrap();
         let row = repo.fetch("linear:wsp1/T-4").unwrap().unwrap();
         assert_eq!(row.tg_chat_id, Some(-1001234567890));
         assert_eq!(row.tg_message_id, Some(4242));
@@ -767,7 +776,7 @@ mod repo_tests {
             IntakeError::InvalidTransition { from, to } => {
                 assert_eq!(from, TicketState::Skipped);
                 assert_eq!(to, TicketState::Active);
-            }
+            },
             other => panic!("expected InvalidTransition, got {other:?}"),
         }
         // State must be unchanged.
@@ -791,7 +800,9 @@ mod repo_tests {
     fn set_callback_token_errors_when_row_missing() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        let err = repo.set_callback_token("linear:wsp1/missing", "tok").unwrap_err();
+        let err = repo
+            .set_callback_token("linear:wsp1/missing", "tok")
+            .unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
     }
 
@@ -799,7 +810,9 @@ mod repo_tests {
     fn clear_callback_token_errors_when_row_missing() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        let err = repo.clear_callback_token("linear:wsp1/missing").unwrap_err();
+        let err = repo
+            .clear_callback_token("linear:wsp1/missing")
+            .unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
     }
 
@@ -807,7 +820,9 @@ mod repo_tests {
     fn set_tg_message_ref_errors_when_row_missing() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        let err = repo.set_tg_message_ref("linear:wsp1/missing", 1, 2).unwrap_err();
+        let err = repo
+            .set_tg_message_ref("linear:wsp1/missing", 1, 2)
+            .unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
     }
 
@@ -824,7 +839,13 @@ mod repo_tests {
         let row = repo.fetch("linear:wsp1/S-1").unwrap().unwrap();
         assert_eq!(row.snooze_until, Some(until));
         repo.clear_snooze_until("linear:wsp1/S-1").unwrap();
-        assert!(repo.fetch("linear:wsp1/S-1").unwrap().unwrap().snooze_until.is_none());
+        assert!(
+            repo.fetch("linear:wsp1/S-1")
+                .unwrap()
+                .unwrap()
+                .snooze_until
+                .is_none()
+        );
     }
 
     #[test]
@@ -832,7 +853,9 @@ mod repo_tests {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
         let until = Utc::now();
-        let err = repo.set_snooze_until("linear:wsp1/missing", until).unwrap_err();
+        let err = repo
+            .set_snooze_until("linear:wsp1/missing", until)
+            .unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
         let err = repo.clear_snooze_until("linear:wsp1/missing").unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
@@ -847,7 +870,8 @@ mod repo_tests {
         let repo = IntakeRepo::new(&conn);
         repo.insert(&sample_row("linear:wsp1/R-1", TicketState::InboxNotified))
             .unwrap();
-        repo.set_run_id("linear:wsp1/R-1", "01ABCRUNID0001".into()).unwrap();
+        repo.set_run_id("linear:wsp1/R-1", "01ABCRUNID0001".into())
+            .unwrap();
         let row = repo.fetch("linear:wsp1/R-1").unwrap().unwrap();
         assert_eq!(row.run_id.as_deref(), Some("01ABCRUNID0001"));
     }
@@ -856,7 +880,9 @@ mod repo_tests {
     fn set_run_id_errors_when_row_missing() {
         let conn = db_with_schema();
         let repo = IntakeRepo::new(&conn);
-        let err = repo.set_run_id("linear:wsp1/missing", "01ABCRUNID0002".into()).unwrap_err();
+        let err = repo
+            .set_run_id("linear:wsp1/missing", "01ABCRUNID0002".into())
+            .unwrap_err();
         assert!(matches!(err, IntakeError::NotFound { .. }));
     }
 

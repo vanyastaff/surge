@@ -307,7 +307,15 @@ mod tests {
     #[test]
     fn append_then_list_then_mark_processed() {
         let conn = db();
-        let seq = append_action(&conn, InboxActionKind::Start, "linear:t/T-1", "tok1", "telegram", None).unwrap();
+        let seq = append_action(
+            &conn,
+            InboxActionKind::Start,
+            "linear:t/T-1",
+            "tok1",
+            "telegram",
+            None,
+        )
+        .unwrap();
         assert!(seq > 0);
         let pending = list_pending_actions(&conn).unwrap();
         assert_eq!(pending.len(), 1);
@@ -323,7 +331,15 @@ mod tests {
         let until = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        append_action(&conn, InboxActionKind::Snooze, "linear:t/T-2", "tok2", "desktop", Some(until)).unwrap();
+        append_action(
+            &conn,
+            InboxActionKind::Snooze,
+            "linear:t/T-2",
+            "tok2",
+            "desktop",
+            Some(until),
+        )
+        .unwrap();
         let pending = list_pending_actions(&conn).unwrap();
         assert_eq!(pending[0].snooze_until, Some(until));
     }
@@ -346,7 +362,15 @@ mod tests {
     #[test]
     fn idempotent_marking() {
         let conn = db();
-        let seq = append_action(&conn, InboxActionKind::Skip, "linear:t/T-3", "tok3", "telegram", None).unwrap();
+        let seq = append_action(
+            &conn,
+            InboxActionKind::Skip,
+            "linear:t/T-3",
+            "tok3",
+            "telegram",
+            None,
+        )
+        .unwrap();
         mark_action_processed(&conn, seq).unwrap();
         // Second call is a no-op (the WHERE clause filters it out).
         mark_action_processed(&conn, seq).unwrap();

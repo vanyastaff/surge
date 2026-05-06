@@ -5,7 +5,7 @@
 //! Outgoing inbox cards are rendered by `TgInboxBot::outgoing_loop` from
 //! `inbox_delivery_queue`. `TicketStateSync` follows engine events for
 //! inbox-initiated runs. `SnoozeScheduler` re-emits cards when their
-//! snooze_until expires.
+//! `snooze_until` expires.
 
 pub mod consumer;
 pub mod desktop_listener;
@@ -83,7 +83,7 @@ pub(crate) mod consumer_helpers {
     }
 }
 
-/// Enqueue an inbox card for delivery and persist the callback_token on
+/// Enqueue an inbox card for delivery and persist the `callback_token` on
 /// the existing `ticket_index` row. Idempotent at the row level: if the
 /// row doesn't exist yet, it's inserted with state=`InboxNotified`.
 pub async fn enqueue_inbox_card(
@@ -93,7 +93,9 @@ pub async fn enqueue_inbox_card(
     let conn = storage.acquire_registry_conn().map_err(|e| e.to_string())?;
     let repo = IntakeRepo::new(&conn);
 
-    let existing = repo.fetch(payload.task_id.as_str()).map_err(|e| e.to_string())?;
+    let existing = repo
+        .fetch(payload.task_id.as_str())
+        .map_err(|e| e.to_string())?;
     let now = chrono::Utc::now();
     if existing.is_none() {
         let row = IntakeRow {

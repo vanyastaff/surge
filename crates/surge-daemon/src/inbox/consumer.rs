@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_intake::types::TaskId;
 use surge_intake::TaskSource;
+use surge_intake::types::TaskId;
 use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
 use surge_orchestrator::engine::config::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -18,7 +18,7 @@ use tracing::{info, warn};
 
 /// Polls `inbox_action_queue` and dispatches handlers.
 pub struct InboxActionConsumer {
-    /// Storage handle for queue + ticket_index access.
+    /// Storage handle for queue + `ticket_index` access.
     pub storage: Arc<Storage>,
     /// Trait object for converting prompts → graphs.
     pub bootstrap: Arc<dyn BootstrapGraphBuilder>,
@@ -38,7 +38,7 @@ impl InboxActionConsumer {
         let mut interval = tokio::time::interval(self.poll_interval);
         loop {
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                () = shutdown.cancelled() => return,
                 _ = interval.tick() => {}
             }
             if let Err(e) = self.tick().await {
@@ -81,6 +81,7 @@ impl InboxActionConsumer {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_start(&self, row: &InboxActionRow) -> Result<(), String> {
         // Resolve ticket row.
         let ticket_row = {
@@ -92,12 +93,9 @@ impl InboxActionConsumer {
                 .fetch_by_callback_token(&row.callback_token)
                 .map_err(|e| e.to_string())?
         };
-        let ticket_row = match ticket_row {
-            Some(r) => r,
-            None => {
-                info!(token = %row.callback_token, "Start: callback token not found; ignoring");
-                return Ok(());
-            }
+        let Some(ticket_row) = ticket_row else {
+            info!(token = %row.callback_token, "Start: callback token not found; ignoring");
+            return Ok(());
         };
         // Idempotency: state must still be awaiting decision.
         if !matches!(
@@ -117,8 +115,8 @@ impl InboxActionConsumer {
             .sources
             .get(&ticket_row.source_id)
             .ok_or_else(|| format!("source {} not registered", ticket_row.source_id))?;
-        let task_id = TaskId::try_new(ticket_row.task_id.clone())
-            .map_err(|e| format!("task_id: {e}"))?;
+        let task_id =
+            TaskId::try_new(ticket_row.task_id.clone()).map_err(|e| format!("task_id: {e}"))?;
         let details = source
             .fetch_task(&task_id)
             .await
@@ -134,7 +132,10 @@ impl InboxActionConsumer {
             title: details.title.clone(),
             description: details.description.clone(),
             tracker_url: Some(details.url.clone()),
-            priority: ticket_row.priority.as_deref().and_then(crate::inbox::consumer_helpers::parse_priority_str),
+            priority: ticket_row
+                .priority
+                .as_deref()
+                .and_then(crate::inbox::consumer_helpers::parse_priority_str),
             labels: details.labels.clone(),
         };
         let graph = self
@@ -160,7 +161,7 @@ impl InboxActionConsumer {
             repo.set_run_id(&ticket_row.task_id, run_id.to_string())
                 .map_err(|e| e.to_string())?;
             match repo.update_state_validated(&ticket_row.task_id, TicketState::RunStarted) {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(IntakeError::InvalidTransition { from, to }) => {
                     warn!(
                         ?from,
@@ -169,7 +170,7 @@ impl InboxActionConsumer {
                         "Start: state transition rejected; assuming concurrent action"
                     );
                     return Ok(());
-                }
+                },
                 Err(e) => return Err(e.to_string()),
             }
             repo.clear_callback_token(&ticket_row.task_id)
@@ -198,6 +199,7 @@ impl InboxActionConsumer {
         Ok(())
     }
 
+    #[allow(clippy::unused_async)]
     async fn handle_snooze(&self, row: &InboxActionRow) -> Result<(), String> {
         let ticket_row = {
             let conn = self
@@ -208,16 +210,14 @@ impl InboxActionConsumer {
                 .fetch_by_callback_token(&row.callback_token)
                 .map_err(|e| e.to_string())?
         };
-        let ticket_row = match ticket_row {
-            Some(r) => r,
-            None => return Ok(()),
+        let Some(ticket_row) = ticket_row else {
+            return Ok(());
         };
         if !matches!(ticket_row.state, TicketState::InboxNotified) {
             return Ok(());
         }
-        let until = match row.snooze_until {
-            Some(u) => u,
-            None => return Err("snooze action without snooze_until".into()),
+        let Some(until) = row.snooze_until else {
+            return Err("snooze action without snooze_until".into());
         };
         let conn = self
             .storage
@@ -225,7 +225,7 @@ impl InboxActionConsumer {
             .map_err(|e| e.to_string())?;
         let repo = IntakeRepo::new(&conn);
         match repo.update_state_validated(&ticket_row.task_id, TicketState::Snoozed) {
-            Ok(()) => {}
+            Ok(()) => {},
             Err(IntakeError::InvalidTransition { .. }) => return Ok(()),
             Err(e) => return Err(e.to_string()),
         }
@@ -245,9 +245,8 @@ impl InboxActionConsumer {
                 .fetch_by_callback_token(&row.callback_token)
                 .map_err(|e| e.to_string())?
         };
-        let ticket_row = match ticket_row {
-            Some(r) => r,
-            None => return Ok(()),
+        let Some(ticket_row) = ticket_row else {
+            return Ok(());
         };
         if !matches!(
             ticket_row.state,
@@ -267,7 +266,7 @@ impl InboxActionConsumer {
                 .map_err(|e| e.to_string())?;
             let repo = IntakeRepo::new(&conn);
             match repo.update_state_validated(&ticket_row.task_id, TicketState::Skipped) {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(IntakeError::InvalidTransition { .. }) => return Ok(()),
                 Err(e) => return Err(e.to_string()),
             }
@@ -276,8 +275,8 @@ impl InboxActionConsumer {
                 .map_err(|e| e.to_string())?;
         }
 
-        let task_id = TaskId::try_new(ticket_row.task_id.clone())
-            .map_err(|e| format!("task_id: {e}"))?;
+        let task_id =
+            TaskId::try_new(ticket_row.task_id.clone()).map_err(|e| format!("task_id: {e}"))?;
         if let Err(e) = source.set_label(&task_id, "surge:skipped", true).await {
             warn!(error = %e, task_id = %task_id, "set_label surge:skipped failed");
         }
@@ -291,4 +290,3 @@ impl InboxActionConsumer {
         Ok(())
     }
 }
-

@@ -37,7 +37,7 @@ impl DesktopActionListener {
         let mut interval = tokio::time::interval(self.poll_interval);
         loop {
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                () = shutdown.cancelled() => return,
                 _ = interval.tick() => {}
             }
             if let Err(e) = self.tick().await {
@@ -46,6 +46,7 @@ impl DesktopActionListener {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn tick(&self) -> Result<(), String> {
         let pending = {
             let conn = self
@@ -62,8 +63,7 @@ impl DesktopActionListener {
                     .storage
                     .acquire_registry_conn()
                     .map_err(|e| e.to_string())?;
-                inbox_queue::record_desktop_delivered(&conn, row.seq)
-                    .map_err(|e| e.to_string())?;
+                inbox_queue::record_desktop_delivered(&conn, row.seq).map_err(|e| e.to_string())?;
             }
 
             let payload: surge_notify::messages::InboxCardPayload =
@@ -72,7 +72,7 @@ impl DesktopActionListener {
                     Err(e) => {
                         warn!(error = %e, seq = row.seq, "desktop payload parse failed; skipping");
                         continue;
-                    }
+                    },
                 };
             let rendered = surge_notify::desktop::format_inbox_card_desktop(&payload);
             let token = payload.callback_token.clone();
@@ -91,6 +91,7 @@ impl DesktopActionListener {
 ///
 /// `wait_for_action` is only available on Linux (dbus/zbus, `unix` non-macOS).
 /// On other platforms we show the notification but cannot receive click events.
+#[allow(clippy::needless_pass_by_value)]
 fn show_and_wait(
     rendered: surge_notify::desktop::InboxCardDesktopRendered,
     #[cfg(all(unix, not(target_os = "macos")))] token: String,
@@ -101,8 +102,8 @@ fn show_and_wait(
 ) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        use crate::inbox::tg_bot;
         use crate::inbox::ActionChannel;
+        use crate::inbox::tg_bot;
         use tracing::debug;
 
         let mut n = notify_rust::Notification::new();
@@ -115,7 +116,7 @@ fn show_and_wait(
             Err(e) => {
                 warn!(error = %e, "notify-rust show failed");
                 return;
-            }
+            },
         };
         handle.wait_for_action(|action_id| {
             let action_kind = match parse_desktop_action_id(action_id) {
@@ -123,20 +124,16 @@ fn show_and_wait(
                 None => {
                     debug!(action_id, "ignored desktop action (dismiss/expired)");
                     return;
-                }
+                },
             };
             // Bridge into async via the current tokio runtime handle.
             let storage = Arc::clone(&storage);
             let token = token.clone();
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 rt.spawn(async move {
-                    if let Err(e) = tg_bot::handle_action(
-                        &storage,
-                        action_kind,
-                        &token,
-                        ActionChannel::Desktop,
-                    )
-                    .await
+                    if let Err(e) =
+                        tg_bot::handle_action(&storage, action_kind, &token, ActionChannel::Desktop)
+                            .await
                     {
                         warn!(error = ?e, "desktop action enqueue failed");
                     }

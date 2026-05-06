@@ -435,10 +435,7 @@ pub enum SurgeEvent {
     },
 
     /// Inbox-initiated run was successfully started by `Engine::start_run`.
-    InboxRunStarted {
-        task_id: String,
-        run_id: String,
-    },
+    InboxRunStarted { task_id: String, run_id: String },
 }
 
 /// Versioned wrapper for `SurgeEvent` — used by `surge-persistence` for durable
@@ -663,11 +660,15 @@ mod tests {
         };
         let rt = tracker_roundtrip(&event);
         match rt {
-            SurgeEvent::InboxRunStartRequested { task_id, callback_token, decided_via } => {
+            SurgeEvent::InboxRunStartRequested {
+                task_id,
+                callback_token,
+                decided_via,
+            } => {
                 assert_eq!(task_id, "linear:wsp1/T-1");
                 assert_eq!(callback_token, "01HKGZTOK1");
                 assert_eq!(decided_via, "telegram");
-            }
+            },
             other => panic!("expected InboxRunStartRequested, got {other:?}"),
         }
     }

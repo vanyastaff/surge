@@ -20,14 +20,12 @@ use surge_orchestrator::engine::config::EngineRunConfig;
 use surge_orchestrator::engine::error::EngineError;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome, RunSummary};
-use rusqlite;
 use surge_persistence::inbox_queue::{self, InboxActionKind};
 use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
 use surge_persistence::runs::storage::Storage;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-
 
 // ===== Helpers ==========================================================
 
@@ -39,7 +37,7 @@ async fn build_storage() -> (Arc<Storage>, TempDir) {
 
 fn insert_ticket(storage: &Storage, task_id: &str, callback_token: &str) {
     let conn = storage.acquire_registry_conn().unwrap();
-    let repo = IntakeRepo::new(&*conn);
+    let repo = IntakeRepo::new(&conn);
     let row = IntakeRow {
         task_id: task_id.into(),
         source_id: "mock:t".into(),
@@ -61,7 +59,7 @@ fn insert_ticket(storage: &Storage, task_id: &str, callback_token: &str) {
 
 fn fetch_state(storage: &Storage, task_id: &str) -> TicketState {
     let conn = storage.acquire_registry_conn().unwrap();
-    IntakeRepo::new(&*conn)
+    IntakeRepo::new(&conn)
         .fetch(task_id)
         .unwrap()
         .unwrap()
@@ -132,13 +130,16 @@ impl EngineFacade for MockEngineFacade {
         // Insert a fake `runs` row so that the `ticket_index.run_id` FK
         // constraint is satisfied when `handle_start` calls `set_run_id`.
         if matches!(behavior, EngineBehavior::SucceedsThenCompletes) {
-            let conn = self.storage.acquire_registry_conn()
+            let conn = self
+                .storage
+                .acquire_registry_conn()
                 .map_err(|e| EngineError::Internal(e.to_string()))?;
             conn.execute(
                 "INSERT OR IGNORE INTO runs(id, project_path, status, started_at) \
                  VALUES (?1, '/fake', 'active', 0)",
                 rusqlite::params![run_id.to_string()],
-            ).map_err(|e| EngineError::Internal(e.to_string()))?;
+            )
+            .map_err(|e| EngineError::Internal(e.to_string()))?;
         }
         match behavior {
             EngineBehavior::SucceedsThenCompletes => {
@@ -167,7 +168,7 @@ impl EngineFacade for MockEngineFacade {
                     events: rx,
                     completion,
                 })
-            }
+            },
             EngineBehavior::Errors => Err(EngineError::Internal("simulated engine error".into())),
         }
     }
@@ -203,10 +204,7 @@ fn make_consumer(
     source: Arc<MockTaskSource>,
 ) -> InboxActionConsumer {
     let mut sources: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
-    sources.insert(
-        "mock:t".into(),
-        Arc::clone(&source) as Arc<dyn TaskSource>,
-    );
+    sources.insert("mock:t".into(), Arc::clone(&source) as Arc<dyn TaskSource>);
     let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
     InboxActionConsumer {
         storage,
@@ -227,7 +225,8 @@ async fn scenario_a_start_happy_path() {
 
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
     mock.put_task(make_task_details("mock:t#1")).await;
-    let (engine, engine_state) = MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
+    let (engine, engine_state) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
     let consumer = make_consumer(
         Arc::clone(&storage),
         engine.clone() as Arc<dyn EngineFacade>,
@@ -238,7 +237,7 @@ async fn scenario_a_start_happy_path() {
     {
         let conn = storage.acquire_registry_conn().unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Start,
             "mock:t#1",
             "tok_start_1",
@@ -263,7 +262,9 @@ async fn scenario_a_start_happy_path() {
     // 3. Tracker comments contain start + completion.
     let comments = mock.posted_comments().await;
     assert!(
-        comments.iter().any(|(_, body)| body.starts_with("Surge run #")),
+        comments
+            .iter()
+            .any(|(_, body)| body.starts_with("Surge run #")),
         "expected start comment in {comments:?}"
     );
     assert!(
@@ -272,7 +273,7 @@ async fn scenario_a_start_happy_path() {
     );
     // 4. callback_token cleared.
     let conn = storage.acquire_registry_conn().unwrap();
-    let row = IntakeRepo::new(&*conn).fetch("mock:t#1").unwrap().unwrap();
+    let row = IntakeRepo::new(&conn).fetch("mock:t#1").unwrap().unwrap();
     assert_eq!(row.callback_token, None);
 }
 
@@ -282,7 +283,8 @@ async fn scenario_b_snooze_then_re_emit() {
     insert_ticket(&storage, "mock:t#2", "tok_snooze_2");
 
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
-    let (engine, _) = MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
+    let (engine, _) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
     let consumer = make_consumer(
         Arc::clone(&storage),
         engine as Arc<dyn EngineFacade>,
@@ -293,7 +295,7 @@ async fn scenario_b_snooze_then_re_emit() {
     {
         let conn = storage.acquire_registry_conn().unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Snooze,
             "mock:t#2",
             "tok_snooze_2",
@@ -327,12 +329,12 @@ async fn scenario_b_snooze_then_re_emit() {
 
     // After re-emit: state back to InboxNotified, callback_token regenerated.
     let conn = storage.acquire_registry_conn().unwrap();
-    let row = IntakeRepo::new(&*conn).fetch("mock:t#2").unwrap().unwrap();
+    let row = IntakeRepo::new(&conn).fetch("mock:t#2").unwrap().unwrap();
     assert_eq!(row.state, TicketState::InboxNotified);
     assert!(row.callback_token.is_some());
     assert_ne!(row.callback_token.as_deref(), Some("tok_snooze_2"));
     // A delivery row exists for the re-emission.
-    let deliveries = inbox_queue::list_pending_telegram_deliveries(&*conn).unwrap();
+    let deliveries = inbox_queue::list_pending_telegram_deliveries(&conn).unwrap();
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].task_id, "mock:t#2");
 }
@@ -343,7 +345,8 @@ async fn scenario_c_skip_sets_label_and_state() {
     insert_ticket(&storage, "mock:t#3", "tok_skip_3");
 
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
-    let (engine, _) = MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
+    let (engine, _) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
     let consumer = make_consumer(
         Arc::clone(&storage),
         engine as Arc<dyn EngineFacade>,
@@ -353,7 +356,7 @@ async fn scenario_c_skip_sets_label_and_state() {
     {
         let conn = storage.acquire_registry_conn().unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Skip,
             "mock:t#3",
             "tok_skip_3",
@@ -386,7 +389,8 @@ async fn scenario_d_idempotent_double_start() {
 
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
     mock.put_task(make_task_details("mock:t#4")).await;
-    let (engine, engine_state) = MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
+    let (engine, engine_state) =
+        MockEngineFacade::new(EngineBehavior::SucceedsThenCompletes, Arc::clone(&storage));
     let consumer = make_consumer(
         Arc::clone(&storage),
         engine.clone() as Arc<dyn EngineFacade>,
@@ -397,7 +401,7 @@ async fn scenario_d_idempotent_double_start() {
     {
         let conn = storage.acquire_registry_conn().unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Start,
             "mock:t#4",
             "tok_dbl_4",
@@ -406,7 +410,7 @@ async fn scenario_d_idempotent_double_start() {
         )
         .unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Start,
             "mock:t#4",
             "tok_dbl_4",
@@ -433,7 +437,8 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
 
     let mock = Arc::new(MockTaskSource::new("mock:t", "mock"));
     mock.put_task(make_task_details("mock:t#5")).await;
-    let (engine, engine_state) = MockEngineFacade::new(EngineBehavior::Errors, Arc::clone(&storage));
+    let (engine, engine_state) =
+        MockEngineFacade::new(EngineBehavior::Errors, Arc::clone(&storage));
     let consumer = make_consumer(
         Arc::clone(&storage),
         engine.clone() as Arc<dyn EngineFacade>,
@@ -443,7 +448,7 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
     {
         let conn = storage.acquire_registry_conn().unwrap();
         inbox_queue::append_action(
-            &*conn,
+            &conn,
             InboxActionKind::Start,
             "mock:t#5",
             "tok_fail_5",
@@ -462,5 +467,8 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
     // Engine called once.
     assert_eq!(engine_state.start_calls.lock().unwrap().len(), 1);
     // State remained InboxNotified (no transition on engine failure).
-    assert_eq!(fetch_state(&storage, "mock:t#5"), TicketState::InboxNotified);
+    assert_eq!(
+        fetch_state(&storage, "mock:t#5"),
+        TicketState::InboxNotified
+    );
 }

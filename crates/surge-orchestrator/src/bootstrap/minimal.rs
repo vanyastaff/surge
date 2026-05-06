@@ -2,9 +2,7 @@
 //! today's inbox-card pipeline. Replaced by `StagedBootstrapGraphBuilder`
 //! when RFC-0004 lands.
 
-use crate::bootstrap::builder::{
-    BootstrapBuildError, BootstrapGraphBuilder, BootstrapPrompt,
-};
+use crate::bootstrap::builder::{BootstrapBuildError, BootstrapGraphBuilder, BootstrapPrompt};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -53,8 +51,7 @@ impl BootstrapGraphBuilder for MinimalBootstrapGraphBuilder {
             ));
         }
         let prompt_text = render_prompt(&prompt);
-        build_single_agent_graph(&prompt_text)
-            .map_err(BootstrapBuildError::GraphBuild)
+        build_single_agent_graph(&prompt_text).map_err(BootstrapBuildError::GraphBuild)
     }
 }
 
@@ -87,20 +84,20 @@ fn render_prompt(prompt: &BootstrapPrompt) -> String {
 /// - edge `e_agent_done`: agent.done → terminal_success (Forward)
 /// - edge `e_agent_blocked`: agent.blocked → terminal_failure (Escalate)
 fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
-    let agent_key = NodeKey::try_from("bootstrap_agent")
-        .map_err(|e| format!("invalid node key: {e}"))?;
-    let success_key = NodeKey::try_from("terminal_success")
-        .map_err(|e| format!("invalid node key: {e}"))?;
-    let failure_key = NodeKey::try_from("terminal_failure")
-        .map_err(|e| format!("invalid node key: {e}"))?;
+    let agent_key =
+        NodeKey::try_from("bootstrap_agent").map_err(|e| format!("invalid node key: {e}"))?;
+    let success_key =
+        NodeKey::try_from("terminal_success").map_err(|e| format!("invalid node key: {e}"))?;
+    let failure_key =
+        NodeKey::try_from("terminal_failure").map_err(|e| format!("invalid node key: {e}"))?;
 
-    let outcome_done = OutcomeKey::try_from("done")
-        .map_err(|e| format!("invalid outcome key: {e}"))?;
-    let outcome_blocked = OutcomeKey::try_from("blocked")
-        .map_err(|e| format!("invalid outcome key: {e}"))?;
+    let outcome_done =
+        OutcomeKey::try_from("done").map_err(|e| format!("invalid outcome key: {e}"))?;
+    let outcome_blocked =
+        OutcomeKey::try_from("blocked").map_err(|e| format!("invalid outcome key: {e}"))?;
 
-    let profile = ProfileKey::try_from("implementer@1.0")
-        .map_err(|e| format!("invalid profile key: {e}"))?;
+    let profile =
+        ProfileKey::try_from("implementer@1.0").map_err(|e| format!("invalid profile key: {e}"))?;
 
     // Agent node with prompt override
     let agent_node = Node {
@@ -159,8 +156,7 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
 
     let edges = vec![
         Edge {
-            id: EdgeKey::try_from("e_agent_done")
-                .map_err(|e| format!("invalid edge key: {e}"))?,
+            id: EdgeKey::try_from("e_agent_done").map_err(|e| format!("invalid edge key: {e}"))?,
             from: PortRef {
                 node: agent_key.clone(),
                 outcome: outcome_done,
@@ -185,13 +181,11 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
     let mut nodes = BTreeMap::new();
     nodes.insert(agent_key.clone(), agent_node);
     nodes.insert(
-        NodeKey::try_from("terminal_success")
-            .map_err(|e| format!("invalid node key: {e}"))?,
+        NodeKey::try_from("terminal_success").map_err(|e| format!("invalid node key: {e}"))?,
         success_node,
     );
     nodes.insert(
-        NodeKey::try_from("terminal_failure")
-            .map_err(|e| format!("invalid node key: {e}"))?,
+        NodeKey::try_from("terminal_failure").map_err(|e| format!("invalid node key: {e}"))?,
         failure_node,
     );
 

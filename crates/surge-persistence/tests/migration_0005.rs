@@ -27,7 +27,14 @@ fn migration_0005_creates_inbox_action_queue_table() {
         "INSERT INTO inbox_action_queue \
             (kind, task_id, callback_token, decided_via, snooze_until, enqueued_at) \
          VALUES (?, ?, ?, ?, ?, ?)",
-        params!["start", "linear:wsp1/T-1", "tok1", "telegram", Option::<String>::None, now],
+        params![
+            "start",
+            "linear:wsp1/T-1",
+            "tok1",
+            "telegram",
+            Option::<String>::None,
+            now
+        ],
     )
     .unwrap();
     let kind: String = conn
