@@ -282,22 +282,64 @@ async fn spawn_task_router(sources: Vec<Arc<dyn TaskSource>>) {
         }
     });
 
-    // Placeholder consumer — T9.3 replaces this with inbox-notify wiring.
+    // Consume router output and build InboxCard payloads (T9.3).
     tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
-            consume_router_output(out);
+            match out {
+                surge_intake::router::RouterOutput::Triage { event } => {
+                    // MVP placeholder: build an InboxCardPayload and log it.
+                    // Triage Author LLM dispatch + actual delivery are Plan-C-polish.
+                    let title = event
+                        .raw_payload
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("New ticket")
+                        .to_string();
+                    let task_url = event
+                        .raw_payload
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let provider = event
+                        .source_id
+                        .split(':')
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let payload = surge_notify::messages::InboxCardPayload {
+                        task_id: event.task_id.clone(),
+                        source_id: event.source_id.clone(),
+                        provider,
+                        title,
+                        summary: String::new(),
+                        priority: surge_intake::types::Priority::Medium,
+                        task_url,
+                        run_id: ulid::Ulid::new().to_string(),
+                    };
+                    let msg = surge_notify::messages::NotifyMessage::InboxCard(payload);
+                    tracing::info!(
+                        task_id = %event.task_id,
+                        "router output: triage → InboxCard built (delivery is Plan-C-polish)"
+                    );
+                    // TODO Plan-C-polish: send `msg` through NotifyMultiplexer
+                    // for actual delivery to Telegram + Desktop channels. For MVP
+                    // we just log to confirm the pipeline reaches this point.
+                    let _ = msg; // silence "unused" lint until delivery wires up
+                }
+                surge_intake::router::RouterOutput::EarlyDuplicate { event, run_id } => {
+                    // TODO Plan-C-polish: invoke source.post_comment with prefix
+                    // "Surge run #N: detected duplicate of active run …" and update
+                    // ticket_index state to TriagedDup. Requires resurfacing the
+                    // originating TaskSource instance via RouterOutput, which is
+                    // also a follow-up.
+                    tracing::info!(
+                        task_id = %event.task_id,
+                        %run_id,
+                        "router output: early duplicate (comment posting is Plan-C-polish)"
+                    );
+                }
+            }
         }
     });
-}
-
-/// Log router output (placeholder for T9.3).
-fn consume_router_output(out: RouterOutput) {
-    match out {
-        RouterOutput::Triage { event } => {
-            info!(task_id = %event.task_id, "router output: triage (placeholder)");
-        }
-        RouterOutput::EarlyDuplicate { event, run_id } => {
-            info!(task_id = %event.task_id, %run_id, "router output: early duplicate (placeholder)");
-        }
-    }
 }
