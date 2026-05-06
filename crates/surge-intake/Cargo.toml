@@ -17,6 +17,7 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
