@@ -112,6 +112,9 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 # Futures utilities
 futures = "0.3"
 
+# Tokio testing utilities
+tokio-test = "0.4"
+
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }

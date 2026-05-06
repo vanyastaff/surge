@@ -15,8 +15,5 @@ pub mod testing;
 pub mod types;
 
 pub use error::{Error, Result};
-pub use source::TaskSource;
-pub use types::{
-    Priority, TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary, Tier1Decision,
-    TriageDecision,
-};
+
+// Re-exports for trait + types are added by tasks T1.1–T1.5.

@@ -23,4 +23,4 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 insta = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = "0.4"
+tokio-test = { workspace = true }
