@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_intake::types::{Priority, TaskId};
+use surge_intake::types::TaskId;
 use surge_intake::TaskSource;
 use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
 use surge_orchestrator::engine::config::EngineRunConfig;
@@ -134,7 +134,7 @@ impl InboxActionConsumer {
             title: details.title.clone(),
             description: details.description.clone(),
             tracker_url: Some(details.url.clone()),
-            priority: ticket_row.priority.as_deref().and_then(parse_priority_str),
+            priority: ticket_row.priority.as_deref().and_then(crate::inbox::consumer_helpers::parse_priority_str),
             labels: details.labels.clone(),
         };
         let graph = self
@@ -292,12 +292,3 @@ impl InboxActionConsumer {
     }
 }
 
-fn parse_priority_str(s: &str) -> Option<Priority> {
-    match s {
-        "urgent" => Some(Priority::Urgent),
-        "high" => Some(Priority::High),
-        "medium" => Some(Priority::Medium),
-        "low" => Some(Priority::Low),
-        _ => None,
-    }
-}

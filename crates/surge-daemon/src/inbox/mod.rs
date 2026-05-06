@@ -69,6 +69,20 @@ use surge_persistence::inbox_queue;
 use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
 use surge_persistence::runs::storage::Storage;
 
+pub(crate) mod consumer_helpers {
+    use surge_intake::types::Priority;
+
+    pub fn parse_priority_str(s: &str) -> Option<Priority> {
+        match s {
+            "urgent" => Some(Priority::Urgent),
+            "high" => Some(Priority::High),
+            "medium" => Some(Priority::Medium),
+            "low" => Some(Priority::Low),
+            _ => None,
+        }
+    }
+}
+
 /// Enqueue an inbox card for delivery and persist the callback_token on
 /// the existing `ticket_index` row. Idempotent at the row level: if the
 /// row doesn't exist yet, it's inserted with state=`InboxNotified`.
