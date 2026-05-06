@@ -251,6 +251,82 @@ fn surge_runs_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from(".surge"))
 }
 
+/// Deliver a Medium-priority placeholder InboxCard for `event`.
+///
+/// Used as the fallback path when (a) the source registry doesn't
+/// know `event.source_id`, (b) `source.fetch_task` fails, or (c)
+/// `dispatch_triage` returns `TriageError`. Preserves Plan-C-MVP
+/// behaviour for unrecoverable provider errors.
+#[allow(dead_code)] // wired in T11
+async fn deliver_fallback_inbox(
+    notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
+    event: &surge_intake::types::TaskEvent,
+) {
+    let title = event
+        .raw_payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("New ticket")
+        .to_string();
+    let task_url = event
+        .raw_payload
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let provider = event
+        .task_id
+        .as_str()
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let run_id_str = ulid::Ulid::new().to_string();
+    let payload = surge_notify::messages::InboxCardPayload {
+        task_id: event.task_id.clone(),
+        source_id: event.source_id.clone(),
+        provider,
+        title,
+        summary: String::new(),
+        priority: surge_intake::types::Priority::Medium,
+        task_url,
+        run_id: run_id_str.clone(),
+    };
+    let rendered_desktop = surge_notify::desktop::format_inbox_card_desktop(&payload);
+    let rendered = surge_notify::RenderedNotification {
+        severity: surge_core::notify_config::NotifySeverity::Info,
+        title: rendered_desktop.title.clone(),
+        body: rendered_desktop.body.clone(),
+        artifact_paths: vec![],
+    };
+    let run_id = match run_id_str.parse::<surge_core::id::RunId>() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to parse run_id; skipping fallback delivery");
+            return;
+        },
+    };
+    let node_key = match surge_core::keys::NodeKey::try_new("intake") {
+        Ok(key) => key,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to construct intake NodeKey");
+            return;
+        },
+    };
+    let channel = surge_core::notify_config::NotifyChannel::Desktop;
+    let ctx = surge_notify::NotifyDeliveryContext {
+        run_id,
+        node: &node_key,
+    };
+    match notifier.deliver(&ctx, &channel, &rendered).await {
+        Ok(()) => tracing::info!(task_id = %event.task_id, "fallback InboxCard delivered"),
+        Err(surge_notify::NotifyError::ChannelNotConfigured) => {
+            tracing::debug!(task_id = %event.task_id, "Desktop channel not configured")
+        },
+        Err(e) => tracing::warn!(error = %e, task_id = %event.task_id, "fallback delivery failed"),
+    }
+}
+
 /// Spawn the TaskRouter and its output consumer (placeholder for T9.3).
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
