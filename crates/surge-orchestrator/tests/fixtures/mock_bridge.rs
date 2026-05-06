@@ -43,8 +43,9 @@ pub struct MockBridge {
     pub recorded_calls: Arc<Mutex<Vec<RecordedCall>>>,
     /// Broadcast channel.
     tx: broadcast::Sender<BridgeEvent>,
-    /// When set, `open_session` returns this id and clears it.
-    pinned_session_id: Mutex<Option<SessionId>>,
+    /// Queue of SessionIds to return from `open_session` calls.
+    /// When empty, `open_session` generates a fresh `SessionId::new()`.
+    pinned_session_ids: Mutex<VecDeque<SessionId>>,
 }
 
 impl MockBridge {
@@ -54,15 +55,25 @@ impl MockBridge {
             scripted_events: Mutex::new(VecDeque::new()),
             recorded_calls: Arc::new(Mutex::new(Vec::new())),
             tx,
-            pinned_session_id: Mutex::new(None),
+            pinned_session_ids: Mutex::new(VecDeque::new()),
         }
     }
 
     /// Pin the `SessionId` that the next `open_session` call will return.
-    /// The id is consumed (cleared) after one use.
+    /// The id is consumed (popped) after one use. Multiple calls queue them.
     #[allow(dead_code)]
     pub async fn pin_next_session_id(&self, id: SessionId) {
-        *self.pinned_session_id.lock().await = Some(id);
+        self.pinned_session_ids.lock().await.push_back(id);
+    }
+
+    /// Pin a sequence of `SessionId`s to be returned by successive `open_session` calls.
+    /// Ids are consumed (popped from the queue) in order.
+    #[allow(dead_code)]
+    pub async fn pin_session_ids(&self, ids: Vec<SessionId>) {
+        let mut q = self.pinned_session_ids.lock().await;
+        for id in ids {
+            q.push_back(id);
+        }
     }
 
     /// Queue an event to be broadcast on the next `pump_scripted_events()`.
@@ -95,8 +106,13 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::OpenSession);
-        let pinned = self.pinned_session_id.lock().await.take();
-        Ok(pinned.unwrap_or_else(SessionId::new))
+        let id = self
+            .pinned_session_ids
+            .lock()
+            .await
+            .pop_front()
+            .unwrap_or_else(SessionId::new);
+        Ok(id)
     }
 
     async fn send_message(

@@ -105,6 +105,22 @@ use crate::runs::registry::{self, RunFilter, RunSummary};
 use crate::runs::run_writer::RunWriter;
 use crate::runs::writer::{WriterConfig, spawn_writer};
 
+/// Lightweight active-run row for Triage Author's `active_runs` input.
+///
+/// Returned by [`Storage::snapshot_active_runs`]. Carries only fields
+/// useful for dedup hints — full run metadata stays inside `RunSummary`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActiveRunRow {
+    /// The run ID.
+    pub run_id: String,
+    /// The task ID, populated by Layer 2 engine integration (None for Layer 1).
+    pub task_id: Option<String>,
+    /// Current run status as a string (e.g., "Running", "Bootstrapping").
+    pub status: String,
+    /// Unix epoch milliseconds of run creation.
+    pub started_at_ms: i64,
+}
+
 impl Storage {
     /// Create a new run: insert into registry, init per-run DB with migrations,
     /// open the worktree-anchored writer.
@@ -232,6 +248,47 @@ impl Storage {
         Ok(runs)
     }
 
+    /// Snapshot of currently active runs (status Running or Bootstrapping).
+    ///
+    /// Bounded by `limit` rows. Used by Triage Author to reason about
+    /// dedup against in-flight work.
+    ///
+    /// Layer 1 leaves `task_id` as `None` for all rows because the
+    /// `ticket_index` join would require resolving cross-table foreign
+    /// keys not yet materialised in this code path. Layer 2's engine
+    /// integration will populate it.
+    pub async fn snapshot_active_runs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ActiveRunRow>, crate::runs::error::StorageError> {
+        let conn = self
+            .registry_pool
+            .get()
+            .map_err(|e| crate::runs::error::StorageError::Pool(e.to_string()))?;
+        // SQLite errors propagate via the `From<rusqlite::Error>` impl on
+        // `StorageError`, surfacing as `StorageError::Sqlite`. Pool-acquire
+        // failures above keep the `StorageError::Pool` mapping.
+        let mut stmt = conn.prepare(
+            "SELECT id, status, started_at FROM runs
+             WHERE status IN ('Running', 'Bootstrapping')
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            Ok(ActiveRunRow {
+                run_id: row.get::<_, String>(0)?,
+                task_id: None,
+                status: row.get::<_, String>(1)?,
+                started_at_ms: row.get::<_, i64>(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Get a single run summary, with stale-pid detection.
     pub async fn get_run(
         &self,
@@ -284,5 +341,45 @@ impl Storage {
             std::fs::remove_dir_all(&dir)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod snapshot_active_runs_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn snapshot_returns_active_runs_only() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        // Insert one Running, one Bootstrapping, one Completed.
+        let pool = storage.registry_pool.clone();
+        let conn = pool.get().unwrap();
+        for (id, status) in [
+            ("01HXX0000000000000000RUN1", "Running"),
+            ("01HXX0000000000000000BTS1", "Bootstrapping"),
+            ("01HXX0000000000000000DONE", "Completed"),
+        ] {
+            conn.execute(
+                "INSERT INTO runs (id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid)
+                 VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL)",
+                rusqlite::params![
+                    id,
+                    "/tmp/proj",
+                    status,
+                    1_700_000_000_000_i64,
+                ],
+            ).unwrap();
+        }
+        drop(conn);
+
+        let snap = storage.snapshot_active_runs(32).await.unwrap();
+        assert_eq!(snap.len(), 2, "only Running + Bootstrapping should appear");
+        assert!(
+            snap.iter()
+                .all(|r| matches!(r.status.as_str(), "Running" | "Bootstrapping"))
+        );
     }
 }
