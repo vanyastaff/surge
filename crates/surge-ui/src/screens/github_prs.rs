@@ -24,9 +24,9 @@ impl PrStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Open => theme::SUCCESS,
-            Self::Merged => theme::PRIMARY,
-            Self::Closed => theme::ERROR,
+            Self::Open => theme::success(),
+            Self::Merged => theme::primary(),
+            Self::Closed => theme::error(),
         }
     }
 }
@@ -58,9 +58,9 @@ impl CiStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Passing => theme::SUCCESS,
-            Self::Failing => theme::ERROR,
-            Self::Pending => theme::WARNING,
+            Self::Passing => theme::success(),
+            Self::Failing => theme::error(),
+            Self::Pending => theme::warning(),
         }
     }
 }
@@ -86,10 +86,10 @@ impl ReviewStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Approved => theme::SUCCESS,
-            Self::ChangesRequested => theme::WARNING,
-            Self::Pending => theme::TEXT_MUTED,
-            Self::None => theme::TEXT_MUTED,
+            Self::Approved => theme::success(),
+            Self::ChangesRequested => theme::warning(),
+            Self::Pending => theme::text_muted(),
+            Self::None => theme::text_muted(),
         }
     }
 }
@@ -125,9 +125,9 @@ impl GithubPrsScreen {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             // Header: number + title + status
             .child(
                 div()
@@ -137,7 +137,7 @@ impl GithubPrsScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("#{}", pr.number)),
                     )
                     .child(
@@ -145,7 +145,7 @@ impl GithubPrsScreen {
                             .flex_1()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(pr.title.clone()),
                     )
                     .child(
@@ -167,20 +167,20 @@ impl GithubPrsScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::PRIMARY)
+                            .text_color(theme::primary())
                             .font_family("monospace")
                             .child(pr.branch.clone()),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("by {}", pr.author)),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.6))
+                            .text_color(theme::text_muted().opacity(0.6))
                             .child(pr.created.clone()),
                     ),
             )
@@ -222,13 +222,13 @@ impl GithubPrsScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::SUCCESS)
+                            .text_color(theme::success())
                             .child(format!("+{}", pr.additions)),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::ERROR)
+                            .text_color(theme::error())
                             .child(format!("-{}", pr.deletions)),
                     ),
             )
@@ -239,7 +239,7 @@ impl GithubPrsScreen {
                     .gap_2()
                     .pt_2()
                     .border_t_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .when(pr.status == PrStatus::Open, |el: Div| {
                         el.child(
                             Button::new(SharedString::from(format!("pr-merge-{idx}")))
@@ -302,13 +302,13 @@ impl Render for GithubPrsScreen {
                                 div()
                                     .text_2xl()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child("GitHub PRs".to_string()),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(format!("{open_count} open  {merged_count} merged")),
                             ),
                     )

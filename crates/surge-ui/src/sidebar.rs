@@ -58,17 +58,19 @@ impl AppSidebar {
             }));
 
         let base = if is_active {
-            base.bg(theme::PRIMARY.opacity(0.15))
-                .text_color(theme::PRIMARY)
+            base.bg(theme::primary().opacity(0.15))
+                .text_color(theme::primary())
         } else {
-            base.text_color(theme::TEXT_MUTED)
-                .hover(|s: StyleRefinement| s.bg(theme::SURFACE).text_color(theme::TEXT_PRIMARY))
+            base.text_color(theme::text_muted())
+                .hover(|s: StyleRefinement| {
+                    s.bg(theme::surface()).text_color(theme::text_primary())
+                })
         };
 
         let icon_color = if is_active {
-            theme::PRIMARY
+            theme::primary()
         } else {
-            theme::TEXT_MUTED
+            theme::text_muted()
         };
         let mut row = base.child(Icon::new(screen.icon()).size_4().text_color(icon_color));
 
@@ -79,7 +81,7 @@ impl AppSidebar {
                 row = row.child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_MUTED.opacity(0.5))
+                        .text_color(theme::text_muted().opacity(0.5))
                         .child(sc.to_string()),
                 );
             }
@@ -101,11 +103,15 @@ impl AppSidebar {
             .justify_center()
             .py_2()
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.text_color(theme::TEXT_PRIMARY))
+            .hover(|s: StyleRefinement| s.text_color(theme::text_primary()))
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.emit(ToggleSidebar);
             }))
-            .child(Icon::new(icon_name).size_4().text_color(theme::TEXT_MUTED))
+            .child(
+                Icon::new(icon_name)
+                    .size_4()
+                    .text_color(theme::text_muted()),
+            )
     }
 }
 
@@ -123,9 +129,9 @@ impl Render for AppSidebar {
             .w(width)
             .h_full()
             .flex_shrink_0()
-            .bg(theme::SIDEBAR_BG)
+            .bg(theme::sidebar_bg())
             .border_r_1()
-            .border_color(theme::SURFACE)
+            .border_color(theme::surface())
             .pt_4()
             .gap_0p5()
             // Logo
@@ -139,7 +145,7 @@ impl Render for AppSidebar {
                         div()
                             .text_base()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::PRIMARY)
+                            .text_color(theme::primary())
                             .child("⚡".to_string()),
                     )
                     .when(!self.collapsed, |el: Div| {
@@ -147,7 +153,7 @@ impl Render for AppSidebar {
                             div()
                                 .text_base()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme::TEXT_PRIMARY)
+                                .text_color(theme::text_primary())
                                 .child("Surge".to_string()),
                         )
                     }),

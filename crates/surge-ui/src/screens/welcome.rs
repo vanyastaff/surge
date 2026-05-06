@@ -48,17 +48,17 @@ impl WelcomeScreen {
             .items_center()
             .gap_2()
             .pb_8()
-            .child(div().text_color(theme::PRIMARY).child("⚡".to_string()))
+            .child(div().text_color(theme::primary()).child("⚡".to_string()))
             .child(
                 div()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Surge".to_string()),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("Any Agent. One Protocol. Pure Rust.".to_string()),
             )
     }
@@ -85,7 +85,7 @@ impl WelcomeScreen {
             .py_3()
             .rounded_lg()
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.bg(theme::SURFACE))
+            .hover(|s: StyleRefinement| s.bg(theme::surface()))
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(WelcomeEvent::OpenProject(path_open.clone()));
             }))
@@ -104,14 +104,14 @@ impl WelcomeScreen {
                                 el.child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme::WARNING)
+                                        .text_color(theme::warning())
                                         .child("★".to_string()),
                                 )
                             })
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(name),
                             )
                             .when(active_tasks > 0, |el: Div| {
@@ -121,8 +121,8 @@ impl WelcomeScreen {
                                         .px_2()
                                         .py_0p5()
                                         .rounded_md()
-                                        .bg(theme::PRIMARY.opacity(0.2))
-                                        .text_color(theme::PRIMARY)
+                                        .bg(theme::primary().opacity(0.2))
+                                        .text_color(theme::primary())
                                         .child(format!("{active_tasks} tasks")),
                                 )
                             }),
@@ -130,7 +130,7 @@ impl WelcomeScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(display_path),
                     ),
             )
@@ -149,11 +149,11 @@ impl WelcomeScreen {
                             .rounded_md()
                             .text_xs()
                             .text_color(if pinned {
-                                theme::WARNING
+                                theme::warning()
                             } else {
-                                theme::TEXT_MUTED
+                                theme::text_muted()
                             })
-                            .hover(|s: StyleRefinement| s.bg(theme::SURFACE))
+                            .hover(|s: StyleRefinement| s.bg(theme::surface()))
                             .on_click(cx.listener(
                                 move |_this, _event: &ClickEvent, _window, cx| {
                                     cx.emit(WelcomeEvent::TogglePin(path_pin.clone()));
@@ -170,9 +170,9 @@ impl WelcomeScreen {
                             .py_1()
                             .rounded_md()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .hover(|s: StyleRefinement| {
-                                s.text_color(theme::ERROR).bg(theme::SURFACE)
+                                s.text_color(theme::error()).bg(theme::surface())
                             })
                             .on_click(cx.listener(
                                 move |_this, _event: &ClickEvent, _window, cx| {
@@ -225,7 +225,7 @@ impl Render for WelcomeScreen {
             .v_flex()
             .items_center()
             .justify_center()
-            .bg(theme::BACKGROUND)
+            .bg(theme::background())
             .child(
                 div()
                     .v_flex()
@@ -239,7 +239,7 @@ impl Render for WelcomeScreen {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child("Recent Projects".to_string()),
                         ),
                     )
@@ -249,14 +249,14 @@ impl Render for WelcomeScreen {
                             .v_flex()
                             .rounded_lg()
                             .border_1()
-                            .border_color(theme::SURFACE)
+                            .border_color(theme::surface())
                             .overflow_hidden()
                             .when(project_items.is_empty(), |el: Div| {
                                 el.child(
                                     div()
                                         .p_8()
                                         .text_center()
-                                        .text_color(theme::TEXT_MUTED)
+                                        .text_color(theme::text_muted())
                                         .child(
                                         "No recent projects. Open or create one to get started."
                                             .to_string(),

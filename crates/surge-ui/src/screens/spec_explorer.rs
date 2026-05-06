@@ -26,10 +26,10 @@ impl SpecStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Draft => theme::TEXT_MUTED,
-            Self::Active => theme::WARNING,
-            Self::Completed => theme::SUCCESS,
-            Self::Failed => theme::ERROR,
+            Self::Draft => theme::text_muted(),
+            Self::Active => theme::warning(),
+            Self::Completed => theme::success(),
+            Self::Failed => theme::error(),
         }
     }
 }
@@ -131,16 +131,16 @@ impl SpecExplorerScreen {
                     .cursor_pointer()
                     .text_xs()
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.15)
+                        theme::primary().opacity(0.15)
                     } else {
-                        theme::SURFACE
+                        theme::surface()
                     })
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
-                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.1)))
+                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.1)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.filter_status = s;
                         cx.notify();
@@ -155,10 +155,10 @@ impl SpecExplorerScreen {
     fn render_spec_card(&self, spec: &SpecCard, cx: &mut Context<Self>) -> Stateful<Div> {
         let id = spec.id.clone();
         let complexity_color = match spec.complexity.as_str() {
-            "Simple" => theme::SUCCESS,
-            "Standard" => theme::WARNING,
-            "Complex" => theme::ERROR,
-            _ => theme::TEXT_MUTED,
+            "Simple" => theme::success(),
+            "Standard" => theme::warning(),
+            "Complex" => theme::error(),
+            _ => theme::text_muted(),
         };
 
         div()
@@ -167,11 +167,11 @@ impl SpecExplorerScreen {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::PRIMARY.opacity(0.3)))
+            .hover(|s: StyleRefinement| s.border_color(theme::primary().opacity(0.3)))
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 cx.emit(SpecClicked(id.clone()));
             }))
@@ -206,14 +206,14 @@ impl SpecExplorerScreen {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(spec.title.clone()),
             )
             // Description
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(spec.description.clone()),
             )
             // Footer
@@ -224,7 +224,7 @@ impl SpecExplorerScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("{} subtasks", spec.subtask_count)),
                     )
                     .when(spec.agent.is_some(), |el: Div| {
@@ -232,7 +232,7 @@ impl SpecExplorerScreen {
                         el.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::PRIMARY)
+                                .text_color(theme::primary())
                                 .child(agent.to_string()),
                         )
                     }),
@@ -264,7 +264,7 @@ impl Render for SpecExplorerScreen {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Specs".to_string()),
                     )
                     .child(Button::new("new-spec").primary().label("+ New Spec")),
@@ -283,12 +283,12 @@ impl Render for SpecExplorerScreen {
                         .child(
                             Icon::new(IconName::File)
                                 .size_8()
-                                .text_color(theme::TEXT_MUTED.opacity(0.3)),
+                                .text_color(theme::text_muted().opacity(0.3)),
                         )
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child("No specs yet".to_string()),
                         ),
                 )

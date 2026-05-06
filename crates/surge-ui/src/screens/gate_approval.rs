@@ -194,9 +194,9 @@ impl GateApprovalScreen {
 
     fn render_header(&self) -> Div {
         let gate_color = match self.gate_type.as_str() {
-            "QaReview" => theme::PRIMARY,
-            "HumanReview" => theme::WARNING,
-            _ => theme::TEXT_MUTED,
+            "QaReview" => theme::primary(),
+            "HumanReview" => theme::warning(),
+            _ => theme::text_muted(),
         };
 
         div()
@@ -204,7 +204,7 @@ impl GateApprovalScreen {
             .gap_2()
             .pb_4()
             .border_b_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .h_flex()
@@ -217,8 +217,8 @@ impl GateApprovalScreen {
                             .px_2()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme::TEXT_MUTED.opacity(0.15))
-                            .text_color(theme::TEXT_MUTED)
+                            .bg(theme::text_muted().opacity(0.15))
+                            .text_color(theme::text_muted())
                             .child(self.task_id.clone()),
                     )
                     // Gate type badge
@@ -237,7 +237,7 @@ impl GateApprovalScreen {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(self.title.clone()),
             )
     }
@@ -250,22 +250,22 @@ impl GateApprovalScreen {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Description".to_string()),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(self.description.clone()),
             )
     }
 
     fn render_decision_status(&self) -> Div {
         let (status_text, status_color) = match self.current_decision {
-            ApprovalDecision::Pending => ("Awaiting Decision", theme::WARNING),
-            ApprovalDecision::Approved => ("Approved", theme::SUCCESS),
-            ApprovalDecision::Rejected => ("Rejected", theme::ERROR),
+            ApprovalDecision::Pending => ("Awaiting Decision", theme::warning()),
+            ApprovalDecision::Approved => ("Approved", theme::success()),
+            ApprovalDecision::Rejected => ("Rejected", theme::error()),
         };
 
         div()
@@ -275,7 +275,7 @@ impl GateApprovalScreen {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Status".to_string()),
             )
             .child(
@@ -293,7 +293,7 @@ impl GateApprovalScreen {
             .items_center()
             .justify_center()
             .text_sm()
-            .text_color(theme::TEXT_MUTED)
+            .text_color(theme::text_muted())
             .child(msg.to_string())
     }
 
@@ -310,12 +310,12 @@ impl GateApprovalScreen {
                     .rounded_md()
                     .text_sm()
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
@@ -348,12 +348,12 @@ impl GateApprovalScreen {
                     .gap_2()
                     .py_3()
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(item.category.clone()),
                     )
                     .child(
@@ -367,15 +367,15 @@ impl GateApprovalScreen {
                                     .px_3()
                                     .py_2()
                                     .rounded_md()
-                                    .bg(theme::ERROR.opacity(0.1))
+                                    .bg(theme::error().opacity(0.1))
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(item.before.clone()),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child("→".to_string()),
                             )
                             .child(
@@ -384,9 +384,9 @@ impl GateApprovalScreen {
                                     .px_3()
                                     .py_2()
                                     .rounded_md()
-                                    .bg(theme::SUCCESS.opacity(0.1))
+                                    .bg(theme::success().opacity(0.1))
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(item.after.clone()),
                             ),
                     )
@@ -405,10 +405,10 @@ impl GateApprovalScreen {
             .iter()
             .map(|file| {
                 let status_color = match file.status.as_str() {
-                    "Added" => theme::SUCCESS,
-                    "Modified" => theme::WARNING,
-                    "Deleted" => theme::ERROR,
-                    _ => theme::TEXT_MUTED,
+                    "Added" => theme::success(),
+                    "Modified" => theme::warning(),
+                    "Deleted" => theme::error(),
+                    _ => theme::text_muted(),
                 };
 
                 let status_badge = match file.status.as_str() {
@@ -424,7 +424,7 @@ impl GateApprovalScreen {
                     .items_center()
                     .py(px(6.0))
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .child(
                         div()
                             .text_xs()
@@ -437,7 +437,7 @@ impl GateApprovalScreen {
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(file.path.clone()),
                     )
                     .child(
@@ -447,13 +447,13 @@ impl GateApprovalScreen {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::SUCCESS)
+                                    .text_color(theme::success())
                                     .child(format!("+{}", file.added)),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::ERROR)
+                                    .text_color(theme::error())
                                     .child(format!("-{}", file.removed)),
                             ),
                     )
@@ -463,12 +463,17 @@ impl GateApprovalScreen {
         div()
             .v_flex()
             .gap_3()
-            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(format!(
-                "{} files changed  +{}  -{}",
-                self.changed_files.len(),
-                total_added,
-                total_removed
-            )))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::text_muted())
+                    .child(format!(
+                        "{} files changed  +{}  -{}",
+                        self.changed_files.len(),
+                        total_added,
+                        total_removed
+                    )),
+            )
             .child(div().v_flex().children(items))
     }
 
@@ -490,9 +495,9 @@ impl GateApprovalScreen {
             .iter()
             .map(|check| {
                 let (status_icon, status_color) = match check.status.as_str() {
-                    "Passed" => ("✓", theme::SUCCESS),
-                    "Failed" => ("✗", theme::ERROR),
-                    _ => ("○", theme::TEXT_MUTED),
+                    "Passed" => ("✓", theme::success()),
+                    "Failed" => ("✗", theme::error()),
+                    _ => ("○", theme::text_muted()),
                 };
 
                 div()
@@ -500,7 +505,7 @@ impl GateApprovalScreen {
                     .gap_1()
                     .py_3()
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .child(
                         div()
                             .h_flex()
@@ -517,7 +522,7 @@ impl GateApprovalScreen {
                                 div()
                                     .flex_1()
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(check.name.clone()),
                             )
                             .child(
@@ -537,7 +542,7 @@ impl GateApprovalScreen {
                             div()
                                 .pl(px(18.0))
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child(msg.to_string()),
                         )
                     })
@@ -550,7 +555,7 @@ impl GateApprovalScreen {
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(format!("{} / {} checks passed", passed, total)),
             )
             .when(failed > 0, |el: Div| {
@@ -559,9 +564,9 @@ impl GateApprovalScreen {
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .bg(theme::ERROR.opacity(0.1))
+                        .bg(theme::error().opacity(0.1))
                         .text_sm()
-                        .text_color(theme::ERROR)
+                        .text_color(theme::error())
                         .child(format!("{} check(s) failed - review required", failed)),
                 )
             })
@@ -575,18 +580,18 @@ impl GateApprovalScreen {
             .pt_4()
             .pb_2()
             .border_t_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child("Rejection Feedback".to_string()),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child("This feedback will be written to HUMAN_INPUT.md for the agent to review.".to_string()),
             )
             .child(
@@ -597,16 +602,16 @@ impl GateApprovalScreen {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::SURFACE)
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.2))
+                    .border_color(theme::text_muted().opacity(0.2))
                     .text_sm()
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .cursor_text()
                     .child(
                         if self.rejection_feedback.is_empty() {
                             div()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child("Enter your feedback here (e.g., \"Tests are failing\", \"Code needs refactoring\")...".to_string())
                         } else {
                             div().child(self.rejection_feedback.to_string())
@@ -673,7 +678,7 @@ impl Render for GateApprovalScreen {
                     .gap_2()
                     .pt_4()
                     .border_t_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .child(Button::new("ga-view-changes").ghost().label("View Changes"))
                     .child(Button::new("ga-view-logs").ghost().label("View Logs"))
                     .child(

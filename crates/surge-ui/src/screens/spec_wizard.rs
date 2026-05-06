@@ -118,11 +118,11 @@ impl SpecWizardScreen {
                 let is_current = s == self.step;
                 let is_done = s.index() < self.step.index();
                 let color = if is_current {
-                    theme::PRIMARY
+                    theme::primary()
                 } else if is_done {
-                    theme::SUCCESS
+                    theme::success()
                 } else {
-                    theme::TEXT_MUTED.opacity(0.3)
+                    theme::text_muted().opacity(0.3)
                 };
 
                 div()
@@ -167,7 +167,7 @@ impl SpecWizardScreen {
                     div()
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::TEXT_PRIMARY)
+                        .text_color(theme::text_primary())
                         .child("What do you want to build?".to_string()),
                 )
                 .child(
@@ -175,15 +175,15 @@ impl SpecWizardScreen {
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .bg(theme::BACKGROUND)
+                        .bg(theme::background())
                         .border_1()
-                        .border_color(theme::TEXT_MUTED.opacity(0.2))
+                        .border_color(theme::text_muted().opacity(0.2))
                         .min_h(px(120.0))
                         .text_sm()
                         .text_color(if self.description.is_empty() {
-                            theme::TEXT_MUTED
+                            theme::text_muted()
                         } else {
-                            theme::TEXT_PRIMARY
+                            theme::text_primary()
                         })
                         .child(if self.description.is_empty() {
                             "Describe the feature, bugfix, or refactor...".to_string()
@@ -199,25 +199,25 @@ impl SpecWizardScreen {
                     div()
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::TEXT_PRIMARY)
+                        .text_color(theme::text_primary())
                         .child("AI Analysis".to_string()),
                 )
                 .child(
                     div()
                         .p_4()
                         .rounded_md()
-                        .bg(theme::PRIMARY.opacity(0.05))
+                        .bg(theme::primary().opacity(0.05))
                         .border_1()
-                        .border_color(theme::PRIMARY.opacity(0.2))
+                        .border_color(theme::primary().opacity(0.2))
                         .v_flex()
                         .gap_2()
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(theme::TEXT_PRIMARY)
+                                .text_color(theme::text_primary())
                                 .child("Analyzing your description...".to_string()),
                         )
-                        .child(div().text_xs().text_color(theme::TEXT_MUTED).child(
+                        .child(div().text_xs().text_color(theme::text_muted()).child(
                             "The AI will break down your request into subtasks.".to_string(),
                         )),
                 ),
@@ -234,11 +234,11 @@ impl SpecWizardScreen {
                             .items_center()
                             .py(px(6.0))
                             .border_b_1()
-                            .border_color(theme::TEXT_MUTED.opacity(0.05))
+                            .border_color(theme::text_muted().opacity(0.05))
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .w(px(20.0))
                                     .child(format!("{}", i + 1)),
                             )
@@ -246,13 +246,13 @@ impl SpecWizardScreen {
                                 div()
                                     .flex_1()
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(st.title.clone()),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::PRIMARY)
+                                    .text_color(theme::primary())
                                     .child(st.agent.clone()),
                             )
                     })
@@ -265,13 +265,13 @@ impl SpecWizardScreen {
                         div()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Review Plan".to_string()),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child("Drag to reorder. Edit subtasks as needed.".to_string()),
                     )
                     .child(div().v_flex().children(subtasks))
@@ -290,13 +290,13 @@ impl SpecWizardScreen {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::SUCCESS)
+                                    .text_color(theme::success())
                                     .child("✓".to_string()),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child(c.clone()),
                             )
                     })
@@ -309,7 +309,7 @@ impl SpecWizardScreen {
                         div()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Acceptance Criteria".to_string()),
                     )
                     .child(div().v_flex().gap_1().children(items))
@@ -322,7 +322,7 @@ impl SpecWizardScreen {
                     div()
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::TEXT_PRIMARY)
+                        .text_color(theme::text_primary())
                         .child("Ready to create".to_string()),
                 )
                 .child(self.summary_row("Subtasks", &format!("{}", self.planned_subtasks.len())))
@@ -338,14 +338,14 @@ impl SpecWizardScreen {
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme::TEXT_MUTED)
+                    .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(value.to_string()),
             )
     }
@@ -362,10 +362,10 @@ impl Render for SpecWizardScreen {
                 .max_w(px(700.0))
                 .gap_6()
                 .p_6()
-                .bg(theme::SURFACE)
+                .bg(theme::surface())
                 .rounded_xl()
                 .border_1()
-                .border_color(theme::TEXT_MUTED.opacity(0.15))
+                .border_color(theme::text_muted().opacity(0.15))
                 .child(self.render_stepper())
                 .child(div().min_h(px(200.0)).child(self.render_step_content()))
                 .child(

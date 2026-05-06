@@ -100,13 +100,13 @@ impl TaskDetailScreen {
 
     fn render_header(&self) -> Div {
         let status_color = match self.status.as_str() {
-            "Draft" => theme::TEXT_MUTED,
-            "Planning" | "Planned" => theme::PRIMARY,
-            "Executing" => theme::WARNING,
-            "QaReview" | "HumanReview" => theme::PRIMARY,
-            "Completed" => theme::SUCCESS,
-            "Failed" => theme::ERROR,
-            _ => theme::TEXT_MUTED,
+            "Draft" => theme::text_muted(),
+            "Planning" | "Planned" => theme::primary(),
+            "Executing" => theme::warning(),
+            "QaReview" | "HumanReview" => theme::primary(),
+            "Completed" => theme::success(),
+            "Failed" => theme::error(),
+            _ => theme::text_muted(),
         };
 
         div()
@@ -114,7 +114,7 @@ impl TaskDetailScreen {
             .gap_2()
             .pb_4()
             .border_b_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.1))
+            .border_color(theme::text_muted().opacity(0.1))
             .child(
                 div()
                     .h_flex()
@@ -127,8 +127,8 @@ impl TaskDetailScreen {
                             .px_2()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme::TEXT_MUTED.opacity(0.15))
-                            .text_color(theme::TEXT_MUTED)
+                            .bg(theme::text_muted().opacity(0.15))
+                            .text_color(theme::text_muted())
                             .child(self.task_id.clone()),
                     )
                     // Status badge
@@ -146,7 +146,7 @@ impl TaskDetailScreen {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(self.complexity.clone()),
                     ),
             )
@@ -154,7 +154,7 @@ impl TaskDetailScreen {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme::TEXT_PRIMARY)
+                    .text_color(theme::text_primary())
                     .child(self.title.clone()),
             )
             .when(self.agent.is_some(), |el: Div| {
@@ -166,13 +166,13 @@ impl TaskDetailScreen {
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child("Agent:".to_string()),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::PRIMARY)
+                                .text_color(theme::primary())
                                 .child(agent.to_string()),
                         ),
                 )
@@ -192,12 +192,12 @@ impl TaskDetailScreen {
                     .rounded_md()
                     .text_sm()
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
@@ -240,13 +240,13 @@ impl TaskDetailScreen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Description".to_string()),
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(self.description.clone()),
                     ),
             )
@@ -258,13 +258,13 @@ impl TaskDetailScreen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child("Progress".to_string()),
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
+                            .text_color(theme::text_muted())
                             .child(format!("{completed}/{total} subtasks completed")),
                     )
                     .child(
@@ -272,14 +272,18 @@ impl TaskDetailScreen {
                             .w_full()
                             .h(px(6.0))
                             .rounded_full()
-                            .bg(theme::TEXT_MUTED.opacity(0.15))
-                            .child(div().h_full().rounded_full().bg(theme::PRIMARY).w(relative(
-                                if total > 0 {
-                                    completed as f32 / total as f32
-                                } else {
-                                    0.0
-                                },
-                            ))),
+                            .bg(theme::text_muted().opacity(0.15))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(theme::primary())
+                                    .w(relative(if total > 0 {
+                                        completed as f32 / total as f32
+                                    } else {
+                                        0.0
+                                    })),
+                            ),
                     ),
             )
     }
@@ -296,9 +300,9 @@ impl TaskDetailScreen {
                     _ => "?",
                 };
                 let status_color = match st.status.as_str() {
-                    "Completed" => theme::SUCCESS,
-                    "Executing" => theme::WARNING,
-                    _ => theme::TEXT_MUTED,
+                    "Completed" => theme::success(),
+                    "Executing" => theme::warning(),
+                    _ => theme::text_muted(),
                 };
 
                 div()
@@ -307,7 +311,7 @@ impl TaskDetailScreen {
                     .items_center()
                     .py(px(6.0))
                     .border_b_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.05))
+                    .border_color(theme::text_muted().opacity(0.05))
                     .child(
                         div()
                             .text_sm()
@@ -319,7 +323,7 @@ impl TaskDetailScreen {
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(st.title.clone()),
                     )
                     .when(st.agent.is_some(), |el: Div| {
@@ -327,7 +331,7 @@ impl TaskDetailScreen {
                         el.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::PRIMARY)
+                                .text_color(theme::primary())
                                 .child(agent.to_string()),
                         )
                     })
@@ -336,7 +340,7 @@ impl TaskDetailScreen {
                         el.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(theme::text_muted())
                                 .child(dur.to_string()),
                         )
                     })
@@ -353,7 +357,7 @@ impl TaskDetailScreen {
             .items_center()
             .justify_center()
             .text_sm()
-            .text_color(theme::TEXT_MUTED)
+            .text_color(theme::text_muted())
             .child(msg.to_string())
     }
 }
@@ -376,7 +380,7 @@ impl Render for TaskDetailScreen {
                     .gap_2()
                     .pt_4()
                     .border_t_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .child(Button::new("td-open-ide").ghost().label("Open in IDE"))
                     .child(Button::new("td-terminal").ghost().label("Terminal"))
                     .child(Button::new("td-create-pr").primary().label("Create PR")),

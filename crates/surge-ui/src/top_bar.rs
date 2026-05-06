@@ -63,7 +63,7 @@ impl TopBar {
         div().h_flex().gap_1().items_center().child(
             div()
                 .text_xs()
-                .text_color(theme::TEXT_MUTED)
+                .text_color(theme::text_muted())
                 .child(self.active_screen.label().to_string()),
         )
     }
@@ -74,9 +74,9 @@ impl TopBar {
             .iter()
             .map(|(_name, connected)| {
                 let color = if *connected {
-                    theme::SUCCESS
+                    theme::success()
                 } else {
-                    theme::ERROR
+                    theme::error()
                 };
                 div().w(px(8.0)).h(px(8.0)).rounded_full().bg(color)
             })
@@ -104,7 +104,7 @@ impl TopBar {
                     .py(px(6.0))
                     .cursor_pointer()
                     .rounded_md()
-                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.1)))
+                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.1)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.switcher_open = false;
                         cx.emit(TopBarEvent::SwitchProject(path.clone()));
@@ -112,11 +112,16 @@ impl TopBar {
                     .child(
                         div()
                             .v_flex()
-                            .child(div().text_sm().text_color(theme::TEXT_PRIMARY).child(name))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme::text_primary())
+                                    .child(name),
+                            )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(theme::text_muted())
                                     .child(display_path),
                             ),
                     )
@@ -129,10 +134,10 @@ impl TopBar {
             .left_0()
             .w(px(320.0))
             .v_flex()
-            .bg(theme::SURFACE)
+            .bg(theme::surface())
             .rounded_lg()
             .border_1()
-            .border_color(theme::TEXT_MUTED.opacity(0.2))
+            .border_color(theme::text_muted().opacity(0.2))
             .shadow_lg()
             .p_1()
             .gap_0p5()
@@ -140,7 +145,7 @@ impl TopBar {
             .child(
                 div()
                     .border_t_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
+                    .border_color(theme::text_muted().opacity(0.1))
                     .mt_1()
                     .pt_1()
                     .child(
@@ -151,8 +156,8 @@ impl TopBar {
                             .cursor_pointer()
                             .rounded_md()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
-                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.1)))
+                            .text_color(theme::text_muted())
+                            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.1)))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.switcher_open = false;
                                 cx.emit(TopBarEvent::OpenOther);
@@ -167,8 +172,8 @@ impl TopBar {
                             .cursor_pointer()
                             .rounded_md()
                             .text_sm()
-                            .text_color(theme::TEXT_MUTED)
-                            .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.1)))
+                            .text_color(theme::text_muted())
+                            .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.1)))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.switcher_open = false;
                                 cx.emit(TopBarEvent::NewProject);
@@ -191,9 +196,9 @@ impl Render for TopBar {
             .px_4()
             .items_center()
             .justify_between()
-            .bg(theme::SIDEBAR_BG)
+            .bg(theme::sidebar_bg())
             .border_b_1()
-            .border_color(theme::SURFACE)
+            .border_color(theme::surface())
             // Left: project name (clickable) + branch
             .child(
                 div()
@@ -206,9 +211,9 @@ impl Render for TopBar {
                             .id("project-switcher")
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .cursor_pointer()
-                            .hover(|s: StyleRefinement| s.text_color(theme::PRIMARY))
+                            .hover(|s: StyleRefinement| s.text_color(theme::primary()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toggle_switcher(cx);
                             }))
@@ -220,8 +225,8 @@ impl Render for TopBar {
                             .px_2()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme::PRIMARY.opacity(0.15))
-                            .text_color(theme::PRIMARY)
+                            .bg(theme::primary().opacity(0.15))
+                            .text_color(theme::primary())
                             .child(self.branch_name.clone()),
                     )
                     .when(switcher_open, |el: Div| {
@@ -240,7 +245,7 @@ impl Render for TopBar {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .child("Ctrl+K".to_string()),
                     ),
             )

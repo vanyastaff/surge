@@ -23,9 +23,9 @@ impl FileStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Added => theme::SUCCESS,
-            Self::Modified => theme::WARNING,
-            Self::Deleted => theme::ERROR,
+            Self::Added => theme::success(),
+            Self::Modified => theme::warning(),
+            Self::Deleted => theme::error(),
         }
     }
 }
@@ -122,12 +122,12 @@ impl DiffViewerScreen {
                     .rounded_md()
                     .text_sm()
                     .text_color(if is_active {
-                        theme::PRIMARY
+                        theme::primary()
                     } else {
-                        theme::TEXT_MUTED
+                        theme::text_muted()
                     })
                     .bg(if is_active {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
@@ -164,11 +164,11 @@ impl DiffViewerScreen {
                     .cursor_pointer()
                     .rounded_md()
                     .bg(if is_selected {
-                        theme::PRIMARY.opacity(0.1)
+                        theme::primary().opacity(0.1)
                     } else {
                         gpui::transparent_black()
                     })
-                    .hover(|s: StyleRefinement| s.bg(theme::PRIMARY.opacity(0.05)))
+                    .hover(|s: StyleRefinement| s.bg(theme::primary().opacity(0.05)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.selected_file = idx;
                         cx.notify();
@@ -187,7 +187,7 @@ impl DiffViewerScreen {
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .overflow_hidden()
                             .child(file.path.clone()),
                     )
@@ -199,13 +199,13 @@ impl DiffViewerScreen {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::SUCCESS)
+                                    .text_color(theme::success())
                                     .child(format!("+{}", file.added)),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::ERROR)
+                                    .text_color(theme::error())
                                     .child(format!("-{}", file.removed)),
                             ),
                     )
@@ -228,9 +228,9 @@ impl DiffViewerScreen {
             .iter()
             .map(|line| {
                 let (bg, text_color, prefix) = match line.kind {
-                    DiffLineKind::Added => (theme::SUCCESS.opacity(0.1), theme::SUCCESS, "+"),
-                    DiffLineKind::Removed => (theme::ERROR.opacity(0.1), theme::ERROR, "-"),
-                    DiffLineKind::Context => (gpui::transparent_black(), theme::TEXT_MUTED, " "),
+                    DiffLineKind::Added => (theme::success().opacity(0.1), theme::success(), "+"),
+                    DiffLineKind::Removed => (theme::error().opacity(0.1), theme::error(), "-"),
+                    DiffLineKind::Context => (gpui::transparent_black(), theme::text_muted(), " "),
                 };
 
                 let left = line
@@ -249,7 +249,7 @@ impl DiffViewerScreen {
                         div()
                             .text_xs()
                             .w(px(36.0))
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .font_family("monospace")
                             .child(left),
                     )
@@ -257,7 +257,7 @@ impl DiffViewerScreen {
                         div()
                             .text_xs()
                             .w(px(36.0))
-                            .text_color(theme::TEXT_MUTED.opacity(0.5))
+                            .text_color(theme::text_muted().opacity(0.5))
                             .font_family("monospace")
                             .child(right),
                     )
@@ -295,7 +295,7 @@ impl DiffViewerScreen {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(theme::text_primary())
                             .child(file.path.clone()),
                     )
                     .child(Button::new("open-ide").ghost().label("Open in IDE")),
@@ -306,8 +306,8 @@ impl DiffViewerScreen {
                     .v_flex()
                     .rounded_lg()
                     .border_1()
-                    .border_color(theme::TEXT_MUTED.opacity(0.1))
-                    .bg(theme::BACKGROUND)
+                    .border_color(theme::text_muted().opacity(0.1))
+                    .bg(theme::background())
                     .overflow_hidden()
                     .children(lines),
             )
@@ -340,10 +340,10 @@ impl Render for DiffViewerScreen {
                                 div()
                                     .text_2xl()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_color(theme::text_primary())
                                     .child("Diff Viewer".to_string()),
                             )
-                            .child(div().text_sm().text_color(theme::TEXT_MUTED).child(format!(
+                            .child(div().text_sm().text_color(theme::text_muted()).child(format!(
                                 "{} files  +{}  -{}",
                                 self.files.len(),
                                 total_added,
