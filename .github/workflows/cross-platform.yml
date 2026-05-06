@@ -1,0 +1,75 @@
+name: Cross-Platform
+
+# Runs only when OS-sensitive code might have changed, or on a schedule
+# as a safety net. Most surge logic is OS-portable; the OS-specific
+# surface lives in surge-acp (subprocess + ACP transport), surge-mcp
+# (interprocess sockets), and surge-daemon (IPC, process lifecycle).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'crates/surge-acp/**'
+      - 'crates/surge-mcp/**'
+      - 'crates/surge-daemon/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/cross-platform.yml'
+  merge_group:
+  schedule:
+    # Weekly Monday 03:00 UTC sanity run — catches transitive-dep
+    # breakage on Windows/macOS that we don't directly hit.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  RUST_BACKTRACE: short
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: surge-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # Build first — if a build error is OS-specific, we want to see it
+      # before the more expensive test step.
+      - name: Build
+        run: cargo build --workspace --exclude surge-ui --locked
+      - name: Tests (nextest)
+        run: cargo nextest run --workspace --exclude surge-ui --locked --no-fail-fast
+
+  required-cross:
+    name: required-cross
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [smoke]
+    timeout-minutes: 5
+    steps:
+      - name: Verify all smoke jobs succeeded
+        run: |
+          echo '${{ toJSON(needs) }}' \
+            | jq -e 'all(.[]; .result == "success")' > /dev/null \
+            || (echo "One or more smoke jobs failed:"; echo '${{ toJSON(needs) }}'; exit 1)

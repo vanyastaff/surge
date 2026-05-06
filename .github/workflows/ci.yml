@@ -2,126 +2,128 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
+  merge_group:
+
+# PR pushes cancel older runs of themselves; main/develop/merge_group runs
+# use SHA so each commit completes (still useful when investigating which
+# commit broke main).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0       # incremental output is per-run on CI; just costs link time + cache bloat
+  CARGO_NET_RETRY: 10        # crates.io / GH runner DNS occasionally flakes
+  RUSTUP_MAX_RETRIES: 10
+  RUST_BACKTRACE: short
 
 jobs:
-  test:
-    name: Test Suite
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target/
-          key: ${{ runner.os }}-target-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-test-
-            ${{ runner.os }}-target-
-
-      - name: Run tests
-        run: cargo test --workspace --exclude surge-ui --verbose
-
-      - name: Build mock_acp_agent for engine integration tests
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo build -p surge-acp --bin mock_acp_agent
-
-      - name: Run M5 engine integration tests (--ignored)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p surge-orchestrator --tests -- --ignored
-        timeout-minutes: 10
-        continue-on-error: true  # known M5 limitation: some tests hang on bridge worker reply routing (M5.1)
-
-  clippy:
-    name: Clippy
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: |
-            target/
-          key: ${{ runner.os }}-target-clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-clippy-
-            ${{ runner.os }}-target-
-
-      # Strict: M1's surge-core crate must be warning-free.
-      - name: Run clippy (strict on surge-core)
-        run: cargo clippy -p surge-core --all-targets --all-features -- -D warnings
-
-      # Strict: M3's surge-acp crate (bridge::* + shared::*) must be warning-free.
-      - name: Run clippy (strict on surge-acp)
-        run: cargo clippy -p surge-acp --all-targets -- -D warnings
-
-      # Permissive: legacy crates have accumulated clippy debt that's tracked
-      # as separate cleanup work, not blocking. We still run clippy to catch
-      # new errors / clippy::correctness regressions, but don't fail on warnings.
-      - name: Run clippy (permissive on workspace)
-        run: cargo clippy --workspace --all-targets --all-features
-
   fmt:
-    name: Format Check
+    name: fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
+      - run: cargo fmt --all -- --check
 
-      - name: Check formatting
-        run: cargo fmt --check
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: surge-ubuntu
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      # Strict on the entire workspace. Was historically split (strict on
+      # surge-core+surge-acp, permissive on the rest); the workspace is
+      # warning-free now after the MSRV-1.95 cleanup.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: surge-ubuntu
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # surge-ui is excluded — gpui pulls heavy deps and the crate has no
+      # automated tests today.
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace --exclude surge-ui --locked --no-fail-fast
+
+      - name: Build mock_acp_agent for engine integration tests
+        run: cargo build -p surge-acp --bin mock_acp_agent --locked
+
+      # M5 engine integration tests are kept with continue-on-error per the
+      # known M5.1 bridge-worker reply-routing limitation. Tracked separately.
+      - name: Run M5 engine integration tests (--ignored)
+        run: cargo nextest run -p surge-orchestrator --tests --run-ignored=ignored-only --locked --no-fail-fast
+        timeout-minutes: 10
+        continue-on-error: true
+
+  doctests:
+    name: doctests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: surge-ubuntu
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      # nextest doesn't run doctests — keep cargo test --doc as the fallback.
+      - run: cargo test --workspace --exclude surge-ui --doc --locked
+
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: surge-ubuntu
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      # Catch cases where --all-features fails to compile but the default
+      # build is fine.
+      - run: cargo check --workspace --all-targets --all-features --locked
+
+  # Aggregator: branch protection points at this single job. Adding or
+  # removing a sub-job above no longer requires touching branch protection.
+  required:
+    name: required
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [fmt, clippy, test, doctests, check]
+    timeout-minutes: 5
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          echo '${{ toJSON(needs) }}' \
+            | jq -e 'all(.[]; .result == "success")' > /dev/null \
+            || (echo "One or more required jobs failed:"; echo '${{ toJSON(needs) }}'; exit 1)
