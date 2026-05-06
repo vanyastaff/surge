@@ -251,3 +251,126 @@ async fn linear_source_rejects_empty_token() {
         },
     }
 }
+
+#[tokio::test]
+async fn linear_polling_emits_all_issues_in_one_cycle() {
+    let server = MockServer::start().await;
+
+    // Mock the Linear GraphQL endpoint to return 3 issues in a single response.
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "issues": {
+                    "nodes": [
+                        {
+                            "id": "uuid-abc-1",
+                            "identifier": "ABC-1",
+                            "title": "First issue",
+                            "description": "",
+                            "url": "https://linear.app/test/issue/ABC-1",
+                            "state": {
+                                "id": "state-in-progress",
+                                "name": "In Progress",
+                                "type": "started"
+                            },
+                            "labels": {
+                                "nodes": [
+                                    {"id": "label-1", "name": "surge:enabled"}
+                                ]
+                            },
+                            "assignee": null,
+                            "createdAt": "2026-05-06T10:00:00.000Z",
+                            "updatedAt": "2026-05-06T10:00:00.000Z"
+                        },
+                        {
+                            "id": "uuid-abc-2",
+                            "identifier": "ABC-2",
+                            "title": "Second issue",
+                            "description": "",
+                            "url": "https://linear.app/test/issue/ABC-2",
+                            "state": {
+                                "id": "state-todo",
+                                "name": "Todo",
+                                "type": "unstarted"
+                            },
+                            "labels": {
+                                "nodes": [
+                                    {"id": "label-1", "name": "surge:enabled"}
+                                ]
+                            },
+                            "assignee": null,
+                            "createdAt": "2026-05-06T10:00:01.000Z",
+                            "updatedAt": "2026-05-06T10:00:01.000Z"
+                        },
+                        {
+                            "id": "uuid-abc-3",
+                            "identifier": "ABC-3",
+                            "title": "Third issue",
+                            "description": "",
+                            "url": "https://linear.app/test/issue/ABC-3",
+                            "state": {
+                                "id": "state-todo",
+                                "name": "Todo",
+                                "type": "unstarted"
+                            },
+                            "labels": {
+                                "nodes": [
+                                    {"id": "label-1", "name": "surge:enabled"}
+                                ]
+                            },
+                            "assignee": null,
+                            "createdAt": "2026-05-06T10:00:02.000Z",
+                            "updatedAt": "2026-05-06T10:00:02.000Z"
+                        }
+                    ],
+                    "pageInfo": {
+                        "hasNextPage": false,
+                        "endCursor": "c1"
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = LinearConfig {
+        id: "linear:test".into(),
+        display_name: "Linear · test".into(),
+        workspace_id: "wsp_test".into(),
+        api_token: "lin_test_token_abc123".into(),
+        poll_interval: Duration::from_millis(50),
+        label_filters: vec!["surge:enabled".into()],
+    };
+
+    let mut source = LinearTaskSource::new(cfg).expect("failed to create LinearTaskSource");
+    source.set_base_url(format!("{}/graphql", server.uri()));
+
+    let source = Arc::new(source);
+    let mut stream = source.watch_for_tasks();
+
+    // Collect the first 3 events from the stream.
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        let event = tokio::time::timeout(Duration::from_secs(2), async {
+            futures::stream::StreamExt::next(&mut stream).await
+        })
+        .await
+        .expect("timeout waiting for event")
+        .expect("stream ended unexpectedly")
+        .expect("failed to get event from stream");
+        events.push(event);
+    }
+
+    // Verify we got all 3 events with the correct task IDs.
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].task_id.as_str(), "linear:wsp_test/ABC-1");
+    assert_eq!(events[1].task_id.as_str(), "linear:wsp_test/ABC-2");
+    assert_eq!(events[2].task_id.as_str(), "linear:wsp_test/ABC-3");
+
+    // Verify they all have the correct source and kind.
+    for event in &events {
+        assert_eq!(event.source_id, "linear:test");
+        assert!(matches!(event.kind, TaskEventKind::NewTask));
+    }
+}

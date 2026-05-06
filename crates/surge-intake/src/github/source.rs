@@ -7,9 +7,10 @@ use crate::{Error, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::{self, BoxStream};
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Configuration for [`GitHubIssuesTaskSource`].
 ///
@@ -102,19 +103,21 @@ impl GitHubIssuesTaskSource {
         Error::Network(e.to_string())
     }
 
-    async fn handle_poll_success(
+
+    async fn build_events_from_page(
         &self,
         items: octocrab::Page<octocrab::models::issues::Issue>,
         since: Option<DateTime<Utc>>,
-    ) -> Option<(Result<TaskEvent>, &Self)> {
+    ) -> VecDeque<Result<TaskEvent>> {
+        let mut queue = VecDeque::new();
         let mut last_updated = since;
-        let mut events = Vec::<Result<TaskEvent>>::new();
+
         for issue in items.items.iter() {
             let is_newer = last_updated.map(|u| issue.updated_at > u).unwrap_or(true);
             if is_newer {
                 last_updated = Some(issue.updated_at);
             }
-            events.push(Ok(TaskEvent {
+            queue.push_back(Ok(TaskEvent {
                 source_id: self.id.clone(),
                 task_id: self.task_id(issue.number),
                 kind: TaskEventKind::NewTask,
@@ -122,18 +125,12 @@ impl GitHubIssuesTaskSource {
                 raw_payload: serde_json::to_value(issue).unwrap_or(serde_json::Value::Null),
             }));
         }
+
         if let Some(u) = last_updated {
             *self.last_seen_updated_at.lock().await = Some(u);
         }
-        if events.is_empty() {
-            tokio::time::sleep(self.poll_interval).await;
-            return None;
-        }
-        let mut iter = events.into_iter();
-        let first = iter.next().unwrap();
-        debug!(remaining = iter.count(), "deferring multi-issue emission");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        Some((first, self))
+
+        queue
     }
 
     fn issue_to_details(&self, i: &octocrab::models::issues::Issue) -> TaskDetails {
@@ -174,37 +171,55 @@ impl TaskSource for GitHubIssuesTaskSource {
     /// The stream uses a `since` watermark (tracking `updated_at`) to avoid
     /// re-emitting issues that haven't changed since the last poll cycle.
     ///
+    /// Uses an internal queue to emit all issues from a single fetch before polling again.
+    ///
     /// Rate-limit errors and authentication failures are mapped to `Error::RateLimited`
     /// and `Error::AuthFailed` respectively, allowing the consumer to implement
     /// backoff logic.
+    #[allow(clippy::excessive_nesting)]
     fn watch_for_tasks<'a>(&'a self) -> BoxStream<'a, Result<TaskEvent>> {
-        Box::pin(stream::unfold(self, move |this| async move {
-            let since = *this.last_seen_updated_at.lock().await;
+        use std::collections::VecDeque;
 
-            // Get the issue handler and build the query
-            // The handler holds references to the octocrab instance and repo details
-            let owner = this.client.owner.clone();
-            let repo = this.client.repo.clone();
-            let labels = this.label_filters.clone();
+        type State<'a> = (&'a GitHubIssuesTaskSource, VecDeque<Result<TaskEvent>>);
+        let initial: State<'a> = (self, VecDeque::new());
 
-            let issue_handler = this.client.octocrab.issues(&owner, &repo);
-            let mut page_builder = issue_handler
-                .list()
-                .state(octocrab::params::State::Open)
-                .labels(&labels);
-            if let Some(s) = since {
-                page_builder = page_builder.since(s);
+        Box::pin(stream::unfold(initial, |(this, mut queue)| async move {
+            // Drain the queue first; emit one event per stream pull.
+            if let Some(item) = queue.pop_front() {
+                return Some((item, (this, queue)));
             }
-            let result = page_builder.send().await;
 
-            match result {
-                Ok(items) => this.handle_poll_success(items, since).await,
-                Err(e) => {
-                    warn!(error = %e, "github poll failed");
-                    let mapped = Self::map_octocrab_error(&e);
-                    tokio::time::sleep(this.poll_interval).await;
-                    Some((Err(mapped), this))
-                },
+            // Queue empty: fetch a fresh page and populate the queue.
+            loop {
+                tokio::time::sleep(this.poll_interval).await;
+                let since = *this.last_seen_updated_at.lock().await;
+
+                // Build the paginated request
+                let owner = this.client.owner.clone();
+                let repo = this.client.repo.clone();
+                let labels = this.label_filters.clone();
+                let issue_handler = this.client.octocrab.issues(&owner, &repo);
+                let mut page_builder = issue_handler
+                    .list()
+                    .state(octocrab::params::State::Open)
+                    .labels(&labels);
+                if let Some(s) = since {
+                    page_builder = page_builder.since(s);
+                }
+
+                match page_builder.send().await {
+                    Ok(items) => {
+                        queue = this.build_events_from_page(items, since).await;
+                        if let Some(item) = queue.pop_front() {
+                            return Some((item, (this, queue)));
+                        }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "github poll failed");
+                        let mapped = Self::map_octocrab_error(&e);
+                        return Some((Err(mapped), (this, queue)));
+                    },
+                }
             }
         }))
     }

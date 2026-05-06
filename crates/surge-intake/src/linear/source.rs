@@ -171,21 +171,38 @@ impl TaskSource for LinearTaskSource {
     /// Stream of incoming task events.
     ///
     /// Polls the Linear API periodically for issues matching the label filters,
-    /// emitting one TaskEvent per cycle. Filters by `updated_at > last_seen_updated_at`
+    /// emitting TaskEvent for each issue. Filters by `updated_at > last_seen_updated_at`
     /// to avoid re-emitting unchanged tasks.
+    ///
+    /// Uses an internal queue to emit all issues from a single fetch before polling again.
+    #[allow(clippy::excessive_nesting)]
     fn watch_for_tasks<'a>(&'a self) -> BoxStream<'a, Result<TaskEvent>> {
-        Box::pin(stream::unfold((), move |_| async move {
-            loop {
-                tokio::time::sleep(self.poll_interval).await;
+        use std::collections::VecDeque;
 
-                let result = self.fetch_and_emit_events().await;
-                match result {
+        type State<'a> = (&'a LinearTaskSource, VecDeque<Result<TaskEvent>>);
+        let initial: State<'a> = (self, VecDeque::new());
+
+        Box::pin(stream::unfold(initial, |(this, mut queue)| async move {
+            // Drain the queue first; emit one event per stream pull.
+            if let Some(item) = queue.pop_front() {
+                return Some((item, (this, queue)));
+            }
+
+            // Queue empty: fetch a fresh page and populate the queue.
+            loop {
+                tokio::time::sleep(this.poll_interval).await;
+
+                match this.fetch_and_emit_events().await {
                     Ok(events) if !events.is_empty() => {
-                        return Some((Ok(events[0].clone()), ()));
+                        queue = this.build_queue_from_events(events);
+                        if let Some(item) = queue.pop_front() {
+                            return Some((item, (this, queue)));
+                        }
+                        continue;
                     },
                     Err(e) => {
                         warn!("error polling linear issues: {}", e);
-                        return Some((Err(e), ()));
+                        return Some((Err(e), (this, queue)));
                     },
                     Ok(_) => continue,
                 }
@@ -333,6 +350,18 @@ impl TaskSource for LinearTaskSource {
 }
 
 impl LinearTaskSource {
+    fn build_queue_from_events(
+        &self,
+        events: Vec<TaskEvent>,
+    ) -> std::collections::VecDeque<Result<TaskEvent>> {
+        use std::collections::VecDeque;
+        let mut queue = VecDeque::new();
+        for event in events {
+            queue.push_back(Ok(event));
+        }
+        queue
+    }
+
     async fn fetch_and_emit_events(&self) -> Result<Vec<TaskEvent>> {
         let mut filter = if !self.label_filters.is_empty() {
             let label_name = &self.label_filters[0];
