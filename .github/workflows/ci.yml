@@ -11,6 +11,14 @@ env:
   RUST_BACKTRACE: 1
   # Pin nextest to a known-good release. Bump when we want a newer one.
   NEXTEST_VERSION: 0.9.85
+  # sccache: wrap rustc so individual translation units cache hits
+  # across jobs (and across cold rust-cache restores). Backed by the
+  # GitHub Actions cache via SCCACHE_GHA_ENABLED=true — no extra
+  # storage, no extra service to host. Complements rust-cache:
+  # rust-cache keeps target/ deps warm, sccache keeps individual
+  # rustc invocations cheap when they DO need to run.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
 
 jobs:
   test:
@@ -26,6 +34,14 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      # sccache wraps rustc so per-translation-unit outputs cache to
+      # the GitHub Actions cache (SCCACHE_GHA_ENABLED=true). Pairs with
+      # rust-cache below — rust-cache keeps target/ deps warm; sccache
+      # speeds up the rustc invocations that DO need to run (e.g.
+      # after a Cargo.lock bump that invalidates rust-cache).
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
 
       # `Swatinem/rust-cache@v2` is significantly smarter than the
       # manual `actions/cache@v4` it replaces:
@@ -96,17 +112,16 @@ jobs:
           shared-key: surge-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Strict: M1's surge-core crate must be warning-free.
-      - name: Run clippy (strict on surge-core)
-        run: cargo clippy -p surge-core --all-targets --all-features -- -D warnings
-
-      # Strict: M3's surge-acp crate (bridge::* + shared::*) must be warning-free.
-      - name: Run clippy (strict on surge-acp)
-        run: cargo clippy -p surge-acp --all-targets -- -D warnings
+      # Strict: surge-core (M1) and surge-acp (M3) must be warning-free.
+      # Combined into a single cargo invocation so clippy compiles its
+      # graph once instead of twice.
+      - name: Run clippy (strict on surge-core + surge-acp)
+        run: cargo clippy -p surge-core -p surge-acp --all-targets --all-features -- -D warnings
 
       # Permissive: legacy crates have accumulated clippy debt that's tracked
       # as separate cleanup work, not blocking. We still run clippy to catch
       # new errors / clippy::correctness regressions, but don't fail on warnings.
+      # rust-cache + sccache keep this incremental over the strict run above.
       - name: Run clippy (permissive on workspace)
         run: cargo clippy --workspace --all-targets --all-features
 
