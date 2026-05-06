@@ -12,10 +12,10 @@ use surge_core::{OutcomeKey, SessionId};
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-// Ignored: M5.1 bridge-worker reply-routing limitation. Concurrent
-// session close races deadlock the worker. Re-enable (drop #[ignore])
-// once M5.1 lands.
-#[ignore = "M5.1 hang: bridge worker reply routing — re-enable when M5.1 lands"]
+// Ignored: hangs under cargo-nextest (passes under cargo test on
+// main). Cause is process-isolation specific — investigation tracked
+// separately.
+#[ignore = "nextest hang — see investigation task; passes under cargo test"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn five_concurrent_sessions_complete_independently() {
     // Hard outer timeout — concurrent session shutdown shouldn't take more

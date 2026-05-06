@@ -14,11 +14,10 @@ use surge_core::OutcomeKey;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-// Ignored: M5.1 bridge-worker reply-routing limitation. Crash signal
-// from subprocess_waiter doesn't surface to close_session in time, so
-// the test waits indefinitely for SessionEnded::Crashed. Re-enable
-// (drop #[ignore]) once M5.1 lands.
-#[ignore = "M5.1 hang: bridge worker reply routing — re-enable when M5.1 lands"]
+// Ignored: hangs under cargo-nextest waiting for the SessionEnded::Crashed
+// event (passes under cargo test on main). Cause is nextest
+// process-isolation specific — investigation tracked separately.
+#[ignore = "nextest hang — see investigation task; passes under cargo test"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn crash_after_n_tool_calls_surfaces_within_2s() {
     let wt = TempDir::new().unwrap();
