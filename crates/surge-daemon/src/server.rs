@@ -330,6 +330,39 @@ async fn dispatch(
                     // against this dispatch finds the per-run channel
                     // already in the registry.
                     let publisher = broadcast.register(run_id).await;
+                    // Pre-attach a forwarder for THIS connection BEFORE
+                    // the engine starts emitting. Without this, fast-
+                    // completing flows (e.g. `flow_terminal_only.toml`)
+                    // can race the client: the engine fires Terminal
+                    // into `publisher` before the client's follow-up
+                    // `Subscribe` IPC creates a subscriber, and tokio
+                    // broadcast's `send` with no receivers drops the
+                    // message — there is no buffer-for-future-receivers
+                    // semantic. Subscribing now (off the same publisher
+                    // we hand to `spawn_forward_task` below) guarantees
+                    // the receiver exists before any send; the
+                    // companion `Subscribe` handler is idempotent for
+                    // already-attached connections so the client's
+                    // post-StartRun Subscribe is a no-op.
+                    let pre_subscribe_rx = publisher.subscribe();
+                    let writer_for_task = writer.clone();
+                    let pre_handle = tokio::spawn(forward_per_run_to_client(
+                        run_id,
+                        pre_subscribe_rx,
+                        writer_for_task,
+                    ));
+                    {
+                        let mut s = state.lock().await;
+                        s.subscriptions.insert(run_id);
+                        if let Some(old) = s.forwarders.insert(run_id, pre_handle) {
+                            // Defensive: should never have a prior
+                            // forwarder for a freshly-admitted run,
+                            // but mirror the Subscribe handler's
+                            // abort-before-replace pattern for
+                            // safety.
+                            old.abort();
+                        }
+                    }
                     broadcast.publish_global(GlobalDaemonEvent::RunAccepted { run_id });
                     let admission_for_completion = admission.clone();
                     let broadcast_for_completion = broadcast.clone();
@@ -353,6 +386,17 @@ async fn dispatch(
                             Some(DaemonResponse::StartRunOk { request_id, run_id })
                         },
                         Err(e) => {
+                            // Clean up the pre-attached forwarder
+                            // we optimistically spawned above, so the
+                            // connection's state stays consistent and
+                            // the task does not hang awaiting events
+                            // that never come.
+                            let mut s = state.lock().await;
+                            s.subscriptions.remove(&run_id);
+                            if let Some(h) = s.forwarders.remove(&run_id) {
+                                h.abort();
+                            }
+                            drop(s);
                             broadcast.deregister(run_id).await;
                             admission.notify_completed(run_id).await;
                             Some(DaemonResponse::Error {
@@ -598,6 +642,24 @@ async fn dispatch(
         },
 
         DaemonRequest::Subscribe { request_id, run_id } => {
+            // Idempotent for connections that already have a live
+            // forwarder for this run_id. The StartRun Admitted arm
+            // pre-attaches a forwarder so fast-completing flows
+            // don't lose events to tokio broadcast's no-receivers
+            // drop semantic; if the same connection then sends a
+            // Subscribe (which `DaemonEngineFacade::start_run` does
+            // after every StartRun), spawning a SECOND forwarder
+            // would double-send every event on the wire. Detect
+            // the existing-and-alive case and reply SubscribeOk
+            // without spawning.
+            {
+                let s = state.lock().await;
+                if let Some(existing) = s.forwarders.get(&run_id) {
+                    if !existing.is_finished() {
+                        return Some(DaemonResponse::SubscribeOk { request_id });
+                    }
+                }
+            }
             if let Some(rx) = broadcast.subscribe(run_id).await {
                 let writer_for_task = writer.clone();
                 // F5: store the JoinHandle so Unsubscribe can abort it.
@@ -605,7 +667,14 @@ async fn dispatch(
                 {
                     let mut s = state.lock().await;
                     s.subscriptions.insert(run_id);
-                    s.forwarders.insert(run_id, handle);
+                    // Abort any dead-but-still-mapped forwarder
+                    // before replacing — the idempotency check
+                    // above filters out *live* duplicates, so any
+                    // entry reaching here is finished and safe to
+                    // drop.
+                    if let Some(old) = s.forwarders.insert(run_id, handle) {
+                        old.abort();
+                    }
                 }
                 Some(DaemonResponse::SubscribeOk { request_id })
             } else {
