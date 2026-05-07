@@ -132,12 +132,28 @@ async fn test_windows_chcp_utf8() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    // Poll for output instead of relying on a fixed sleep — on slow
+    // Windows CI runners (PR #48 surfaced this) the spawn + chcp +
+    // echo + capture pipeline routinely exceeds 200ms, leaving the
+    // assertion racing the producer. Cap at 5s so a genuine
+    // regression still surfaces; the 50ms granularity keeps the
+    // happy path fast.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut output = String::new();
+    while std::time::Instant::now() < deadline {
+        let (out, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+        if !out.is_empty() {
+            output = out;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // Should get some output without crashing
-    assert!(!output.is_empty(), "Output should not be empty");
+    assert!(
+        !output.is_empty(),
+        "Output should not be empty within 5s deadline"
+    );
 }
 
 #[tokio::test]
