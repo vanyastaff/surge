@@ -285,6 +285,23 @@ pub enum EventPayload {
         /// Error message if delivery failed; `None` on success.
         error: Option<String>,
     },
+    /// Operator-facing escalation request — emitted when an automated path
+    /// hits a hard limit (e.g., the bootstrap edit-loop cap) and the engine
+    /// gives up. Distinct from `NotifyDelivered` because the engine emits it
+    /// directly (no Notify node) and the operator may not see a delivery
+    /// confirmation at all. Carries enough context for an out-of-band
+    /// dispatcher (telegram, email, dashboard) to surface a clear message
+    /// without needing to replay the event log.
+    EscalationRequested {
+        /// Bootstrap stage that ran out of retries, when the escalation
+        /// originates from the bootstrap flow. `None` for non-bootstrap
+        /// escalations.
+        #[serde(default)]
+        stage: Option<BootstrapStage>,
+        /// Free-form operator-readable explanation (e.g., the cap value
+        /// and the failure mode).
+        reason: String,
+    },
 }
 
 impl EventPayload {
@@ -349,6 +366,7 @@ impl EventPayload {
             Self::SubgraphEntered { .. } => "SubgraphEntered",
             Self::SubgraphExited { .. } => "SubgraphExited",
             Self::NotifyDelivered { .. } => "NotifyDelivered",
+            Self::EscalationRequested { .. } => "EscalationRequested",
         }
     }
 }

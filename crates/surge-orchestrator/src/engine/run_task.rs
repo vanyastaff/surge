@@ -277,6 +277,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     run_memory: &memory,
                     resolution_rx: Some(rx),
                     default_timeout: params.run_config.human_input_timeout,
+                    bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
                 })
                 .await;
                 params.gate_resolutions.lock().await.remove(&cursor.node);

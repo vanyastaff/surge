@@ -207,6 +207,7 @@ Graph {
                                 },
                             ],
                             allow_freetext: true,
+                            mode: Generic,
                         },
                     ),
                 },

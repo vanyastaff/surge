@@ -92,6 +92,13 @@ pub struct RunMemory {
     /// backtrack-aware feature) reads it to detect re-entries without
     /// scanning the event log.
     pub node_visits: BTreeMap<NodeKey, u32>,
+    /// Per-bootstrap-stage latest edit feedback. Updated on every
+    /// `BootstrapEditRequested { stage, feedback }` event — the newest
+    /// feedback overwrites the previous entry for that stage. Read by the
+    /// `ArtifactSource::EditFeedback` binding resolver in the orchestrator
+    /// to expose the most recent operator feedback to the re-entered agent
+    /// stage. Empty for non-bootstrap runs.
+    pub last_edit_feedback_by_stage: BTreeMap<BootstrapStage, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -528,8 +535,10 @@ impl RunMemory {
                 self.costs.cache_hits += u64::from(*cache_hits);
                 self.costs.cost_usd += cost_usd.unwrap_or(0.0);
             },
-            EventPayload::BootstrapEditRequested { stage, .. } => {
+            EventPayload::BootstrapEditRequested { stage, feedback } => {
                 *self.bootstrap_edit_counts.entry(*stage).or_insert(0) += 1;
+                self.last_edit_feedback_by_stage
+                    .insert(*stage, feedback.clone());
             },
             EventPayload::EdgeTraversed {
                 kind: EdgeKind::Backtrack,

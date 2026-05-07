@@ -68,6 +68,35 @@ pub struct EngineRunConfig {
     /// runs).
     #[serde(default)]
     pub initial_prompt: String,
+    /// Bootstrap-flow knobs. Default values are tuned for the bundled
+    /// bootstrap graph; non-bootstrap runs ignore the section entirely.
+    #[serde(default)]
+    pub bootstrap: BootstrapRunConfig,
+}
+
+/// Knobs for the bootstrap-driven adaptive flow. See
+/// `EngineRunConfig::bootstrap`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BootstrapRunConfig {
+    /// Maximum number of `BootstrapEditRequested` cycles per stage before the
+    /// engine bails out with `StageError::EditLoopCapExceeded`. Default `3`
+    /// (matches Decision 4 / ADR 0004 in the milestone plan). Set to `0` to
+    /// disable the cap (not recommended in production — used by integration
+    /// tests that need to exercise unbounded loops).
+    #[serde(default = "default_edit_loop_cap")]
+    pub edit_loop_cap: u32,
+}
+
+fn default_edit_loop_cap() -> u32 {
+    3
+}
+
+impl Default for BootstrapRunConfig {
+    fn default() -> Self {
+        Self {
+            edit_loop_cap: default_edit_loop_cap(),
+        }
+    }
 }
 
 impl Default for EngineRunConfig {
@@ -77,6 +106,7 @@ impl Default for EngineRunConfig {
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
             initial_prompt: String::new(),
+            bootstrap: BootstrapRunConfig::default(),
         }
     }
 }
@@ -125,6 +155,7 @@ mod tests {
                 true,
             )],
             initial_prompt: String::new(),
+            bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -150,9 +181,39 @@ mod tests {
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
             initial_prompt: "fix the broken cart-total bug".into(),
+            bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.initial_prompt, "fix the broken cart-total bug");
+    }
+
+    #[test]
+    fn bootstrap_run_config_default_cap_is_three() {
+        let cfg = EngineRunConfig::default();
+        assert_eq!(cfg.bootstrap.edit_loop_cap, 3);
+    }
+
+    #[test]
+    fn bootstrap_run_config_legacy_json_defaults_to_default_cap() {
+        // Persisted run configs from before Task 9 do not carry a bootstrap
+        // block; they must still decode and pick up the default cap.
+        let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
+        let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.bootstrap.edit_loop_cap, 3);
+    }
+
+    #[test]
+    fn bootstrap_run_config_serde_roundtrip() {
+        let cfg = EngineRunConfig {
+            human_input_timeout: Duration::from_secs(60),
+            stage_timeout_override: None,
+            mcp_servers: Vec::new(),
+            initial_prompt: String::new(),
+            bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.bootstrap.edit_loop_cap, 5);
     }
 }
