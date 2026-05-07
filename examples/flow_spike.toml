@@ -1,0 +1,62 @@
+# Spike archetype: a 2-node experiment flow that explicitly skips Architect
+# and Reviewer. The single Implement stage produces a `findings_recorded`
+# outcome; success terminal records the experiment was run to completion.
+
+schema_version = 1
+start = "spike_1"
+
+[metadata]
+name = "flow_spike"
+created_at = "2026-05-06T00:00:00Z"
+
+[nodes.spike_1]
+id = "spike_1"
+
+[nodes.spike_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.spike_1.declared_outcomes]]
+id = "findings_recorded"
+description = "Spike completed; findings written to artifacts"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.spike_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.spike_1.config.limits]
+timeout_seconds = 1800
+max_retries = 1
+max_tokens = 200000
+
+[nodes.spike_1.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 200.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_spike_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "spike_1"
+outcome = "findings_recorded"
+
+[edges.policy]
+on_max_exceeded = "escalate"

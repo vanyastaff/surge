@@ -1,0 +1,137 @@
+# Single-loop archetype: outer Loop iterates a static 3-item list and runs an
+# Implement → Verify body subgraph per iteration. Exits on `all_items` and
+# routes to a success terminal.
+
+schema_version = 1
+start = "task_loop"
+
+[metadata]
+name = "flow_single_loop"
+created_at = "2026-05-06T00:00:00Z"
+
+# ── outer loop ──
+[nodes.task_loop]
+id = "task_loop"
+
+[nodes.task_loop.position]
+x = 0.0
+y = 0.0
+
+[[nodes.task_loop.declared_outcomes]]
+id = "completed"
+description = "All tasks processed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+
+[nodes.task_loop.config.iterates_over]
+type = "static"
+value = ["task_a", "task_b", "task_c"]
+
+[nodes.task_loop.config.exit_condition]
+type = "all_items"
+
+[nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+# ── terminal ──
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 200.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+# ── outer edges ──
+[[edges]]
+id = "e_loop_done"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "task_loop"
+outcome = "completed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+# ── body subgraph: implement → verify ──
+[subgraphs.task_body]
+start = "impl_in_body"
+
+[[subgraphs.task_body.edges]]
+id = "e_body_impl_to_verify"
+to = "verify_in_body"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "impl_in_body"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[subgraphs.task_body.nodes.impl_in_body]
+id = "impl_in_body"
+
+[subgraphs.task_body.nodes.impl_in_body.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.impl_in_body.declared_outcomes]]
+id = "done"
+description = "Body iteration: implementation complete"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.impl_in_body.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.impl_in_body.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.task_body.nodes.impl_in_body.config.custom_fields]
+
+[subgraphs.task_body.nodes.verify_in_body]
+id = "verify_in_body"
+
+[subgraphs.task_body.nodes.verify_in_body.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.verify_in_body.declared_outcomes]]
+id = "done"
+description = "Body iteration: verification complete"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.task_body.nodes.verify_in_body.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.verify_in_body.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.task_body.nodes.verify_in_body.config.custom_fields]

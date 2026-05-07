@@ -1,0 +1,162 @@
+# Bug-fix archetype: Reproduce → Implement → Verify → Terminal.
+# Verify declares `regressed` as a Backtrack edge to Reproduce, so failed
+# verification loops back through the whole chain rather than escalating.
+
+schema_version = 1
+start = "reproduce_1"
+
+[metadata]
+name = "flow_bug_fix"
+created_at = "2026-05-06T00:00:00Z"
+
+# ── reproduce_1 ──
+[nodes.reproduce_1]
+id = "reproduce_1"
+
+[nodes.reproduce_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.reproduce_1.declared_outcomes]]
+id = "reproduced"
+description = "Bug reproduced with stable repro steps"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.reproduce_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.reproduce_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.reproduce_1.config.custom_fields]
+
+# ── implement_1 ──
+[nodes.implement_1]
+id = "implement_1"
+
+[nodes.implement_1.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_1.declared_outcomes]]
+id = "patched"
+description = "Patch implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_1.config.custom_fields]
+
+# ── verify_1 (backtrack on `regressed`) ──
+[nodes.verify_1]
+id = "verify_1"
+
+[nodes.verify_1.position]
+x = 400.0
+y = 0.0
+
+[[nodes.verify_1.declared_outcomes]]
+id = "pass"
+description = "Verification clean"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.verify_1.declared_outcomes]]
+id = "regressed"
+description = "Verification surfaced regression — backtrack to reproduce"
+edge_kind_hint = "backtrack"
+is_terminal = false
+
+[nodes.verify_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.verify_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.verify_1.config.custom_fields]
+
+# ── terminal ──
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+# ── edges ──
+[[edges]]
+id = "e_repro_to_impl"
+to = "implement_1"
+kind = "forward"
+
+[edges.from]
+node = "reproduce_1"
+outcome = "reproduced"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_to_verify"
+to = "verify_1"
+kind = "forward"
+
+[edges.from]
+node = "implement_1"
+outcome = "patched"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_pass"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "verify_1"
+outcome = "pass"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_regressed"
+to = "reproduce_1"
+kind = "backtrack"
+
+[edges.from]
+node = "verify_1"
+outcome = "regressed"
+
+[edges.policy]
+max_traversals = 3
+on_max_exceeded = "escalate"
