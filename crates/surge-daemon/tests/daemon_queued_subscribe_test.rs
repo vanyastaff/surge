@@ -352,7 +352,11 @@ async fn subscribe_to_queued_run_streams_after_admission() {
 #[tokio::test]
 async fn subscribe_to_queued_then_stop_does_not_leak_waiter() {
     let temp = TempDir::new().unwrap();
-    let socket = unique_socket_path(&temp, "queue_sub_stop");
+    // Short prefix: macOS caps sockaddr_un.sun_path at 104 bytes and the
+    // CI runner's /Users/runner/work/... tempdir already eats most of
+    // that budget. The companion test uses "queue_sub" (9 chars) and
+    // passes; this one uses "qstop" (5 chars) for the same reason.
+    let socket = unique_socket_path(&temp, "qstop");
     let cfg = ServerConfig {
         max_active: 1,
         max_queue: 4,
