@@ -642,22 +642,30 @@ async fn dispatch(
         },
 
         DaemonRequest::Subscribe { request_id, run_id } => {
-            // Idempotent for connections that already have a live
-            // forwarder for this run_id. The StartRun Admitted arm
-            // pre-attaches a forwarder so fast-completing flows
-            // don't lose events to tokio broadcast's no-receivers
-            // drop semantic; if the same connection then sends a
-            // Subscribe (which `DaemonEngineFacade::start_run` does
-            // after every StartRun), spawning a SECOND forwarder
-            // would double-send every event on the wire. Detect
-            // the existing-and-alive case and reply SubscribeOk
-            // without spawning.
+            // Idempotent for connections that already have a forwarder
+            // for this run_id — alive OR finished. The StartRun
+            // Admitted arm pre-attaches a forwarder so fast-completing
+            // flows don't lose events to tokio broadcast's
+            // no-receivers drop semantic. Two cases:
+            //
+            //   * Forwarder still running: spawning a second one
+            //     would double-send every wire frame. Reply
+            //     SubscribeOk and skip.
+            //   * Forwarder already finished (run completed during
+            //     the StartRun→Subscribe IPC roundtrip — observed on
+            //     macOS for `flow_terminal_only.toml`): any events
+            //     have already been written to the wire by the
+            //     pre-attached forwarder; the publisher has been
+            //     deregistered by `spawn_forward_task`'s terminal
+            //     cleanup, so the fallback `broadcast.subscribe`
+            //     would return None and produce a misleading
+            //     RunNotActive error. Reply SubscribeOk: the client
+            //     already has whatever it was going to get from
+            //     the wire.
             {
                 let s = state.lock().await;
-                if let Some(existing) = s.forwarders.get(&run_id) {
-                    if !existing.is_finished() {
-                        return Some(DaemonResponse::SubscribeOk { request_id });
-                    }
+                if s.forwarders.contains_key(&run_id) {
+                    return Some(DaemonResponse::SubscribeOk { request_id });
                 }
             }
             if let Some(rx) = broadcast.subscribe(run_id).await {
@@ -667,14 +675,11 @@ async fn dispatch(
                 {
                     let mut s = state.lock().await;
                     s.subscriptions.insert(run_id);
-                    // Abort any dead-but-still-mapped forwarder
-                    // before replacing — the idempotency check
-                    // above filters out *live* duplicates, so any
-                    // entry reaching here is finished and safe to
-                    // drop.
-                    if let Some(old) = s.forwarders.insert(run_id, handle) {
-                        old.abort();
-                    }
+                    // No prior forwarder is possible here: the
+                    // idempotency block above returns early for any
+                    // existing entry (alive or finished). Plain
+                    // insert is correct.
+                    s.forwarders.insert(run_id, handle);
                 }
                 Some(DaemonResponse::SubscribeOk { request_id })
             } else {
