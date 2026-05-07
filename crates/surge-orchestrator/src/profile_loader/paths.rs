@@ -44,34 +44,50 @@ pub fn profiles_dir() -> Result<PathBuf, SurgeError> {
 mod tests {
     use super::*;
 
+    /// Process-wide lock that serialises tests mutating `SURGE_HOME`.
+    /// `cargo test` runs unit tests in parallel within a single binary;
+    /// without this guard, `EnvGuard::set("/tmp/a")` from one test could
+    /// race with `EnvGuard::unset()` from another and observe each
+    /// other's mutations. The lock is held for the lifetime of the guard
+    /// so the env state is stable for the duration of the test body.
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     /// Helper to run a closure with `SURGE_HOME` set to a value, restoring
-    /// the previous value (or removing the var) on drop. Tests in this
-    /// module are NOT marked `#[serial_test]` because the workspace does
-    /// not depend on `serial_test`; run only one at a time per crate
-    /// thread is the de-facto convention enforced by `cargo test`'s
-    /// default behavior on this scope.
+    /// the previous value (or removing the var) on drop.
     struct EnvGuard {
         prev: Option<String>,
+        // Hold the env-lock for the lifetime of the guard so concurrent
+        // tests in the same binary cannot see partial state. The guard
+        // is intentionally untyped (`Box<dyn ...>`) so the field can be
+        // declared on a struct that does not name `MutexGuard`'s lifetime.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl EnvGuard {
         fn set(value: &str) -> Self {
+            let lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
             let prev = std::env::var(SURGE_HOME_ENV).ok();
-            // SAFETY: tests in surge-orchestrator are single-threaded by
-            // default; the test harness serialises within a single binary.
+            // SAFETY: env_lock() serialises every test that mutates
+            // SURGE_HOME within this binary, so concurrent reads from
+            // other tests in this module observe a consistent value.
             unsafe { std::env::set_var(SURGE_HOME_ENV, value) };
-            Self { prev }
+            Self { prev, _lock: lock }
         }
 
         fn unset() -> Self {
+            let lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
             let prev = std::env::var(SURGE_HOME_ENV).ok();
             unsafe { std::env::remove_var(SURGE_HOME_ENV) };
-            Self { prev }
+            Self { prev, _lock: lock }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
+            // SAFETY: still holding `_lock`; env mutation is serialised.
             unsafe {
                 if let Some(v) = self.prev.take() {
                     std::env::set_var(SURGE_HOME_ENV, v);

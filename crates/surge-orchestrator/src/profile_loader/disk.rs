@@ -54,6 +54,11 @@ impl DiskProfileSet {
         }
 
         let mut profiles: Vec<DiskEntry> = Vec::new();
+        // Linear-time dedup keyed by `(role.id, role.version)`. The
+        // previous implementation re-scanned `profiles` for every new
+        // file, which is O(n²) in directory size; HashSet keeps it O(n).
+        let mut seen_keys: std::collections::HashSet<(String, semver::Version)> =
+            std::collections::HashSet::new();
         let read_dir = std::fs::read_dir(dir)?;
         for entry in read_dir {
             let entry = match entry {
@@ -80,9 +85,7 @@ impl DiskProfileSet {
                         profile.role.id.as_str().to_string(),
                         profile.role.version.clone(),
                     );
-                    if profiles.iter().any(|e| {
-                        e.profile.role.id.as_str() == key.0 && e.profile.role.version == key.1
-                    }) {
+                    if !seen_keys.insert(key.clone()) {
                         tracing::warn!(
                             target: "profile::disk",
                             path = %path.display(),

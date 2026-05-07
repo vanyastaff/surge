@@ -36,8 +36,8 @@ Profile registry code is split across three crates along the existing layer boun
 3. **`surge-orchestrator::profile_loader`** — disk I/O and 3-way resolution.
    - `surge_home()` and `profiles_dir()` honoring `SURGE_HOME`, mirroring `surge-persistence::store::default_path`.
    - `DiskProfileSet::scan` walking `*.toml` flat under `profiles_dir()`; warn-and-skip on parse failure.
-   - `ProfileRegistry::{load, resolve, list}` with the lookup order **versioned (`name-MAJOR.MINOR.toml`) → latest (`name.toml`) → bundled fallback**, tagging each result with `Provenance::{Versioned, Latest, Bundled}`.
-   - Version match is **canonical against `Profile.role.version`** (the semver in the TOML body); the filename is only a hint.
+   - `ProfileRegistry::{load, resolve, list}` with the lookup order **versioned (exact `role.version` match on disk) → latest (highest `role.version` on disk for the requested name) → bundled fallback**, tagging each result with `Provenance::{Versioned, Latest, Bundled}`.
+   - Version match is **canonical against `Profile.role.version`** (the semver in the TOML body); the filename is only a hint to humans and a duplicate-detection key. `name.toml`, `name-1.0.toml`, and `name-2.0.toml` are all candidates for the latest-disk lane and the highest body-version among them wins.
 
 4. **`surge-cli::commands::profile`** — user-facing CLI.
    - `surge profile list` with provenance column + optional `--format json`.

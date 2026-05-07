@@ -67,8 +67,11 @@ pub struct ValidateArgs {
 
 #[derive(Debug, Args)]
 pub struct NewArgs {
-    /// Profile name (must satisfy `ProfileKey` rules: ASCII letter start,
-    /// alphanumeric or `_-.@`, max 64 chars).
+    /// Profile name (ASCII letter start, then alphanumeric / `_` / `-` /
+    /// `.`, max 64 chars). `@` is intentionally rejected here even though
+    /// `ProfileKey` accepts it — `@` is the version delimiter in
+    /// `name@version` references and allowing it in names would make
+    /// references ambiguous.
     pub name: String,
 
     /// Optional base profile to inherit from (e.g. `implementer@1.0`).
@@ -273,8 +276,18 @@ fn run_validate(args: ValidateArgs) -> Result<()> {
 fn run_new(args: NewArgs) -> Result<()> {
     use surge_core::keys::ProfileKey;
 
-    // Validate the name now so we don't write a file the registry cannot
-    // load.
+    // Reject `@` in profile names even though `ProfileKey` accepts it.
+    // `@` is the version delimiter in `name@version` references; allowing
+    // it inside a name produces files like `foo@1.0-1.0.toml` that
+    // `parse_key_ref` cannot disambiguate.
+    if args.name.contains('@') {
+        bail!(
+            "profile name {:?} contains '@', which is reserved as the version delimiter in \
+             name@version references",
+            args.name
+        );
+    }
+    // Validate the rest of the character set via ProfileKey.
     let key = ProfileKey::try_new(&args.name)
         .with_context(|| format!("invalid profile name {:?}", args.name))?;
 

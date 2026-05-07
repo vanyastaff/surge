@@ -108,10 +108,21 @@ impl ProfileRegistry {
         // 2. Walk the extends chain using the same lookup as `find_leaf`,
         //    but for parent references (which themselves are ProfileKey
         //    forms like "implementer@1.0").
+        //
+        //    Crucially, only `ProfileNotFound` is collapsed into `Ok(None)`
+        //    so the walker can attribute it to the *parent* reference;
+        //    every other resolution error (`ProfileVersionMismatch`,
+        //    `InvalidProfileKey`, etc.) is propagated unchanged so the
+        //    caller sees the actionable failure instead of a generic
+        //    "not found".
         let chain = collect_chain(leaf.clone(), |parent_key: &ProfileKey| {
             let parsed = parse_key_ref(parent_key.as_str())
                 .map_err(|e| SurgeError::InvalidProfileKey(e.to_string()))?;
-            Ok(self.find_leaf(&parsed).ok().map(|(p, _)| p))
+            match self.find_leaf(&parsed) {
+                Ok((p, _)) => Ok(Some(p)),
+                Err(SurgeError::ProfileNotFound(_)) => Ok(None),
+                Err(other) => Err(other),
+            }
         })?;
 
         let chain_keys: Vec<ProfileKey> = chain.iter().map(|p| p.role.id.clone()).collect();

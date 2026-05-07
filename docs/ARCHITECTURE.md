@@ -171,9 +171,9 @@ Registry code is split across the three layers it touches (codified in [ADR 0001
 
 ### Resolution order
 
-`versioned (name-MAJOR.MINOR.toml on disk) → latest (name.toml on disk) → bundled fallback`.
+`versioned (exact role.version match on disk) → latest (highest role.version on disk for the requested name) → bundled fallback`.
 
-Version match is **canonical against `Profile.role.version`** in the TOML body — the filename is just a hint and a duplicate-detection key. Inheritance via `extends = "generic@1.0"` with shallow merge. The agent runtime is identified by `runtime.agent_id` (default `"claude-code"`); the engine derives `AgentKind` via `surge_acp::Registry::builtin().find(agent_id)`. `mock@1.0` is a bundled profile — no special-case fallback.
+Version match is **canonical against `Profile.role.version`** in the TOML body — the filename is just a hint and a duplicate-detection key. `name.toml`, `name-1.0.toml`, and `name-2.0.toml` are all candidates for the latest-disk lane; the highest body-version wins. Inheritance via `extends = "generic@1.0"` with shallow merge. The agent runtime is identified by `runtime.agent_id` (default `"claude-code"`); the engine derives `AgentKind` via `surge_acp::Registry::builtin().find(agent_id)`. `mock@1.0` is a bundled profile — no special-case fallback.
 
 Templates are Handlebars (strict mode at `ProfileRegistry::load` time so broken templates fail loudly; lenient at agent-launch so optional bindings don't panic stages). HTML escaping is disabled.
 

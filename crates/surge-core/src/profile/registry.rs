@@ -95,8 +95,11 @@ pub struct ResolvedProfile {
 ///
 /// The walker enforces:
 ///
-/// - **Cycle detection.** If a profile id appears twice in the chain it
-///   returns [`SurgeError::ProfileExtendsCycle`].
+/// - **Cycle detection.** If a profile's canonical `role.id` appears twice
+///   in the chain it returns [`SurgeError::ProfileExtendsCycle`]. The
+///   check uses the *resolved* parent's `role.id`, not the raw `extends`
+///   reference text — so `extends = "child@1.0"` and `extends = "child"`
+///   collide correctly when they both resolve to the same profile.
 /// - **Depth guard.** Chains longer than [`MAX_EXTENDS_DEPTH`] return
 ///   [`SurgeError::ProfileExtendsTooDeep`]. Depth counts the number of
 ///   parents traversed: a leaf with no `extends` has depth 0.
@@ -111,6 +114,11 @@ where
 {
     // Build the chain leaf-first, then reverse to root-first before returning.
     let mut chain: Vec<Profile> = Vec::with_capacity(2);
+    // `seen_ids` tracks canonical `role.id` strings (not raw `extends`
+    // references). This is what makes cycle detection robust against
+    // version qualifiers in the reference: `child@1.0` and `child` both
+    // resolve to the profile with `role.id = "child"`, so the second
+    // occurrence is caught as a cycle.
     let mut seen_ids: Vec<String> = Vec::with_capacity(2);
 
     seen_ids.push(leaf.role.id.as_str().to_string());
@@ -146,19 +154,6 @@ where
             });
         }
 
-        let parent_id_str = parent_key.as_str().to_string();
-        if seen_ids.contains(&parent_id_str) {
-            // Record the cycle in observed order so the error message names
-            // the path through the cycle.
-            seen_ids.push(parent_id_str.clone());
-            tracing::error!(
-                target: "profile::chain",
-                chain = ?seen_ids,
-                "extends cycle detected"
-            );
-            return Err(SurgeError::ProfileExtendsCycle { chain: seen_ids });
-        }
-
         let parent = lookup(&parent_key)?.ok_or_else(|| {
             tracing::error!(
                 target: "profile::chain",
@@ -168,7 +163,21 @@ where
             SurgeError::ProfileNotFound(parent_key.as_str().to_string())
         })?;
 
-        seen_ids.push(parent_id_str);
+        // Canonical id from the resolved profile, not from the raw
+        // `extends` text. This catches cycles like
+        // `extends = "child@1.0"` → `extends = "child"` consistently.
+        let parent_canonical = parent.role.id.as_str().to_string();
+        if seen_ids.contains(&parent_canonical) {
+            seen_ids.push(parent_canonical);
+            tracing::error!(
+                target: "profile::chain",
+                chain = ?seen_ids,
+                "extends cycle detected"
+            );
+            return Err(SurgeError::ProfileExtendsCycle { chain: seen_ids });
+        }
+
+        seen_ids.push(parent_canonical);
         chain.push(parent);
         depth += 1;
     }
@@ -783,6 +792,34 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, SurgeError::ProfileExtendsCycle { .. }));
+    }
+
+    #[test]
+    fn collect_chain_cycle_detected_when_extends_uses_versioned_ref() {
+        // Regression: the leaf's role.id is "child"; its extends points at
+        // "child@1.0". Pre-fix the walker tracked seen ids by raw extends
+        // text and missed this cycle until the depth guard tripped.
+        let leaf = with_extends("child", Some("child@1.0"));
+        let leaf_for_lookup = leaf.clone();
+        let err = collect_chain(leaf, move |key| {
+            // Both "child" and "child@1.0" resolve to the same profile.
+            if key.as_str() == "child" || key.as_str() == "child@1.0" {
+                Ok(Some(leaf_for_lookup.clone()))
+            } else {
+                Ok(None)
+            }
+        })
+        .unwrap_err();
+        match err {
+            SurgeError::ProfileExtendsCycle { chain } => {
+                // Canonical "child" appears at least twice in the chain trace.
+                assert!(
+                    chain.iter().filter(|s| s.as_str() == "child").count() >= 2,
+                    "expected canonical 'child' to repeat in cycle chain, got {chain:?}"
+                );
+            },
+            other => panic!("expected ProfileExtendsCycle, got {other:?}"),
+        }
     }
 
     #[test]
