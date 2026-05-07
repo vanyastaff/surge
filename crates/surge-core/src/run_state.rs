@@ -140,7 +140,11 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
         (RunState::NotStarted, EventPayload::RunStarted { .. }) => Ok(RunState::Bootstrapping {
             stage: BootstrapStage::Description,
             substate: BootstrapSubstate::AgentRunning {
-                session: SessionId::new(),
+                // Replay determinism: fold must not introduce random IDs.
+                // The real session id arrives via `BootstrapStageStarted` /
+                // `SessionOpened` events; this is a stable placeholder until
+                // then.
+                session: SessionId::nil(),
                 started_seq: event.seq,
             },
         }),
@@ -388,9 +392,19 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
             }
         },
         // Many (state, event) pairs are pass-through — events like ToolCalled,
-        // EdgeTraversed, SandboxElevation*, HookExecuted, ApprovalRequested/Decided,
+        // EdgeTraversed, SandboxElevation*, ApprovalRequested/Decided,
         // BootstrapStageStarted etc. are recorded for replay but do not drive
         // the M1 state machine. Engine in M5 may extend behavior.
+        //
+        // Hook-related events are explicit no-ops for replay determinism: the
+        // engine appends `HookExecuted` and `OutcomeRejectedByHook` for audit,
+        // but `RunMemory.outcomes` is only mutated on `OutcomeReported`. Since
+        // a rejecting `on_outcome` hook fires BEFORE the engine appends
+        // `OutcomeReported`, no fold-side mutation is needed. These explicit
+        // arms prevent a future change from accidentally treating the audit
+        // events as state transitions.
+        (state, EventPayload::HookExecuted { .. }) => Ok(state),
+        (state, EventPayload::OutcomeRejectedByHook { .. }) => Ok(state),
         (state, _) => Ok(state),
     }
 }
@@ -400,14 +414,18 @@ fn advance_bootstrap_stage(stage: BootstrapStage, seq: u64) -> RunState {
         BootstrapStage::Description => RunState::Bootstrapping {
             stage: BootstrapStage::Roadmap,
             substate: BootstrapSubstate::AgentRunning {
-                session: SessionId::new(),
+                // Deterministic placeholder — see RunStarted arm in `apply`
+                // for context. Real session id flows via separate events.
+                session: SessionId::nil(),
                 started_seq: seq,
             },
         },
         BootstrapStage::Roadmap => RunState::Bootstrapping {
             stage: BootstrapStage::Flow,
             substate: BootstrapSubstate::AgentRunning {
-                session: SessionId::new(),
+                // Deterministic placeholder — see RunStarted arm in `apply`
+                // for context. Real session id flows via separate events.
+                session: SessionId::nil(),
                 started_seq: seq,
             },
         },

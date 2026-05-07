@@ -15,6 +15,15 @@ macro_rules! define_id {
                 Self(Ulid::new())
             }
 
+            /// Deterministic placeholder ID — all-zero ULID. Used by pure
+            /// folds that need a stable value but have no real ID to bind
+            /// (replay determinism requires no random IDs introduced inside
+            /// `apply`).
+            #[must_use]
+            pub const fn nil() -> Self {
+                Self(Ulid::nil())
+            }
+
             #[must_use]
             pub fn as_ulid(&self) -> Ulid {
                 self.0

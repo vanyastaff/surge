@@ -22,6 +22,9 @@ use surge_core::node::OutcomeDecl;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 use surge_persistence::runs::run_writer::RunWriter;
 
+use surge_core::hooks::HookTrigger;
+
+use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome, record_hook_executed};
 use crate::engine::sandbox_factory::build_sandbox;
 use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
 use crate::engine::stage::{StageError, StageResult};
@@ -65,6 +68,9 @@ pub struct AgentStageParams<'a> {
     /// Run-level server list. Each entry maps a server name to its timeout
     /// and allowed-tools filter for this session's `RoutingToolDispatcher`.
     pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
+    /// Lifecycle-hook executor. The default `HookExecutor::new()` runs hooks
+    /// via the OS shell; tests substitute via `HookExecutor::with_spawner`.
+    pub hook_executor: &'a HookExecutor,
 }
 
 /// Execute a single agent stage.
@@ -270,6 +276,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // SessionEstablished event (or earlier ToolCall events).
     let mut events = p.bridge.subscribe();
 
+    // Track outcomes rejected by `on_outcome` hooks within THIS session so we
+    // can surface `StageFailed` once the agent burns its retry budget.
+    let max_outcome_rejections: u32 = p.agent_config.limits.max_retries;
+    let mut outcome_rejection_attempts: u32 = 0;
+
     let session_id = p
         .bridge
         .open_session(session_config)
@@ -313,6 +324,67 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             BridgeEvent::OutcomeReported {
                 outcome, summary, ..
             } => {
+                // on_outcome hook chain runs BEFORE OutcomeReported is persisted.
+                // A rejecting hook lets the agent attempt a different outcome
+                // until `limits.max_retries` is exhausted.
+                let hook_ctx = HookContext::for_node(p.node)
+                    .with_session(session_id)
+                    .with_outcome(&outcome);
+                let outcome_chain = p
+                    .hook_executor
+                    .run_hooks(&p.agent_config.hooks, HookTrigger::OnOutcome, &hook_ctx)
+                    .await;
+                for record in outcome_chain.executed() {
+                    record_hook_executed(p.writer, record).await;
+                }
+
+                if let HookOutcome::Reject {
+                    reason, hook_id, ..
+                } = &outcome_chain
+                {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::OutcomeRejectedByHook {
+                                node: p.node.clone(),
+                                outcome: outcome.clone(),
+                                hook_id: hook_id.clone(),
+                            },
+                        ))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                    outcome_rejection_attempts += 1;
+                    tracing::info!(
+                        target: "engine::stage::agent",
+                        node = %p.node,
+                        outcome = %outcome,
+                        hook_id = %hook_id,
+                        attempt = outcome_rejection_attempts,
+                        max = max_outcome_rejections,
+                        reason = %reason,
+                        "on_outcome hook rejected outcome; awaiting agent retry"
+                    );
+
+                    if outcome_rejection_attempts > max_outcome_rejections {
+                        let exhausted_reason = format!(
+                            "on_outcome rejection budget exhausted (last reject from '{hook_id}')"
+                        );
+                        p.writer
+                            .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
+                                node: p.node.clone(),
+                                reason: exhausted_reason.clone(),
+                                retry_available: false,
+                            }))
+                            .await
+                            .map_err(|e| StageError::Storage(e.to_string()))?;
+                        // Close the session before bailing — the agent isn't
+                        // going to recover at this point.
+                        let _ = p.bridge.close_session(session_id).await;
+                        return Err(StageError::AgentCrashed(exhausted_reason));
+                    }
+                    continue;
+                }
+
                 p.writer
                     .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
                         node: p.node.clone(),
@@ -371,6 +443,47 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     worktree_root: p.worktree_path,
                     run_memory: p.run_memory,
                 };
+
+                // pre_tool_use hooks gate the dispatch. A Reject short-circuits
+                // the call: we send a synthetic tool-error reply and continue
+                // the agent loop without invoking the dispatcher.
+                let hook_ctx = HookContext::for_node(p.node)
+                    .with_session(session_id)
+                    .with_tool(tool.as_str(), Some(args_redacted_json.as_str()));
+                let pre_outcome = p
+                    .hook_executor
+                    .run_hooks(&p.agent_config.hooks, HookTrigger::PreToolUse, &hook_ctx)
+                    .await;
+                for record in pre_outcome.executed() {
+                    record_hook_executed(p.writer, record).await;
+                }
+                if let HookOutcome::Reject {
+                    reason, hook_id, ..
+                } = &pre_outcome
+                {
+                    tracing::warn!(
+                        target: "engine::stage::agent",
+                        node = %p.node,
+                        tool = %tool,
+                        hook_id = %hook_id,
+                        reason = %reason,
+                        "pre_tool_use hook rejected; sending tool-error reply"
+                    );
+                    p.bridge
+                        .reply_to_tool(
+                            session_id,
+                            call_id,
+                            AcpResultPayload::Error {
+                                message: format!(
+                                    "pre_tool_use hook '{hook_id}' rejected call: {reason}"
+                                ),
+                            },
+                        )
+                        .await
+                        .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+                    continue;
+                }
+
                 let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Persist ToolCalled + ToolResultReceived.
@@ -423,6 +536,30 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .reply_to_tool(session_id, call_id, acp_result)
                     .await
                     .map_err(|e| StageError::Bridge(format!("reply_to_tool: {e}")))?;
+
+                // post_tool_use cannot un-run the call. Record execution and
+                // log Reject as a warning; the agent has already received the
+                // result above.
+                let post_outcome = p
+                    .hook_executor
+                    .run_hooks(&p.agent_config.hooks, HookTrigger::PostToolUse, &hook_ctx)
+                    .await;
+                for record in post_outcome.executed() {
+                    record_hook_executed(p.writer, record).await;
+                }
+                if let HookOutcome::Reject {
+                    reason, hook_id, ..
+                } = &post_outcome
+                {
+                    tracing::warn!(
+                        target: "engine::stage::agent",
+                        node = %p.node,
+                        tool = %tool,
+                        hook_id = %hook_id,
+                        reason = %reason,
+                        "post_tool_use hook rejected (cannot un-run; logged for audit)"
+                    );
+                }
             },
             BridgeEvent::TokenUsage {
                 prompt_tokens,

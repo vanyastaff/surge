@@ -34,6 +34,7 @@ pub mod error;
 pub mod facade;
 pub mod frames;
 pub mod handle;
+pub mod hooks;
 pub mod ipc;
 pub mod predicates;
 pub mod replay;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use surge_core::{ContentHash, RunId, VersionedEventPayload};
+use surge_core::{ContentHash, RunId, VersionedEventPayload, migrate_payload};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader_views as views;
@@ -72,7 +72,7 @@ impl RunReader {
         tokio::task::spawn_blocking(move || -> Result<Option<ReadEvent>, StorageError> {
             let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
             let row = conn.query_row(
-                "SELECT seq, timestamp, kind, payload FROM events WHERE seq = ?",
+                "SELECT seq, timestamp, kind, payload, schema_version FROM events WHERE seq = ?",
                 params![seq.0 as i64],
                 |row| {
                     let blob: Vec<u8> = row.get(3)?;
@@ -81,12 +81,22 @@ impl RunReader {
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         blob,
+                        row.get::<_, i64>(4)? as u32,
                     ))
                 },
             );
             match row {
-                Ok((seq, ts, kind, blob)) => {
-                    let payload: VersionedEventPayload = serde_json::from_slice(&blob)?;
+                Ok((seq, ts, kind, blob, schema_version)) => {
+                    let inner = migrate_payload(schema_version, &blob).map_err(|e| {
+                        StorageError::Pool(format!(
+                            "schema migration failed for seq={}: {e}",
+                            seq.0
+                        ))
+                    })?;
+                    let payload = VersionedEventPayload {
+                        schema_version,
+                        payload: inner,
+                    };
                     Ok(Some(ReadEvent {
                         seq,
                         timestamp_ms: ts,
@@ -111,7 +121,7 @@ impl RunReader {
         tokio::task::spawn_blocking(move || -> Result<Vec<ReadEvent>, StorageError> {
             let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
             let mut stmt = conn.prepare(
-                "SELECT seq, timestamp, kind, payload
+                "SELECT seq, timestamp, kind, payload, schema_version
                  FROM events WHERE seq >= ? AND seq < ? ORDER BY seq",
             )?;
             let iter =
@@ -122,12 +132,22 @@ impl RunReader {
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         blob,
+                        row.get::<_, i64>(4)? as u32,
                     ))
                 })?;
             let mut out = Vec::new();
             for r in iter {
-                let (seq, ts, kind, blob) = r?;
-                let payload: VersionedEventPayload = serde_json::from_slice(&blob)?;
+                let (seq, ts, kind, blob, schema_version) = r?;
+                let inner = migrate_payload(schema_version, &blob).map_err(|e| {
+                    StorageError::Pool(format!(
+                        "schema migration failed for seq={}: {e}",
+                        seq.0
+                    ))
+                })?;
+                let payload = VersionedEventPayload {
+                    schema_version,
+                    payload: inner,
+                };
                 out.push(ReadEvent {
                     seq,
                     timestamp_ms: ts,

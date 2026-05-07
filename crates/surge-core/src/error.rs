@@ -72,6 +72,14 @@ pub enum SurgeError {
         actual: crate::content_hash::ContentHash,
     },
 
+    /// Persisted event payload uses a schema version older than the supported minimum.
+    #[error("event payload schema {found} is older than supported minimum {min}")]
+    SchemaTooOld { found: u32, min: u32 },
+
+    /// Persisted event payload uses a schema version newer than this build can read.
+    #[error("event payload schema {found} is newer than supported maximum {max}")]
+    SchemaTooNew { found: u32, max: u32 },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -157,5 +165,25 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(msg.contains("sha256:"));
+    }
+
+    #[test]
+    fn schema_too_old_displays_found_and_min() {
+        let err = SurgeError::SchemaTooOld { found: 0, min: 1 };
+        let msg = err.to_string();
+        assert!(msg.contains("0"));
+        assert!(msg.contains("1"));
+        assert!(msg.contains("older"));
+    }
+
+    #[test]
+    fn schema_too_new_displays_found_and_max() {
+        let err = SurgeError::SchemaTooNew {
+            found: 999,
+            max: 1,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("999"));
+        assert!(msg.contains("newer"));
     }
 }

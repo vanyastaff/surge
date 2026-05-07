@@ -122,6 +122,44 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 #[allow(dead_code)]
 pub use validate_for_m6 as validate_for_m5;
 
+/// `validate_for_m6` plus the `surge_core::ReferenceResolver` lookups for
+/// profiles, templates, and named agents. Engine wiring picks this entry
+/// point when a real registry is available; the terminal-only smoke path
+/// can still use the no-resolver `validate_for_m6`.
+///
+/// # Errors
+/// - All `validate_for_m6` errors.
+/// - [`EngineError::GraphInvalid`] for every reference-resolution failure
+///   reported by the supplied resolver, joined into a single message.
+pub fn validate_for_m6_with_resolver(
+    graph: &Graph,
+    resolver: &dyn surge_core::ReferenceResolver,
+) -> Result<(), EngineError> {
+    validate_for_m6(graph)?;
+
+    // Surge-core's reference checks layer on top of the structural pass —
+    // surface only resolver-related diagnostics, since the rest are already
+    // covered by validate_for_m6.
+    if let Err(findings) = surge_core::validate_with_resolver(graph, resolver) {
+        let resolver_failures: Vec<String> = findings
+            .into_iter()
+            .filter_map(|f| match f.kind {
+                surge_core::ValidationErrorKind::ProfileNotFound { .. }
+                | surge_core::ValidationErrorKind::TemplateNotFound { .. }
+                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => Some(f.message),
+                _ => None,
+            })
+            .collect();
+        if !resolver_failures.is_empty() {
+            return Err(EngineError::GraphInvalid(format!(
+                "reference resolution failed: {}",
+                resolver_failures.join("; ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

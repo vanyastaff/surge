@@ -2,7 +2,7 @@
 
 use crate::approvals::ApprovalConfig;
 use crate::edge::EdgeKind;
-use crate::hooks::Hook;
+use crate::hooks::{Hook, HookTrigger};
 use crate::keys::{OutcomeKey, ProfileKey};
 use crate::sandbox::SandboxConfig;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,20 @@ pub struct Profile {
     pub prompt: PromptTemplate,
     #[serde(default)]
     pub inspector_ui: InspectorUi,
+}
+
+impl Profile {
+    /// Iterate hooks declared directly on this profile that fire on the
+    /// requested `trigger`. `extends`-chain resolution is intentionally NOT
+    /// performed here — it is owned by the future `Profile registry & bundled
+    /// roles` milestone. The orchestrator's `HookExecutor` consumes a single
+    /// already-resolved `Profile`.
+    pub fn hooks_for_trigger(&self, trigger: HookTrigger) -> impl Iterator<Item = &Hook> {
+        self.hooks
+            .entries
+            .iter()
+            .filter(move |hook| hook.trigger == trigger)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

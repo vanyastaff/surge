@@ -75,19 +75,26 @@ impl MatcherSpec {
                 _ => return false,
             }
         }
-        if let Some(glob) = &self.file_glob {
-            // M1 stub: substring-match against file path. Engine will replace
-            // with proper glob matcher (probably via the `globset` crate).
+        if let Some(pattern_text) = &self.file_glob {
             match ctx.file_path {
-                Some(p) => {
-                    if !p.to_string_lossy().contains(glob.trim_start_matches('*')) {
-                        return false;
-                    }
+                Some(path) => match glob::Pattern::new(pattern_text) {
+                    Ok(pattern) if pattern.matches_path(path) => {},
+                    _ => return false,
                 },
                 None => return false,
             }
         }
         true
+    }
+}
+
+impl Hook {
+    /// True when the hook is configured for `trigger` AND the matcher accepts
+    /// the supplied context. The engine's `HookExecutor` calls this once per
+    /// candidate hook before spawning the command.
+    #[must_use]
+    pub fn matches(&self, trigger: HookTrigger, ctx: &MatchContext<'_>) -> bool {
+        self.trigger == trigger && self.matcher.matches(ctx)
     }
 }
 
@@ -103,6 +110,7 @@ pub struct MatchContext<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum HookTrigger {
     PreToolUse,
     PostToolUse,
@@ -219,5 +227,126 @@ mod tests {
             file_path: None,
         };
         assert!(m.matches(&ctx));
+    }
+
+    #[test]
+    fn file_glob_matches_with_glob_pattern() {
+        let m = MatcherSpec {
+            file_glob: Some("**/*.rs".into()),
+            ..Default::default()
+        };
+        let ctx_match = MatchContext {
+            trigger: HookTrigger::PostToolUse,
+            tool: None,
+            tool_args_text: None,
+            outcome: None,
+            node: None,
+            file_path: Some(Path::new("crates/surge-core/src/lib.rs")),
+        };
+        assert!(m.matches(&ctx_match));
+
+        let ctx_skip = MatchContext {
+            trigger: HookTrigger::PostToolUse,
+            tool: None,
+            tool_args_text: None,
+            outcome: None,
+            node: None,
+            file_path: Some(Path::new("docs/README.md")),
+        };
+        assert!(!m.matches(&ctx_skip));
+    }
+
+    #[test]
+    fn file_glob_rejects_when_no_path_in_context() {
+        let m = MatcherSpec {
+            file_glob: Some("**/*.rs".into()),
+            ..Default::default()
+        };
+        let ctx = MatchContext {
+            trigger: HookTrigger::PostToolUse,
+            tool: None,
+            tool_args_text: None,
+            outcome: None,
+            node: None,
+            file_path: None,
+        };
+        assert!(!m.matches(&ctx));
+    }
+
+    #[test]
+    fn invalid_glob_pattern_does_not_match() {
+        let m = MatcherSpec {
+            file_glob: Some("[unterminated".into()),
+            ..Default::default()
+        };
+        let ctx = MatchContext {
+            trigger: HookTrigger::PostToolUse,
+            tool: None,
+            tool_args_text: None,
+            outcome: None,
+            node: None,
+            file_path: Some(Path::new("anything.rs")),
+        };
+        assert!(!m.matches(&ctx));
+    }
+
+    #[test]
+    fn tool_arg_substring_filter() {
+        let m = MatcherSpec {
+            tool_arg_contains: Some("--write".into()),
+            ..Default::default()
+        };
+        let hit = MatchContext {
+            trigger: HookTrigger::PreToolUse,
+            tool: None,
+            tool_args_text: Some("cargo fmt --write all"),
+            outcome: None,
+            node: None,
+            file_path: None,
+        };
+        assert!(m.matches(&hit));
+
+        let miss = MatchContext {
+            trigger: HookTrigger::PreToolUse,
+            tool: None,
+            tool_args_text: Some("cargo fmt --check"),
+            outcome: None,
+            node: None,
+            file_path: None,
+        };
+        assert!(!m.matches(&miss));
+    }
+
+    #[test]
+    fn hook_matches_combines_trigger_and_matcher() {
+        let h = Hook {
+            id: "fmt-check".into(),
+            trigger: HookTrigger::PostToolUse,
+            matcher: MatcherSpec {
+                tool: Some("edit_file".into()),
+                ..Default::default()
+            },
+            command: "cargo fmt --check".into(),
+            on_failure: HookFailureMode::Warn,
+            timeout_seconds: Some(30),
+            inherit: HookInheritance::Extend,
+        };
+        let ctx_hit = MatchContext {
+            trigger: HookTrigger::PostToolUse,
+            tool: Some("edit_file"),
+            tool_args_text: None,
+            outcome: None,
+            node: None,
+            file_path: None,
+        };
+        assert!(h.matches(HookTrigger::PostToolUse, &ctx_hit));
+        // Wrong trigger short-circuits even if the matcher would accept.
+        assert!(!h.matches(HookTrigger::PreToolUse, &ctx_hit));
+        // Tool mismatch fails the matcher.
+        let ctx_miss = MatchContext {
+            tool: Some("read_file"),
+            ..ctx_hit
+        };
+        assert!(!h.matches(HookTrigger::PostToolUse, &ctx_miss));
     }
 }

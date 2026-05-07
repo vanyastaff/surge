@@ -83,6 +83,9 @@ rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
 # File paths
 dirs = "5"
 
+# Glob pattern matching (used by hook MatcherSpec::file_glob)
+glob = "0.3"
+
 # HTTP client (remote registry fetching)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 

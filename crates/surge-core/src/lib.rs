@@ -41,6 +41,7 @@ pub mod human_gate_config;
 pub mod keys;
 pub mod loop_config;
 pub mod mcp_config;
+pub mod migrations;
 pub mod node;
 pub mod notify_config;
 pub mod predicate;
@@ -71,6 +72,7 @@ pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
+pub use migrations::{IdentityV1, MigrationChain, migrate_payload};
 pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;
 pub use profile::{Profile, Role, RoleCategory};
@@ -80,4 +82,7 @@ pub use run_event::{
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
 pub use run_status::{ParseRunStatusError, RunStatus};
-pub use validation::{Severity, ValidationError, ValidationErrorKind, validate};
+pub use validation::{
+    NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind, validate,
+    validate_with_resolver,
+};

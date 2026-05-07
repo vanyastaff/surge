@@ -10,6 +10,7 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::AgentConfig;
 use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
+use surge_orchestrator::engine::hooks::HookExecutor;
 use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use surge_orchestrator::engine::tools::{
     ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
@@ -77,6 +78,7 @@ async fn agent_stage_loops_until_outcome_reported() {
     let node = NodeKey::try_from("plan_1").unwrap();
     let tool_resolutions =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
         node: &node,
         agent_config: &cfg,
@@ -91,6 +93,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         human_input_timeout: std::time::Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        hook_executor: &hook_executor,
     })
     .await
     .unwrap();
