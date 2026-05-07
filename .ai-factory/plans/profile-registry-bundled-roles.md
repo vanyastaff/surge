@@ -72,12 +72,12 @@ These are decisions taken at planning time so /aif-implement does not re-litigat
 
 ### Phase 2 — Bundled assets in `surge-core`
 
-- [ ] Task 8: `BundledRegistry` skeleton with `include_str!` pattern; create `crates/surge-core/bundled/profiles/` dir; re-export from `lib.rs` (depends on 1)
-- [ ] Task 9: Author 3 bootstrap profiles — Description Author, Roadmap Planner, Flow Generator — using REAL field shape (`prompt = { system = "..." }`, `tools = { default_mcp = [], default_skills = [], default_shell_allowlist = [] }`, `sandbox = { mode = "read_only" }`, `runtime` includes `agent_id`). Register in `BundledRegistry::all()` (depends on 8, 28)
-- [ ] Task 10: Author 7 execution profiles — Spec Author, Architect, Implementer, Test Author, Verifier, Reviewer, PR Composer (depends on 8, 28)
-- [ ] Task 11: Author 4 specialized variants using `extends` (Bug-Fix, Refactor, Security Reviewer, Migration Implementer) + assertion test that every bundled profile resolves through the merge chain (depends on 5, 6, 10)
-- [ ] Task 12: Author 2 project-level profiles — Project Context Author, Feature Planner (depends on 8, 28)
-- [ ] Task 31: Bundle `mock@1.0.toml` so the M5 mock test path keeps working through the registry (`runtime.agent_id = "mock"` resolves to `AgentKind::Mock`) (depends on 8, 28)
+- [x] Task 8: `BundledRegistry` skeleton with `include_str!` pattern; create `crates/surge-core/bundled/profiles/` dir; re-export from `lib.rs` (depends on 1)
+- [x] Task 9: Author 3 bootstrap profiles — Description Author, Roadmap Planner, Flow Generator — using REAL field shape (`prompt = { system = "..." }`, `tools = { default_mcp = [], default_skills = [], default_shell_allowlist = [] }`, `sandbox = { mode = "read_only" }`, `runtime` includes `agent_id`). Register in `BundledRegistry::all()` (depends on 8, 28)
+- [x] Task 10: Author 7 execution profiles — Spec Author, Architect, Implementer, Test Author, Verifier, Reviewer, PR Composer (depends on 8, 28)
+- [x] Task 11: Author 4 specialized variants using `extends` (Bug-Fix, Refactor, Security Reviewer, Migration Implementer) + assertion test that every bundled profile resolves through the merge chain (depends on 5, 6, 10)
+- [x] Task 12: Author 2 project-level profiles — Project Context Author, Feature Planner (depends on 8, 28)
+- [x] Task 31: Bundle `mock@1.0.toml` so the M5 mock test path keeps working through the registry (`runtime.agent_id = "mock"` resolves to `AgentKind::Mock`) (depends on 8, 28)
 <!-- Commit checkpoint: tasks 8-12, 31 -->
 
 ### Phase 3 — Disk loader, ProfileRegistry, engine plumbing

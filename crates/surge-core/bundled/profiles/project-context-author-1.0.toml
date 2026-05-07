@@ -1,0 +1,56 @@
+# Project Context Author — project-level profile.
+#
+# Produces or refreshes project.md from the working tree.
+
+schema_version = 1
+
+[role]
+id = "project-context-author"
+version = "1.0.0"
+display_name = "Project Context Author"
+category = "agents"
+description = "Reads the working tree and produces a stable project.md for downstream agent context."
+when_to_use = "On `surge init` and on demand via `surge project describe`. Refreshes only when the working tree actually changed."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.1
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[[outcomes]]
+id = "drafted"
+description = "project.md drafted (or refreshed on real change)."
+edge_kind_hint = "forward"
+required_artifacts = ["project.md"]
+
+[[outcomes]]
+id = "no_change"
+description = "Working tree hash matches the previous project.md generation; no update needed."
+edge_kind_hint = "forward"
+
+[[bindings.expected]]
+name = "worktree_root"
+source = { source = "any" }
+
+[prompt]
+system = """\
+You are the Project Context Author. Read `{{worktree_root}}` and produce `project.md`.
+
+Output schema (Markdown sections):
+- `## Project name`
+- `## Primary language` and `## Framework`
+- `## Stack` — one bullet per significant dependency family with version when knowable.
+- `## Key directories` — short list with one-line purpose each.
+- `## Build commands` — derived from `Makefile` / `Cargo.toml` / `package.json` / `justfile`.
+- `## Tests` — where they live and how to run them.
+- `## Conventions` — anything noticeable: error type, log style, branch naming.
+
+Rules:
+- Read `AGENTS.md`, `CLAUDE.md`, `README.md`, root config files first; trust them over inference.
+- Content-addressed: if everything you would write matches the existing `project.md`, report `no_change` and skip the write.
+- No project history, no roadmap state, no open issues — that's other artifacts.
+"""

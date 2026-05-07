@@ -1,0 +1,73 @@
+# Implementer — execution profile.
+#
+# Generic implementation profile. Specialized variants
+# (bug-fix-implementer, refactor-implementer) extend this one.
+
+schema_version = 1
+
+[role]
+id = "implementer"
+version = "1.0.0"
+display_name = "Implementer"
+category = "agents"
+description = "Writes the code described by a spec, respecting project conventions and the architecture rules."
+when_to_use = "Default execution profile for any normal feature work after Spec Author."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.2
+default_max_tokens = 200000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "workspace-write"
+
+[tools]
+default_skills = ["aif-best-practices", "aif-implement"]
+
+[[outcomes]]
+id = "implemented"
+description = "All spec subtasks implemented and the project compiles."
+edge_kind_hint = "forward"
+
+[[outcomes]]
+id = "blocked"
+description = "Implementation hit a blocker that requires human input or spec revision."
+edge_kind_hint = "escalate"
+
+[[outcomes]]
+id = "partial"
+description = "Some subtasks complete; others deferred with explicit reason. Engine should re-enter."
+edge_kind_hint = "backtrack"
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[[bindings.expected]]
+name = "adr"
+source = { source = "node_output", from_role = "architect" }
+optional = true
+
+[approvals]
+policy = "on-request"
+elevation = true
+
+[prompt]
+system = """\
+You are the Implementer. Implement the work described by `{{spec}}`. When `{{adr}}` is
+bound, treat its `## Decision` section as locked.
+
+Process:
+1. Read the spec, the ADR (if any), the project rules, and the architecture doc.
+2. Use existing code patterns. Match the surrounding crate's style. Do not introduce a new pattern when one exists.
+3. Add tests when the spec calls for them; do not invent test scaffolding the spec did not ask for.
+4. Use `tracing::*` for logs (`debug` for hot paths, `info` for state changes, `warn` for recoverable degradations, `error` for failures).
+5. After every meaningful checkpoint, run the project's verification commands and fix anything that broke.
+
+Rules:
+- No `unwrap()` / `expect()` / `dbg!` / `println!` in library code.
+- `anyhow` only in binary crates; libraries use `thiserror`-derived enums.
+- If a task is ambiguous, prefer the smaller change and report `blocked` with the question.
+- If you make partial progress, report `partial` with a one-line summary per remaining subtask.
+"""

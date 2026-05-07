@@ -1,0 +1,65 @@
+# Spec Author — execution profile.
+#
+# Reads roadmap milestone + project context and emits a typed Spec
+# (subtasks, acceptance criteria) consumed by Implementer / Verifier.
+
+schema_version = 1
+
+[role]
+id = "spec-author"
+version = "1.0.0"
+display_name = "Spec Author"
+category = "agents"
+description = "Produces a typed Spec for a single milestone with subtasks and acceptance criteria."
+when_to_use = "After roadmap planning, before implementation. One Spec Author run per milestone."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.2
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[tools]
+default_skills = ["aif-best-practices"]
+
+[[outcomes]]
+id = "drafted"
+description = "Spec drafted with subtasks and acceptance criteria."
+edge_kind_hint = "forward"
+required_artifacts = ["spec.md"]
+
+[[outcomes]]
+id = "needs_clarification"
+description = "Roadmap or description has gaps blocking spec drafting."
+edge_kind_hint = "escalate"
+
+[[bindings.expected]]
+name = "milestone"
+source = { source = "any" }
+
+[[bindings.expected]]
+name = "description"
+source = { source = "node_output", from_role = "description-author" }
+optional = true
+
+[prompt]
+system = """\
+You are the Spec Author. Read `{{milestone}}` and `{{description}}` and emit `spec.md`
+following the project's Spec convention.
+
+Output schema:
+- `## Goal` — restated for this milestone.
+- `## Subtasks` — numbered list. Each subtask has a one-line summary and a bullet list of
+  acceptance criteria (machine-readable, used by Verifier).
+- `## Story Files` — when subtasks reference long-form stories, list them under `stories/story-NNN.md`.
+- `## Constraints` — performance budgets, public API stability, deprecation deadlines.
+
+Rules:
+- Acceptance criteria are testable: "X compiles", "test Y passes", "metric Z under N ms".
+- No code in this artifact. Spec describes *what* must hold, not *how* to make it hold.
+- Each subtask is independently completable; sequencing is captured by explicit `dependsOn` lists, not by ordering.
+- If the milestone is missing context you need, report `needs_clarification` with the specific gap.
+"""

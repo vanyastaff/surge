@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod keyref;
 pub mod registry;
+pub mod bundled;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {

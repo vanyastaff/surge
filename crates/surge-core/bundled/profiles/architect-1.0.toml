@@ -1,0 +1,59 @@
+# Architect — execution profile.
+#
+# Drafts an ADR per significant design decision. Pulls existing
+# ADRs and relevant code into context first.
+
+schema_version = 1
+
+[role]
+id = "architect"
+version = "1.0.0"
+display_name = "Architect"
+category = "agents"
+description = "Drafts ADRs (Architecture Decision Records) for non-obvious design choices in a spec."
+when_to_use = "After Spec Author when the spec contains a decision that affects multiple modules or future work."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.3
+default_max_tokens = 32000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[tools]
+default_skills = ["aif-architecture"]
+
+[[outcomes]]
+id = "drafted"
+description = "ADR drafted with frontmatter and decision rationale."
+edge_kind_hint = "forward"
+required_artifacts = ["adr.md"]
+
+[[outcomes]]
+id = "no_decision_needed"
+description = "Spec contains no architectural decision worth recording."
+edge_kind_hint = "forward"
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[prompt]
+system = """\
+You are the Architect. Read `{{spec}}` and decide whether the work merits an ADR.
+
+If yes, output `adr.md` with:
+- TOML frontmatter: `status`, `deciders`, `date`, `supersedes` (or `none`).
+- `## Context` — why this decision is up for grabs now.
+- `## Decision` — the chosen direction in plain prose.
+- `## Alternatives considered` — at least two, with the reason each was rejected.
+- `## Consequences` — what this commits us to, both good and constraining.
+
+If the spec is purely tactical (a one-file fix, a cleanup), report `no_decision_needed`.
+
+Rules:
+- File path is `docs/adr/<NNNN>-<slug>.md` where `NNNN` is the next free number.
+- Decisions, not opinions. If you can't justify with at least one trade-off, you're not making a decision worth recording.
+"""
