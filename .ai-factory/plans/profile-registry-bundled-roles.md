@@ -97,11 +97,11 @@ These are decisions taken at planning time so /aif-implement does not re-litigat
 
 ### Phase 5 — CLI surface in `surge-cli`
 
-- [ ] Task 19: Scaffold `ProfileCommands` enum + `commands/profile.rs` + main.rs wiring; subcommand bodies `bail!()` until tasks 20-23 fill them (depends on 15)
-- [ ] Task 20: `surge profile list` with provenance column + optional `--format json` (depends on 19)
-- [ ] Task 21: `surge profile show <name> [--version X.Y.Z] [--raw]` rendering merged or raw profile as TOML (depends on 19, 17)
-- [ ] Task 22: `surge profile validate <path>` checking schema + `prompt.system` Handlebars syntax + extends parent existence (depends on 19, 17)
-- [ ] Task 23: `surge profile new <name> [--base BASE]` scaffolder; refuses to overwrite existing files (depends on 19)
+- [x] Task 19: Scaffold `ProfileCommands` enum + `commands/profile.rs` + main.rs wiring; subcommand bodies `bail!()` until tasks 20-23 fill them (depends on 15)
+- [x] Task 20: `surge profile list` with provenance column + optional `--format json` (depends on 19)
+- [x] Task 21: `surge profile show <name> [--version X.Y.Z] [--raw]` rendering merged or raw profile as TOML (depends on 19, 17)
+- [x] Task 22: `surge profile validate <path>` checking schema + `prompt.system` Handlebars syntax + extends parent existence (depends on 19, 17)
+- [x] Task 23: `surge profile new <name> [--base BASE]` scaffolder; refuses to overwrite existing files (depends on 19)
 <!-- Commit checkpoint: tasks 19-23 -->
 
 ### Phase 6 — Binary wiring, integration test, docs, acceptance

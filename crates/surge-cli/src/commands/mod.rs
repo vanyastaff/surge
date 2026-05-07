@@ -8,6 +8,7 @@ pub mod git;
 pub mod insights;
 pub mod memory;
 pub mod pipeline;
+pub mod profile;
 pub mod registry;
 pub mod spec;
 pub mod tracker;
