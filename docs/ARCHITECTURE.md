@@ -1,3 +1,5 @@
+[← Workflow](workflow.md) · [Back to README](../README.md) · [Development →](development.md)
+
 # Surge Architecture
 
 > **Status:** living document. Architecture is described from the existing codebase; product vision and explicit decisions are still being written. Treat any section marked _(intent)_ as a sketch, not a contract.
@@ -288,3 +290,9 @@ Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge
 - The story for shared profiles across projects (registry vs git-tracked).
 - AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping?
 - Loop-level token budgeting and when to split a run into chained smaller runs.
+
+## See Also
+
+- [Workflow](workflow.md) — user-facing AFK workflow, flow model, run lifecycle diagrams
+- [CLI](cli.md) — concrete commands that exercise the engine today
+- [Development](development.md) — running tests and lints across the workspace

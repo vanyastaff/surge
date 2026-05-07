@@ -1,0 +1,64 @@
+[← Architecture](ARCHITECTURE.md) · [Back to README](../README.md)
+
+# Development
+
+Day-to-day commands for working on the Surge codebase: format checks, tests, lints, and the long-running tests that need an external mock agent.
+
+## Build Automation (`just`)
+
+The repo ships a [`justfile`](../justfile) that wraps every cargo command listed below into short recipes. Install [just](https://just.systems/) once with `cargo install just`, then run `just` (no arguments) to see the list:
+
+```bash
+cargo install just
+just                       # list all recipes, grouped
+just build                 # cargo build --workspace --exclude surge-ui
+just test                  # cargo test --workspace --exclude surge-ui
+just lint                  # fmt-check + clippy-strict + clippy (mirrors ci.yml)
+just smoke                 # run the smallest example flow
+just audit                 # cargo audit (install: just install-tools)
+just ci                    # full local CI run
+just ci-full               # ci + audit + ignored integration tests
+```
+
+The cargo commands below are equivalent if you prefer not to install `just`.
+
+## Common Checks
+
+Format check, full workspace tests (excluding the GPUI desktop shell), and clippy on the most-touched crates plus the whole workspace:
+
+```bash
+cargo fmt --check
+cargo test --workspace --exclude surge-ui
+cargo clippy -p surge-core --all-targets --all-features -- -D warnings
+cargo clippy -p surge-acp --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features
+```
+
+The strict clippy profile is in [`clippy.toml`](../clippy.toml). Test code relaxes most rules (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-print-in-tests`, etc.); production code does not.
+
+## Long-Running / External-Agent Tests
+
+Some `surge-orchestrator` tests need the bundled mock ACP agent. Build it and run the ignored tests separately:
+
+```bash
+cargo build -p surge-acp --bin mock_acp_agent
+cargo test -p surge-orchestrator --tests -- --ignored
+```
+
+## Local Runtime State
+
+Runtime state is stored under `~/.surge/`, including run databases (`~/.surge/runs/<run_id>/events.sqlite`) and daemon metadata. Project-local state may appear under `.surge/` inside the project. Both directories are safe to delete to start fresh.
+
+## Crate-Level READMEs
+
+A few crates document their own internals beyond the workspace-level docs:
+
+- [`crates/surge-daemon/README.md`](../crates/surge-daemon/README.md)
+- [`crates/surge-mcp/README.md`](../crates/surge-mcp/README.md)
+- [`crates/surge-notify/README.md`](../crates/surge-notify/README.md)
+
+## See Also
+
+- [Getting Started](getting-started.md) — initial build and smoke-test commands
+- [CLI](cli.md) — what each `surge` subcommand does
+- [Architecture](ARCHITECTURE.md) — crate boundaries, dependency rules, conventions
