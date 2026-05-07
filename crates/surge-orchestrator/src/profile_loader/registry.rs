@@ -23,6 +23,7 @@ use surge_core::profile::keyref::{ProfileKeyRef, parse_key_ref};
 use surge_core::profile::registry::{Provenance, ResolvedProfile, collect_chain, merge_chain};
 
 use super::DiskProfileSet;
+use crate::prompt::PromptRenderer;
 
 /// Registry combining disk + bundled profile stores.
 ///
@@ -49,14 +50,21 @@ impl ProfileRegistry {
     /// — bundled profiles still resolve. This matches the fresh-install
     /// experience.
     ///
+    /// Every loaded profile's `prompt.system` is run through
+    /// [`PromptRenderer::validate_template`] at this point. Per Task 18
+    /// of the milestone plan we fail-fast on broken templates rather
+    /// than letting the engine discover them at agent-launch time.
+    ///
     /// # Errors
     /// Propagates [`SurgeError`] from the path resolver or directory walker.
     /// Per-file parse failures inside the directory are logged at WARN and
-    /// skipped, not returned.
+    /// skipped, not returned. Per-profile template-compile failures abort
+    /// the load with [`SurgeError::Config`].
     pub fn load() -> Result<Self, SurgeError> {
         let dir = super::paths::profiles_dir()?;
         let disk = DiskProfileSet::scan(&dir)?;
         let bundled = Arc::new(BundledRegistry::all());
+        validate_prompts(&disk, &bundled)?;
         tracing::info!(
             target: "profile::registry",
             disk_count = disk.entries().len(),
@@ -70,6 +78,10 @@ impl ProfileRegistry {
     /// Construct a registry from an explicit disk set. Useful for tests
     /// that want to supply a `tempdir`-scoped store without exporting
     /// `SURGE_HOME` into the process env.
+    ///
+    /// Skips the load-time prompt validation step — tests that need it
+    /// can call [`Self::load`] with `SURGE_HOME` set, or call
+    /// [`validate_prompts`] explicitly.
     #[must_use]
     pub fn new(disk: DiskProfileSet) -> Self {
         let bundled = Arc::new(BundledRegistry::all());
@@ -233,6 +245,56 @@ impl ProfileRegistry {
     pub fn bundled(&self) -> &[Profile] {
         &self.bundled
     }
+}
+
+/// Run [`PromptRenderer::validate_template`] over every disk and bundled
+/// profile's `prompt.system`.
+///
+/// # Errors
+/// Returns [`SurgeError::Config`] on the first broken template, naming
+/// the offending profile so the operator knows which file to fix.
+pub fn validate_prompts(
+    disk: &DiskProfileSet,
+    bundled: &[Profile],
+) -> Result<(), SurgeError> {
+    let renderer = PromptRenderer::strict();
+    for entry in disk.entries() {
+        renderer
+            .validate_template(&entry.profile.prompt.system)
+            .map_err(|e| {
+                tracing::error!(
+                    target: "profile::validate",
+                    path = %entry.path.display(),
+                    id = %entry.profile.role.id,
+                    err = %e,
+                    "disk profile prompt.system failed validation"
+                );
+                SurgeError::Config(format!(
+                    "disk profile {:?} ({}): prompt template invalid: {}",
+                    entry.profile.role.id.as_str(),
+                    entry.path.display(),
+                    e
+                ))
+            })?;
+    }
+    for profile in bundled {
+        renderer
+            .validate_template(&profile.prompt.system)
+            .map_err(|e| {
+                tracing::error!(
+                    target: "profile::validate",
+                    id = %profile.role.id,
+                    err = %e,
+                    "bundled profile prompt.system failed validation"
+                );
+                SurgeError::Config(format!(
+                    "bundled profile {:?}: prompt template invalid: {}",
+                    profile.role.id.as_str(),
+                    e
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -441,6 +503,53 @@ system = "team-local override"
             .unwrap();
         assert_eq!(implementer.provenance, Provenance::Latest);
         assert_eq!(implementer.profile.prompt.system, "shadowed");
+    }
+
+    #[test]
+    fn validate_prompts_passes_for_bundled_set() {
+        // Every shipped profile must compile against the strict-mode probe.
+        let disk = DiskProfileSet::empty();
+        let bundled = BundledRegistry::all();
+        validate_prompts(&disk, &bundled).unwrap();
+    }
+
+    #[test]
+    fn validate_prompts_rejects_broken_disk_template() {
+        let tmp = TempDir::new().unwrap();
+        // Raw string (no format!) so the literal "{{" survives intact.
+        // An unmatched "{{" is what trips Handlebars' compile pass.
+        let body = r#"
+schema_version = 1
+
+[role]
+id = "broken"
+version = "1.0.0"
+display_name = "Broken"
+category = "agents"
+description = "broken template"
+when_to_use = "test"
+
+[runtime]
+recommended_model = "test"
+
+[[outcomes]]
+id = "done"
+description = "done"
+edge_kind_hint = "forward"
+
+[prompt]
+system = "Hello {{ unmatched"
+"#;
+        write(tmp.path(), "broken-1.0.toml", body);
+        let disk = DiskProfileSet::scan(tmp.path()).unwrap();
+        // The scan layer parses the TOML successfully (it's syntactically
+        // valid); the prompt body only fails when handed to Handlebars.
+        let bundled = BundledRegistry::all();
+        let err = validate_prompts(&disk, &bundled).unwrap_err();
+        match err {
+            SurgeError::Config(msg) => assert!(msg.contains("broken")),
+            other => panic!("expected Config error, got {other:?}"),
+        }
     }
 
     #[test]

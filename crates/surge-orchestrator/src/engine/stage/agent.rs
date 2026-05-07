@@ -26,11 +26,12 @@ use surge_core::hooks::HookTrigger;
 
 use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome, record_hook_executed};
 use crate::engine::sandbox_factory::build_sandbox;
-use crate::engine::stage::bindings::{resolve_bindings, substitute_template};
+use crate::engine::stage::bindings::resolve_bindings;
 use crate::engine::stage::{StageError, StageResult};
 use crate::engine::tools::{
     ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
 };
+use crate::prompt::PromptRenderer;
 
 /// Parameters for executing a single agent stage.
 pub struct AgentStageParams<'a> {
@@ -126,7 +127,15 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 .and_then(|po| po.append_system.as_deref())
         })
         .unwrap_or("");
-    let prompt_text = substitute_template(prompt_template, &resolved_bindings);
+    // Lenient at runtime: missing bindings render as empty strings rather
+    // than failing the stage. Strict-mode validation runs at
+    // `ProfileRegistry::load` so bundled / disk profiles are caught at
+    // startup; runtime forgiveness keeps the engine from blowing up over
+    // optional-binding edge cases the profile schema authorizes.
+    let renderer = PromptRenderer::lenient();
+    let prompt_text = renderer
+        .render(prompt_template, &resolved_bindings)
+        .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
 
     // Derive AgentKind. With the profile registry wired (Profile registry &
     // bundled roles milestone) we resolve the profile reference, then map

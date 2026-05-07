@@ -86,7 +86,15 @@ async fn read_artifact_text(
 
 /// Substitute `{{var}}` placeholders in `template` with `bindings`.
 /// Unknown placeholders are left as-is (best-effort).
+///
+/// **Deprecated:** retained only for the legacy unit tests in this
+/// module. New code uses [`crate::prompt::PromptRenderer`], which is
+/// Handlebars-backed and validates templates at registry load time.
 #[must_use]
+#[deprecated(
+    note = "use crate::prompt::PromptRenderer; substitute_template is the M5 fallback retained \
+            only for the legacy substitute_template tests in this file"
+)]
 pub fn substitute_template(template: &str, bindings: &[(TemplateVar, String)]) -> String {
     let mut out = template.to_string();
     for (var, val) in bindings {
@@ -116,6 +124,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn substitute_replaces_known_vars() {
         let bindings = vec![(TemplateVar("name".into()), "World".into())];
         let out = substitute_template("Hello, {{name}}!", &bindings);
@@ -123,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn substitute_leaves_unknown_vars_alone() {
         let bindings = vec![];
         let out = substitute_template("Hello, {{unknown}}!", &bindings);

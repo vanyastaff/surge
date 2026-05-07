@@ -91,8 +91,8 @@ These are decisions taken at planning time so /aif-implement does not re-litigat
 
 ### Phase 4 — Prompt template engine
 
-- [ ] Task 17: `PromptRenderer` wrapper around `handlebars::Handlebars` (strict mode, no HTML escape); replaces `substitute_template` in `crates/surge-orchestrator/src/engine/stage/bindings.rs:87-97` and the call site at `agent.rs:124`. Renders `profile.prompt.system` (depends on 3)
-- [ ] Task 18: Validate every profile's `prompt.system` at `ProfileRegistry::load` time; fail-fast on bundled or disk template errors (depends on 15, 17)
+- [x] Task 17: `PromptRenderer` wrapper around `handlebars::Handlebars` (strict mode, no HTML escape); replaces `substitute_template` in `crates/surge-orchestrator/src/engine/stage/bindings.rs:87-97` and the call site at `agent.rs:124`. Renders `profile.prompt.system` (depends on 3)
+- [x] Task 18: Validate every profile's `prompt.system` at `ProfileRegistry::load` time; fail-fast on bundled or disk template errors (depends on 15, 17)
 <!-- Commit checkpoint: tasks 17-18 -->
 
 ### Phase 5 — CLI surface in `surge-cli`
