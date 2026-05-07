@@ -190,21 +190,23 @@ fn show_and_wait(
 
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
-        // On macOS and Windows notify-rust::show() returns () — no handle.
-        // Show the notification; action callbacks are not supported here.
-        match notify_rust::Notification::new()
+        // On macOS `show()` returns `Result<NotificationHandle, Error>`; on
+        // Windows it returns `Result<(), Error>`. We don't use the handle on
+        // either platform (action callbacks aren't wired here), so cast the
+        // outcome to `bool` via `is_ok()` to avoid platform-specific match
+        // arms (`Ok(())` rejects the macOS handle type; `Ok(_)` trips
+        // `clippy::ignored_unit_patterns` on Windows).
+        let show_outcome = notify_rust::Notification::new()
             .summary(&rendered.title)
             .body(&rendered.body)
-            .show()
-        {
-            Ok(()) => {
-                let _ = show_tx.send(true);
-                info!(task_id = %task_id_for_log, "desktop card shown (no action callback on this platform)");
-            },
-            Err(e) => {
-                warn!(error = %e, "notify-rust show failed");
-                let _ = show_tx.send(false);
-            },
+            .show();
+        let success = show_outcome.is_ok();
+        if let Err(e) = show_outcome {
+            warn!(error = %e, "notify-rust show failed");
+        }
+        let _ = show_tx.send(success);
+        if success {
+            info!(task_id = %task_id_for_log, "desktop card shown (no action callback on this platform)");
         }
     }
 }
