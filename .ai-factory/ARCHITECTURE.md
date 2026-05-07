@@ -31,18 +31,30 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   │   │   ├── edge.rs                     # Edge + EdgeKind (Forward / Backtrack / Escalate)
 │   │   │   ├── event.rs / run_event.rs     # Event payloads (bincode-serialized)
 │   │   │   ├── state.rs / run_state.rs     # State machines and folds
-│   │   │   ├── profile.rs                  # Profile/role configuration
+│   │   │   ├── profile.rs                  # Profile/role configuration (parent)
+│   │   │   ├── profile/                    # registry / merge / inheritance / bundled
+│   │   │   │   ├── keyref.rs               #   `name@version` parser → ProfileKeyRef
+│   │   │   │   ├── registry.rs             #   ResolvedProfile, merge_chain, collect_chain
+│   │   │   │   └── bundled.rs              #   17 bundled profiles via include_str!
 │   │   │   ├── sandbox.rs                  # SandboxIntent / launch profiles
 │   │   │   ├── validation.rs               # Graph invariants
-│   │   │   ├── error.rs                    # SurgeError (thiserror)
+│   │   │   ├── error.rs                    # SurgeError (thiserror, #[non_exhaustive])
 │   │   │   ├── id.rs / keys.rs             # ULID-based IDs, NodeKey / OutcomeKey
 │   │   │   └── *_config.rs                 # One config struct per file
+│   │   ├── bundled/profiles/               # 17 *.toml assets baked in via include_str!
 │   │   └── benches/                        # criterion benches (harness = false)
 │   │
 │   ├── surge-spec/                         # Legacy structured-spec format (kept while flow.toml stabilizes)
 │   │
 │   │   ── Application layer (orchestrator / engine) ──────────────────────────
 │   ├── surge-orchestrator/                 # Engine: graph executor + legacy spec pipeline
+│   │   ├── src/
+│   │   │   ├── prompt.rs                   # PromptRenderer — Handlebars wrapper (strict + lenient)
+│   │   │   ├── profile_loader/             # Disk + bundled resolution (I/O-touching)
+│   │   │   │   ├── paths.rs                #   surge_home() / profiles_dir() honouring SURGE_HOME
+│   │   │   │   ├── disk.rs                 #   DiskProfileSet::scan(*.toml, warn-and-skip)
+│   │   │   │   └── registry.rs             #   ProfileRegistry::{load, resolve, list} 3-way lookup
+│   │   │   └── engine/                     # graph executor + stage handlers + hooks
 │   │
 │   │   ── Adapter layer (one external concern per crate) ─────────────────────
 │   ├── surge-persistence/                  # SQLite event log, materialized views, memory, analytics

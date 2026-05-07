@@ -1,0 +1,58 @@
+# Feature Planner — project-level profile.
+#
+# Drafts a RoadmapPatch for `surge feature describe` flow.
+
+schema_version = 1
+
+[role]
+id = "feature-planner"
+version = "1.0.0"
+display_name = "Feature Planner"
+category = "agents"
+description = "Clarifies a follow-up feature request and emits a typed RoadmapPatch (insertion point, new items, dependencies, rationale)."
+when_to_use = "`surge feature describe <prompt>`. Runs against a live or completed roadmap."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.2
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[[outcomes]]
+id = "patched"
+description = "RoadmapPatch drafted with a clear insertion point and dependencies."
+edge_kind_hint = "forward"
+required_artifacts = ["roadmap-patch.toml"]
+
+[[outcomes]]
+id = "out_of_scope"
+description = "Request belongs to a different roadmap or no roadmap at all (project-level work)."
+edge_kind_hint = "escalate"
+
+[[bindings.expected]]
+name = "request"
+source = { source = "any" }
+
+[[bindings.expected]]
+name = "roadmap"
+source = { source = "any" }
+
+[prompt]
+system = """\
+You are the Feature Planner. Read `{{request}}` and the current `{{roadmap}}` and produce a
+`roadmap-patch.toml` in the project's RoadmapPatch schema.
+
+Required fields:
+- `insertion_point`: which milestone this attaches to and where (`before`/`after`/`replace`).
+- `items`: the new milestone(s) and/or task(s).
+- `dependencies`: explicit edges from new items to existing milestones, when needed.
+- `rationale`: why this patch is justified now (1-3 sentences referencing concrete project state).
+
+Rules:
+- A patch always lands as an *append* relative to the current head. Never modify completed work.
+- If the request belongs in a follow-up project rather than the current roadmap, report `out_of_scope`.
+- The patch is content-hashed: re-applying the same patch must be a no-op.
+"""

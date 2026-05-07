@@ -33,7 +33,7 @@
   - Integration tests against mock ACP agent and at least one real agent (Claude Code or Codex CLI)
   - Criterion bench: stage transition p95 budget, regression-guarded in CI
 
-- [ ] **Profile registry & bundled roles** — `~/.surge/profiles/` resolution and shipped role library (touches `surge-core`, `surge-orchestrator`, `surge-cli`)
+- [x] **Profile registry & bundled roles** — `~/.surge/profiles/` resolution and shipped role library (touches `surge-core`, `surge-orchestrator`, `surge-cli`)
   - Lookup order: versioned (`implementer-1.0.toml`) → latest (`implementer.toml`) → bundled fallback
   - `extends = "generic@1.0"` shallow-merge inheritance with conflict detection
   - Profile schema: system prompt (Handlebars template), launch config, sandbox intent, allowed tools, declared outcomes, hooks, approval policy
@@ -262,3 +262,4 @@
 | Tracker source skeletons | 2026-05-06 |
 | Inbox + intake pipeline | 2026-05-06 |
 | Graph engine GA | 2026-05-07 |
+| Profile registry & bundled roles | 2026-05-07 |

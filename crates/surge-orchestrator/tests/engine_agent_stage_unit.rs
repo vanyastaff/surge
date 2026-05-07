@@ -93,6 +93,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         human_input_timeout: std::time::Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        profile_registry: None,
         hook_executor: &hook_executor,
     })
     .await

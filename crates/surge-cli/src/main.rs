@@ -208,6 +208,12 @@ enum Commands {
         #[command(subcommand)]
         command: commands::daemon::DaemonCommands,
     },
+
+    /// List, show, validate, or scaffold profiles.
+    Profile {
+        #[command(subcommand)]
+        command: commands::profile::ProfileCommands,
+    },
 }
 
 /// Set up signal handlers for graceful shutdown.
@@ -333,6 +339,7 @@ async fn main() -> Result<()> {
             | Commands::Engine { .. }
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
+            | Commands::Profile { .. }
     );
 
     if should_check_orphans {
@@ -539,6 +546,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Daemon { command } => {
             commands::daemon::run(command).await?;
+        },
+
+        Commands::Profile { command } => {
+            commands::profile::run(command).await?;
         },
 
         Commands::Init => {

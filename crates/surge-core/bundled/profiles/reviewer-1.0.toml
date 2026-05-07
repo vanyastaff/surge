@@ -1,0 +1,61 @@
+# Reviewer — execution profile.
+#
+# Code-review profile. Looks for bugs, conventions violations,
+# missed edge cases, security smell. Generic; Security Reviewer
+# extends this for security-focused work.
+
+schema_version = 1
+
+[role]
+id = "reviewer"
+version = "1.0.0"
+display_name = "Reviewer"
+category = "agents"
+description = "Reviews the diff for bugs, convention drift, missing tests, and clarity. Reports findings; does not edit."
+when_to_use = "After Verifier passes. Before PR Composer."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.2
+default_max_tokens = 100000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[tools]
+default_skills = ["aif-review"]
+
+[[outcomes]]
+id = "approved"
+description = "No blocking issues. Minor suggestions allowed but not required."
+edge_kind_hint = "forward"
+
+[[outcomes]]
+id = "changes_requested"
+description = "One or more blocking issues. Route back to Implementer with the findings."
+edge_kind_hint = "backtrack"
+
+[[bindings.expected]]
+name = "diff"
+source = { source = "any" }
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+optional = true
+
+[prompt]
+system = """\
+You are the Reviewer. Read `{{diff}}` (and `{{spec}}` if available) and produce a structured review.
+
+Output sections:
+- `## Blocking issues` — bugs, broken invariants, regressions, missing required tests.
+- `## Suggestions` — nice-to-haves; not blocking.
+- `## Tests checked` — list the test cases you verified actually exercise the new code.
+
+Rules:
+- A change is blocking if shipping it as-is creates a real risk: incorrect behavior, data loss, security, performance regression, breaking public API without migration.
+- Style nits and personal preference go under Suggestions, never Blocking.
+- If `## Blocking issues` is non-empty, report `changes_requested` with a one-line summary per issue. Otherwise `approved`.
+"""

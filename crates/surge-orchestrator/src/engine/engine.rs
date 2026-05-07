@@ -6,6 +6,7 @@ use crate::engine::config::{EngineConfig, EngineRunConfig};
 use crate::engine::error::EngineError;
 use crate::engine::handle::RunHandle;
 use crate::engine::tools::ToolDispatcher;
+use crate::profile_loader::ProfileRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -107,7 +108,50 @@ impl Engine {
         }
     }
 
+    /// Full constructor: every dependency including the profile registry.
+    ///
+    /// Use this from production CLI / daemon entry points. Legacy
+    /// constructors delegate here, leaving `profile_registry` as the
+    /// `EngineConfig` already carries it (so passing `None` for the
+    /// argument keeps the legacy mock-only fast path active).
+    #[must_use]
+    pub fn new_full(
+        bridge: Arc<dyn BridgeFacade>,
+        storage: Arc<surge_persistence::runs::Storage>,
+        tool_dispatcher: Arc<dyn ToolDispatcher>,
+        notify_deliverer: Arc<dyn surge_notify::NotifyDeliverer>,
+        mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
+        profile_registry: Option<Arc<ProfileRegistry>>,
+        mut config: EngineConfig,
+    ) -> Self {
+        // The argument wins; if a caller already populated `config.profile_registry`
+        // and also passed `Some(_)` here, the explicit argument is the
+        // authoritative source.
+        if profile_registry.is_some() {
+            config.profile_registry = profile_registry;
+        }
+        Self {
+            bridge,
+            storage,
+            tool_dispatcher,
+            notify_deliverer,
+            mcp_registry,
+            config: Arc::new(config),
+            runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Borrow the profile registry, if one is wired into this engine.
+    /// Used by the agent stage to derive `AgentKind` from the profile's
+    /// `runtime.agent_id` (M6+ resolution path that replaces the M5
+    /// mock-only fast path).
+    #[must_use]
+    pub fn profile_registry(&self) -> Option<&Arc<ProfileRegistry>> {
+        self.config.profile_registry.as_ref()
+    }
+
     /// Start a new run.
+    #[allow(clippy::too_many_lines)]
     pub async fn start_run(
         &self,
         run_id: RunId,
@@ -217,6 +261,7 @@ impl Engine {
             tool_resolutions,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
+            profile_registry: self.config.profile_registry.clone(),
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -340,6 +385,7 @@ impl Engine {
             tool_resolutions,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
+            profile_registry: self.config.profile_registry.clone(),
         };
 
         let runs_for_cleanup = self.runs.clone();

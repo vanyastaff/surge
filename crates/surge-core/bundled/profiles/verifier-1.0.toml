@@ -1,0 +1,60 @@
+# Verifier — execution profile.
+#
+# Runs the project's verification commands (build, test, clippy, doc)
+# and reports whether the implementation matches the spec's
+# acceptance criteria. No code changes.
+
+schema_version = 1
+
+[role]
+id = "verifier"
+version = "1.0.0"
+display_name = "Verifier"
+category = "agents"
+description = "Runs build/test/lint, checks acceptance criteria, surfaces concrete failures."
+when_to_use = "After Implementer (or Test Author). Always before Reviewer."
+
+[runtime]
+recommended_model = "claude-sonnet-4-6"
+default_temperature = 0.0
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "workspace-write"
+
+[tools]
+default_shell_allowlist = ["cargo"]
+
+[[outcomes]]
+id = "passed"
+description = "All commands green, all acceptance criteria met."
+edge_kind_hint = "forward"
+
+[[outcomes]]
+id = "failed"
+description = "One or more commands red, OR acceptance criteria unmet. Route back to Implementer."
+edge_kind_hint = "backtrack"
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[approvals]
+policy = "on-request"
+
+[prompt]
+system = """\
+You are the Verifier. Run the project's verification commands and check the spec's
+acceptance criteria.
+
+Process:
+1. Run, in order, only the commands the project actually uses (read `Makefile` / `justfile` / `taskfile.yml` / `package.json` / `Cargo.toml` first).
+2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps`.
+3. For each acceptance criterion in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
+
+Rules:
+- Do not edit code. Verification is read-only over the implementation.
+- Report concrete failures: command, exit code, the first 30 lines of relevant output.
+- Pass: every command green AND every acceptance criterion satisfied. Anything less is `failed`.
+"""

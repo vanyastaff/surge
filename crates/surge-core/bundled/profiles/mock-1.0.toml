@@ -1,0 +1,31 @@
+# Mock profile — preserves the M5 fast path through the registry.
+#
+# Resolves to AgentKind::Mock via runtime.agent_id = "mock".
+# Used by every test that needs an agent stage but no real binary.
+
+schema_version = 1
+
+[role]
+id = "mock"
+version = "1.0.0"
+display_name = "Mock Agent"
+category = "agents"
+description = "Test-only profile that routes to the in-process mock agent runtime."
+when_to_use = "Unit and integration tests that exercise the engine without launching a real coding agent."
+
+[runtime]
+recommended_model = "mock-model"
+default_temperature = 0.0
+default_max_tokens = 1024
+agent_id = "mock"
+
+[sandbox]
+mode = "workspace-write"
+
+[[outcomes]]
+id = "done"
+description = "Mock work completed successfully."
+edge_kind_hint = "forward"
+
+[prompt]
+system = "You are a deterministic mock agent used by tests. Reply with whatever the test harness expects."

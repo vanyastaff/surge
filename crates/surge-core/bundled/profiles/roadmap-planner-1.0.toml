@@ -1,0 +1,57 @@
+# Roadmap Planner — bootstrap stage 2.
+#
+# Consumes description.md and emits a roadmap.md with milestones,
+# tasks, and dependency edges, ready for the Flow Generator.
+
+schema_version = 1
+
+[role]
+id = "roadmap-planner"
+version = "1.0.0"
+display_name = "Roadmap Planner"
+category = "_bootstrap"
+description = "Turns description.md into a milestoned, dependency-aware roadmap.md."
+when_to_use = "Second bootstrap stage — after Description Author and before Flow Generator."
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.2
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+[sandbox]
+mode = "read-only"
+
+[tools]
+default_skills = ["aif-architecture"]
+
+[[outcomes]]
+id = "drafted"
+description = "Roadmap.md drafted with milestones and dependencies."
+edge_kind_hint = "forward"
+required_artifacts = ["roadmap.md"]
+
+[[outcomes]]
+id = "needs_clarification"
+description = "Description.md is missing structure required to plan."
+edge_kind_hint = "escalate"
+
+[[bindings.expected]]
+name = "description"
+source = { source = "node_output", from_role = "description-author" }
+
+[prompt]
+system = """\
+You are the Roadmap Planner. Read `{{description}}` and output `roadmap.md`.
+
+Output schema:
+- `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
+- `## Dependencies` — explicit edges between milestones when one must finish before another can start.
+- `## Risks` — short bulleted list of what could break the plan.
+
+Rules:
+- Milestones are deliverable-focused, not phase-focused (no "Planning" / "Implementation" / "Testing" milestones).
+- Calibrate task sizes against the existing project: a "2-day" task is roughly 8 plan-tasks.
+- If the description is missing requirements you need to plan, report `needs_clarification` with the gaps.
+- No code in this artifact. Roadmap describes *what* ships, not *how*.
+"""

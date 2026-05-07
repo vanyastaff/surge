@@ -1,6 +1,7 @@
 //! Error types for Surge.
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SurgeError {
     #[error("Configuration error: {0}")]
     Config(String),
@@ -82,6 +83,37 @@ pub enum SurgeError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    // ── Profile registry errors (Profile registry & bundled roles milestone) ──
+    /// A profile reference resolved to no on-disk file and no bundled fallback.
+    #[error("profile not found: {0}")]
+    ProfileNotFound(String),
+
+    /// A profile reference asked for a specific version that does not match the
+    /// version recorded in any candidate file's `[role] version = "..."`.
+    #[error("profile version mismatch for {name}: requested {requested}, available {available:?}")]
+    ProfileVersionMismatch {
+        name: String,
+        requested: String,
+        available: Vec<String>,
+    },
+
+    /// `extends` resolution detected a cycle in the parent chain.
+    #[error("profile extends cycle detected: {chain:?}")]
+    ProfileExtendsCycle { chain: Vec<String> },
+
+    /// `extends` resolution exceeded `MAX_EXTENDS_DEPTH`.
+    #[error("profile extends chain exceeded max depth {max}: {chain:?}")]
+    ProfileExtendsTooDeep { max: usize, chain: Vec<String> },
+
+    /// A merge_chain step encountered conflicting fields it could not safely
+    /// reconcile (e.g. divergent enum-tagged unions).
+    #[error("profile field conflict in {field}: {detail}")]
+    ProfileFieldConflict { field: String, detail: String },
+
+    /// A profile key reference (`name@version`) failed to parse.
+    #[error("invalid profile key reference: {0}")]
+    InvalidProfileKey(String),
 }
 
 impl SurgeError {

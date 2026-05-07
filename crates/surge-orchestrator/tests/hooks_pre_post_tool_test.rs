@@ -144,6 +144,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        profile_registry: None,
         hook_executor: &hook_executor,
     })
     .await
@@ -247,6 +248,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        profile_registry: None,
         hook_executor: &hook_executor,
     })
     .await

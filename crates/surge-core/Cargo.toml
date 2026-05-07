@@ -18,6 +18,7 @@ bincode    = { workspace = true }
 semver     = { workspace = true }
 humantime-serde = { workspace = true }
 glob       = { workspace = true }
+tracing    = { workspace = true }
 
 [dev-dependencies]
 proptest   = { workspace = true }

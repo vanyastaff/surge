@@ -1,19 +1,31 @@
 //! Engine-level and run-level configuration knobs.
 
+use std::sync::Arc;
 use std::time::Duration;
 use surge_core::mcp_config::McpServerRef;
+
+use crate::profile_loader::ProfileRegistry;
 
 /// Top-level engine configuration, shared across all runs.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     /// Controls when the engine persists a snapshot to storage.
     pub snapshot_policy: SnapshotPolicy,
+    /// Registry used by agent stages to resolve `agent_config.profile`
+    /// references into a fully merged [`surge_core::profile::Profile`]
+    /// (and from there to an `AgentKind` via `runtime.agent_id`).
+    ///
+    /// `None` keeps the legacy M5 mock-only fast path active for tests
+    /// and pre-registry callers; production wiring (CLI / daemon) should
+    /// always populate this with `ProfileRegistry::load()`.
+    pub profile_registry: Option<Arc<ProfileRegistry>>,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             snapshot_policy: SnapshotPolicy::StageBoundary,
+            profile_registry: None,
         }
     }
 }
@@ -71,6 +83,12 @@ mod tests {
     fn engine_config_default_uses_stage_boundary() {
         let c = EngineConfig::default();
         assert_eq!(c.snapshot_policy, SnapshotPolicy::StageBoundary);
+    }
+
+    #[test]
+    fn engine_config_default_has_no_profile_registry() {
+        let c = EngineConfig::default();
+        assert!(c.profile_registry.is_none());
     }
 
     #[test]

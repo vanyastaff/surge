@@ -1,0 +1,69 @@
+---
+source: crates/surge-core/tests/profile_registry_proptest.rs
+expression: toml
+---
+schema_version = 1
+
+[role]
+id = "child"
+version = "1.0.0"
+display_name = "child"
+category = "agents"
+description = "desc child"
+when_to_use = "when child"
+extends = "root"
+
+[runtime]
+recommended_model = "claude-opus-4-7"
+default_temperature = 0.20000000298023224
+default_max_tokens = 200000
+agent_id = "codex"
+
+[sandbox]
+mode = "workspace-write"
+writable_roots = []
+network_allowlist = []
+shell_allowlist = []
+protected_paths = []
+
+[tools]
+default_mcp = ["fs", "github"]
+default_skills = []
+default_shell_allowlist = []
+
+[approvals]
+policy = "on-request"
+sandbox_approval = false
+mcp_elicitations = false
+request_permissions = false
+skill_approval = false
+elevation = true
+elevation_channels = []
+
+[[outcomes]]
+id = "done"
+description = "Success"
+edge_kind_hint = "forward"
+required_artifacts = []
+
+[[bindings.expected]]
+name = "spec"
+optional = false
+
+[bindings.expected.source]
+source = "run_artifact"
+
+[[hooks.entries]]
+id = "audit"
+trigger = "pre_tool_use"
+command = "cmd audit"
+on_failure = "warn"
+inherit = "extend"
+
+[hooks.entries.matcher]
+
+[prompt]
+system = "child system prompt"
+
+[inspector_ui]
+fields = []

@@ -7,6 +7,10 @@ use crate::keys::{OutcomeKey, ProfileKey};
 use crate::sandbox::SandboxConfig;
 use serde::{Deserialize, Serialize};
 
+pub mod bundled;
+pub mod keyref;
+pub mod registry;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     pub schema_version: u32,
@@ -78,6 +82,14 @@ pub struct RuntimeCfg {
     pub default_max_tokens: u32,
     #[serde(default)]
     pub load_rules_lazily: Option<bool>,
+    /// Identifier of the agent runtime this profile targets, matching an entry
+    /// id in the `surge_acp::Registry` (e.g. `"claude-code"`, `"codex"`,
+    /// `"gemini-cli"`, `"mock"`). The orchestrator resolves this to a binary
+    /// path / launch profile via the agent registry. Defaults to
+    /// `"claude-code"` so existing TOML profiles authored before the
+    /// `Profile registry & bundled roles` milestone keep parsing.
+    #[serde(default = "default_agent_id")]
+    pub agent_id: String,
 }
 
 fn default_temperature() -> f32 {
@@ -85,6 +97,9 @@ fn default_temperature() -> f32 {
 }
 fn default_max_tokens_profile() -> u32 {
     200_000
+}
+pub(crate) fn default_agent_id() -> String {
+    "claude-code".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -198,6 +213,7 @@ mod tests {
                 default_temperature: 0.2,
                 default_max_tokens: 200_000,
                 load_rules_lazily: None,
+                agent_id: default_agent_id(),
             },
             sandbox: SandboxConfig::default(),
             tools: ToolsCfg::default(),
