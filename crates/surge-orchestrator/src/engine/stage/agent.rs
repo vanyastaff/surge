@@ -91,13 +91,14 @@ pub struct AgentStageParams<'a> {
 /// replies to the agent via `bridge.reply_to_tool`. Also persists
 /// `TokensConsumed` events from `BridgeEvent::TokenUsage`.
 ///
-/// # Known M5 limitation — artifact events
-/// `BridgeEvent::OutcomeReported` carries `artifacts_produced: Vec<String>`,
-/// but there is no separate `BridgeEvent::ArtifactProduced` variant in M3.
-/// Artifacts are therefore noted in the `OutcomeReported` event but are NOT
-/// stored as individual `EventPayload::ArtifactProduced` events in this phase.
-/// TODO(M5): emit `EventPayload::ArtifactProduced` for each path in
-///   `artifacts_produced` when handling `BridgeEvent::OutcomeReported`.
+/// # Artifact event emission
+/// `BridgeEvent::OutcomeReported` carries `artifacts_produced: Vec<String>`.
+/// For each declared path the engine resolves it against the run's worktree,
+/// computes a `ContentHash` of the file contents, and appends one
+/// `EventPayload::ArtifactProduced` event **before** the `OutcomeReported`
+/// event so the standard fold rule populates `RunMemory.artifacts` /
+/// `RunMemory.artifacts_by_node` deterministically. A missing or unreadable
+/// path is logged at WARN and skipped — it does not fail the stage.
 ///
 /// Phase 6.4 wires prompt/bindings.
 ///
@@ -356,7 +357,10 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
         match event {
             BridgeEvent::OutcomeReported {
-                outcome, summary, ..
+                outcome,
+                summary,
+                artifacts_produced,
+                ..
             } => {
                 // on_outcome hook chain runs BEFORE OutcomeReported is persisted.
                 // A rejecting hook lets the agent attempt a different outcome
@@ -417,6 +421,52 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         return Err(StageError::AgentCrashed(exhausted_reason));
                     }
                     continue;
+                }
+
+                // Task 30: emit one ArtifactProduced event per declared
+                // path BEFORE the OutcomeReported event so the standard
+                // fold rule populates RunMemory.artifacts deterministically.
+                // A missing or unreadable path is logged and skipped — it
+                // does not fail the stage.
+                for declared_path in &artifacts_produced {
+                    let absolute = p.worktree_path.join(declared_path);
+                    let bytes = match tokio::fs::read(&absolute).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "engine::stage::agent",
+                                node = %p.node,
+                                path = %declared_path,
+                                err = %e,
+                                "artifact path missing — skipping"
+                            );
+                            continue;
+                        },
+                    };
+                    let hash = ContentHash::compute(&bytes);
+                    let path_buf = std::path::PathBuf::from(declared_path);
+                    let name = path_buf
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map_or_else(|| declared_path.clone(), str::to_owned);
+                    tracing::info!(
+                        target: "engine::stage::agent",
+                        node = %p.node,
+                        name = %name,
+                        hash = %hash,
+                        "artifact_produced"
+                    );
+                    p.writer
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::ArtifactProduced {
+                                node: p.node.clone(),
+                                artifact: hash,
+                                path: path_buf,
+                                name,
+                            },
+                        ))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
                 }
 
                 p.writer
