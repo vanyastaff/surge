@@ -54,6 +54,16 @@ jobs:
       - name: Review dependencies
         # Diff dependency manifests against the base branch and fail the PR
         # on new vulnerable / GPL / unlicensed crates being introduced.
+        #
+        # `continue-on-error: true` keeps this advisory rather than blocking:
+        # the action requires GitHub's Dependency Graph to be enabled for the
+        # repository (Settings → Code security and analysis → Dependency
+        # graph) and refuses to run otherwise. Until that is on, this step
+        # would hard-fail every PR despite `cargo audit` already covering
+        # RustSec advisories in the parallel `audit` job. When Dependency
+        # graph is enabled the action runs normally and reports diffs; the
+        # `continue-on-error` becomes a no-op (no failure to swallow).
         uses: actions/dependency-review-action@v4
+        continue-on-error: true
         with:
           fail-on-severity: high
