@@ -57,7 +57,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo test -p surge-orchestrator --tests -- --ignored
         timeout-minutes: 10
-        continue-on-error: true  # known M5 limitation: some tests hang on bridge worker reply routing (M5.1)
+        # `--ignored` includes long-running e2e flows and tests that need an
+        # external ACP agent; continue-on-error so a single one doesn't fail
+        # the build. (Earlier comment blamed an "M5.1 bridge reply-routing
+        # hang" — M5.1 has since landed and the AcpBridge::Drop deadlock that
+        # caused those hangs is fixed; the gate stays for the genuinely
+        # external-dep tests.)
+        continue-on-error: true
 
   clippy:
     name: Clippy

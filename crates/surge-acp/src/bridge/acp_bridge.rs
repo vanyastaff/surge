@@ -239,11 +239,34 @@ impl AcpBridge {
 
 impl Drop for AcpBridge {
     fn drop(&mut self) {
-        // No await possible in Drop. Dropping the only owned cmd_tx
-        // (when `self` is dropped) closes the channel, causing the worker's
-        // `cmd_rx.recv()` to return `None` and the loop to exit. We then
-        // best-effort join the thread.
+        // CORRECTNESS — drop order matters.
+        //
+        // Rust runs custom `Drop::drop(&mut self)` BEFORE the struct's fields
+        // are dropped. If we just called `handle.join()` directly, `self.cmd_tx`
+        // would still be alive — the worker thread is parked inside
+        // `cmd_rx.recv().await` waiting for a command that will never come, and
+        // `join()` would block forever.
+        //
+        // This was masked under `cargo test` because tests follow the happy
+        // path (call `shutdown().await`, which takes the worker out and joins
+        // it itself, so this `Drop` runs with `worker == None`). It surfaced
+        // under `cargo nextest run` as the three "hung integration test"
+        // reports — those tests panic before reaching `shutdown().await` (e.g.
+        // on `bridge.open_session(...).await.unwrap()` if the agent binary is
+        // missing on a cold cache, or on an assertion mid-flow), and the
+        // resulting unwind reaches this `Drop` with the worker still parked.
+        // The process then sat in `join()` until nextest's wall-clock
+        // SLOW/TIMEOUT machinery killed it after 120s.
+        //
+        // Fix: explicitly drop the command sender first by swapping in a
+        // disconnected dummy. Once the real `cmd_tx` is gone the worker's
+        // `cmd_rx.recv()` returns `None`, `bridge_loop` returns, and the
+        // thread exits → `join()` returns promptly. The dummy's matching
+        // receiver is dropped immediately so any later (mistaken) send on the
+        // dummy fails fast rather than enqueuing into a phantom channel.
         if let Some(handle) = self.worker.take() {
+            let (dummy_tx, _dummy_rx) = mpsc::channel::<BridgeCommand>(1);
+            drop(std::mem::replace(&mut self.cmd_tx, dummy_tx));
             let _ = handle.join();
         }
     }
@@ -257,6 +280,35 @@ mod tests {
     async fn spawn_then_shutdown_clean() {
         let bridge = AcpBridge::with_defaults().unwrap();
         bridge.shutdown().await.unwrap();
+    }
+
+    /// Regression test for a `Drop` deadlock that surfaced under nextest as
+    /// "three integration tests hang for >120s" on PR #40.
+    ///
+    /// The bug: custom `Drop::drop(&mut self)` runs BEFORE the struct's fields
+    /// are dropped, so calling `worker.join()` directly inside `Drop` blocks
+    /// forever — the worker thread is parked on `cmd_rx.recv().await`, and
+    /// `cmd_tx` (a field of the same struct) is still alive at that point.
+    /// The hang only manifested when a test panicked before reaching
+    /// `shutdown().await`, which is exactly what happens when an integration
+    /// test fails an assertion or hits `AgentSpawnFailed`.
+    ///
+    /// This test exercises the panic-path drop directly: no `shutdown()`,
+    /// just create a bridge and drop it. Pre-fix this hangs forever; post-fix
+    /// it returns within milliseconds.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drop_without_shutdown_does_not_deadlock() {
+        let start = std::time::Instant::now();
+        {
+            let _bridge = AcpBridge::with_defaults().unwrap();
+            // Intentionally NO `shutdown().await` — exercises the bare-Drop path.
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "AcpBridge::Drop took {elapsed:?} (>5s) — drop deadlock regression. \
+             See `Drop for AcpBridge` for the cmd_tx-before-join ordering fix."
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
