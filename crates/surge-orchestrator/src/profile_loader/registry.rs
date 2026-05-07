@@ -188,6 +188,12 @@ impl ProfileRegistry {
     }
 
     /// 3-way leaf lookup: versioned disk → latest disk → bundled.
+    ///
+    /// Resolves the bundled half against `self.bundled` (the cached
+    /// `Arc<Vec<Profile>>` populated once at `load`/`new`) rather than via
+    /// `BundledRegistry::by_name_*` static methods. The static methods
+    /// re-parse all 17 embedded TOMLs on every call; consulting the
+    /// cached vec keeps `resolve` allocation-free for the bundled path.
     fn find_leaf(&self, key_ref: &ProfileKeyRef) -> Result<(Profile, Provenance), SurgeError> {
         let name = key_ref.name.as_str();
         if let Some(ref requested_version) = key_ref.version {
@@ -198,8 +204,12 @@ impl ProfileRegistry {
             if let Some(entry) = self.disk.by_name_version(name, requested_version) {
                 return Ok((entry.profile.clone(), Provenance::Versioned));
             }
-            if let Some(profile) = BundledRegistry::by_name_version(name, requested_version) {
-                return Ok((profile, Provenance::Bundled));
+            if let Some(profile) = self
+                .bundled
+                .iter()
+                .find(|p| p.role.id.as_str() == name && &p.role.version == requested_version)
+            {
+                return Ok((profile.clone(), Provenance::Bundled));
             }
             // No match: collect what versions DO exist for this name to
             // make the error actionable.
@@ -228,8 +238,13 @@ impl ProfileRegistry {
         if let Some(entry) = self.disk.by_name_latest(name) {
             return Ok((entry.profile.clone(), Provenance::Latest));
         }
-        if let Some(profile) = BundledRegistry::by_name_latest(name) {
-            return Ok((profile, Provenance::Bundled));
+        if let Some(profile) = self
+            .bundled
+            .iter()
+            .filter(|p| p.role.id.as_str() == name)
+            .max_by(|a, b| a.role.version.cmp(&b.role.version))
+        {
+            return Ok((profile.clone(), Provenance::Bundled));
         }
         Err(SurgeError::ProfileNotFound(name.to_string()))
     }
