@@ -118,7 +118,9 @@ fn print_table(entries: &[surge_orchestrator::profile_loader::registry::ProfileL
         println!("(no profiles)");
         return;
     }
-    println!("NAME                         VERSION    WHERE      AGENT                    DISPLAY NAME");
+    println!(
+        "NAME                         VERSION    WHERE      AGENT                    DISPLAY NAME"
+    );
     for e in entries {
         let id = e.profile.role.id.as_str();
         let version = e.profile.role.version.to_string();
@@ -139,10 +141,13 @@ fn print_json(
             version: e.profile.role.version.to_string(),
             display_name: &e.profile.role.display_name,
             category: format!("{:?}", e.profile.role.category).to_lowercase(),
-            provenance: provenance_label(e.profile.role.extends.as_ref().map_or(
-                e.provenance,
-                |_| e.provenance,
-            )),
+            provenance: provenance_label(
+                e.profile
+                    .role
+                    .extends
+                    .as_ref()
+                    .map_or(e.provenance, |_| e.provenance),
+            ),
             agent_id: &e.profile.runtime.agent_id,
         })
         .collect();
@@ -188,7 +193,9 @@ fn run_show(args: ShowArgs) -> Result<()> {
                 .by_name_latest(args.name.as_str())
                 .map(|e| e.profile.clone())
                 .or_else(|| {
-                    surge_core::profile::bundled::BundledRegistry::by_name_latest(args.name.as_str())
+                    surge_core::profile::bundled::BundledRegistry::by_name_latest(
+                        args.name.as_str(),
+                    )
                 })
         }
         .with_context(|| format!("profile not found: {key_input}"))?;
@@ -234,12 +241,7 @@ fn run_validate(args: ValidateArgs) -> Result<()> {
     let renderer = PromptRenderer::strict();
     renderer
         .validate_template(&profile.prompt.system)
-        .with_context(|| {
-            format!(
-                "prompt.system template invalid in {}",
-                args.path.display()
-            )
-        })?;
+        .with_context(|| format!("prompt.system template invalid in {}", args.path.display()))?;
 
     // Extends parent existence check (best-effort: load the registry; if
     // we cannot, skip — the profile is still considered valid in
@@ -250,9 +252,7 @@ fn run_validate(args: ValidateArgs) -> Result<()> {
                 let parent_ref = parse_key_ref(parent.as_str())
                     .with_context(|| format!("parse extends parent {parent:?}"))?;
                 if registry.resolve(&parent_ref).is_err() {
-                    eprintln!(
-                        "WARN: extends parent {parent:?} not found in current registry"
-                    );
+                    eprintln!("WARN: extends parent {parent:?} not found in current registry");
                 }
             },
             Err(e) => {
@@ -275,9 +275,8 @@ fn run_new(args: NewArgs) -> Result<()> {
 
     // Validate the name now so we don't write a file the registry cannot
     // load.
-    let key = ProfileKey::try_new(&args.name).with_context(|| {
-        format!("invalid profile name {:?}", args.name)
-    })?;
+    let key = ProfileKey::try_new(&args.name)
+        .with_context(|| format!("invalid profile name {:?}", args.name))?;
 
     let dir = match args.dir {
         Some(d) => d,
@@ -299,8 +298,7 @@ fn run_new(args: NewArgs) -> Result<()> {
     }
 
     let body = scaffold_body(key.as_str(), args.base.as_deref());
-    std::fs::write(&dest, body)
-        .with_context(|| format!("write {}", dest.display()))?;
+    std::fs::write(&dest, body).with_context(|| format!("write {}", dest.display()))?;
     println!("✅ created {}", dest.display());
     println!("   Validate: surge profile validate {}", dest.display());
     Ok(())

@@ -76,7 +76,10 @@ impl DiskProfileSet {
             }
             match load_one(&path) {
                 Ok(profile) => {
-                    let key = (profile.role.id.as_str().to_string(), profile.role.version.clone());
+                    let key = (
+                        profile.role.id.as_str().to_string(),
+                        profile.role.version.clone(),
+                    );
                     if profiles.iter().any(|e| {
                         e.profile.role.id.as_str() == key.0 && e.profile.role.version == key.1
                     }) {
@@ -264,8 +267,11 @@ system = "test prompt"
     #[test]
     fn warn_and_skip_on_parse_failure() {
         let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("broken-1.0.toml"), "this = is = invalid toml")
-            .unwrap();
+        std::fs::write(
+            tmp.path().join("broken-1.0.toml"),
+            "this = is = invalid toml",
+        )
+        .unwrap();
         write_profile(
             tmp.path(),
             "good",

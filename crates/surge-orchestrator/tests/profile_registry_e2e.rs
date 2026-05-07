@@ -157,8 +157,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
         custom_fields: Default::default(),
     };
     let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
@@ -261,8 +260,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
         custom_fields: Default::default(),
     };
     let node = NodeKey::try_from("plan_1").unwrap();
-    let tool_resolutions =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {

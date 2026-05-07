@@ -10,8 +10,8 @@ use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, Mat
 use surge_core::keys::{OutcomeKey, ProfileKey};
 use surge_core::profile::registry::{collect_chain, merge_chain, merge_pair};
 use surge_core::profile::{
-    ExpectedBinding, ExpectedBindingSource, Profile, ProfileBindings, ProfileHooks,
-    ProfileOutcome, PromptTemplate, Role, RoleCategory, RuntimeCfg, ToolsCfg,
+    ExpectedBinding, ExpectedBindingSource, Profile, ProfileBindings, ProfileHooks, ProfileOutcome,
+    PromptTemplate, Role, RoleCategory, RuntimeCfg, ToolsCfg,
 };
 use surge_core::sandbox::SandboxConfig;
 
@@ -120,9 +120,9 @@ fn arb_profile_name() -> impl Strategy<Value = String> {
 
 fn arb_simple_profile(name: String) -> impl Strategy<Value = Profile> {
     (
-        any::<bool>(),                           // has_custom_prompt
+        any::<bool>(),                             // has_custom_prompt
         prop::collection::vec("[a-z]{1,8}", 0..3), // mcp tools
-        any::<bool>(),                           // overrides agent_id
+        any::<bool>(),                             // overrides agent_id
     )
         .prop_map(move |(has_prompt, mcp, override_agent)| {
             let mut p = make_profile(&name);

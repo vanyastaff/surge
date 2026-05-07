@@ -23,11 +23,9 @@ pub fn surge_home() -> Result<PathBuf, SurgeError> {
             return Ok(PathBuf::from(custom));
         }
     }
-    dirs::home_dir()
-        .map(|h| h.join(".surge"))
-        .ok_or_else(|| {
-            SurgeError::Config("cannot determine SURGE_HOME (no $SURGE_HOME, no $HOME)".into())
-        })
+    dirs::home_dir().map(|h| h.join(".surge")).ok_or_else(|| {
+        SurgeError::Config("cannot determine SURGE_HOME (no $SURGE_HOME, no $HOME)".into())
+    })
 }
 
 /// Resolve `${SURGE_HOME}/profiles` (the disk root for user-authored profiles).

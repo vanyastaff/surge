@@ -171,10 +171,7 @@ impl ProfileRegistry {
 
         // Bundled entries that don't shadow a disk match.
         for p in self.bundled.iter() {
-            let key = (
-                p.role.id.as_str().to_string(),
-                p.role.version.clone(),
-            );
+            let key = (p.role.id.as_str().to_string(), p.role.version.clone());
             if seen.contains(&key) {
                 continue;
             }
@@ -214,7 +211,12 @@ impl ProfileRegistry {
             // No match: collect what versions DO exist for this name to
             // make the error actionable.
             let mut available: Vec<String> = Vec::new();
-            for e in self.disk.entries().iter().filter(|e| e.profile.role.id.as_str() == name) {
+            for e in self
+                .disk
+                .entries()
+                .iter()
+                .filter(|e| e.profile.role.id.as_str() == name)
+            {
                 available.push(e.profile.role.version.to_string());
             }
             for p in self.bundled.iter().filter(|p| p.role.id.as_str() == name) {
@@ -268,10 +270,7 @@ impl ProfileRegistry {
 /// # Errors
 /// Returns [`SurgeError::Config`] on the first broken template, naming
 /// the offending profile so the operator knows which file to fix.
-pub fn validate_prompts(
-    disk: &DiskProfileSet,
-    bundled: &[Profile],
-) -> Result<(), SurgeError> {
+pub fn validate_prompts(disk: &DiskProfileSet, bundled: &[Profile]) -> Result<(), SurgeError> {
     let renderer = PromptRenderer::strict();
     for entry in disk.entries() {
         renderer
@@ -413,7 +412,9 @@ system = "{prompt}"
         let key_ref = parse_key_ref("implementer@9.9.9").unwrap();
         let err = reg.resolve(&key_ref).unwrap_err();
         match err {
-            SurgeError::ProfileVersionMismatch { name, available, .. } => {
+            SurgeError::ProfileVersionMismatch {
+                name, available, ..
+            } => {
                 assert_eq!(name, "implementer");
                 // Bundled also has implementer@1.0.0; both should appear.
                 assert!(available.iter().any(|v| v == "2.0.0"));
@@ -471,12 +472,14 @@ system = "team-local override"
         // Child prompt wins over parent.
         assert_eq!(resolved.profile.prompt.system, "team-local override");
         // Inherited tools from bundled implementer.
-        assert!(resolved
-            .profile
-            .tools
-            .default_skills
-            .iter()
-            .any(|s| s == "aif-implement"));
+        assert!(
+            resolved
+                .profile
+                .tools
+                .default_skills
+                .iter()
+                .any(|s| s == "aif-implement")
+        );
     }
 
     #[test]
@@ -491,10 +494,15 @@ system = "team-local override"
         let entries = reg.list();
         // 17 bundled + 1 disk = 18 (no shadow collision)
         assert_eq!(entries.len(), 18);
-        assert!(entries.iter().any(|e| e.profile.role.id.as_str() == "team-impl"
-            && e.provenance == Provenance::Latest));
-        assert!(entries.iter().any(|e| e.profile.role.id.as_str() == "implementer"
-            && e.provenance == Provenance::Bundled));
+        assert!(entries.iter().any(
+            |e| e.profile.role.id.as_str() == "team-impl" && e.provenance == Provenance::Latest
+        ));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.profile.role.id.as_str() == "implementer"
+                    && e.provenance == Provenance::Bundled)
+        );
     }
 
     #[test]
@@ -574,9 +582,11 @@ system = "Hello {{ unmatched"
         assert_eq!(resolved.profile.role.id.as_str(), "bug-fix-implementer");
         // chain: bundled implementer -> bundled bug-fix-implementer
         assert!(resolved.chain.iter().any(|k| k.as_str() == "implementer"));
-        assert!(resolved
-            .chain
-            .iter()
-            .any(|k| k.as_str() == "bug-fix-implementer"));
+        assert!(
+            resolved
+                .chain
+                .iter()
+                .any(|k| k.as_str() == "bug-fix-implementer")
+        );
     }
 }

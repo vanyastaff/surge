@@ -146,7 +146,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 .as_ref()
                 .and_then(|po| po.append_system.as_deref())
         })
-        .or_else(|| resolved_profile.as_ref().map(|r| r.profile.prompt.system.as_str()))
+        .or_else(|| {
+            resolved_profile
+                .as_ref()
+                .map(|r| r.profile.prompt.system.as_str())
+        })
         .unwrap_or("");
     // Lenient at runtime: missing bindings render as empty strings rather
     // than failing the stage. Strict-mode validation runs at

@@ -156,10 +156,7 @@ mod tests {
     #[test]
     fn no_html_escape_passes_through_specials() {
         let r = PromptRenderer::strict();
-        let bindings = vec![(
-            TemplateVar("payload".into()),
-            "<tag>quote\"</tag>".into(),
-        )];
+        let bindings = vec![(TemplateVar("payload".into()), "<tag>quote\"</tag>".into())];
         let out = r.render("Body: {{payload}}", &bindings).unwrap();
         assert_eq!(out, "Body: <tag>quote\"</tag>");
     }

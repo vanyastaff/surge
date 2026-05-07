@@ -91,9 +91,7 @@ pub enum SurgeError {
 
     /// A profile reference asked for a specific version that does not match the
     /// version recorded in any candidate file's `[role] version = "..."`.
-    #[error(
-        "profile version mismatch for {name}: requested {requested}, available {available:?}"
-    )]
+    #[error("profile version mismatch for {name}: requested {requested}, available {available:?}")]
     ProfileVersionMismatch {
         name: String,
         requested: String,

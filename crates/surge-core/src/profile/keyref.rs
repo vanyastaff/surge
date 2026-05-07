@@ -90,12 +90,11 @@ impl ProfileKeyRef {
     /// `ProfileKey` validation.
     pub fn name_only(name: impl Into<String>) -> Result<Self, KeyRefParseError> {
         let name_str = name.into();
-        let key = ProfileKey::try_new(&name_str).map_err(|source| {
-            KeyRefParseError::InvalidName {
+        let key =
+            ProfileKey::try_new(&name_str).map_err(|source| KeyRefParseError::InvalidName {
                 name: name_str.clone(),
                 source,
-            }
-        })?;
+            })?;
         Ok(Self {
             name: key,
             version: None,
@@ -128,11 +127,9 @@ pub fn parse_key_ref(input: &str) -> Result<ProfileKeyRef, KeyRefParseError> {
     if name_part.is_empty() {
         return Err(KeyRefParseError::EmptyName(input.to_string()));
     }
-    let name = ProfileKey::try_new(name_part).map_err(|source| {
-        KeyRefParseError::InvalidName {
-            name: name_part.to_string(),
-            source,
-        }
+    let name = ProfileKey::try_new(name_part).map_err(|source| KeyRefParseError::InvalidName {
+        name: name_part.to_string(),
+        source,
     })?;
 
     let version = match version_part {

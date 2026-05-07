@@ -686,12 +686,7 @@ mod tests {
         assert_eq!(merged.runtime.recommended_model, "gp-model");
         assert_eq!(merged.tools.default_mcp, vec!["fs".to_string()]);
         assert_eq!(merged.tools.default_skills, vec!["debugging".to_string()]);
-        let hook_ids: Vec<&str> = merged
-            .hooks
-            .entries
-            .iter()
-            .map(|h| h.id.as_str())
-            .collect();
+        let hook_ids: Vec<&str> = merged.hooks.entries.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(hook_ids, vec!["gp_hook", "parent_hook", "child_hook"]);
         // role of leaf wins
         assert_eq!(merged.role.id.as_str(), "child");
@@ -835,10 +830,8 @@ mod tests {
             .iter()
             .map(|p| (p.role.id.as_str().to_string(), p.clone()))
             .collect();
-        let err = collect_chain(leaf, move |key| {
-            Ok(lookup_table.get(key.as_str()).cloned())
-        })
-        .unwrap_err();
+        let err = collect_chain(leaf, move |key| Ok(lookup_table.get(key.as_str()).cloned()))
+            .unwrap_err();
         assert!(matches!(err, SurgeError::ProfileExtendsTooDeep { .. }));
     }
 
@@ -866,12 +859,13 @@ mod tests {
             .iter()
             .map(|p| (p.role.id.as_str().to_string(), p.clone()))
             .collect();
-        let chain = collect_chain(leaf, move |key| {
-            Ok(lookup_table.get(key.as_str()).cloned())
-        })
-        .unwrap();
+        let chain =
+            collect_chain(leaf, move |key| Ok(lookup_table.get(key.as_str()).cloned())).unwrap();
         assert_eq!(chain.len(), total);
-        assert_eq!(chain.first().unwrap().role.id.as_str(), &format!("p{MAX_EXTENDS_DEPTH}"));
+        assert_eq!(
+            chain.first().unwrap().role.id.as_str(),
+            &format!("p{MAX_EXTENDS_DEPTH}")
+        );
         assert_eq!(chain.last().unwrap().role.id.as_str(), "leaf");
     }
 
@@ -902,10 +896,7 @@ mod tests {
     #[test]
     fn collect_chain_propagates_lookup_error() {
         let leaf = with_extends("child", Some("base"));
-        let err = collect_chain(leaf, |_| {
-            Err(SurgeError::Config("boom".into()))
-        })
-        .unwrap_err();
+        let err = collect_chain(leaf, |_| Err(SurgeError::Config("boom".into()))).unwrap_err();
         assert!(matches!(err, SurgeError::Config(msg) if msg == "boom"));
     }
 }

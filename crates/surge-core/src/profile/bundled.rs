@@ -27,10 +27,8 @@ const MOCK_TOML: &str = include_str!("../../bundled/profiles/mock-1.0.toml");
 
 const DESCRIPTION_AUTHOR_TOML: &str =
     include_str!("../../bundled/profiles/description-author-1.0.toml");
-const ROADMAP_PLANNER_TOML: &str =
-    include_str!("../../bundled/profiles/roadmap-planner-1.0.toml");
-const FLOW_GENERATOR_TOML: &str =
-    include_str!("../../bundled/profiles/flow-generator-1.0.toml");
+const ROADMAP_PLANNER_TOML: &str = include_str!("../../bundled/profiles/roadmap-planner-1.0.toml");
+const FLOW_GENERATOR_TOML: &str = include_str!("../../bundled/profiles/flow-generator-1.0.toml");
 
 const SPEC_AUTHOR_TOML: &str = include_str!("../../bundled/profiles/spec-author-1.0.toml");
 const ARCHITECT_TOML: &str = include_str!("../../bundled/profiles/architect-1.0.toml");
@@ -51,8 +49,7 @@ const MIGRATION_IMPLEMENTER_TOML: &str =
 
 const PROJECT_CONTEXT_AUTHOR_TOML: &str =
     include_str!("../../bundled/profiles/project-context-author-1.0.toml");
-const FEATURE_PLANNER_TOML: &str =
-    include_str!("../../bundled/profiles/feature-planner-1.0.toml");
+const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-planner-1.0.toml");
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
@@ -124,9 +121,8 @@ impl BundledRegistry {
 }
 
 fn parse(raw: &str, expected_name: &str) -> Profile {
-    let profile: Profile = toml::from_str(raw).unwrap_or_else(|e| {
-        panic!("bundled profile {expected_name:?} failed to parse: {e}")
-    });
+    let profile: Profile = toml::from_str(raw)
+        .unwrap_or_else(|e| panic!("bundled profile {expected_name:?} failed to parse: {e}"));
     assert!(
         profile.role.id.as_str() == expected_name,
         "bundled profile constant for {expected_name:?} contained role.id = {:?}",

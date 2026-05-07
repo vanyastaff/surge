@@ -52,8 +52,6 @@
 
 pub mod bootstrap;
 pub mod budget;
-pub mod profile_loader;
-pub mod prompt;
 pub mod circuit_breaker;
 pub mod conflict;
 pub mod context;
@@ -64,7 +62,9 @@ pub mod parallel;
 pub mod phases;
 pub mod pipeline;
 pub mod planner;
+pub mod profile_loader;
 pub mod project;
+pub mod prompt;
 pub mod qa;
 pub mod retry;
 pub mod schedule;
