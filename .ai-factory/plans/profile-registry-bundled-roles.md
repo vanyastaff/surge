@@ -82,11 +82,11 @@ These are decisions taken at planning time so /aif-implement does not re-litigat
 
 ### Phase 3 — Disk loader, ProfileRegistry, engine plumbing
 
-- [ ] Task 13: `surge_home()` and `profiles_dir()` helpers honoring `SURGE_HOME`; mirror `surge-persistence::store::default_path` pattern. Files: `crates/surge-orchestrator/src/profile_loader/{mod,paths}.rs`
-- [ ] Task 14: `DiskProfileSet::scan` walking `*.toml` flat under `profiles_dir()`; warn-and-skip on parse failure; tempdir tests (depends on 13)
-- [ ] Task 15: `ProfileRegistry::{load, resolve, list}` with 3-way lookup matching `Profile.role.version` (canonical) + `Provenance` tagging (depends on 8, 14, 5, 6)
-- [ ] Task 29: Add `profile_registry: Option<Arc<ProfileRegistry>>` to `EngineConfig`; new `Engine::new_full(...)` constructor; legacy constructors delegate (depends on 15)
-- [ ] Task 16: Replace M5 fallback at `crates/surge-orchestrator/src/engine/stage/agent.rs:126-137` with registry-driven `AgentKind` derivation via `runtime.agent_id` → `surge_acp::Registry` lookup. Add `profile_registry` to `AgentStageParams` mirroring existing `mcp_registry` field (depends on 15, 17, 28, 29)
+- [x] Task 13: `surge_home()` and `profiles_dir()` helpers honoring `SURGE_HOME`; mirror `surge-persistence::store::default_path` pattern. Files: `crates/surge-orchestrator/src/profile_loader/{mod,paths}.rs`
+- [x] Task 14: `DiskProfileSet::scan` walking `*.toml` flat under `profiles_dir()`; warn-and-skip on parse failure; tempdir tests (depends on 13)
+- [x] Task 15: `ProfileRegistry::{load, resolve, list}` with 3-way lookup matching `Profile.role.version` (canonical) + `Provenance` tagging (depends on 8, 14, 5, 6)
+- [x] Task 29: Add `profile_registry: Option<Arc<ProfileRegistry>>` to `EngineConfig`; new `Engine::new_full(...)` constructor; legacy constructors delegate (depends on 15)
+- [x] Task 16: Replace M5 fallback at `crates/surge-orchestrator/src/engine/stage/agent.rs:126-137` with registry-driven `AgentKind` derivation via `runtime.agent_id` → `surge_acp::Registry` lookup. Add `profile_registry` to `AgentStageParams` mirroring existing `mcp_registry` field (depends on 15, 17, 28, 29)
 <!-- Commit checkpoint: tasks 13-15, 29 (one commit), then 16 (separate commit) -->
 
 ### Phase 4 — Prompt template engine

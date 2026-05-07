@@ -75,6 +75,12 @@ pub(crate) struct RunTaskParams {
     /// references entries by name; agent stages use this to look
     /// up timeouts and `allowed_tools` filters.
     pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
+    /// Profile registry, if wired via `EngineConfig::profile_registry`.
+    /// When `Some`, agent stages resolve `agent_config.profile` through
+    /// it to derive `AgentKind` from the merged profile's
+    /// `runtime.agent_id`. When `None`, the M5 mock-only fast path
+    /// remains active.
+    pub profile_registry: Option<Arc<crate::profile_loader::ProfileRegistry>>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -147,6 +153,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     human_input_timeout: params.run_config.human_input_timeout,
                     mcp_registry: params.mcp_registry.clone(),
                     mcp_servers: params.mcp_servers.clone(),
+                    profile_registry: params.profile_registry.clone(),
                     hook_executor: &hook_executor,
                 })
                 .await;

@@ -130,6 +130,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        profile_registry: None,
         hook_executor: &hook_executor,
     })
     .await
@@ -220,6 +221,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        profile_registry: None,
         hook_executor: &hook_executor,
     })
     .await;

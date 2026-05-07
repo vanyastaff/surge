@@ -68,6 +68,11 @@ pub struct AgentStageParams<'a> {
     /// Run-level server list. Each entry maps a server name to its timeout
     /// and allowed-tools filter for this session's `RoutingToolDispatcher`.
     pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
+    /// Optional profile registry. When `Some`, the stage resolves
+    /// `agent_config.profile` through it to derive `AgentKind` from the
+    /// merged profile's `runtime.agent_id`. When `None`, the legacy M5
+    /// mock-only fast path remains active.
+    pub profile_registry: Option<std::sync::Arc<crate::profile_loader::ProfileRegistry>>,
     /// Lifecycle-hook executor. The default `HookExecutor::new()` runs hooks
     /// via the OS shell; tests substitute via `HookExecutor::with_spawner`.
     pub hook_executor: &'a HookExecutor,
@@ -123,18 +128,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .unwrap_or("");
     let prompt_text = substitute_template(prompt_template, &resolved_bindings);
 
-    // Derive AgentKind from the profile string.
-    // M5 minimum: profiles matching "mock" or "mock@*" → AgentKind::Mock.
-    // All other profiles also map to Mock for now; full profile registry is M6+.
-    // TODO(M6): wire profile → binary path via a ProfileRegistry lookup.
+    // Derive AgentKind. With the profile registry wired (Profile registry &
+    // bundled roles milestone) we resolve the profile reference, then map
+    // its `runtime.agent_id` to an `AgentKind`. Without the registry we
+    // fall back to the M5 mock-only behaviour so legacy callers keep
+    // working.
     let profile_str = p.agent_config.profile.as_ref();
-    let agent_kind = if profile_str == "mock" || profile_str.starts_with("mock@") {
-        AgentKind::Mock { args: vec![] }
-    } else {
-        // M5 fallback: treat all non-mock profiles as Mock so the engine can
-        // be tested without a real agent binary. M6 will add binary resolution.
-        AgentKind::Mock { args: vec![] }
-    };
+    let agent_kind = derive_agent_kind(profile_str, p.profile_registry.as_deref())?;
 
     // Derive declared outcomes from the node's OutcomeDecl list.
     // Fall back to ["done"] when the node has no declared_outcomes so the
@@ -698,6 +698,88 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
         | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
     }
+}
+
+/// Resolve `profile_str` (the value of `AgentConfig::profile`) into an
+/// `AgentKind` using the profile registry, with the M5 mock fast path as
+/// the documented fallback when no registry is wired.
+///
+/// Order:
+/// 1. If `profile_str` is `"mock"` or `"mock@..."` and the registry is
+///    `None`, short-circuit to `AgentKind::Mock`. Preserves legacy tests
+///    that build the engine without a registry.
+/// 2. If a registry is supplied, parse the reference, resolve through the
+///    full disk + bundled chain, take `merged.runtime.agent_id`, and map
+///    that id to a concrete `AgentKind` via `surge_acp::Registry::builtin`.
+///    Unknown agent ids surface a `StageError::Internal` rather than a
+///    silent mock.
+/// 3. If no registry is supplied AND the profile is non-mock, also fall
+///    back to `AgentKind::Mock` with a one-time WARN log so the test path
+///    keeps working but production wiring is still encouraged.
+fn derive_agent_kind(
+    profile_str: &str,
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Result<AgentKind, StageError> {
+    // Step 1 / step 3 fallback path: no registry wired.
+    if profile_registry.is_none() {
+        if profile_str != "mock" && !profile_str.starts_with("mock@") {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                profile = %profile_str,
+                "no profile_registry wired; falling back to AgentKind::Mock (legacy M5 path)"
+            );
+        }
+        return Ok(AgentKind::Mock { args: vec![] });
+    }
+    let registry = profile_registry.expect("checked Some above");
+
+    // Step 2: registry-driven resolution.
+    let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).map_err(|e| {
+        StageError::Internal(format!("invalid profile reference {profile_str:?}: {e}"))
+    })?;
+    let resolved = registry
+        .resolve(&key_ref)
+        .map_err(|e| StageError::Internal(format!("profile resolve failed: {e}")))?;
+
+    let agent_id = resolved.profile.runtime.agent_id.as_str();
+    if agent_id.is_empty() {
+        return Err(StageError::Internal(format!(
+            "profile {profile_str:?} has empty runtime.agent_id"
+        )));
+    }
+    if agent_id == "mock" {
+        return Ok(AgentKind::Mock { args: vec![] });
+    }
+
+    // Look up the agent registry to find the binary + default args. Builtin
+    // covers claude-code / codex / gemini-cli; user-installed agents fall
+    // through to a `Custom` shape with the registry-supplied command.
+    let agent_registry = surge_acp::Registry::builtin();
+    let entry = agent_registry.find(agent_id).ok_or_else(|| {
+        StageError::Internal(format!(
+            "profile {profile_str:?} references agent_id {agent_id:?} not present in surge_acp::Registry"
+        ))
+    })?;
+
+    let binary = std::path::PathBuf::from(&entry.command);
+    let extra_args = entry.default_args.clone();
+    let kind = match entry.id.as_str() {
+        "claude-code" => AgentKind::ClaudeCode { binary, extra_args },
+        "codex" => AgentKind::Codex { binary, extra_args },
+        "gemini-cli" => AgentKind::GeminiCli { binary, extra_args },
+        _ => AgentKind::Custom {
+            binary,
+            args: extra_args,
+        },
+    };
+    tracing::debug!(
+        target: "engine::stage::agent",
+        profile = %profile_str,
+        agent_id = %agent_id,
+        kind = kind.label(),
+        "derived AgentKind from profile registry"
+    );
+    Ok(kind)
 }
 
 /// Conservative M7 heuristic for whether a sandbox tier permits an

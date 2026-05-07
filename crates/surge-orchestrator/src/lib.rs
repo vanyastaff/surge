@@ -52,6 +52,7 @@
 
 pub mod bootstrap;
 pub mod budget;
+pub mod profile_loader;
 pub mod circuit_breaker;
 pub mod conflict;
 pub mod context;
