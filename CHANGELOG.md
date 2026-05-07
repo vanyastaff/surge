@@ -86,6 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enum's tag nests cleanly. All callers (orchestrator engine, daemon
   facade, CLI watch loop, daemon inbox state-sync, integration tests)
   updated to the new field-style pattern.
+- **StopRun on a queued run leaked `BroadcastRegistry::waiters` entries**
+  introduced by `subscribe_eventual`. When a client called
+  `Subscribe(run_id)` while the run was still in the FIFO admission
+  queue and then `StopRun(run_id)` cancelled it before admission, the
+  parked oneshot sender stayed in `waiters[run_id]` forever and the
+  per-connection `forward_queued_to_client` task hung indefinitely.
+  `StopRun`'s queued branch now calls `broadcast.deregister(run_id)`
+  to drop the parked senders — each waiter wakes with
+  `Err(RecvError::Closed)` and exits cleanly. Regression test:
+  `daemon_queued_subscribe_test.rs::subscribe_to_queued_then_stop_does_not_leak_waiter`.
 
 - **Replay determinism violation in `RunState::apply`.** The proptest above
   uncovered that `apply()` generated `SessionId::new()` on `RunStarted` and

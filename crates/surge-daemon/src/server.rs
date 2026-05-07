@@ -509,10 +509,22 @@ async fn dispatch(
             //     can retry once the run is fully admitted.
             //   * Two concurrent StopRuns for the same queued run:
             //     one wins, the other falls through to facade.stop_run.
-            // No `broadcast.deregister` is needed — a queued run never
-            // reached `broadcast.register`.
+            // We DO call `broadcast.deregister` here — even though a
+            // queued run never reached `broadcast.register`, a client
+            // may have called `Subscribe(run_id)` while the run was
+            // queued and parked a waiter via
+            // `BroadcastRegistry::subscribe_eventual`. Without
+            // deregister, those waiters orphan in the registry's
+            // `waiters` map indefinitely (leak) and the per-connection
+            // `forward_queued_to_client` task hangs forever awaiting
+            // the oneshot. `deregister` removes the per_run entry
+            // (no-op if absent) AND drops every parked
+            // `oneshot::Sender` for this run_id, which causes each
+            // waiter to wake with `Err(RecvError::Closed)` and exit
+            // cleanly via the `forward_queued_to_client` Err arm.
             if admission.cancel_queued(run_id).await {
                 pending_starts.lock().await.remove(&run_id);
+                broadcast.deregister(run_id).await;
                 broadcast.publish_global(GlobalDaemonEvent::RunFinished {
                     run_id,
                     outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted { reason },

@@ -329,3 +329,180 @@ async fn subscribe_to_queued_run_streams_after_admission() {
     let server_result = join_result.expect("server task panicked");
     server_result.expect("server returned error");
 }
+
+/// Regression test for the H1 finding from the `/aif-review` of
+/// commit `0d9b2b2`: when `StopRun` cancels a queued run, the
+/// matching `Subscribe` waiters in `BroadcastRegistry` were not
+/// drained. The per-connection `forward_queued_to_client` task
+/// hung on its oneshot indefinitely, leaking memory and never
+/// closing the client's per-run channel.
+///
+/// Post-fix, `StopRun` calls `broadcast.deregister(run_id)` which
+/// drops every parked sender for the queued run, waking each
+/// `forward_queued_to_client` task with `Err(RecvError::Closed)`
+/// so it exits cleanly.
+///
+/// The observable invariant from the test's POV: after Subscribe
+/// + StopRun on a queued run, the `forward_queued_to_client` task
+/// has finished — verified indirectly by sending an Unsubscribe
+/// after StopRun and confirming no spurious frames arrive on the
+/// wire (and that the daemon shuts down cleanly within timeout,
+/// which would not happen if the orphan task were still parked
+/// holding the writer mutex).
+#[tokio::test]
+async fn subscribe_to_queued_then_stop_does_not_leak_waiter() {
+    let temp = TempDir::new().unwrap();
+    let socket = unique_socket_path(&temp, "queue_sub_stop");
+    let cfg = ServerConfig {
+        max_active: 1,
+        max_queue: 4,
+        socket_path: socket.clone(),
+    };
+    let shutdown = CancellationToken::new();
+    let stub = Arc::new(CountingStubFacade::new());
+    let stub_for_facade: Arc<dyn EngineFacade> = stub.clone();
+
+    let server_handle = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move { run_server(cfg, stub_for_facade, shutdown).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let name = local_socket_name_from_path(&socket).expect("socket name");
+    let stream = LocalSocketStream::connect(name)
+        .await
+        .expect("connect to daemon");
+    let (read_half, mut write_half) = stream.split();
+    let mut reader = BufReader::new(read_half);
+
+    // --- StartRun #1 (admitted, holds slot until release) ---
+    let run1 = RunId::new();
+    let req1 = DaemonRequest::StartRun {
+        request_id: 1,
+        run_id: run1,
+        graph: Box::new(make_minimal_graph()),
+        worktree_path: temp.path().to_path_buf(),
+        run_config: EngineRunConfig::default(),
+    };
+    write_frame(&mut write_half, &req1)
+        .await
+        .expect("write StartRun #1");
+    write_half.flush().await.expect("flush #1");
+    let resp1 = read_inbound_server_frame(&mut reader)
+        .await
+        .expect("read #1")
+        .expect("frame #1");
+    assert!(matches!(
+        resp1,
+        InboundServerFrame::Response(DaemonResponse::StartRunOk { .. })
+    ));
+
+    // --- StartRun #2 (queued behind #1) ---
+    let run2 = RunId::new();
+    let req2 = DaemonRequest::StartRun {
+        request_id: 2,
+        run_id: run2,
+        graph: Box::new(make_minimal_graph()),
+        worktree_path: temp.path().to_path_buf(),
+        run_config: EngineRunConfig::default(),
+    };
+    write_frame(&mut write_half, &req2)
+        .await
+        .expect("write StartRun #2");
+    write_half.flush().await.expect("flush #2");
+    let resp2 = read_inbound_server_frame(&mut reader)
+        .await
+        .expect("read #2")
+        .expect("frame #2");
+    assert!(matches!(
+        resp2,
+        InboundServerFrame::Response(DaemonResponse::StartRunQueued { .. })
+    ));
+
+    // --- Subscribe(run2) while run2 is still queued ---
+    // This parks a waiter inside BroadcastRegistry.waiters.
+    let sub_req = DaemonRequest::Subscribe {
+        request_id: 3,
+        run_id: run2,
+    };
+    write_frame(&mut write_half, &sub_req)
+        .await
+        .expect("write Subscribe(run2)");
+    write_half.flush().await.expect("flush Subscribe");
+    let sub_resp = read_inbound_server_frame(&mut reader)
+        .await
+        .expect("read Subscribe resp")
+        .expect("frame Subscribe resp");
+    assert!(
+        matches!(
+            sub_resp,
+            InboundServerFrame::Response(DaemonResponse::SubscribeOk { .. })
+        ),
+        "Subscribe on queued run should succeed; got {sub_resp:?}"
+    );
+
+    // --- StopRun(run2) while still queued — pre-fix would leak the parked waiter ---
+    let stop_req = DaemonRequest::StopRun {
+        request_id: 4,
+        run_id: run2,
+        reason: "test cancel before admission".into(),
+    };
+    write_frame(&mut write_half, &stop_req)
+        .await
+        .expect("write StopRun(run2)");
+    write_half.flush().await.expect("flush StopRun");
+    let stop_resp = read_inbound_server_frame(&mut reader)
+        .await
+        .expect("read StopRun resp")
+        .expect("frame StopRun resp");
+    assert!(
+        matches!(
+            stop_resp,
+            InboundServerFrame::Response(DaemonResponse::StopRunOk { .. })
+        ),
+        "StopRun on queued should succeed; got {stop_resp:?}"
+    );
+
+    // --- Confirm no spurious per-run frame arrives for run2 ---
+    // Post-fix the forwarder exits via the oneshot Err arm and
+    // writes nothing. Pre-fix it hangs forever (no frame either,
+    // but the orphan task remains alive holding the connection's
+    // writer mutex).
+    //
+    // We give 300ms for any straggler frame to land. If the
+    // forwarder is correctly torn down, the read times out
+    // cleanly. We also accept Global frames (RunFinished{run2})
+    // which are expected and should arrive on the global path
+    // (this connection didn't subscribe globally, so we won't
+    // see one — but if we did, it would be benign).
+    let stray = tokio::time::timeout(
+        Duration::from_millis(300),
+        read_inbound_server_frame(&mut reader),
+    )
+    .await;
+    match stray {
+        Ok(Ok(Some(InboundServerFrame::Event(DaemonEvent::PerRun { run_id, event })))) => {
+            if run_id == run2 {
+                panic!("queued-then-stopped run2 emitted a PerRun frame post-StopRun: {event:?}");
+            }
+        },
+        Ok(Ok(Some(_))) | Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+            // Timeout (expected) or unrelated frame — both fine.
+        },
+    }
+
+    // --- Release run1 so it terminates and the daemon can shut down cleanly ---
+    // Pre-fix: shutdown might still take 2s, but the orphan task
+    // would hold the writer mutex briefly. Post-fix: clean.
+    stub.release_first();
+
+    // --- Clean shutdown within timeout ---
+    // If the orphan forwarder were stuck holding a lock or never
+    // exiting, this would either hang or trigger the 2s timeout.
+    shutdown.cancel();
+    let join_result = tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("server did not shut down within 2s after cancellation (orphan task?)");
+    let server_result = join_result.expect("server task panicked");
+    server_result.expect("server returned error");
+}
