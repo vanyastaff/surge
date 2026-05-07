@@ -63,11 +63,11 @@ These are decisions taken at planning time so /aif-implement does not re-litigat
 
 ### Phase 1 — Pure registry primitives in `surge-core`
 
-- [ ] Task 28: Add `agent_id: String` to `RuntimeCfg` (default `"claude-code"`); add `parse_key_ref(s) -> ProfileKeyRef { name, version }` helper for `name@version` syntax (depends on 1)
-- [ ] Task 4: Add `ProfileRegistryError` family to `SurgeError` (`ProfileNotFound`, `ProfileVersionMismatch`, `ProfileExtendsCycle`, `ProfileExtendsTooDeep`, `ProfileFieldConflict`, `InvalidProfileKey`). Retrofit `#[non_exhaustive]`. Files: `crates/surge-core/src/error.rs`
-- [ ] Task 5: Implement `ResolvedProfile`, `Provenance`, `merge_chain` in `crates/surge-core/src/profile/registry.rs` using the corrected merge semantics for actual fields (`default_mcp`/`default_skills`/`default_shell_allowlist`, `bindings.expected`, `hooks.entries`, `prompt.system`) (depends on 1, 4, 28)
-- [ ] Task 6: `MAX_EXTENDS_DEPTH = 8`, `collect_chain` walker with cycle detection and depth guard (depends on 4, 5)
-- [ ] Task 7: Property tests via `proptest` + insta snapshots for representative resolved profiles (depends on 5, 6)
+- [x] Task 28: Add `agent_id: String` to `RuntimeCfg` (default `"claude-code"`); add `parse_key_ref(s) -> ProfileKeyRef { name, version }` helper for `name@version` syntax (depends on 1)
+- [x] Task 4: Add `ProfileRegistryError` family to `SurgeError` (`ProfileNotFound`, `ProfileVersionMismatch`, `ProfileExtendsCycle`, `ProfileExtendsTooDeep`, `ProfileFieldConflict`, `InvalidProfileKey`). Retrofit `#[non_exhaustive]`. Files: `crates/surge-core/src/error.rs`
+- [x] Task 5: Implement `ResolvedProfile`, `Provenance`, `merge_chain` in `crates/surge-core/src/profile/registry.rs` using the corrected merge semantics for actual fields (`default_mcp`/`default_skills`/`default_shell_allowlist`, `bindings.expected`, `hooks.entries`, `prompt.system`) (depends on 1, 4, 28)
+- [x] Task 6: `MAX_EXTENDS_DEPTH = 8`, `collect_chain` walker with cycle detection and depth guard (depends on 4, 5)
+- [x] Task 7: Property tests via `proptest` + insta snapshots for representative resolved profiles (depends on 5, 6)
 <!-- Commit checkpoint: tasks 28, 4-7 -->
 
 ### Phase 2 — Bundled assets in `surge-core`

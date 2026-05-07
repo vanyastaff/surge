@@ -75,7 +75,8 @@ pub use mcp_config::{McpServerRef, McpTransportConfig};
 pub use migrations::{IdentityV1, MigrationChain, migrate_payload};
 pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;
-pub use profile::{Profile, Role, RoleCategory};
+pub use profile::keyref::{KeyRefParseError, ProfileKeyRef, parse_key_ref};
+pub use profile::{Profile, Role, RoleCategory, RuntimeCfg};
 pub use run_event::{
     BootstrapDecision, BootstrapStage, ElevationDecision, EventPayload, RunConfig, RunEvent,
     SessionDisposition, VersionedEventPayload,
