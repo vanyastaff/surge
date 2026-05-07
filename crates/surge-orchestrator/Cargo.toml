@@ -29,6 +29,9 @@ futures = "0.3"
 base64 = "0.22"
 interprocess.workspace = true
 ulid = { workspace = true }
+handlebars = { workspace = true }
+semver = { workspace = true }
+dirs = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
