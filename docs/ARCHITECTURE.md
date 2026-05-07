@@ -159,11 +159,35 @@ When a runtime asks for elevation (e.g., write outside the workspace), surge wri
 
 A `Profile` is a reusable configuration for an `Agent` node — system prompt (Handlebars template), launch config, sandbox intent, allowed tools, declared outcomes, hooks, approval policy.
 
-Profiles live in `~/.surge/profiles/` and are also bundled with the distribution. Resolution order: exact version (`implementer-1.0.toml`) → latest (`implementer.toml`) → bundled. Inheritance via `extends = "generic@1.0"` with shallow merge.
+### Layering
+
+Registry code is split across the three layers it touches (codified in [ADR 0001](adr/0001-profile-registry-layout.md)):
+
+- **`surge-core::profile::registry`** owns pure inheritance + merge logic (`ResolvedProfile`, `Provenance`, `merge_chain`, `MAX_EXTENDS_DEPTH`). Pure functions, property-tested. No I/O.
+- **`surge-core::profile::bundled`** owns compile-time asset bundling via `include_str!`. The `BundledRegistry` returns the 17 first-party profiles freshly parsed on each `all()` call.
+- **`surge-core::profile::keyref`** owns `name@MAJOR.MINOR[.PATCH]` parsing into `ProfileKeyRef { name, version }`.
+- **`surge-orchestrator::profile_loader`** owns disk I/O. `surge_home()` honours `SURGE_HOME` (falls back to `~/.surge`); `DiskProfileSet::scan` walks `*.toml` flat with warn-and-skip on per-file parse failures; `ProfileRegistry::{load, resolve, list}` does the canonical 3-way lookup.
+- **`surge-cli::commands::profile`** owns the user-facing `surge profile {list,show,validate,new}` surface.
+
+### Resolution order
+
+`versioned (name-MAJOR.MINOR.toml on disk) → latest (name.toml on disk) → bundled fallback`.
+
+Version match is **canonical against `Profile.role.version`** in the TOML body — the filename is just a hint and a duplicate-detection key. Inheritance via `extends = "generic@1.0"` with shallow merge. The agent runtime is identified by `runtime.agent_id` (default `"claude-code"`); the engine derives `AgentKind` via `surge_acp::Registry::builtin().find(agent_id)`. `mock@1.0` is a bundled profile — no special-case fallback.
+
+Templates are Handlebars (strict mode at `ProfileRegistry::load` time so broken templates fail loudly; lenient at agent-launch so optional bindings don't panic stages). HTML escaping is disabled.
+
+### Bundled set
 
 Bundled bootstrap roles: **Description Author**, **Roadmap Planner**, **Flow Generator**.
 Bundled execution roles: **Spec Author**, **Architect**, **Implementer**, **Test Author**, **Verifier**, **Reviewer**, **PR Composer**.
-Specialized variants (intent): **Bug-Fix Implementer**, **Refactor Implementer**, **Security Reviewer**, **Migration Implementer**.
+Specialized variants: **Bug-Fix Implementer**, **Refactor Implementer**, **Security Reviewer**, **Migration Implementer** (each `extends` its base implementer / reviewer).
+Project-level: **Project Context Author**, **Feature Planner**.
+Test-only: `mock@1.0`.
+
+### Trust and signature
+
+Deferred to post-v0.1: see [ADR 0002](adr/0002-profile-trust-deferred.md). v0.1 ships bundled + local-disk only; there is no remote fetch, no signature verification, no publisher allowlist.
 
 Anti-pattern: do not duplicate a profile per language / per agent provider. Use template variables and named-agent routing in `agents.yml` instead.
 

@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — Profile registry & bundled roles
+
+- **`surge-core::profile::registry`** — pure inheritance + merge resolver.
+  `ResolvedProfile`, `Provenance` (`Versioned` / `Latest` / `Bundled`),
+  `merge_chain`, `merge_pair`, and a `collect_chain` walker with
+  cycle detection and `MAX_EXTENDS_DEPTH = 8` guard. Shallow merge
+  semantics codified per field shape: `default_mcp` / `default_skills` /
+  `default_shell_allowlist` (each replaced when child non-empty),
+  `bindings.expected` (merged by `name` field), `hooks.entries` (union
+  dedup by `Hook::id` with WARN on collision), `prompt.system`
+  (child wins when non-empty), `inspector_ui.fields`, `sandbox`,
+  `approvals`. 32 unit tests + 8 property/snapshot tests.
+- **`surge-core::profile::bundled`** — `BundledRegistry` with 17
+  first-party profiles compiled in via `include_str!`: 3 bootstrap
+  (Description Author, Roadmap Planner, Flow Generator), 7 execution
+  (Spec Author, Architect, Implementer, Test Author, Verifier,
+  Reviewer, PR Composer), 4 specialized via `extends`
+  (Bug-Fix / Refactor Implementer, Security Reviewer, Migration
+  Implementer), 2 project-level (Project Context Author, Feature
+  Planner), and `mock@1.0` for tests.
+- **`surge-core::profile::keyref`** — `ProfileKeyRef { name, version }`
+  parser for `name@MAJOR.MINOR[.PATCH]` references. Partial versions
+  zero-fill; double `@` and unparseable versions reject.
+- **`surge-core` `RuntimeCfg::agent_id`** — new `String` field with
+  `#[serde(default = "default_agent_id")]` returning `"claude-code"`.
+  Identifies the agent runtime to launch via `surge_acp::Registry`
+  lookup; replaces the M5 string-based fallback.
+- **`surge-orchestrator::profile_loader`** — disk-touching half of the
+  registry. `surge_home()` / `profiles_dir()` honour `SURGE_HOME` (fall
+  back to `dirs::home_dir().join(".surge")`); `DiskProfileSet::scan`
+  walks `*.toml` flat and warn-and-skips per-file parse failures;
+  `ProfileRegistry::{load, resolve, list}` does the canonical
+  versioned → latest → bundled 3-way lookup with version match
+  against `Profile.role.version` in the TOML body.
+- **`surge-orchestrator::prompt::PromptRenderer`** — Handlebars 6
+  wrapper with strict mode (used at `ProfileRegistry::load` to fail
+  loudly on broken templates) and lenient mode (used at agent stage
+  execution to forgive missing optional bindings). HTML escaping
+  disabled. `validate_template` is the load-time fail-fast hook.
+- **`Engine::new_full`** constructor + `EngineConfig::profile_registry:
+  Option<Arc<ProfileRegistry>>` field. Legacy constructors keep
+  working with `profile_registry = None` (mock-only fallback);
+  production wiring (CLI / daemon) calls `ProfileRegistry::load()` at
+  startup.
+- **`AgentStageParams::profile_registry`** — agent stages resolve
+  `agent_config.profile` through it to derive `AgentKind` from the
+  merged profile's `runtime.agent_id`. The M5 `if profile_str ==
+  "mock"` fallback at `agent.rs:126-137` is gone — `mock@1.0` is now
+  a bundled profile resolved through the registry like everything
+  else. Unknown agent ids surface as `StageError::Internal` rather
+  than silently degrading to mock.
+- **`surge profile` CLI** — four new subcommands:
+  - `surge profile list [--format json]`
+  - `surge profile show <name> [--version X.Y.Z] [--raw]`
+  - `surge profile validate <path>`
+  - `surge profile new <name> [--base BASE]`
+- **Documentation.** [`docs/profile-authoring.md`](docs/profile-authoring.md)
+  is the new authoring guide (schema, inheritance, Handlebars,
+  outcomes, sandbox/approvals/hooks, versioning, CLI).
+  [ADR 0001](docs/adr/0001-profile-registry-layout.md) records the
+  layout decisions; [ADR 0002](docs/adr/0002-profile-trust-deferred.md)
+  defers signature/trust to post-v0.1.
+
+### Changed — Profile registry & bundled roles
+
+- `SurgeError` is now `#[non_exhaustive]` and gains the registry
+  error family: `ProfileNotFound`, `ProfileVersionMismatch`,
+  `ProfileExtendsCycle`, `ProfileExtendsTooDeep`, `ProfileFieldConflict`,
+  `InvalidProfileKey`.
+- `surge-orchestrator::engine::stage::bindings::substitute_template` is
+  now `#[deprecated]` in favour of `PromptRenderer`. Kept around for
+  the two legacy unit tests; new code routes through Handlebars.
+- `docs/ARCHITECTURE.md` § 6 (Profiles and roles) and
+  `.ai-factory/ARCHITECTURE.md` folder map updated to reflect the
+  three-crate layering split.
+
 ## [Unreleased] — Graph engine GA
 
 ### Added

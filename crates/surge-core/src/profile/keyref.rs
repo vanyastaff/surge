@@ -137,7 +137,7 @@ pub fn parse_key_ref(input: &str) -> Result<ProfileKeyRef, KeyRefParseError> {
 
     let version = match version_part {
         None => None,
-        Some(v) if v.is_empty() => return Err(KeyRefParseError::EmptyVersion(input.to_string())),
+        Some("") => return Err(KeyRefParseError::EmptyVersion(input.to_string())),
         Some(v) => Some(parse_partial_semver(input, v)?),
     };
 

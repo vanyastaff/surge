@@ -115,6 +115,26 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             .await
             .map_err(|e| StageError::Internal(format!("binding resolution: {e}")))?;
 
+    // Resolve the profile once (when a registry is wired) so we can use
+    // its `runtime.agent_id` to derive `AgentKind` AND fall back to its
+    // `prompt.system` when the agent_config does not supply an override.
+    // Without a registry, both paths use their legacy fallbacks.
+    let profile_str = p.agent_config.profile.as_ref();
+    let resolved_profile = if let Some(reg) = p.profile_registry.as_deref() {
+        let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).map_err(|e| {
+            StageError::Internal(format!("invalid profile reference {profile_str:?}: {e}"))
+        })?;
+        Some(
+            reg.resolve(&key_ref)
+                .map_err(|e| StageError::Internal(format!("profile resolve failed: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    // Prompt selection: explicit prompt_overrides.system wins; then
+    // prompt_overrides.append_system; then the resolved profile's
+    // prompt.system; then empty string (legacy fallback).
     let prompt_template = p
         .agent_config
         .prompt_overrides
@@ -126,6 +146,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 .as_ref()
                 .and_then(|po| po.append_system.as_deref())
         })
+        .or_else(|| resolved_profile.as_ref().map(|r| r.profile.prompt.system.as_str()))
         .unwrap_or("");
     // Lenient at runtime: missing bindings render as empty strings rather
     // than failing the stage. Strict-mode validation runs at
@@ -137,13 +158,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .render(prompt_template, &resolved_bindings)
         .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
 
-    // Derive AgentKind. With the profile registry wired (Profile registry &
-    // bundled roles milestone) we resolve the profile reference, then map
-    // its `runtime.agent_id` to an `AgentKind`. Without the registry we
-    // fall back to the M5 mock-only behaviour so legacy callers keep
-    // working.
-    let profile_str = p.agent_config.profile.as_ref();
-    let agent_kind = derive_agent_kind(profile_str, p.profile_registry.as_deref())?;
+    // Derive AgentKind. With a resolved profile in hand, take the agent_id
+    // from its runtime block; otherwise fall through to the legacy mock
+    // fast path so callers without a registry keep working.
+    let agent_kind = match resolved_profile.as_ref() {
+        Some(rp) => derive_agent_kind_from_id(profile_str, rp.profile.runtime.agent_id.as_str())?,
+        None => derive_agent_kind(profile_str, None)?,
+    };
 
     // Derive declared outcomes from the node's OutcomeDecl list.
     // Fall back to ["done"] when the node has no declared_outcomes so the
@@ -750,7 +771,14 @@ fn derive_agent_kind(
         .resolve(&key_ref)
         .map_err(|e| StageError::Internal(format!("profile resolve failed: {e}")))?;
 
-    let agent_id = resolved.profile.runtime.agent_id.as_str();
+    derive_agent_kind_from_id(profile_str, resolved.profile.runtime.agent_id.as_str())
+}
+
+/// Map an `agent_id` string to an `AgentKind` via `surge_acp::Registry`.
+///
+/// Pulled out so [`execute_agent_stage`] can call it directly when the
+/// caller already resolved the profile and just needs the id translated.
+fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentKind, StageError> {
     if agent_id.is_empty() {
         return Err(StageError::Internal(format!(
             "profile {profile_str:?} has empty runtime.agent_id"
@@ -759,17 +787,12 @@ fn derive_agent_kind(
     if agent_id == "mock" {
         return Ok(AgentKind::Mock { args: vec![] });
     }
-
-    // Look up the agent registry to find the binary + default args. Builtin
-    // covers claude-code / codex / gemini-cli; user-installed agents fall
-    // through to a `Custom` shape with the registry-supplied command.
     let agent_registry = surge_acp::Registry::builtin();
     let entry = agent_registry.find(agent_id).ok_or_else(|| {
         StageError::Internal(format!(
             "profile {profile_str:?} references agent_id {agent_id:?} not present in surge_acp::Registry"
         ))
     })?;
-
     let binary = std::path::PathBuf::from(&entry.command);
     let extra_args = entry.default_args.clone();
     let kind = match entry.id.as_str() {

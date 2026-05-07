@@ -117,12 +117,24 @@ fn main() -> std::process::ExitCode {
                 .with_webhook(Arc::new(surge_notify::WebhookDeliverer::new())),
         );
 
-        let engine = Arc::new(Engine::new_with_mcp(
+        // Load the profile registry once at daemon startup so every run
+        // resolves agent_config.profile through it. A failure here is a
+        // hard error: a daemon without a registry would silently drop
+        // back to mocking every agent stage.
+        let profile_registry = Arc::new(
+            surge_orchestrator::profile_loader::ProfileRegistry::load().unwrap_or_else(|e| {
+                tracing::error!(error = %e, "profile registry failed to load; daemon shutting down");
+                std::process::exit(2);
+            }),
+        );
+
+        let engine = Arc::new(Engine::new_full(
             Arc::clone(&bridge),
             Arc::clone(&storage),
             tool_dispatcher,
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
+            Some(profile_registry),
             EngineConfig::default(),
         ));
 

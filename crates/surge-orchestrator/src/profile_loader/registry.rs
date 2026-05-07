@@ -421,8 +421,7 @@ system = "{prompt}"
     fn resolve_extends_chain_uses_disk_then_bundled() {
         let tmp = TempDir::new().unwrap();
         // Disk profile that extends the bundled implementer.
-        let disk_body = format!(
-            r#"
+        let disk_body = r#"
 schema_version = 1
 
 [role]
@@ -444,9 +443,8 @@ edge_kind_hint = "forward"
 
 [prompt]
 system = "team-local override"
-"#
-        );
-        write(tmp.path(), "my-impl-1.0.toml", &disk_body);
+"#;
+        write(tmp.path(), "my-impl-1.0.toml", disk_body);
         let reg = registry_with_disk(tmp.path());
         let key_ref = parse_key_ref("my-impl").unwrap();
         let resolved = reg.resolve(&key_ref).unwrap();

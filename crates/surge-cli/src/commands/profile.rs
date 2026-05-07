@@ -118,19 +118,14 @@ fn print_table(entries: &[surge_orchestrator::profile_loader::registry::ProfileL
         println!("(no profiles)");
         return;
     }
-    println!(
-        "{:<28} {:<10} {:<10} {:<24} {}",
-        "NAME", "VERSION", "WHERE", "AGENT", "DISPLAY NAME"
-    );
+    println!("NAME                         VERSION    WHERE      AGENT                    DISPLAY NAME");
     for e in entries {
-        println!(
-            "{:<28} {:<10} {:<10} {:<24} {}",
-            e.profile.role.id.as_str(),
-            e.profile.role.version.to_string(),
-            provenance_label(e.provenance),
-            e.profile.runtime.agent_id,
-            e.profile.role.display_name
-        );
+        let id = e.profile.role.id.as_str();
+        let version = e.profile.role.version.to_string();
+        let where_label = provenance_label(e.provenance);
+        let agent = &e.profile.runtime.agent_id;
+        let display = &e.profile.role.display_name;
+        println!("{id:<28} {version:<10} {where_label:<10} {agent:<24} {display}");
     }
 }
 

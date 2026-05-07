@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn merge_chain_singleton_returns_clone() {
         let p = make_profile("solo");
-        let merged = merge_chain(&[p.clone()]).unwrap();
+        let merged = merge_chain(std::slice::from_ref(&p)).unwrap();
         assert_eq!(merged, p);
     }
 

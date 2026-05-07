@@ -151,6 +151,7 @@ impl Engine {
     }
 
     /// Start a new run.
+    #[allow(clippy::too_many_lines)]
     pub async fn start_run(
         &self,
         run_id: RunId,

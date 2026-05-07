@@ -145,11 +145,23 @@ async fn run_command(
 
         let notifier = build_default_notifier();
 
-        let engine = Arc::new(Engine::new_with_notifier(
+        // Load the profile registry on engine startup so agent stages
+        // resolve `agent_config.profile` through it instead of the
+        // M5 mock-only fallback. A registry-load failure is a hard
+        // error here: production CLI runs should never silently fall
+        // back to mocking.
+        let profile_registry = Arc::new(
+            surge_orchestrator::profile_loader::ProfileRegistry::load()
+                .context("load profile registry")?,
+        );
+
+        let engine = Arc::new(Engine::new_full(
             bridge,
             storage,
             tool_dispatcher,
             notifier,
+            None, // mcp_registry: not wired in the CLI in-process path
+            Some(profile_registry),
             EngineConfig::default(),
         ));
         Arc::new(surge_orchestrator::engine::facade::LocalEngineFacade::new(

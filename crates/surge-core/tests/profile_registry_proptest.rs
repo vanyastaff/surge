@@ -195,7 +195,7 @@ proptest! {
     #[test]
     fn merge_chain_singleton_is_identity(name in arb_profile_name()) {
         let p = make_profile(&name);
-        let merged = merge_chain(&[p.clone()]).unwrap();
+        let merged = merge_chain(std::slice::from_ref(&p)).unwrap();
         prop_assert_eq!(&merged, &p);
     }
 
