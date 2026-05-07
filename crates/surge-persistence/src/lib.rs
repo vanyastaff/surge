@@ -68,6 +68,8 @@ pub mod store;
 /// New M2 Surge storage layer (per-run event log, registry, worktree integration).
 pub mod runs;
 
+pub use runs::inbox_queue;
+
 /// Persistence error types
 pub mod error {
     use thiserror::Error;

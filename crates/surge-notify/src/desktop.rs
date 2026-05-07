@@ -37,11 +37,11 @@ pub fn format_inbox_card_desktop(payload: &InboxCardPayload) -> InboxCardDesktop
         prio = payload.priority.label(),
         provider = payload.provider,
     );
-    let run_id = payload.run_id.clone();
+    let token = payload.callback_token.clone();
     let actions = vec![
-        (format!("inbox:start:{run_id}"), "Start".to_string()),
-        (format!("inbox:snooze:{run_id}"), "Snooze 24h".to_string()),
-        (format!("inbox:skip:{run_id}"), "Skip".to_string()),
+        (format!("inbox:start:{token}"), "Start".to_string()),
+        (format!("inbox:snooze:{token}"), "Snooze 24h".to_string()),
+        (format!("inbox:skip:{token}"), "Skip".to_string()),
     ];
     InboxCardDesktopRendered {
         title,
@@ -108,7 +108,7 @@ mod desktop_inbox_format_tests {
             summary: "ad-hoc".into(),
             priority: Priority::Medium,
             task_url: "https://linear.app/wsp/issue/A-1".into(),
-            run_id: "run_x".into(),
+            callback_token: "tok_x".into(),
         }
     }
 
@@ -130,11 +130,11 @@ mod desktop_inbox_format_tests {
     fn three_actions_in_correct_order() {
         let r = format_inbox_card_desktop(&sample_payload());
         assert_eq!(r.actions.len(), 3);
-        assert_eq!(r.actions[0].0, "inbox:start:run_x");
+        assert_eq!(r.actions[0].0, "inbox:start:tok_x");
         assert_eq!(r.actions[0].1, "Start");
-        assert_eq!(r.actions[1].0, "inbox:snooze:run_x");
+        assert_eq!(r.actions[1].0, "inbox:snooze:tok_x");
         assert_eq!(r.actions[1].1, "Snooze 24h");
-        assert_eq!(r.actions[2].0, "inbox:skip:run_x");
+        assert_eq!(r.actions[2].0, "inbox:skip:tok_x");
         assert_eq!(r.actions[2].1, "Skip");
     }
 

@@ -8,6 +8,29 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Errors raised by `IntakeRepo` mutating helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum IntakeError {
+    /// The requested transition violates the FSM defined in
+    /// `TicketState::is_valid_transition_from`.
+    #[error("invalid ticket state transition {from:?} -> {to:?}")]
+    InvalidTransition {
+        /// The state the ticket was in before the attempted transition.
+        from: TicketState,
+        /// The state that was requested but rejected.
+        to: TicketState,
+    },
+    /// No row with the given `task_id` exists.
+    #[error("ticket_index row not found: {task_id}")]
+    NotFound {
+        /// The `task_id` that was not found in `ticket_index`.
+        task_id: String,
+    },
+    /// Underlying SQLite error.
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+}
+
 /// Lifecycle states of an external ticket as tracked by `surge-intake`.
 ///
 /// See `docs/revision/rfcs/0010-issue-tracker-integration.md` data-flow section
@@ -76,8 +99,8 @@ impl TicketState {
     ///
     /// Returns `true` iff this transition is permitted by the ticket FSM
     /// described in `docs/revision/rfcs/0010-issue-tracker-integration.md`.
-    /// Used for property testing and for runtime guards in `IntakeRepo::update_state`
-    /// (future enhancement).
+    /// Used for property testing and for runtime guards in
+    /// [`IntakeRepo::update_state_validated`].
     #[must_use]
     pub fn is_valid_transition_from(&self, from: Self) -> bool {
         use TicketState::*;
@@ -110,7 +133,11 @@ impl TicketState {
             | (InboxNotified, Stale) => true,
 
             // Snoozed can return to inbox when timer fires, or skip/stale.
-            (Snoozed, InboxNotified) | (Snoozed, Skipped) | (Snoozed, Stale) => true,
+            // Also allows direct Start on a snoozed card (spec §3.2.1).
+            (Snoozed, InboxNotified)
+            | (Snoozed, RunStarted)
+            | (Snoozed, Skipped)
+            | (Snoozed, Stale) => true,
 
             // Run started -> active or abort/stale recovery.
             (RunStarted, Active) | (RunStarted, TriageStale) | (RunStarted, Aborted) => true,
@@ -188,6 +215,15 @@ pub struct IntakeRow {
     pub last_seen: DateTime<Utc>,
     /// If state is Snoozed, resume processing at this time.
     pub snooze_until: Option<DateTime<Utc>>,
+    /// Short ULID embedded in inbox-card callback data; lookup key for the
+    /// daemon's inbox handler. NULL after Start (cleared) or before any
+    /// card is emitted.
+    pub callback_token: Option<String>,
+    /// Telegram chat ID where the most recent inbox card was sent.
+    pub tg_chat_id: Option<i64>,
+    /// Telegram message ID of the most recent inbox card; used by future
+    /// `editMessageReplyMarkup` to remove the keyboard after action.
+    pub tg_message_id: Option<i32>,
 }
 
 /// Read/write helpers for the `ticket_index` table.
@@ -210,8 +246,9 @@ impl<'a> IntakeRepo<'a> {
         self.conn.execute(
             "INSERT INTO ticket_index(\
                 task_id, source_id, provider, run_id, triage_decision, duplicate_of,\
-                priority, state, first_seen, last_seen, snooze_until\
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                priority, state, first_seen, last_seen, snooze_until,\
+                callback_token, tg_chat_id, tg_message_id\
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 row.task_id,
                 row.source_id,
@@ -224,6 +261,9 @@ impl<'a> IntakeRepo<'a> {
                 row.first_seen.to_rfc3339(),
                 row.last_seen.to_rfc3339(),
                 row.snooze_until.map(|d| d.to_rfc3339()),
+                row.callback_token,
+                row.tg_chat_id,
+                row.tg_message_id,
             ],
         )?;
         Ok(())
@@ -255,7 +295,8 @@ impl<'a> IntakeRepo<'a> {
     pub fn fetch(&self, task_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
-                    priority, state, first_seen, last_seen, snooze_until \
+                    priority, state, first_seen, last_seen, snooze_until, \
+                    callback_token, tg_chat_id, tg_message_id \
              FROM ticket_index WHERE task_id = ?1",
         )?;
         let mut rows = stmt.query(params![task_id])?;
@@ -308,6 +349,9 @@ impl<'a> IntakeRepo<'a> {
                         e.to_string().into(),
                     )
                 })?,
+            callback_token: r.get(11)?,
+            tg_chat_id: r.get(12)?,
+            tg_message_id: r.get(13)?,
         }))
     }
 
@@ -329,68 +373,212 @@ impl<'a> IntakeRepo<'a> {
         }
     }
 
+    /// Set the callback token, replacing any prior value. UNIQUE constraint
+    /// on the partial index will reject collisions.
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn set_callback_token(&self, task_id: &str, token: &str) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET callback_token = ?1 WHERE task_id = ?2",
+            params![token, task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Clear the callback token (called after Start to free the token for
+    /// the partial UNIQUE index).
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn clear_callback_token(&self, task_id: &str) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET callback_token = NULL WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Look up a ticket row by callback_token. Used by inbox-action receivers
+    /// to map a callback_data string back to the ticket.
+    pub fn fetch_by_callback_token(&self, token: &str) -> rusqlite::Result<Option<IntakeRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id FROM ticket_index WHERE callback_token = ?1")?;
+        let task_id: Option<String> = stmt
+            .query_row(params![token], |r| r.get::<_, String>(0))
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        match task_id {
+            Some(id) => self.fetch(&id),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the Telegram message reference for the most recent inbox card.
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn set_tg_message_ref(
+        &self,
+        task_id: &str,
+        chat_id: i64,
+        msg_id: i32,
+    ) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET tg_chat_id = ?1, tg_message_id = ?2 WHERE task_id = ?3",
+            params![chat_id, msg_id, task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validated state transition. Errors if the row is missing, if
+    /// `to.is_valid_transition_from(current)` returns false, or if a
+    /// concurrent caller changed state between the FSM check and the
+    /// write. The on-disk state is unchanged on error.
+    ///
+    /// This is the only mutator the inbox subsystem uses; raw `update_state`
+    /// remains for crash-recovery and tests.
+    ///
+    /// **Concurrency.** The write is a conditional UPDATE keyed on the
+    /// `from` state observed during the fetch; if another caller wrote
+    /// between fetch and UPDATE, the conditional matches zero rows and we
+    /// surface that as `InvalidTransition` (the caller then sees the same
+    /// "transition rejected" outcome it would for a static FSM violation).
+    /// This guarantees that two concurrent callers cannot both write —
+    /// the registry pool's `max_size = 8` plus the conditional makes the
+    /// FSM check + write atomic with respect to the SQLite per-row state.
+    pub fn update_state_validated(
+        &self,
+        task_id: &str,
+        to: TicketState,
+    ) -> Result<(), IntakeError> {
+        let current = self.fetch(task_id)?.ok_or_else(|| IntakeError::NotFound {
+            task_id: task_id.into(),
+        })?;
+        let from = current.state;
+        if !to.is_valid_transition_from(from) {
+            return Err(IntakeError::InvalidTransition { from, to });
+        }
+        // Conditional UPDATE: only succeeds if the row's state still matches
+        // `from`. If another caller changed the state under us, the WHERE
+        // clause excludes the row and `affected == 0`. We surface that as
+        // `InvalidTransition` so existing call sites (which already swallow
+        // that variant gracefully) treat it as "another actor handled this".
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET state = ?1 WHERE task_id = ?2 AND state = ?3",
+            params![to.as_str(), task_id, from.as_str()],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::InvalidTransition { from, to });
+        }
+        Ok(())
+    }
+
+    /// Set the `snooze_until` timestamp for a ticket.
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn set_snooze_until(&self, task_id: &str, until: DateTime<Utc>) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET snooze_until = ?1 WHERE task_id = ?2",
+            params![until.to_rfc3339(), task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Clear the `snooze_until` timestamp.
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn clear_snooze_until(&self, task_id: &str) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET snooze_until = NULL WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Set the run_id (run row must already exist due to FK).
+    ///
+    /// Errors with `IntakeError::NotFound` if the `task_id` does not exist.
+    pub fn set_run_id(&self, task_id: &str, run_id: String) -> Result<(), IntakeError> {
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET run_id = ?1 WHERE task_id = ?2",
+            params![run_id, task_id],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::NotFound {
+                task_id: task_id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Return all rows with state='Snoozed' AND snooze_until <= now.
+    /// Caller is responsible for the state transition + snooze_until clear.
+    pub fn fetch_due_snoozed(&self, now: DateTime<Utc>) -> rusqlite::Result<Vec<IntakeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id FROM ticket_index \
+             WHERE state = 'Snoozed' AND snooze_until IS NOT NULL AND snooze_until <= ?1 \
+             ORDER BY snooze_until ASC",
+        )?;
+        let mut out = Vec::new();
+        let mut rows = stmt.query(params![now.to_rfc3339()])?;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            if let Some(row) = self.fetch(&id)? {
+                out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
     /// Reverse of `lookup_active_run`: returns the ticket row whose `run_id`
     /// matches, regardless of state. Used when an engine run finishes and we
     /// need to find the originating ticket (if any) so we can post a tracker
     /// comment + update the ticket FSM. Returns `Ok(None)` when no row has
     /// this `run_id` (e.g., the run was not tracker-originated).
     pub fn lookup_ticket_by_run_id(&self, run_id: &str) -> rusqlite::Result<Option<IntakeRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
-                    priority, state, first_seen, last_seen, snooze_until \
-             FROM ticket_index WHERE run_id = ?1",
-        )?;
-        let mut rows = stmt.query(params![run_id])?;
-        let Some(r) = rows.next()? else {
-            return Ok(None);
-        };
-
-        let state_str: String = r.get(7)?;
-        let state: TicketState = state_str.parse().map_err(|e: String| {
-            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, e.into())
-        })?;
-        let first_seen: String = r.get(8)?;
-        let last_seen: String = r.get(9)?;
-        let snooze_until: Option<String> = r.get(10)?;
-
-        Ok(Some(IntakeRow {
-            task_id: r.get(0)?,
-            source_id: r.get(1)?,
-            provider: r.get(2)?,
-            run_id: r.get(3)?,
-            triage_decision: r.get(4)?,
-            duplicate_of: r.get(5)?,
-            priority: r.get(6)?,
-            state,
-            first_seen: DateTime::parse_from_rfc3339(&first_seen)
-                .map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        8,
-                        rusqlite::types::Type::Text,
-                        e.to_string().into(),
-                    )
-                })?
-                .with_timezone(&Utc),
-            last_seen: DateTime::parse_from_rfc3339(&last_seen)
-                .map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        9,
-                        rusqlite::types::Type::Text,
-                        e.to_string().into(),
-                    )
-                })?
-                .with_timezone(&Utc),
-            snooze_until: snooze_until
-                .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
-                .transpose()
-                .map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        10,
-                        rusqlite::types::Type::Text,
-                        e.to_string().into(),
-                    )
-                })?,
-        }))
+        let task_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT task_id FROM ticket_index WHERE run_id = ?1",
+                params![run_id],
+                |r| r.get::<_, String>(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        match task_id {
+            Some(id) => self.fetch(&id),
+            None => Ok(None),
+        }
     }
 }
 
@@ -461,8 +649,10 @@ mod repo_tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
             .unwrap();
-        let sql = include_str!("runs/migrations/registry/0002_ticket_index.sql");
-        conn.execute_batch(sql).unwrap();
+        let m2 = include_str!("runs/migrations/registry/0002_ticket_index.sql");
+        conn.execute_batch(m2).unwrap();
+        let m4 = include_str!("runs/migrations/registry/0004_inbox_callback_columns.sql");
+        conn.execute_batch(m4).unwrap();
         conn
     }
 
@@ -479,6 +669,9 @@ mod repo_tests {
             first_seen: Utc::now(),
             last_seen: Utc::now(),
             snooze_until: None,
+            callback_token: None,
+            tg_chat_id: None,
+            tg_message_id: None,
         }
     }
 
@@ -539,6 +732,235 @@ mod repo_tests {
             .unwrap();
         let fetched = repo.fetch("linear:wsp1/ABC-5").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Triaged);
+    }
+
+    #[test]
+    fn callback_token_set_clear_lookup() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-1", TicketState::InboxNotified))
+            .unwrap();
+
+        repo.set_callback_token("linear:wsp1/T-1", "01HKGZTOK1")
+            .unwrap();
+        let row = repo.fetch_by_callback_token("01HKGZTOK1").unwrap().unwrap();
+        assert_eq!(row.task_id, "linear:wsp1/T-1");
+        assert_eq!(row.callback_token.as_deref(), Some("01HKGZTOK1"));
+
+        repo.clear_callback_token("linear:wsp1/T-1").unwrap();
+        assert!(
+            repo.fetch_by_callback_token("01HKGZTOK1")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn callback_token_uniqueness() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-2", TicketState::InboxNotified))
+            .unwrap();
+        repo.insert(&sample_row("linear:wsp1/T-3", TicketState::InboxNotified))
+            .unwrap();
+        repo.set_callback_token("linear:wsp1/T-2", "01HKGZSAME")
+            .unwrap();
+        let dup_err = repo.set_callback_token("linear:wsp1/T-3", "01HKGZSAME");
+        assert!(
+            dup_err.is_err(),
+            "duplicate callback_token must fail UNIQUE"
+        );
+    }
+
+    #[test]
+    fn tg_message_ref_round_trip() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/T-4", TicketState::InboxNotified))
+            .unwrap();
+        repo.set_tg_message_ref("linear:wsp1/T-4", -1001234567890, 4242)
+            .unwrap();
+        let row = repo.fetch("linear:wsp1/T-4").unwrap().unwrap();
+        assert_eq!(row.tg_chat_id, Some(-1001234567890));
+        assert_eq!(row.tg_message_id, Some(4242));
+    }
+
+    #[test]
+    fn update_state_validated_accepts_valid_transition() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/V-1", TicketState::InboxNotified))
+            .unwrap();
+        repo.update_state_validated("linear:wsp1/V-1", TicketState::RunStarted)
+            .expect("InboxNotified -> RunStarted is valid");
+        assert_eq!(
+            repo.fetch("linear:wsp1/V-1").unwrap().unwrap().state,
+            TicketState::RunStarted
+        );
+    }
+
+    #[test]
+    fn update_state_validated_rejects_invalid_transition() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/V-2", TicketState::Skipped))
+            .unwrap();
+        // Skipped is terminal; any non-self transition is invalid.
+        let err = repo
+            .update_state_validated("linear:wsp1/V-2", TicketState::Active)
+            .unwrap_err();
+        match err {
+            IntakeError::InvalidTransition { from, to } => {
+                assert_eq!(from, TicketState::Skipped);
+                assert_eq!(to, TicketState::Active);
+            },
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+        // State must be unchanged.
+        assert_eq!(
+            repo.fetch("linear:wsp1/V-2").unwrap().unwrap().state,
+            TicketState::Skipped
+        );
+    }
+
+    #[test]
+    fn update_state_validated_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .update_state_validated("linear:wsp1/missing", TicketState::Active)
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn set_callback_token_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .set_callback_token("linear:wsp1/missing", "tok")
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn clear_callback_token_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .clear_callback_token("linear:wsp1/missing")
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn set_tg_message_ref_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .set_tg_message_ref("linear:wsp1/missing", 1, 2)
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn snooze_until_set_clear_round_trip() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/S-1", TicketState::InboxNotified))
+            .unwrap();
+        let until = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        repo.set_snooze_until("linear:wsp1/S-1", until).unwrap();
+        let row = repo.fetch("linear:wsp1/S-1").unwrap().unwrap();
+        assert_eq!(row.snooze_until, Some(until));
+        repo.clear_snooze_until("linear:wsp1/S-1").unwrap();
+        assert!(
+            repo.fetch("linear:wsp1/S-1")
+                .unwrap()
+                .unwrap()
+                .snooze_until
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn snooze_until_setters_error_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let until = Utc::now();
+        let err = repo
+            .set_snooze_until("linear:wsp1/missing", until)
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+        let err = repo.clear_snooze_until("linear:wsp1/missing").unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn set_run_id_persists() {
+        let conn = db_with_schema();
+        // Pre-create the run row to satisfy the FK.
+        conn.execute("INSERT INTO runs(id) VALUES ('01ABCRUNID0001')", [])
+            .unwrap();
+        let repo = IntakeRepo::new(&conn);
+        repo.insert(&sample_row("linear:wsp1/R-1", TicketState::InboxNotified))
+            .unwrap();
+        repo.set_run_id("linear:wsp1/R-1", "01ABCRUNID0001".into())
+            .unwrap();
+        let row = repo.fetch("linear:wsp1/R-1").unwrap().unwrap();
+        assert_eq!(row.run_id.as_deref(), Some("01ABCRUNID0001"));
+    }
+
+    #[test]
+    fn set_run_id_errors_when_row_missing() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let err = repo
+            .set_run_id("linear:wsp1/missing", "01ABCRUNID0002".into())
+            .unwrap_err();
+        assert!(matches!(err, IntakeError::NotFound { .. }));
+    }
+
+    #[test]
+    fn update_state_validated_snoozed_to_run_started() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let mut row = sample_row("linear:wsp1/SR-1", TicketState::Snoozed);
+        row.snooze_until = Some(Utc::now() + chrono::Duration::hours(24));
+        repo.insert(&row).unwrap();
+        repo.update_state_validated("linear:wsp1/SR-1", TicketState::RunStarted)
+            .expect("Snoozed -> RunStarted is valid");
+        assert_eq!(
+            repo.fetch("linear:wsp1/SR-1").unwrap().unwrap().state,
+            TicketState::RunStarted
+        );
+    }
+
+    #[test]
+    fn fetch_due_snoozed_returns_only_due_rows() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let past = Utc::now() - chrono::Duration::hours(1);
+        let future = Utc::now() + chrono::Duration::hours(1);
+
+        let mut due_row = sample_row("linear:wsp1/D-1", TicketState::Snoozed);
+        due_row.snooze_until = Some(past);
+        repo.insert(&due_row).unwrap();
+
+        let mut not_yet_row = sample_row("linear:wsp1/D-2", TicketState::Snoozed);
+        not_yet_row.snooze_until = Some(future);
+        repo.insert(&not_yet_row).unwrap();
+
+        // Wrong state: skipped tickets must not be returned even if snooze_until is past.
+        let mut skipped_row = sample_row("linear:wsp1/D-3", TicketState::Skipped);
+        skipped_row.snooze_until = Some(past);
+        repo.insert(&skipped_row).unwrap();
+
+        let due = repo.fetch_due_snoozed(Utc::now()).unwrap();
+        let ids: Vec<&str> = due.iter().map(|r| r.task_id.as_str()).collect();
+        assert_eq!(ids, vec!["linear:wsp1/D-1"]);
     }
 
     #[test]
@@ -663,6 +1085,14 @@ mod fsm_proptests {
                 "happy path step {from:?} -> {to:?} should be valid"
             );
         }
+    }
+
+    #[test]
+    fn snoozed_can_transition_to_run_started() {
+        assert!(
+            TicketState::RunStarted.is_valid_transition_from(TicketState::Snoozed),
+            "User can tap Start on a snoozed card directly"
+        );
     }
 
     /// Hand-coded invalid: Seen -> Active (skips bootstrap entirely)

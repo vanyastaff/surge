@@ -31,6 +31,10 @@ fn db() -> Connection {
     let sql =
         include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
     conn.execute_batch(sql).unwrap();
+    let sql4 = include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0004_inbox_callback_columns.sql"
+    );
+    conn.execute_batch(sql4).unwrap();
     conn
 }
 
@@ -89,6 +93,9 @@ async fn e2e_new_task_then_dup() {
                 first_seen: Utc::now(),
                 last_seen: Utc::now(),
                 snooze_until: None,
+                callback_token: None,
+                tg_chat_id: None,
+                tg_message_id: None,
             })
             .unwrap();
     }

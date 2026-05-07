@@ -154,20 +154,24 @@ pub fn format_inbox_card(payload: &InboxCardPayload) -> InboxCardRendered {
         prio = payload.priority.label(),
     );
 
-    let keyboard = vec![
-        vec![
-            InboxKeyboardButton::callback("▶ Start", format!("inbox:start:{}", payload.run_id)),
-            InboxKeyboardButton::callback(
-                "⏸ Snooze 24h",
-                format!("inbox:snooze:{}", payload.run_id),
-            ),
-            InboxKeyboardButton::callback("✕ Skip", format!("inbox:skip:{}", payload.run_id)),
-        ],
-        vec![InboxKeyboardButton::url(
+    let mut keyboard = vec![vec![
+        InboxKeyboardButton::callback("▶ Start", format!("inbox:start:{}", payload.callback_token)),
+        InboxKeyboardButton::callback(
+            "⏸ Snooze 24h",
+            format!("inbox:snooze:{}", payload.callback_token),
+        ),
+        InboxKeyboardButton::callback("✕ Skip", format!("inbox:skip:{}", payload.callback_token)),
+    ]];
+    // Omit the View-ticket URL row when the URL is missing — re-emitted
+    // snooze cards reach the formatter without the original tracker URL,
+    // and rendering a button with an empty/invalid URL would degrade to
+    // a callback button that responds "Invalid action" when tapped.
+    if !payload.task_url.is_empty() {
+        keyboard.push(vec![InboxKeyboardButton::url(
             "View ticket ↗",
             payload.task_url.clone(),
-        )],
-    ];
+        )]);
+    }
 
     InboxCardRendered { body, keyboard }
 }
@@ -187,7 +191,7 @@ mod inbox_format_tests {
             summary: "Stack overflow at depth 16".into(),
             priority: Priority::High,
             task_url: "https://github.com/user/repo/issues/1".into(),
-            run_id: "run_abc".into(),
+            callback_token: "01HKGZTOKABC".into(),
         }
     }
 
@@ -210,15 +214,15 @@ mod inbox_format_tests {
         assert_eq!(row0.len(), 3);
 
         assert_eq!(row0[0].label, "▶ Start");
-        assert_eq!(row0[0].data, "inbox:start:run_abc");
+        assert_eq!(row0[0].data, "inbox:start:01HKGZTOKABC");
         assert!(!row0[0].is_url);
 
         assert_eq!(row0[1].label, "⏸ Snooze 24h");
-        assert_eq!(row0[1].data, "inbox:snooze:run_abc");
+        assert_eq!(row0[1].data, "inbox:snooze:01HKGZTOKABC");
         assert!(!row0[1].is_url);
 
         assert_eq!(row0[2].label, "✕ Skip");
-        assert_eq!(row0[2].data, "inbox:skip:run_abc");
+        assert_eq!(row0[2].data, "inbox:skip:01HKGZTOKABC");
         assert!(!row0[2].is_url);
 
         let row1 = &rendered.keyboard[1];
@@ -244,6 +248,18 @@ mod inbox_format_tests {
         let rendered = format_inbox_card(&p);
         // Since there's no #, rsplit('#') returns the full ID after :
         assert!(rendered.body.contains("workspace/ABC-123"));
+    }
+
+    #[test]
+    fn empty_task_url_omits_view_button_row() {
+        let mut p = sample_payload();
+        p.task_url = String::new();
+        let rendered = format_inbox_card(&p);
+        // Only the action-row should be present; the View-ticket row is
+        // omitted to avoid a degraded callback button on snooze re-emissions
+        // that lack the original tracker URL.
+        assert_eq!(rendered.keyboard.len(), 1);
+        assert_eq!(rendered.keyboard[0].len(), 3);
     }
 
     #[test]

@@ -31,9 +31,13 @@ fn db_with_schema() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY);")
         .unwrap();
-    let sql =
+    let m2 =
         include_str!("../../surge-persistence/src/runs/migrations/registry/0002_ticket_index.sql");
-    conn.execute_batch(sql).unwrap();
+    conn.execute_batch(m2).unwrap();
+    let m4 = include_str!(
+        "../../surge-persistence/src/runs/migrations/registry/0004_inbox_callback_columns.sql"
+    );
+    conn.execute_batch(m4).unwrap();
     conn
 }
 
@@ -53,6 +57,9 @@ fn seed_ticket(conn: &Connection, task_id: &str, run_id: &str) {
         first_seen: Utc::now(),
         last_seen: Utc::now(),
         snooze_until: None,
+        callback_token: None,
+        tg_chat_id: None,
+        tg_message_id: None,
     })
     .unwrap();
 }
@@ -360,6 +367,9 @@ async fn invalid_task_id_string_skips_comment_but_transitions_state() {
                 first_seen: Utc::now(),
                 last_seen: Utc::now(),
                 snooze_until: None,
+                callback_token: None,
+                tg_chat_id: None,
+                tg_message_id: None,
             })
             .unwrap();
     }

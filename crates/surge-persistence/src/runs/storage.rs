@@ -82,6 +82,15 @@ impl Storage {
         self.home.join("db").join("registry.sqlite")
     }
 
+    /// Acquire a registry-pool connection. Used by inbox subsystems that
+    /// share the registry DB. The caller holds the connection for the
+    /// duration of one logical operation; do not hold it across awaits.
+    pub fn acquire_registry_conn(
+        &self,
+    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, r2d2::Error> {
+        self.registry_pool.get()
+    }
+
     pub(crate) fn run_dir(&self, run_id: &RunId) -> PathBuf {
         self.home.join("runs").join(run_id.to_string())
     }

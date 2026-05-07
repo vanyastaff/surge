@@ -94,12 +94,17 @@ fn default_budget_warn_threshold() -> u8 {
     80
 }
 
+fn default_default_agent() -> String {
+    "claude-acp".to_string()
+}
+
 /// Top-level Surge configuration, loaded from `surge.toml`.
 ///
 /// Controls agent routing, pipeline behaviour, resilience policies,
 /// cleanup strategy, and analytics. Validated on load via [`SurgeConfig::validate`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
+    #[serde(default = "default_default_agent")]
     pub default_agent: String,
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
@@ -121,6 +126,12 @@ pub struct SurgeConfig {
     /// Empty by default — task-tracker integration is opt-in.
     #[serde(default)]
     pub task_sources: Vec<TaskSourceConfig>,
+    /// Optional Telegram bot configuration. Absent → no TG bot loop.
+    #[serde(default)]
+    pub telegram: Option<TelegramConfig>,
+    /// Inbox subsystem configuration (snooze poll interval, channels).
+    #[serde(default)]
+    pub inbox: InboxConfig,
 }
 
 /// Configuration for a single MCP (Model Context Protocol) server passed to an agent.
@@ -200,6 +211,53 @@ pub struct GitHubIssuesSourceConfig {
 
 fn default_poll_interval() -> std::time::Duration {
     std::time::Duration::from_secs(60)
+}
+
+/// Optional Telegram bot configuration.
+///
+/// `chat_id_env` and `bot_token_env` are the names of the environment
+/// variables to read for the chat ID and bot token respectively. Direct
+/// `chat_id` is allowed for tests / local dev only — secrets never go in
+/// `surge.toml` (per RFC-0010 pattern).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TelegramConfig {
+    /// Name of the env var that holds the numeric chat id.
+    #[serde(default)]
+    pub chat_id_env: Option<String>,
+    /// Name of the env var that holds the bot token.
+    #[serde(default)]
+    pub bot_token_env: Option<String>,
+    /// Direct chat id (overrides `chat_id_env` if set; intended for tests).
+    #[serde(default)]
+    pub chat_id: Option<i64>,
+}
+
+/// Inbox subsystem configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InboxConfig {
+    /// How often the snooze scheduler polls for due cards.
+    #[serde(
+        rename = "snooze_poll_interval_seconds",
+        default = "default_snooze_poll_interval_secs",
+        with = "duration_seconds"
+    )]
+    pub snooze_poll_interval: std::time::Duration,
+    /// Which channels deliver inbox cards. Empty == "all configured".
+    #[serde(default)]
+    pub delivery_channels: Vec<String>,
+}
+
+impl Default for InboxConfig {
+    fn default() -> Self {
+        Self {
+            snooze_poll_interval: std::time::Duration::from_secs(300),
+            delivery_channels: Vec::new(),
+        }
+    }
+}
+
+fn default_snooze_poll_interval_secs() -> std::time::Duration {
+    std::time::Duration::from_secs(300)
 }
 
 mod duration_seconds {
@@ -747,6 +805,8 @@ impl Default for SurgeConfig {
             log: LogConfig::default(),
             analytics: AnalyticsConfig::default(),
             task_sources: Vec::new(),
+            telegram: None,
+            inbox: InboxConfig::default(),
         }
     }
 }
@@ -2175,5 +2235,43 @@ api_token_env = "LINEAR_API_TOKEN"
         let toml_str = r#"default_agent = "claude-acp""#;
         let cfg: SurgeConfig = toml::from_str(toml_str).expect("parse empty");
         assert!(cfg.task_sources.is_empty());
+    }
+
+    #[test]
+    fn telegram_and_inbox_config_round_trip_toml() {
+        let toml_str = r#"
+[telegram]
+chat_id_env = "SURGE_TELEGRAM_CHAT_ID"
+bot_token_env = "SURGE_TELEGRAM_BOT_TOKEN"
+
+[inbox]
+snooze_poll_interval_seconds = 600
+delivery_channels = ["telegram", "desktop"]
+"#;
+        let cfg: SurgeConfig = toml::from_str(toml_str).expect("must parse");
+        let telegram = cfg.telegram.expect("telegram section");
+        assert_eq!(
+            telegram.chat_id_env.as_deref(),
+            Some("SURGE_TELEGRAM_CHAT_ID")
+        );
+        assert_eq!(
+            telegram.bot_token_env.as_deref(),
+            Some("SURGE_TELEGRAM_BOT_TOKEN")
+        );
+        assert_eq!(telegram.chat_id, None);
+        let inbox = cfg.inbox;
+        assert_eq!(inbox.snooze_poll_interval.as_secs(), 600);
+        assert_eq!(
+            inbox.delivery_channels,
+            vec!["telegram".to_string(), "desktop".to_string()]
+        );
+    }
+
+    #[test]
+    fn telegram_and_inbox_config_default_when_absent() {
+        let cfg: SurgeConfig = toml::from_str("").unwrap();
+        assert!(cfg.telegram.is_none());
+        assert_eq!(cfg.inbox.snooze_poll_interval.as_secs(), 300);
+        assert!(cfg.inbox.delivery_channels.is_empty());
     }
 }

@@ -36,7 +36,10 @@ surge-orchestrator.workspace = true
 surge-acp.workspace = true
 surge-persistence.workspace = true
 surge-notify.workspace = true
+notify-rust = { workspace = true }
 surge-intake.workspace = true
+teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler"] }
+reqwest.workspace = true
 ulid.workspace = true
 
 # Unix signal handling
