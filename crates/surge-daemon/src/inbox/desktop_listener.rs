@@ -56,31 +56,65 @@ impl DesktopActionListener {
             inbox_queue::list_pending_desktop_deliveries(&conn).map_err(|e| e.to_string())?
         };
         for row in pending {
-            // Mark as delivered immediately to avoid duplicates if notify-rust
-            // takes a long time. wait_for_action runs in a blocking thread.
-            {
-                let conn = self
-                    .storage
-                    .acquire_registry_conn()
-                    .map_err(|e| e.to_string())?;
-                inbox_queue::record_desktop_delivered(&conn, row.seq).map_err(|e| e.to_string())?;
-            }
-
-            let payload: surge_notify::messages::InboxCardPayload =
-                match serde_json::from_str(&row.payload_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!(error = %e, seq = row.seq, "desktop payload parse failed; skipping");
-                        continue;
-                    },
-                };
+            let payload: surge_notify::messages::InboxCardPayload = match serde_json::from_str(
+                &row.payload_json,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(error = %e, seq = row.seq, "desktop payload parse failed; marking as delivered (sentinel) to break retry loop");
+                    // Sentinel "delivered" so we don't hot-loop on a row
+                    // that will never deserialize. A future migration may
+                    // add a dedicated `delivery_failed_reason` column.
+                    let conn = self
+                        .storage
+                        .acquire_registry_conn()
+                        .map_err(|e| e.to_string())?;
+                    let _ = inbox_queue::record_desktop_delivered(&conn, row.seq);
+                    continue;
+                },
+            };
             let rendered = surge_notify::desktop::format_inbox_card_desktop(&payload);
             let token = payload.callback_token.clone();
             let storage = Arc::clone(&self.storage);
+            let storage_for_blocking = Arc::clone(&self.storage);
             let task_id_for_log = payload.task_id.as_str().to_string();
+            let seq = row.seq;
+            // Show the card on a blocking thread; signal show() success back
+            // to this loop via a oneshot so we record the delivery only
+            // AFTER notify-rust confirms the card is visible. If show()
+            // fails (no DBus, etc.), the row stays pending and we retry
+            // next tick.
+            let (show_tx, show_rx) = tokio::sync::oneshot::channel::<bool>();
             tokio::task::spawn_blocking(move || {
-                show_and_wait(rendered, token, storage, task_id_for_log);
+                show_and_wait(
+                    rendered,
+                    token,
+                    storage_for_blocking,
+                    task_id_for_log,
+                    show_tx,
+                );
             });
+            match show_rx.await {
+                Ok(true) => {
+                    let conn = self
+                        .storage
+                        .acquire_registry_conn()
+                        .map_err(|e| e.to_string())?;
+                    inbox_queue::record_desktop_delivered(&conn, seq).map_err(|e| e.to_string())?;
+                },
+                Ok(false) => {
+                    // show() returned an error; row stays pending, retry next tick.
+                    warn!(seq, "desktop show() failed; will retry");
+                },
+                Err(_) => {
+                    // Sender dropped without sending — the blocking thread
+                    // panicked or returned early. Row stays pending.
+                    warn!(seq, "desktop show task ended without signal; will retry");
+                },
+            }
+            // Touch `storage` so the original Arc isn't moved into the closure
+            // (we cloned for storage_for_blocking).
+            let _ = storage;
         }
         Ok(())
     }
@@ -88,6 +122,10 @@ impl DesktopActionListener {
 
 /// Platform-specific: show the notification and, where supported, wait for
 /// an action and bridge it back into the async runtime.
+///
+/// Sends `true` on `show_tx` once the notification is visible (so the
+/// async loop can mark the delivery durably), or `false` if `show()`
+/// returned an error (so the loop leaves the row pending for retry).
 ///
 /// `wait_for_action` is only available on Linux (dbus/zbus, `unix` non-macOS).
 /// On other platforms we show the notification but cannot receive click events.
@@ -99,6 +137,7 @@ fn show_and_wait(
     #[cfg(all(unix, not(target_os = "macos")))] storage: Arc<Storage>,
     #[cfg(not(all(unix, not(target_os = "macos"))))] _storage: Arc<Storage>,
     task_id_for_log: String,
+    show_tx: tokio::sync::oneshot::Sender<bool>,
 ) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -112,9 +151,13 @@ fn show_and_wait(
             n.action(action_id, label);
         }
         let handle = match n.show() {
-            Ok(h) => h,
+            Ok(h) => {
+                let _ = show_tx.send(true);
+                h
+            },
             Err(e) => {
                 warn!(error = %e, "notify-rust show failed");
+                let _ = show_tx.send(false);
                 return;
             },
         };
@@ -149,11 +192,20 @@ fn show_and_wait(
     {
         // On macOS and Windows notify-rust::show() returns () — no handle.
         // Show the notification; action callbacks are not supported here.
-        let _ = notify_rust::Notification::new()
+        match notify_rust::Notification::new()
             .summary(&rendered.title)
             .body(&rendered.body)
-            .show();
-        info!(task_id = %task_id_for_log, "desktop card shown (no action callback on this platform)");
+            .show()
+        {
+            Ok(()) => {
+                let _ = show_tx.send(true);
+                info!(task_id = %task_id_for_log, "desktop card shown (no action callback on this platform)");
+            },
+            Err(e) => {
+                warn!(error = %e, "notify-rust show failed");
+                let _ = show_tx.send(false);
+            },
+        }
     }
 }
 

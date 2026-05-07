@@ -154,26 +154,24 @@ pub fn format_inbox_card(payload: &InboxCardPayload) -> InboxCardRendered {
         prio = payload.priority.label(),
     );
 
-    let keyboard = vec![
-        vec![
-            InboxKeyboardButton::callback(
-                "▶ Start",
-                format!("inbox:start:{}", payload.callback_token),
-            ),
-            InboxKeyboardButton::callback(
-                "⏸ Snooze 24h",
-                format!("inbox:snooze:{}", payload.callback_token),
-            ),
-            InboxKeyboardButton::callback(
-                "✕ Skip",
-                format!("inbox:skip:{}", payload.callback_token),
-            ),
-        ],
-        vec![InboxKeyboardButton::url(
+    let mut keyboard = vec![vec![
+        InboxKeyboardButton::callback("▶ Start", format!("inbox:start:{}", payload.callback_token)),
+        InboxKeyboardButton::callback(
+            "⏸ Snooze 24h",
+            format!("inbox:snooze:{}", payload.callback_token),
+        ),
+        InboxKeyboardButton::callback("✕ Skip", format!("inbox:skip:{}", payload.callback_token)),
+    ]];
+    // Omit the View-ticket URL row when the URL is missing — re-emitted
+    // snooze cards reach the formatter without the original tracker URL,
+    // and rendering a button with an empty/invalid URL would degrade to
+    // a callback button that responds "Invalid action" when tapped.
+    if !payload.task_url.is_empty() {
+        keyboard.push(vec![InboxKeyboardButton::url(
             "View ticket ↗",
             payload.task_url.clone(),
-        )],
-    ];
+        )]);
+    }
 
     InboxCardRendered { body, keyboard }
 }
@@ -250,6 +248,18 @@ mod inbox_format_tests {
         let rendered = format_inbox_card(&p);
         // Since there's no #, rsplit('#') returns the full ID after :
         assert!(rendered.body.contains("workspace/ABC-123"));
+    }
+
+    #[test]
+    fn empty_task_url_omits_view_button_row() {
+        let mut p = sample_payload();
+        p.task_url = String::new();
+        let rendered = format_inbox_card(&p);
+        // Only the action-row should be present; the View-ticket row is
+        // omitted to avoid a degraded callback button on snooze re-emissions
+        // that lack the original tracker URL.
+        assert_eq!(rendered.keyboard.len(), 1);
+        assert_eq!(rendered.keyboard[0].len(), 3);
     }
 
     #[test]

@@ -447,22 +447,22 @@ impl<'a> IntakeRepo<'a> {
         Ok(())
     }
 
-    /// Validated state transition. Errors if the row is missing or if
-    /// `to.is_valid_transition_from(current)` returns false; the on-disk
-    /// state is unchanged on error.
+    /// Validated state transition. Errors if the row is missing, if
+    /// `to.is_valid_transition_from(current)` returns false, or if a
+    /// concurrent caller changed state between the FSM check and the
+    /// write. The on-disk state is unchanged on error.
     ///
     /// This is the only mutator the inbox subsystem uses; raw `update_state`
     /// remains for crash-recovery and tests.
     ///
-    /// **TOCTOU note:** the check-then-write pattern uses two separate SQL
-    /// statements without an enclosing transaction. Callers sharing a
-    /// `Connection` under a `Mutex` (the daemon pattern) release the lock
-    /// between fetch and update, which leaves a narrow window where two
-    /// threads may both observe `from` and both write `to`. All edges in
-    /// the current FSM are idempotent under this race (terminal states are
-    /// sticky; non-terminals collapse to self-transition), so no data
-    /// corruption results, but new non-idempotent edges must wrap this
-    /// helper in `BEGIN EXCLUSIVE` before adding the edge.
+    /// **Concurrency.** The write is a conditional UPDATE keyed on the
+    /// `from` state observed during the fetch; if another caller wrote
+    /// between fetch and UPDATE, the conditional matches zero rows and we
+    /// surface that as `InvalidTransition` (the caller then sees the same
+    /// "transition rejected" outcome it would for a static FSM violation).
+    /// This guarantees that two concurrent callers cannot both write —
+    /// the registry pool's `max_size = 8` plus the conditional makes the
+    /// FSM check + write atomic with respect to the SQLite per-row state.
     pub fn update_state_validated(
         &self,
         task_id: &str,
@@ -471,13 +471,22 @@ impl<'a> IntakeRepo<'a> {
         let current = self.fetch(task_id)?.ok_or_else(|| IntakeError::NotFound {
             task_id: task_id.into(),
         })?;
-        if !to.is_valid_transition_from(current.state) {
-            return Err(IntakeError::InvalidTransition {
-                from: current.state,
-                to,
-            });
+        let from = current.state;
+        if !to.is_valid_transition_from(from) {
+            return Err(IntakeError::InvalidTransition { from, to });
         }
-        self.update_state(task_id, to)?;
+        // Conditional UPDATE: only succeeds if the row's state still matches
+        // `from`. If another caller changed the state under us, the WHERE
+        // clause excludes the row and `affected == 0`. We surface that as
+        // `InvalidTransition` so existing call sites (which already swallow
+        // that variant gracefully) treat it as "another actor handled this".
+        let affected = self.conn.execute(
+            "UPDATE ticket_index SET state = ?1 WHERE task_id = ?2 AND state = ?3",
+            params![to.as_str(), task_id, from.as_str()],
+        )?;
+        if affected == 0 {
+            return Err(IntakeError::InvalidTransition { from, to });
+        }
         Ok(())
     }
 

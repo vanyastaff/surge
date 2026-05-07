@@ -84,8 +84,12 @@ pub(crate) mod consumer_helpers {
 }
 
 /// Enqueue an inbox card for delivery and persist the `callback_token` on
-/// the existing `ticket_index` row. Idempotent at the row level: if the
-/// row doesn't exist yet, it's inserted with state=`InboxNotified`.
+/// the existing `ticket_index` row. If the row doesn't exist yet, it's
+/// inserted with state=`InboxNotified`. If it does exist, the row's state
+/// must permit a transition to `InboxNotified` (`Triaged`, `InboxNotified`
+/// self-transition, `Snoozed`); otherwise the enqueue is refused so users
+/// don't see actionable cards on terminal-state tickets that
+/// `InboxActionConsumer` would later reject.
 pub async fn enqueue_inbox_card(
     storage: &Arc<Storage>,
     payload: &InboxCardPayload,
@@ -116,6 +120,26 @@ pub async fn enqueue_inbox_card(
         };
         repo.insert(&row).map_err(|e| e.to_string())?;
     } else {
+        // FSM-enforced state guard: only enqueue if the existing row can
+        // transition to InboxNotified. Terminal/in-flight states (Active,
+        // RunStarted, Completed, Failed, Aborted, Skipped, Stale) reject —
+        // the user should not see actionable buttons that the consumer
+        // will silently ignore. Self-transition (already InboxNotified)
+        // is valid; Snoozed→InboxNotified is valid for re-emission;
+        // Triaged→InboxNotified is the natural Triage→inbox path.
+        match repo.update_state_validated(
+            payload.task_id.as_str(),
+            surge_persistence::intake::TicketState::InboxNotified,
+        ) {
+            Ok(()) => {},
+            Err(surge_persistence::intake::IntakeError::InvalidTransition { from, .. }) => {
+                return Err(format!(
+                    "ticket {} is in state {from:?}; not eligible for an actionable inbox card",
+                    payload.task_id.as_str()
+                ));
+            },
+            Err(e) => return Err(e.to_string()),
+        }
         repo.set_callback_token(payload.task_id.as_str(), &payload.callback_token)
             .map_err(|e| e.to_string())?;
     }

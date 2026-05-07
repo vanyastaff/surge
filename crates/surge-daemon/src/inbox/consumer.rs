@@ -177,11 +177,18 @@ impl InboxActionConsumer {
                 .map_err(|e| e.to_string())?;
         }
 
-        // Post tracker comment.
+        // Post tracker comment. Map the wire-level `decided_via` ("telegram"
+        // / "desktop") to a human-readable label since this string is shown
+        // verbatim to ticket viewers.
+        let via_label = match row.decided_via.as_str() {
+            "telegram" => "Telegram",
+            "desktop" => "the desktop notification",
+            other => other,
+        };
         let comment = format!(
             "Surge run #{} started — see {} for progress.",
             run_id.short(),
-            row.decided_via,
+            via_label,
         );
         if let Err(e) = source.post_comment(&task_id, &comment).await {
             warn!(error = %e, task_id = %task_id, "tracker comment on Start failed");
@@ -270,7 +277,10 @@ impl InboxActionConsumer {
                 Err(IntakeError::InvalidTransition { .. }) => return Ok(()),
                 Err(e) => return Err(e.to_string()),
             }
-            // Clear token + tg refs (no longer actionable).
+            // Clear the callback token so a stale tap can't resolve to this
+            // row anymore. `tg_chat_id` and `tg_message_id` are intentionally
+            // kept so a future `editMessageReplyMarkup` polish can strip the
+            // keyboard from the original Telegram card.
             repo.clear_callback_token(&ticket_row.task_id)
                 .map_err(|e| e.to_string())?;
         }

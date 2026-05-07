@@ -103,7 +103,19 @@ async fn tick_outgoing(bot: &Bot, chat_id: ChatId, storage: &Storage) -> Result<
         let payload: InboxCardPayload = match serde_json::from_str(&row.payload_json) {
             Ok(p) => p,
             Err(e) => {
-                warn!(error = %e, seq = row.seq, "failed to parse delivery payload; skipping");
+                warn!(
+                    error = %e,
+                    seq = row.seq,
+                    "failed to parse delivery payload; marking as delivered (sentinel chat_id=0) to break retry loop"
+                );
+                // Without this, the row would stay pending and the 500ms
+                // outgoing tick would hot-loop forever on the same parse
+                // error. Sentinel chat_id=0 + msg_id=0 marks the row out
+                // of the pending pool. A future migration may add a
+                // dedicated `delivery_failed_reason` column.
+                let conn = storage.acquire_registry_conn().map_err(|e| e.to_string())?;
+                inbox_queue::record_telegram_delivered(&conn, row.seq, 0, 0)
+                    .map_err(|e| e.to_string())?;
                 continue;
             },
         };
