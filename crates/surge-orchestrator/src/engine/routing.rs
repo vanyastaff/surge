@@ -1,9 +1,27 @@
 //! Edge selection given (current node, outcome).
 
-use surge_core::edge::{Edge, ExceededAction};
+use surge_core::edge::{Edge, EdgeKind, ExceededAction};
 use surge_core::graph::Graph;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
 use thiserror::Error;
+
+/// Output of [`next_node_after_with_counters`].
+///
+/// Bundles the chosen target node together with the matching edge's id and
+/// kind so callers can emit `EventPayload::EdgeTraversed { kind, .. }` and
+/// drive backtrack-aware bookkeeping (e.g. `RunMemory.node_visits`) without
+/// re-scanning the graph for the same edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutedEdge {
+    /// Target node the engine cursor advances to next.
+    pub target: NodeKey,
+    /// Identifier of the edge that produced this routing decision.
+    pub edge_id: EdgeKey,
+    /// Edge kind selected by the routing pass — `Forward` for normal
+    /// progression, `Backtrack` for `HumanGate` edit-loop re-entry,
+    /// `Escalate` reserved for max-traversal escalation paths.
+    pub kind: EdgeKind,
+}
 
 /// Errors that can occur when determining the next node after a stage outcome.
 #[derive(Debug, Error, PartialEq)]
@@ -85,7 +103,7 @@ pub fn next_node_after_with_counters(
     outcome: &OutcomeKey,
     frames: &mut [crate::engine::frames::Frame],
     root_counts: &mut std::collections::HashMap<EdgeKey, u32>,
-) -> Result<NodeKey, RoutingError> {
+) -> Result<RoutedEdge, RoutingError> {
     let edges = active_edge_set(graph, frames);
 
     let edge = edges
@@ -100,6 +118,7 @@ pub fn next_node_after_with_counters(
     // so that we can take a mutable borrow on `frames` (via `top_loop_mut`) next.
     let edge_id = edge.id.clone();
     let edge_to = edge.to.clone();
+    let edge_kind = edge.kind;
     let max_traversals = edge.policy.max_traversals;
     let on_max_exceeded = edge.policy.on_max_exceeded;
 
@@ -122,7 +141,11 @@ pub fn next_node_after_with_counters(
         }
     }
 
-    Ok(edge_to)
+    Ok(RoutedEdge {
+        target: edge_to,
+        edge_id,
+        kind: edge_kind,
+    })
 }
 
 /// Find the outgoing edge target for `(node, outcome)`. If no edge
@@ -269,18 +292,46 @@ mod tests {
         let mut frames: Vec<crate::engine::frames::Frame> = vec![];
         let mut counts: std::collections::HashMap<EdgeKey, u32> = std::collections::HashMap::new();
 
-        let result = next_node_after_with_counters(
+        let routed = next_node_after_with_counters(
             &g,
             &NodeKey::try_from("a").unwrap(),
             &OutcomeKey::try_from("done").unwrap(),
             &mut frames,
             &mut counts,
-        );
-        assert_eq!(result.unwrap(), NodeKey::try_from("b").unwrap());
+        )
+        .expect("forward edge resolves");
+        assert_eq!(routed.target, NodeKey::try_from("b").unwrap());
+        assert_eq!(routed.edge_id, EdgeKey::try_from("e1").unwrap());
+        assert_eq!(routed.kind, EdgeKind::Forward);
         assert_eq!(
             counts.get(&EdgeKey::try_from("e1").unwrap()).copied(),
             Some(1)
         );
+    }
+
+    #[test]
+    fn backtrack_edge_is_returned_with_kind() {
+        // Bootstrap edit-loop: a HumanGate's `edit` outcome routes back to
+        // its preceding Agent node via a Backtrack edge. Routing must
+        // surface the kind so the caller can emit
+        // `EventPayload::EdgeTraversed { kind: Backtrack }`.
+        let mut e = edge("e_back", "gate", "edit", "agent");
+        e.kind = EdgeKind::Backtrack;
+        let g = graph_with_edges(vec![e]);
+        let mut frames: Vec<crate::engine::frames::Frame> = vec![];
+        let mut counts: std::collections::HashMap<EdgeKey, u32> = std::collections::HashMap::new();
+
+        let routed = next_node_after_with_counters(
+            &g,
+            &NodeKey::try_from("gate").unwrap(),
+            &OutcomeKey::try_from("edit").unwrap(),
+            &mut frames,
+            &mut counts,
+        )
+        .expect("backtrack edge resolves");
+        assert_eq!(routed.target, NodeKey::try_from("agent").unwrap());
+        assert_eq!(routed.edge_id, EdgeKey::try_from("e_back").unwrap());
+        assert_eq!(routed.kind, EdgeKind::Backtrack);
     }
 
     #[test]

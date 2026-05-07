@@ -2,6 +2,7 @@
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
 use crate::content_hash::ContentHash;
+use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::hooks::HookFailureMode;
 use crate::id::{RunId, SessionId};
@@ -163,6 +164,13 @@ pub enum EventPayload {
         edge: EdgeKey,
         from: NodeKey,
         to: NodeKey,
+        /// Edge kind selected by routing. `#[serde(default)]` keeps the
+        /// pre-Task-27 on-disk shape (which omitted this field) decodable as
+        /// `EdgeKind::Forward` so legacy event logs replay unchanged.
+        /// Bootstrap-mode HumanGate edit loops emit `kind = Backtrack` so
+        /// fold can drive `RunMemory.node_visits` deterministically.
+        #[serde(default)]
+        kind: EdgeKind,
     },
     LoopIterationStarted {
         loop_id: NodeKey,
@@ -559,10 +567,45 @@ mod tests {
             edge: EdgeKey::try_from("e_done").unwrap(),
             from: NodeKey::try_from("a").unwrap(),
             to: NodeKey::try_from("b").unwrap(),
+            kind: EdgeKind::Forward,
         };
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn edge_traversed_backtrack_roundtrip() {
+        // Bootstrap edit-loop traversals must round-trip with their
+        // discriminant intact — fold relies on the kind field to bump
+        // `RunMemory.node_visits` on the target node.
+        let payload = EventPayload::EdgeTraversed {
+            edge: EdgeKey::try_from("e_edit").unwrap(),
+            from: NodeKey::try_from("gate1").unwrap(),
+            to: NodeKey::try_from("desc_author").unwrap(),
+            kind: EdgeKind::Backtrack,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn edge_traversed_legacy_json_defaults_to_forward() {
+        // Persistence migrates legacy JSON payloads that pre-date Task 27 and
+        // therefore omit the `kind` field. `#[serde(default)]` must keep
+        // those events decodable as `EdgeKind::Forward`. EventPayload is
+        // internally tagged (`tag = "type"`, `rename_all = "snake_case"`),
+        // so the legacy on-disk shape is a flat object.
+        let legacy_json =
+            r#"{"type":"edge_traversed","edge":"e_done","from":"a","to":"b"}"#;
+        let parsed: EventPayload = serde_json::from_str(legacy_json).unwrap();
+        match parsed {
+            EventPayload::EdgeTraversed { kind, .. } => {
+                assert_eq!(kind, EdgeKind::Forward);
+            },
+            other => panic!("expected EdgeTraversed, got {other:?}"),
+        }
     }
 
     #[test]

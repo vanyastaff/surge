@@ -3,7 +3,9 @@
 //! `(node, outcome)` port (M8+), and validates subgraph references.
 
 use crate::engine::error::EngineError;
+use surge_core::edge::{Edge, EdgeKind};
 use surge_core::graph::Graph;
+use surge_core::keys::NodeKey;
 
 /// Validate the graph for M6 execution. Allows Loop and Subgraph nodes
 /// (M5 rejected them). Rejects multi-edge fanout (M8+) and
@@ -74,6 +76,15 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
         }
     }
 
+    // Pre-execution livelock guard: every cycle in the outer graph must
+    // contain at least one `EdgeKind::Backtrack` edge. Pure-Forward cycles
+    // would loop the engine forever — bootstrap edit loops use Backtrack
+    // edges as the explicit, opt-in cycle marker (Task 27 wires the
+    // runtime; this rule keeps validators in step with that contract).
+    if let Some(cycle) = find_forward_only_cycle(&graph.edges) {
+        return Err(EngineError::ForwardCycleDetected { nodes: cycle });
+    }
+
     // Recursively validate inner subgraphs.
     for (key, sg) in &graph.subgraphs {
         if !sg.nodes.contains_key(&sg.start) {
@@ -94,6 +105,12 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
                     edge.from.node, edge.from.outcome
                 )));
             }
+        }
+        // Same livelock guard inside each subgraph: pure-Forward cycles
+        // in a body subgraph would loop the engine forever just like
+        // outer-graph cycles do.
+        if let Some(cycle) = find_forward_only_cycle(&sg.edges) {
+            return Err(EngineError::ForwardCycleDetected { nodes: cycle });
         }
         // Per-node validation inside subgraphs (gate_after_each etc).
         for (node_key, node) in &sg.nodes {
@@ -121,6 +138,88 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 // Back-compat alias for any internal caller still using the M5 name.
 #[allow(dead_code)]
 pub use validate_for_m6 as validate_for_m5;
+
+/// Find a cycle whose edges are all `EdgeKind::Forward`. Returns the
+/// cycle's nodes in traversal order with the entry node repeated at the
+/// end (e.g. `[a, b, a]`), or `None` if no such cycle exists.
+///
+/// The implementation filters the edge set down to Forward edges first
+/// and runs an iterative DFS for back-edges on the resulting subgraph.
+/// Backtrack edges (and the not-yet-implemented Escalate kind) are
+/// excluded by construction, so any cycle reported here has every edge
+/// equal to `EdgeKind::Forward`.
+fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
+    use std::collections::HashMap;
+
+    #[derive(Clone, Copy)]
+    enum Color {
+        Gray,
+        Black,
+    }
+
+    let forward_edges: Vec<&Edge> = edges
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::Forward))
+        .collect();
+
+    let mut adj: HashMap<&NodeKey, Vec<&NodeKey>> = HashMap::new();
+    for e in &forward_edges {
+        adj.entry(&e.from.node).or_default().push(&e.to);
+    }
+
+    let mut color: HashMap<&NodeKey, Color> = HashMap::new();
+
+    let starts: Vec<&NodeKey> = adj.keys().copied().collect();
+    for start in starts {
+        if color.contains_key(start) {
+            continue;
+        }
+        // Iterative DFS keeping a per-frame index into the adjacency list
+        // so we can resume neighbour iteration after recursion.
+        let mut path: Vec<&NodeKey> = vec![start];
+        let mut iter_idx: Vec<usize> = vec![0];
+        color.insert(start, Color::Gray);
+
+        while let Some(&node) = path.last() {
+            let i = *iter_idx.last().expect("iter_idx and path stay in lockstep");
+            let neighbours = adj.get(node);
+            let len = neighbours.map_or(0, Vec::len);
+            if i < len {
+                *iter_idx.last_mut().expect("iter_idx is non-empty") += 1;
+                let target = neighbours.expect("len > 0 implies present")[i];
+                match color.get(target) {
+                    None => {
+                        color.insert(target, Color::Gray);
+                        path.push(target);
+                        iter_idx.push(0);
+                    },
+                    Some(Color::Gray) => {
+                        // Back-edge → cycle. Reconstruct the cycle starting
+                        // from the first occurrence of `target` in the
+                        // current DFS path and append `target` at the end
+                        // for human-readable reporting (`[a, b, a]`).
+                        let idx = path
+                            .iter()
+                            .position(|n| *n == target)
+                            .expect("Gray node must be on the current path");
+                        let mut report: Vec<NodeKey> =
+                            path[idx..].iter().map(|n| (*n).clone()).collect();
+                        report.push(target.clone());
+                        return Some(report);
+                    },
+                    Some(Color::Black) => {
+                        // Already finished — no new cycle through it.
+                    },
+                }
+            } else {
+                color.insert(node, Color::Black);
+                path.pop();
+                iter_idx.pop();
+            }
+        }
+    }
+    None
+}
 
 /// `validate_for_m6` plus the `surge_core::ReferenceResolver` lookups for
 /// profiles, templates, and named agents. Engine wiring picks this entry
@@ -464,4 +563,221 @@ mod tests {
             "error mentions M8/Parallel: {msg}"
         );
     }
+
+    fn terminal_node(name: &str) -> Node {
+        let key = NodeKey::try_from(name).unwrap();
+        Node {
+            id: key,
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        }
+    }
+
+    fn forward_edge(id: &str, from_node: &str, from_outcome: &str, to: &str) -> surge_core::edge::Edge {
+        use surge_core::edge::{EdgePolicy, PortRef};
+        use surge_core::keys::EdgeKey;
+        surge_core::edge::Edge {
+            id: EdgeKey::try_from(id).unwrap(),
+            from: PortRef {
+                node: NodeKey::try_from(from_node).unwrap(),
+                outcome: OutcomeKey::try_from(from_outcome).unwrap(),
+            },
+            to: NodeKey::try_from(to).unwrap(),
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        }
+    }
+
+    fn graph_with_nodes_and_edges(
+        nodes: &[&str],
+        start: &str,
+        edges: Vec<surge_core::edge::Edge>,
+    ) -> Graph {
+        let mut node_map = BTreeMap::new();
+        for n in nodes {
+            node_map.insert(NodeKey::try_from(*n).unwrap(), terminal_node(n));
+        }
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "cycle-test".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: NodeKey::try_from(start).unwrap(),
+            nodes: node_map,
+            edges,
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn forward_only_cycle_a_b_a_is_rejected() {
+        // Pure-Forward cycle a -> b -> a is a livelock; the validator
+        // refuses to start the run.
+        let g = graph_with_nodes_and_edges(
+            &["a", "b"],
+            "a",
+            vec![
+                forward_edge("e_ab", "a", "done", "b"),
+                forward_edge("e_ba", "b", "done", "a"),
+            ],
+        );
+        let err = validate_for_m6(&g).unwrap_err();
+        match err {
+            EngineError::ForwardCycleDetected { nodes } => {
+                let labels: Vec<String> = nodes.iter().map(ToString::to_string).collect();
+                assert!(
+                    labels.contains(&"a".to_string()) && labels.contains(&"b".to_string()),
+                    "cycle report mentions both nodes: {labels:?}",
+                );
+                assert!(
+                    labels.first() == labels.last(),
+                    "cycle report repeats the entry node at the end: {labels:?}",
+                );
+            },
+            other => panic!("expected ForwardCycleDetected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cycle_with_one_backtrack_edge_is_accepted() {
+        // a -> b (Forward), b -> a (Backtrack) — the bootstrap edit-loop
+        // shape. Cycle is permitted because at least one edge is Backtrack.
+        use surge_core::edge::{EdgePolicy, PortRef};
+        use surge_core::keys::EdgeKey;
+
+        let mut backtrack = surge_core::edge::Edge {
+            id: EdgeKey::try_from("e_back").unwrap(),
+            from: PortRef {
+                node: NodeKey::try_from("b").unwrap(),
+                outcome: OutcomeKey::try_from("edit").unwrap(),
+            },
+            to: NodeKey::try_from("a").unwrap(),
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        };
+        backtrack.kind = EdgeKind::Backtrack;
+
+        let g = graph_with_nodes_and_edges(
+            &["a", "b"],
+            "a",
+            vec![forward_edge("e_ab", "a", "done", "b"), backtrack],
+        );
+        validate_for_m6(&g).expect("Backtrack-containing cycle is permitted");
+    }
+
+    #[test]
+    fn dag_with_no_cycle_is_accepted() {
+        // Regression guard for the previous (cycle-free) behaviour.
+        let g = graph_with_nodes_and_edges(
+            &["a", "b", "c"],
+            "a",
+            vec![
+                forward_edge("e_ab", "a", "done", "b"),
+                forward_edge("e_bc", "b", "done", "c"),
+            ],
+        );
+        validate_for_m6(&g).expect("acyclic graph remains valid");
+    }
+
+    #[test]
+    fn forward_self_loop_is_rejected() {
+        // A self-loop a -> a with kind=Forward is a degenerate cycle of
+        // length 1. Should still be rejected.
+        let g = graph_with_nodes_and_edges(
+            &["a"],
+            "a",
+            vec![forward_edge("e_self", "a", "again", "a")],
+        );
+        match validate_for_m6(&g).unwrap_err() {
+            EngineError::ForwardCycleDetected { nodes } => {
+                assert_eq!(nodes.len(), 2, "self-loop reports [a, a]");
+                assert_eq!(nodes[0], NodeKey::try_from("a").unwrap());
+                assert_eq!(nodes[1], NodeKey::try_from("a").unwrap());
+            },
+            other => panic!("expected ForwardCycleDetected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_only_cycle_inside_subgraph_is_rejected() {
+        // The same livelock guard applies to body subgraphs of Loop
+        // nodes. A Forward-only cycle in a subgraph is also lethal.
+        use surge_core::graph::Subgraph;
+        use surge_core::keys::SubgraphKey;
+        use surge_core::loop_config::{
+            ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+        };
+
+        let loop_key = NodeKey::try_from("loop_1").unwrap();
+        let body_key = SubgraphKey::try_from("body").unwrap();
+        let body_a = NodeKey::try_from("body_a").unwrap();
+        let body_b = NodeKey::try_from("body_b").unwrap();
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            loop_key.clone(),
+            Node {
+                id: loop_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Loop(LoopConfig {
+                    iterates_over: IterableSource::Static(vec![]),
+                    body: body_key.clone(),
+                    iteration_var_name: "item".into(),
+                    exit_condition: ExitCondition::AllItems,
+                    on_iteration_failure: FailurePolicy::Abort,
+                    parallelism: ParallelismMode::Sequential,
+                    gate_after_each: false,
+                }),
+            },
+        );
+
+        let mut body_nodes = BTreeMap::new();
+        body_nodes.insert(body_a.clone(), terminal_node("body_a"));
+        body_nodes.insert(body_b.clone(), terminal_node("body_b"));
+
+        let mut subgraphs = BTreeMap::new();
+        subgraphs.insert(
+            body_key,
+            Subgraph {
+                start: body_a,
+                nodes: body_nodes,
+                edges: vec![
+                    forward_edge("e_body_ab", "body_a", "done", "body_b"),
+                    forward_edge("e_body_ba", "body_b", "done", "body_a"),
+                ],
+            },
+        );
+
+        let g = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "subgraph-cycle".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: loop_key,
+            nodes,
+            edges: vec![],
+            subgraphs,
+        };
+
+        match validate_for_m6(&g).unwrap_err() {
+            EngineError::ForwardCycleDetected { .. } => {},
+            other => panic!("expected ForwardCycleDetected, got {other:?}"),
+        }
+    }
+
 }

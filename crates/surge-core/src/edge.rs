@@ -19,11 +19,21 @@ pub struct PortRef {
     pub outcome: OutcomeKey,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
+    /// Standard forward routing — every edge in M5/M6 graphs.
+    #[default]
     Forward,
+    /// Loop back to a previously visited node (e.g. a HumanGate `edit`
+    /// outcome routing back to its preceding Agent node so the agent can
+    /// re-resolve bindings against fresh feedback). Routing emits
+    /// `EdgeTraversed { kind: Backtrack }` and increments
+    /// `RunMemory.node_visits[target]`. Bootstrap-mode HumanGates rely on
+    /// this to power the operator-driven edit loop.
     Backtrack,
+    /// Reserved for max-traversal escalation re-routes — runtime semantics
+    /// land in a follow-up milestone.
     Escalate,
 }
 

@@ -455,14 +455,14 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             });
 
         // Route to next node.
-        let next = match crate::engine::routing::next_node_after_with_counters(
+        let routed = match crate::engine::routing::next_node_after_with_counters(
             &params.graph,
             &cursor.node,
             &outcome,
             &mut frames,
             &mut root_traversal_counts,
         ) {
-            Ok(n) => n,
+            Ok(r) => r,
             Err(crate::engine::routing::RoutingError::ExceededTraversal {
                 edge,
                 action,
@@ -489,7 +489,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                             &mut frames,
                             &mut root_traversal_counts,
                         ) {
-                            Ok(n) => n,
+                            Ok(r) => r,
                             Err(_) => {
                                 return failed(
                                     &params,
@@ -512,32 +512,28 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             },
             Err(e) => return failed(&params, format!("routing: {e}")).await,
         };
+        let next = routed.target.clone();
 
-        // EdgeTraversed + StageCompleted.
-        // Synthesize a fallback edge id; if the formatted string is not a valid
-        // EdgeKey (e.g. too long or invalid chars), propagate as a routing error
-        // rather than panicking.
-        let edge_id = params
-            .graph
-            .edges
-            .iter()
-            .find(|e| e.from.node == cursor.node && e.from.outcome == outcome)
-            .map(|e| e.id.clone())
-            .or_else(|| {
-                let synth = format!("{}_{}", cursor.node, next);
-                surge_core::keys::EdgeKey::try_from(synth.as_str()).ok()
-            });
+        tracing::debug!(
+            target: "engine::routing",
+            from = %cursor.node,
+            to = %next,
+            kind = ?routed.kind,
+            "traversing edge",
+        );
 
-        if let Some(eid) = edge_id {
-            let _ = params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
-                    edge: eid,
-                    from: cursor.node.clone(),
-                    to: next.clone(),
-                }))
-                .await;
-        }
+        // Emit the EdgeTraversed event with the actual routed kind so fold
+        // can drive `RunMemory.node_visits` deterministically (Backtrack
+        // edges increment the target's visit counter).
+        let _ = params
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
+                edge: routed.edge_id,
+                from: cursor.node.clone(),
+                to: next.clone(),
+                kind: routed.kind,
+            }))
+            .await;
         let _ = params
             .writer
             .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {

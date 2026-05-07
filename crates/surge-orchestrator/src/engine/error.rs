@@ -72,6 +72,27 @@ pub enum EngineError {
     /// A Subgraph node references an inner subgraph that is not in `graph.subgraphs`.
     #[error("subgraph reference {0} not found in graph.subgraphs")]
     SubgraphMissing(surge_core::keys::SubgraphKey),
+
+    /// A pure-`Forward` cycle was detected during pre-execution validation.
+    /// Cycles are permitted iff at least one edge in the cycle has
+    /// `EdgeKind::Backtrack` (deliberate iteration, e.g. bootstrap edit
+    /// loops); a `Forward`-only cycle is a livelock and the engine refuses
+    /// to start such a run. The `nodes` vector lists the nodes that form
+    /// the cycle, in traversal order, with the entry node repeated at the
+    /// end for readability (e.g. `[a, b, a]` for `a → b → a`).
+    #[error("forward-only cycle detected: {}", format_node_cycle(.nodes))]
+    ForwardCycleDetected {
+        /// Nodes forming the offending cycle, in traversal order.
+        nodes: Vec<surge_core::keys::NodeKey>,
+    },
+}
+
+fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {
+    nodes
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" -> ")
 }
 
 #[cfg(test)]

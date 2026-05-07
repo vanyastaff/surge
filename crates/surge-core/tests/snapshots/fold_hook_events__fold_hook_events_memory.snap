@@ -27,4 +27,5 @@ RunMemory {
         cost_usd: 0.0,
     },
     bootstrap_edit_counts: {},
+    node_visits: {},
 }
