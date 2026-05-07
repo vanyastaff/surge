@@ -15,7 +15,7 @@ cargo clippy --workspace       # lint
 
 ## Architecture
 
-Multi-crate workspace. Read `docs/02-ARCHITECTURE.md` for full details.
+Multi-crate workspace. See `docs/ARCHITECTURE.md` for vision and design notes (in progress).
 
 - `surge-core` — shared types: SpecId, TaskId, TaskState FSM, SurgeConfig, AgentConfig
 - `surge-acp` — ACP Client trait implementation, AgentPool, AgentConnection, event system
@@ -38,7 +38,6 @@ Multi-crate workspace. Read `docs/02-ARCHITECTURE.md` for full details.
 - Public API documented with `///` doc comments
 - No `unwrap()` in library code — use `?` or explicit error handling
 - Tests next to code in `#[cfg(test)]` modules
-- Follow RFC-driven design: new features start as RFC in docs/
 
 ## References
 

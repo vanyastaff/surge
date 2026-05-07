@@ -3,7 +3,7 @@
 //! The crate exposes the `NotifyDeliverer` trait and a default
 //! `MultiplexingNotifier` that dispatches on `NotifyChannel` variant
 //! to one of five built-in channel impls (Desktop, Webhook, Slack,
-//! Email, Telegram). See `docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m6-design.md`
+//! Email, Telegram). See `docs/ARCHITECTURE.md`
 //! §10 for the design contract.
 
 #![warn(missing_docs)]

@@ -100,7 +100,7 @@ M7 ships a single version; richer version negotiation is M8+.
 
 ## Architecture
 
-See [`docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m7-design.md`](../../docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m7-design.md)
+See [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)
 §3 (architecture decisions), §6 (run lifecycle), §17 (daemon mode
 section). Key components:
 

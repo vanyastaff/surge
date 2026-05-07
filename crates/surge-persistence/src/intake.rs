@@ -33,7 +33,7 @@ pub enum IntakeError {
 
 /// Lifecycle states of an external ticket as tracked by `surge-intake`.
 ///
-/// See `docs/revision/rfcs/0010-issue-tracker-integration.md` data-flow section
+/// See `docs/ARCHITECTURE.md` data-flow section
 /// for the FSM diagram. The string form (returned by `as_str` and parsed by
 /// `FromStr`) is the on-disk representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,7 +98,7 @@ impl TicketState {
     /// Whether `from -> self` is a valid transition.
     ///
     /// Returns `true` iff this transition is permitted by the ticket FSM
-    /// described in `docs/revision/rfcs/0010-issue-tracker-integration.md`.
+    /// described in `docs/ARCHITECTURE.md`.
     /// Used for property testing and for runtime guards in
     /// [`IntakeRepo::update_state_validated`].
     #[must_use]

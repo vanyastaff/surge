@@ -3,7 +3,7 @@
 //!
 //! Pure-addition submodule introduced in M3. Coexists with the legacy
 //! `AgentPool` / `SurgeClient` stack at the crate root; consumers pick the
-//! style they need. See `docs/superpowers/specs/2026-05-03-surge-acp-bridge-m3-design.md`
+//! style they need. See `docs/ARCHITECTURE.md`
 //! for the design contract.
 //!
 //! Public API surface (all under `bridge::`; **not** re-exported at the

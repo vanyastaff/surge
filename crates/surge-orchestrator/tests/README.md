@@ -393,9 +393,8 @@ These E2E tests verify the acceptance criteria for:
 
 ## Related Documentation
 
-- **Architecture**: `docs/02-ARCHITECTURE.md`
+- **Architecture**: `docs/ARCHITECTURE.md`
 - **ACP Integration**: `crates/surge-acp/README.md`
-- **Token Tracking Verification**: `INTEGRATION_TEST_VERIFICATION.md`
 - **Orchestrator Design**: `crates/surge-orchestrator/README.md`
 
 ## Questions?

@@ -1,6 +1,6 @@
 -- 0002_ticket_index.sql
 -- Tracks lifecycle of external tickets ingested via surge-intake.
--- See docs/revision/rfcs/0010-issue-tracker-integration.md, decision #22.
+-- See docs/ARCHITECTURE.md, decision #22.
 
 CREATE TABLE IF NOT EXISTS ticket_index (
     task_id          TEXT PRIMARY KEY,

@@ -2,7 +2,7 @@
 //! parses LLM output.
 //!
 //! Layer 1 of the two-layer plan in
-//! `docs/superpowers/specs/2026-05-06-triage-author-llm-dispatch-design.md`:
+//! `docs/ARCHITECTURE.md`:
 //! standalone [`dispatch_triage`] function that opens an ACP session
 //! against the bundled `_bootstrap/triage-author@1.0` profile, sends
 //! a structured input, awaits the agent's `triage_decision.json`

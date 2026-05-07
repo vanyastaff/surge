@@ -107,7 +107,7 @@ impl SurgeApp {
 
         // Spawn the daemon connect + global-event subscription task.
         // The runtime UI is a daemon client (per
-        // `docs/revision/rfcs/0008-ui-architecture.md`): it watches runs
+        // `docs/ARCHITECTURE.md`): it watches runs
         // hosted by `surge-daemon` rather than running them in-process.
         // This task: try_connect → list_runs → subscribe_global → loop
         // pumping `GlobalDaemonEvent` into AppState + UI notifications.

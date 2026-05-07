@@ -19,7 +19,7 @@ initialize project -> describe work -> approve roadmap/flow -> walk away -> retu
 The current repository already contains the lower-level engine, ACP bridge,
 persistence, daemon, CLI, notification, MCP, and desktop UI pieces. The full
 polished AFK product loop is still pre-release and is documented in
-[`docs/revision`](docs/revision/README.md).
+[`docs/`](docs/README.md).
 
 ## Status
 
@@ -47,7 +47,7 @@ Current implementation:
 Documentation convention in this README:
 
 - **Current** means implemented enough to try from the repository.
-- **Target** means product direction from `docs/revision`; command names may
+- **Target** means product direction from `docs/`; command names may
   still change while the CLI is being aligned.
 
 ## Target AFK Workflow
@@ -402,9 +402,8 @@ surge/
 |   |-- surge-notify/        # Notification delivery backends
 |   `-- surge-mcp/           # MCP stdio server lifecycle and tool calls
 |-- docs/
-|   |-- revision/            # Active product specification and roadmap
-|   |-- superpowers/         # Implementation specs/plans for recent milestones
-|   `-- *.md                 # Legacy/background docs
+|   |-- README.md
+|   `-- ARCHITECTURE.md      # Vision, design, decisions (in progress)
 |-- examples/
 |   |-- flow_terminal_only.toml
 |   `-- flow_minimal_agent.toml
@@ -524,28 +523,9 @@ surge feature ...       amend roadmap with a new feature
 
 ## Documentation
 
-Start here:
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — vision, design, decisions (in progress).
 
-- [`docs/revision/README.md`](docs/revision/README.md) - active spec index
-- [`docs/revision/rfcs/0001-overview.md`](docs/revision/rfcs/0001-overview.md) -
-  vision, scope, non-goals, glossary
-- [`docs/revision/rfcs/0002-execution-model.md`](docs/revision/rfcs/0002-execution-model.md) -
-  event sourcing, run lifecycle, replay, crash recovery
-- [`docs/revision/rfcs/0003-graph-model.md`](docs/revision/rfcs/0003-graph-model.md) -
-  nodes, outcomes, edges, validation
-- [`docs/revision/rfcs/0004-bootstrap-and-flow-generation.md`](docs/revision/rfcs/0004-bootstrap-and-flow-generation.md) -
-  target bootstrap and adaptive flow generation
-- [`docs/revision/rfcs/0005-profiles-and-roles.md`](docs/revision/rfcs/0005-profiles-and-roles.md) -
-  reusable agent profiles
-- [`docs/revision/rfcs/0006-sandbox-and-approvals.md`](docs/revision/rfcs/0006-sandbox-and-approvals.md) -
-  agent-native sandbox intent and approval policy
-- [`docs/revision/rfcs/0007-telegram-bot.md`](docs/revision/rfcs/0007-telegram-bot.md) -
-  target mobile approval UX
-- [`docs/revision/rfcs/0008-ui-architecture.md`](docs/revision/rfcs/0008-ui-architecture.md) -
-  editor/runtime/replay UI direction
-- [`docs/revision/ROADMAP.md`](docs/revision/ROADMAP.md) - milestone roadmap
-
-Crate-level docs worth reading:
+Crate-level docs:
 
 - [`crates/surge-daemon/README.md`](crates/surge-daemon/README.md)
 - [`crates/surge-mcp/README.md`](crates/surge-mcp/README.md)

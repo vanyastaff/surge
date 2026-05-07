@@ -1,7 +1,7 @@
 //! Daemon connection lifecycle for the runtime UI.
 //!
 //! The runtime UI (this crate) is a daemon client per
-//! `docs/revision/rfcs/0008-ui-architecture.md` — it watches runs that
+//! `docs/ARCHITECTURE.md` — it watches runs that
 //! the daemon hosts rather than running them in-process. This module
 //! owns the connection state machine and the `try_connect` helper used
 //! by `SurgeApp::new` on startup.

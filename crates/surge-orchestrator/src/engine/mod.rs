@@ -1,6 +1,6 @@
 //! Engine — drives a frozen `Graph` through ACP sessions and persistence.
 //!
-//! See `docs/superpowers/specs/2026-05-03-surge-orchestrator-engine-m5-design.md`
+//! See `docs/ARCHITECTURE.md`
 //! for the full design contract. M5 ships sequential-pipeline-only support.
 //! M6 adds loop execution, subgraph execution, and `Notify` delivery.
 //!

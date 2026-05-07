@@ -4,7 +4,7 @@
 //! pipelines (dedup, candidate enumeration, multiplexer) that feed
 //! incoming work into the vibe-flow bootstrap pipeline.
 //!
-//! See `docs/revision/rfcs/0010-issue-tracker-integration.md`.
+//! See `docs/ARCHITECTURE.md`.
 
 pub mod candidates;
 pub mod dedup;

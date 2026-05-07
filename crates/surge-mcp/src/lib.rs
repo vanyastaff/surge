@@ -2,7 +2,7 @@
 //! `surge-orchestrator` agent stages. Wraps the official `rmcp` crate
 //! with surge-flavoured registry, connection state, restart policy.
 //!
-//! See `docs/superpowers/specs/2026-05-04-surge-orchestrator-engine-m7-design.md`
+//! See `docs/ARCHITECTURE.md`
 //! §3.4, §5.6, §7 for the design contract.
 
 #![warn(missing_docs)]

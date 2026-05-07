@@ -4,7 +4,7 @@
 //! alongside the existing legacy persistence (aggregator/budget/memory/
 //! pricing/store) and does not interact with it.
 //!
-//! See `docs/superpowers/specs/2026-05-02-surge-persistence-m2-design.md`
+//! See `docs/ARCHITECTURE.md`
 //! for the full design.
 
 #![warn(clippy::pedantic)]

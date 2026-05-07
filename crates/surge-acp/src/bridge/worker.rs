@@ -1091,7 +1091,7 @@ pub(crate) async fn close_session_impl(
     // child's stdin write-end closes and the agent subprocess can exit cleanly.
     // This is the only way to break the handle_incoming↔handle_io cycle
     // described in the comment above (see also: bridge close-session design note
-    // in docs/superpowers/specs/2026-05-03-surge-acp-bridge-m3-design.md §5.4).
+    // in docs/ARCHITECTURE.md §5.4).
     if let Some(io) = io_task {
         io.abort();
     }
