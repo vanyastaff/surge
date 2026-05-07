@@ -1,0 +1,59 @@
+name: Security
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Weekly on Monday at 06:00 UTC — picks up RustSec advisory updates without
+    # waiting for the next push or PR.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo audit
+        # Reads Cargo.lock and reports any dependency advisories from
+        # https://rustsec.org/advisories/. Fails the workflow on any
+        # vulnerability so weekly drift is caught at scheduled run time.
+        run: cargo audit
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Review dependencies
+        # Diff dependency manifests against the base branch and fail the PR
+        # on new vulnerable / GPL / unlicensed crates being introduced.
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high

@@ -6,6 +6,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+concurrency:
+  # Releases are not cancellable — never abort an in-progress build that may already
+  # have produced binaries on remote runners. Tag pushes are unique, so collisions
+  # only happen on accidental re-runs of the same workflow.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
