@@ -175,8 +175,16 @@ async fn run_through_facade<F: EngineFacade>(
         .expect("start_run");
     let mut rx = handle.events;
     let mut collected = Vec::new();
+    // Per-event timeout is generous (30s) because the daemon path on
+    // Windows CI runs through named-pipe IPC + SQLite per-run DB
+    // open + bridge thread spawn before the first event flows back —
+    // 5s was tight enough that Windows runners (which complete the
+    // whole suite in ~2x the macOS time) tripped it. Linux/macOS
+    // resolve the first event in well under a second; the cap only
+    // exists to surface a genuine hang.
+    let per_event_timeout = Duration::from_secs(30);
     loop {
-        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        match tokio::time::timeout(per_event_timeout, rx.recv()).await {
             Ok(Ok(ev)) => {
                 let is_terminal = matches!(ev, EngineRunEvent::Terminal { .. });
                 collected.push(normalize_event(&ev));
@@ -186,7 +194,10 @@ async fn run_through_facade<F: EngineFacade>(
             },
             Ok(Err(broadcast::error::RecvError::Closed)) => break,
             Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
-            Err(_) => panic!("{archetype}: event stream stalled > 5s"),
+            Err(_) => panic!(
+                "{archetype}: event stream stalled > {}s",
+                per_event_timeout.as_secs()
+            ),
         }
     }
     let _ = handle.completion.await;
