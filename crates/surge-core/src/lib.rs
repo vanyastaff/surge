@@ -32,6 +32,7 @@ pub mod state;
 // New modules — Surge data model.
 pub mod agent_config;
 pub mod approvals;
+pub mod archetype;
 pub mod branch_config;
 pub mod content_hash;
 pub mod edge;
@@ -67,6 +68,7 @@ pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, 
 pub use state::TaskState;
 
 // ── New re-exports (Surge data model) ──
+pub use archetype::{ArchetypeMetadata, ArchetypeName};
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};

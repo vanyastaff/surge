@@ -79,6 +79,11 @@ pub struct RunMemory {
     pub artifacts_by_node: BTreeMap<NodeKey, Vec<ArtifactRef>>,
     pub outcomes: BTreeMap<NodeKey, Vec<OutcomeRecord>>,
     pub costs: CostSummary,
+    /// Per-bootstrap-stage edit-loop counter. Incremented on every
+    /// `BootstrapEditRequested` event. Read by the bootstrap HumanGate
+    /// handler to enforce `EngineRunConfig.bootstrap.edit_loop_cap`.
+    /// Empty for non-bootstrap runs.
+    pub bootstrap_edit_counts: BTreeMap<BootstrapStage, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -489,6 +494,9 @@ impl RunMemory {
                 self.costs.cache_hits += u64::from(*cache_hits);
                 self.costs.cost_usd += cost_usd.unwrap_or(0.0);
             },
+            EventPayload::BootstrapEditRequested { stage, .. } => {
+                *self.bootstrap_edit_counts.entry(*stage).or_insert(0) += 1;
+            },
             _ => {},
         }
     }
@@ -618,6 +626,60 @@ mod tests {
         let m = RunMemory::default();
         assert!(m.artifacts.is_empty());
         assert_eq!(m.costs.tokens_in, 0);
+        assert!(m.bootstrap_edit_counts.is_empty());
+    }
+
+    #[test]
+    fn bootstrap_edit_counter_increments_per_stage() {
+        let mut m = RunMemory::default();
+        for &stage in &[
+            BootstrapStage::Description,
+            BootstrapStage::Description,
+            BootstrapStage::Roadmap,
+        ] {
+            let evt = make_event(
+                1,
+                EventPayload::BootstrapEditRequested {
+                    stage,
+                    feedback: "tighten".into(),
+                },
+            );
+            m.apply_event(&evt);
+        }
+        assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Description], 2);
+        assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Roadmap], 1);
+        assert!(!m.bootstrap_edit_counts.contains_key(&BootstrapStage::Flow));
+    }
+
+    #[test]
+    fn bootstrap_edit_counter_is_deterministic() {
+        // Folding the same event sequence twice must produce identical
+        // bootstrap_edit_counts maps. Replay determinism guard.
+        let events: Vec<RunEvent> = (1..=5)
+            .map(|seq| {
+                make_event(
+                    seq,
+                    EventPayload::BootstrapEditRequested {
+                        stage: if seq % 2 == 0 {
+                            BootstrapStage::Description
+                        } else {
+                            BootstrapStage::Flow
+                        },
+                        feedback: format!("note-{seq}"),
+                    },
+                )
+            })
+            .collect();
+
+        let mut a = RunMemory::default();
+        let mut b = RunMemory::default();
+        for e in &events {
+            a.apply_event(e);
+            b.apply_event(e);
+        }
+        assert_eq!(a.bootstrap_edit_counts, b.bootstrap_edit_counts);
+        assert_eq!(a.bootstrap_edit_counts[&BootstrapStage::Description], 2);
+        assert_eq!(a.bootstrap_edit_counts[&BootstrapStage::Flow], 3);
     }
 
     #[test]
@@ -652,6 +714,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+            archetype: None,
             },
             start: end.clone(),
             nodes,
@@ -730,6 +793,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+            archetype: None,
             },
             start: plan.clone(),
             nodes,
@@ -813,6 +877,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+            archetype: None,
             },
             start: plan.clone(),
             nodes,

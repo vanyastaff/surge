@@ -79,6 +79,7 @@ fn minimal_graph() -> Graph {
             template_origin: None,
             created_at: fixed_ts(),
             author: None,
+            archetype: None,
         },
         start: agent,
         nodes,

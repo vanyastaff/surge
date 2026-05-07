@@ -159,6 +159,7 @@ fn build_linear_graph() -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: plan,
         nodes,

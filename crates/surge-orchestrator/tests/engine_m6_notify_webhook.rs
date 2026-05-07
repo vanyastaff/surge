@@ -78,6 +78,7 @@ fn build_notify_webhook_graph(webhook_url: String) -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: notify_key,
         nodes,

@@ -107,6 +107,7 @@ fn build_linear_graph(keys: Vec<NodeKey>) -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: keys[0].clone(),
         nodes,

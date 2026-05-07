@@ -23,6 +23,10 @@ pub enum BindingError {
     /// `GlobPattern` bindings are not supported until M6.
     #[error("GlobPattern bindings are M6+; not supported in M5")]
     GlobUnsupported,
+    /// `EditFeedback` bindings rely on bootstrap-side feedback persistence
+    /// that is wired in a later milestone task.
+    #[error("EditFeedback bindings are not yet wired in this build")]
+    EditFeedbackUnwired,
     /// Reading the artifact file from disk failed.
     #[error("io error reading artifact {0}: {1}")]
     Io(String, std::io::Error),
@@ -63,6 +67,19 @@ pub async fn resolve_bindings(
             },
             ArtifactSource::Static { content } => content.clone(),
             ArtifactSource::GlobPattern { .. } => return Err(BindingError::GlobUnsupported),
+            ArtifactSource::InitialPrompt => {
+                let aref = memory.artifacts.get("user_prompt").ok_or_else(|| {
+                    BindingError::UnknownArtifact("user_prompt (InitialPrompt)".into())
+                })?;
+                read_artifact_text(&aref.path, worktree_root, &aref.name).await?
+            },
+            // Bootstrap-only binding source. Resolution is wired separately in
+            // a later milestone task that introduces feedback persistence on
+            // RunMemory; for now this variant cannot resolve and surfaces a
+            // clear error.
+            ArtifactSource::EditFeedback { from_node: _ } => {
+                return Err(BindingError::EditFeedbackUnwired);
+            },
         };
         out.push((b.target.clone(), value));
     }

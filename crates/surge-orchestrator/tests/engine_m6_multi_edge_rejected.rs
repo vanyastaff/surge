@@ -72,6 +72,7 @@ fn build_multi_edge_graph() -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: n_a,
         nodes,
