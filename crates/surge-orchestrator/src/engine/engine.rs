@@ -198,19 +198,54 @@ impl Engine {
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
         let graph_hash = ContentHash::compute(&graph_bytes);
 
+        let mut events = vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree_path.clone(),
+                initial_prompt: run_config.initial_prompt.clone(),
+                config: core_run_config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash,
+            }),
+        ];
+
+        // Surface the operator's free-form prompt as a first-class artifact so
+        // bootstrap (or any) agent stage can pull it via the standard binding
+        // path through `ArtifactSource::InitialPrompt` (and equivalently via
+        // `ArtifactSource::RunArtifact { name: "user_prompt" }`). The artifact
+        // body is stored at `<worktree>/.surge/user_prompt.txt`; the
+        // `ArtifactProduced` event records its content hash, relative path,
+        // and a synthetic producer node so the existing fold rule populates
+        // `RunMemory.artifacts["user_prompt"]` deterministically.
+        if !run_config.initial_prompt.is_empty() {
+            let prompt_artifact = synthesise_initial_prompt_artifact(
+                &worktree_path,
+                run_config.initial_prompt.as_bytes(),
+            )
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
+            })?;
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %run_id,
+                prompt_len = run_config.initial_prompt.len(),
+                "seeded user_prompt artifact",
+            );
+            events.push(VersionedEventPayload::new(
+                EventPayload::ArtifactProduced {
+                    node: prompt_artifact.producer,
+                    artifact: prompt_artifact.hash,
+                    path: prompt_artifact.relative_path,
+                    name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
+                },
+            ));
+        }
+
         writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: worktree_path.clone(),
-                    initial_prompt: String::new(),
-                    config: core_run_config,
-                }),
-                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
-                    graph: Box::new(graph.clone()),
-                    graph_hash,
-                }),
-            ])
+            .append_events(events)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
@@ -499,4 +534,58 @@ impl Engine {
 #[allow(dead_code)]
 fn _engine_config_used(e: &Engine) {
     let _ = &e.config;
+}
+
+/// Canonical artifact name under which the run's free-form initial prompt is
+/// surfaced to agent stages. Bootstrap profiles bind to this name (either via
+/// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
+pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
+
+/// Relative path within the worktree where the seeded prompt body is stored.
+const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
+
+/// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
+/// Bootstrap graphs do not have a real `start_node` user node, so the
+/// engine attributes the prompt to a stable synthetic key.
+const INITIAL_PROMPT_PRODUCER_NODE: &str = "start_node";
+
+/// Output of [`synthesise_initial_prompt_artifact`].
+pub(crate) struct InitialPromptArtifact {
+    pub hash: surge_core::content_hash::ContentHash,
+    pub relative_path: PathBuf,
+    pub producer: surge_core::keys::NodeKey,
+}
+
+/// Persist the operator-supplied prompt body to a stable location inside the
+/// run's worktree and compute the metadata needed to record an
+/// `ArtifactProduced` event. Returns the content hash, the relative on-disk
+/// path, and the synthetic producer node key.
+///
+/// Writes `<worktree>/.surge/user_prompt.txt`, creating the parent directory
+/// when missing. Idempotent for identical content (the file is overwritten
+/// each call, and `ContentHash::compute` is purely a function of bytes).
+pub(crate) async fn synthesise_initial_prompt_artifact(
+    worktree_path: &std::path::Path,
+    prompt_bytes: &[u8],
+) -> std::io::Result<InitialPromptArtifact> {
+    use surge_core::content_hash::ContentHash;
+    use surge_core::keys::NodeKey;
+
+    let relative_path = PathBuf::from(INITIAL_PROMPT_ARTIFACT_RELPATH);
+    let absolute_path = worktree_path.join(&relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&absolute_path, prompt_bytes).await?;
+    let hash = ContentHash::compute(prompt_bytes);
+    // INITIAL_PROMPT_PRODUCER_NODE is a hardcoded ASCII identifier valid by
+    // NodeKey rules (max 32, leading letter, alphanumeric + `_`); the unwrap
+    // is unreachable.
+    let producer = NodeKey::try_from(INITIAL_PROMPT_PRODUCER_NODE)
+        .expect("INITIAL_PROMPT_PRODUCER_NODE is a valid NodeKey by construction");
+    Ok(InitialPromptArtifact {
+        hash,
+        relative_path,
+        producer,
+    })
 }

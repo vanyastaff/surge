@@ -60,6 +60,14 @@ pub struct EngineRunConfig {
     /// flag are planned for M8+ scope.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerRef>,
+    /// Free-form prompt that initiated the run. Surfaced to bootstrap profiles
+    /// (and any other agent stage) via `ArtifactSource::InitialPrompt`, which
+    /// resolves through the standard binding path against a synthesised
+    /// `RunMemory.artifacts["user_prompt"]` entry seeded by `Engine::start_run`.
+    /// Empty string disables seeding (the legacy default for non-bootstrap
+    /// runs).
+    #[serde(default)]
+    pub initial_prompt: String,
 }
 
 impl Default for EngineRunConfig {
@@ -68,6 +76,7 @@ impl Default for EngineRunConfig {
             human_input_timeout: Duration::from_secs(300),
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
+            initial_prompt: String::new(),
         }
     }
 }
@@ -115,6 +124,7 @@ mod tests {
                 Duration::from_secs(60),
                 true,
             )],
+            initial_prompt: String::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -128,5 +138,21 @@ mod tests {
         let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
         let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
         assert!(parsed.mcp_servers.is_empty());
+        // Legacy blobs without `initial_prompt` must default to the empty
+        // string so the engine treats them as non-bootstrap runs.
+        assert!(parsed.initial_prompt.is_empty());
+    }
+
+    #[test]
+    fn engine_run_config_serializes_initial_prompt() {
+        let cfg = EngineRunConfig {
+            human_input_timeout: Duration::from_secs(60),
+            stage_timeout_override: None,
+            mcp_servers: Vec::new(),
+            initial_prompt: "fix the broken cart-total bug".into(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.initial_prompt, "fix the broken cart-total bug");
     }
 }

@@ -172,4 +172,72 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BindingError::GlobUnsupported));
     }
+
+    #[tokio::test]
+    async fn initial_prompt_binding_resolves_user_prompt_artifact() {
+        // The bootstrap-driven `ArtifactSource::InitialPrompt` source should
+        // resolve through the standard binding path: a `RunMemory.artifacts`
+        // entry under the canonical name "user_prompt" pointing at a real
+        // file inside the worktree, written by `Engine::start_run` before
+        // the run task spins up.
+        use std::path::PathBuf;
+        use surge_core::content_hash::ContentHash;
+        use surge_core::keys::NodeKey;
+        use surge_core::run_state::ArtifactRef;
+
+        let dir = tempfile::tempdir().unwrap();
+        // Mirror the engine seeding layout exactly.
+        let surge_dir = dir.path().join(".surge");
+        tokio::fs::create_dir_all(&surge_dir).await.unwrap();
+        let prompt_body = "fix the broken cart-total bug";
+        tokio::fs::write(surge_dir.join("user_prompt.txt"), prompt_body)
+            .await
+            .unwrap();
+
+        let mut mem = RunMemory::default();
+        mem.artifacts.insert(
+            "user_prompt".into(),
+            ArtifactRef {
+                hash: ContentHash::compute(prompt_body.as_bytes()),
+                path: PathBuf::from(".surge/user_prompt.txt"),
+                name: "user_prompt".into(),
+                produced_by: NodeKey::try_from("start_node").unwrap(),
+                produced_at_seq: 3,
+            },
+        );
+
+        let bindings = vec![Binding {
+            source: ArtifactSource::InitialPrompt,
+            target: TemplateVar("user_prompt".into()),
+        }];
+        let resolved = resolve_bindings(&bindings, &mem, dir.path())
+            .await
+            .expect("InitialPrompt binding resolves through artifact store");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].0.0, "user_prompt");
+        assert_eq!(resolved[0].1, prompt_body);
+    }
+
+    #[tokio::test]
+    async fn initial_prompt_binding_errors_when_user_prompt_missing() {
+        // Defensive guard: agent stage requesting `InitialPrompt` against a
+        // run that was started without an `initial_prompt` (legacy callers,
+        // non-bootstrap pipelines) surfaces a clear `UnknownArtifact` rather
+        // than panicking or returning empty data.
+        let bindings = vec![Binding {
+            source: ArtifactSource::InitialPrompt,
+            target: TemplateVar("user_prompt".into()),
+        }];
+        let mem = RunMemory::default();
+        let dir = tempfile::tempdir().unwrap();
+        let err = resolve_bindings(&bindings, &mem, dir.path())
+            .await
+            .unwrap_err();
+        match err {
+            BindingError::UnknownArtifact(name) => {
+                assert!(name.contains("user_prompt"));
+            },
+            other => panic!("expected UnknownArtifact, got {other:?}"),
+        }
+    }
 }
