@@ -117,7 +117,9 @@ Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Fold
 
 ### Hooks
 
-`pre_tool_use`, `post_tool_use`, `on_outcome`, `on_error`. Hooks may **reject** an outcome and force a retry; this is where deterministic verification lives without changing the approval design.
+`pre_tool_use`, `post_tool_use`, `on_outcome`, `on_error`. Hooks may **reject** an outcome and force a retry, or **suppress** a stage failure into a declared outcome. This is where deterministic verification lives without changing the approval design.
+
+See [`docs/hooks.md`](hooks.md) for the full lifecycle, matcher rules, failure-mode matrix, suppression directive format, and a profile-authoring example.
 
 ## 5. ACP bridge — agent integration
 

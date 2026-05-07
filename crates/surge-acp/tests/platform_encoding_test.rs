@@ -16,6 +16,34 @@ fn temp_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
+/// Poll [`terminal_get_output`] every 50ms (up to a 5s deadline)
+/// until `predicate` is satisfied OR the deadline expires; return
+/// the most recent result either way. Replaces the historical
+/// `tokio::time::sleep(100ms)` pattern that races the spawned
+/// process on slow CI runners — surfaced by PR #48 where `chcp`
+/// (Windows) and locale-tagged `echo` (Ubuntu) consistently
+/// over-ran 100/200ms before the assertion read the output.
+///
+/// `predicate` receives `(output, truncated)` so callers asserting
+/// "non-empty AND truncated" or "contains substring" can express
+/// the wait condition directly. Returning the last result on
+/// timeout lets the existing assertion phrasing in each test stay
+/// unchanged — a genuine producer regression still surfaces as the
+/// original assertion message at the original line number.
+async fn wait_for_output(
+    mgr: &Arc<Mutex<Terminals>>,
+    id: &str,
+    predicate: impl Fn(&str, bool) -> bool,
+) -> (String, bool, Option<surge_acp::terminal::ExitStatus>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut last = terminal_get_output(mgr, id).await.unwrap();
+    while !predicate(&last.0, last.1) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        last = terminal_get_output(mgr, id).await.unwrap();
+    }
+    last
+}
+
 #[tokio::test]
 async fn test_utf8_basic_output() {
     // Test that basic UTF-8 output is captured correctly
@@ -28,9 +56,7 @@ async fn test_utf8_basic_output() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| o.contains("Hello UTF-8")).await;
 
     assert!(
         output.contains("Hello UTF-8"),
@@ -50,9 +76,7 @@ async fn test_utf8_emoji_output() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     // Note: On Windows, cmd.exe may not support emoji correctly depending on
     // code page, so we just verify no crash occurred
@@ -71,9 +95,7 @@ async fn test_utf8_cjk_characters() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     // On Unix-like systems with UTF-8 locale, this should work
     // On Windows, behavior depends on code page
@@ -92,9 +114,7 @@ async fn test_utf8_mixed_scripts() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     assert!(!output.is_empty(), "Output should not be empty");
 }
@@ -111,9 +131,7 @@ async fn test_windows_code_page_compatibility() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| o.contains("Test")).await;
 
     assert!(output.contains("Test"), "Output should contain test text");
 }
@@ -132,9 +150,7 @@ async fn test_windows_chcp_utf8() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     // Should get some output without crashing
     assert!(!output.is_empty(), "Output should not be empty");
@@ -159,9 +175,11 @@ async fn test_truncation_respects_char_boundaries() {
         .spawn(cmd, &args, &[], None, Some(15))
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    // Wait until the producer has emitted enough bytes to actually trip
+    // the 15-byte limit; otherwise the test races the rocket emitter on
+    // slow runners and asserts truncation before the byte cap is hit.
+    let (output, truncated, _) =
+        wait_for_output(&mgr, &id, |o, t| t || o.len() >= 15 || !o.is_empty()).await;
 
     // Output should be truncated
     assert!(truncated, "Output should be marked as truncated");
@@ -194,9 +212,7 @@ async fn test_truncation_exact_char_boundary() {
         .spawn(cmd, &args, &[], None, Some(10))
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _truncated, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _truncated, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     assert!(
         output.len() <= 10,
@@ -220,9 +236,7 @@ async fn test_stderr_utf8_capture() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| o.contains("Error")).await;
 
     // stderr should be captured along with stdout
     assert!(output.contains("Error"), "Stderr output should be captured");
@@ -252,9 +266,10 @@ async fn test_large_utf8_output() {
 
     let id = mgr.lock().await.spawn(cmd, &args, &[], None, None).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    // Loop emits 100 lines; wait until at least 11 land before asserting
+    // the > 10 floor. Cap is 5s (helper default), plenty for the slowest
+    // runner observed in CI.
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| o.lines().count() > 10).await;
 
     // Should have captured multiple lines
     assert!(
@@ -333,9 +348,7 @@ async fn test_utf8_locale_on_unix() {
         .spawn(cmd, &args, &env, None, None)
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let (output, _, _) = terminal_get_output(&mgr, &id).await.unwrap();
+    let (output, _, _) = wait_for_output(&mgr, &id, |o, _| !o.is_empty()).await;
 
     assert!(!output.is_empty(), "Output should not be empty");
 }

@@ -138,3 +138,49 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
+
+  bench:
+    name: Engine Bench (stage transition)
+    # Linux-only — bench wall-clock numbers across runners are not comparable.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-bench-
+            ${{ runner.os }}-target-
+
+      # Compile-only smoke: full bench is too slow for the PR gate; the GA
+      # cut runs `cargo bench --bench stage_transition -- --save-baseline ga`
+      # locally. CI builds the bench so a bench-breaking change cannot land
+      # silently.
+      - name: Build stage_transition bench
+        run: cargo bench -p surge-orchestrator --bench stage_transition --no-run
+
+      # Quick smoke run with a single sample so CI catches runtime panics
+      # without spending the multi-minute full warmup. P95_BUDGET_US lives
+      # in the bench source — a regression beyond budget surfaces as test
+      # failure once the GA runs include the comparison harness.
+      - name: Smoke-run stage_transition bench
+        run: cargo bench -p surge-orchestrator --bench stage_transition -- --quick

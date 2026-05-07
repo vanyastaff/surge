@@ -276,9 +276,9 @@ impl Engine {
             let (event_tx, event_rx) = broadcast::channel(1);
             // Immediately send the terminal event (best-effort; receiver may
             // not be listening yet, which is fine — the future resolves).
-            let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal(
-                terminal_outcome.clone(),
-            ));
+            let _ = event_tx.send(crate::engine::handle::EngineRunEvent::Terminal {
+                outcome: terminal_outcome.clone(),
+            });
             let join = tokio::spawn(async move { terminal_outcome });
             return Ok(RunHandle {
                 run_id,

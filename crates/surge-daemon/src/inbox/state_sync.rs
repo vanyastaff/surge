@@ -42,7 +42,7 @@ impl TicketStateSync {
                     }
                     went_active = true;
                 },
-                Ok(EngineRunEvent::Terminal(outcome)) => {
+                Ok(EngineRunEvent::Terminal { outcome }) => {
                     self.on_terminal(&outcome).await;
                     return;
                 },

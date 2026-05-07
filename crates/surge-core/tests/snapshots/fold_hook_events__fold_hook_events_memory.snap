@@ -1,0 +1,28 @@
+---
+source: crates/surge-core/tests/fold_hook_events.rs
+expression: memory
+---
+RunMemory {
+    artifacts: {},
+    artifacts_by_node: {},
+    outcomes: {
+        NodeKey("impl_1"): [
+            OutcomeRecord {
+                outcome: OutcomeKey("done"),
+                summary: "implementation complete",
+                seq: 9,
+            },
+            OutcomeRecord {
+                outcome: OutcomeKey("done"),
+                summary: "second pass",
+                seq: 12,
+            },
+        ],
+    },
+    costs: CostSummary {
+        tokens_in: 0,
+        tokens_out: 0,
+        cache_hits: 0,
+        cost_usd: 0.0,
+    },
+}

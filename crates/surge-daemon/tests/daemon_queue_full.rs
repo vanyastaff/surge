@@ -112,15 +112,19 @@ impl EngineFacade for CountingStubFacade {
             // First run: hold events open until released.
             tokio::spawn(async move {
                 release.notified().await;
-                let _ = tx.send(EngineRunEvent::Terminal(RunOutcome::Completed {
-                    terminal: NodeKey::try_from("end").unwrap(),
-                }));
+                let _ = tx.send(EngineRunEvent::Terminal {
+                    outcome: RunOutcome::Completed {
+                        terminal: NodeKey::try_from("end").unwrap(),
+                    },
+                });
                 drop(tx);
             });
         } else {
-            let _ = tx.send(EngineRunEvent::Terminal(RunOutcome::Completed {
-                terminal: NodeKey::try_from("end").unwrap(),
-            }));
+            let _ = tx.send(EngineRunEvent::Terminal {
+                outcome: RunOutcome::Completed {
+                    terminal: NodeKey::try_from("end").unwrap(),
+                },
+            });
             drop(tx);
         }
 

@@ -45,7 +45,18 @@ pub enum EngineRunEvent {
         payload: EventPayload,
     },
     /// The run reached a terminal state.
-    Terminal(RunOutcome),
+    ///
+    /// Wrapped in a struct variant rather than `Terminal(RunOutcome)`
+    /// so the inner [`RunOutcome`]'s `#[serde(tag = "kind")]` does
+    /// not collide with this enum's own `#[serde(tag = "kind")]`
+    /// when serialised over the daemon IPC wire — internally-tagged
+    /// tuple variants flatten the inner object's fields into the
+    /// outer enum, producing two `kind` fields and tripping
+    /// `serde_json` with "duplicate field 'kind'" on read.
+    Terminal {
+        /// Terminal outcome of the run.
+        outcome: RunOutcome,
+    },
 }
 
 /// Handle to an in-flight run. Created by `Engine::start_run` / `resume_run`.

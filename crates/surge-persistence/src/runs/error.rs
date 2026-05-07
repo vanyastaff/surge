@@ -74,6 +74,16 @@ pub enum StorageError {
     /// Connection pool error.
     #[error("pool error: {0}")]
     Pool(String),
+
+    /// Schema-version migration of an event payload failed during read
+    /// (e.g. payload bytes do not match the chain's expected layout for
+    /// the recorded `schema_version`, or the version is out of range).
+    /// Distinct from [`Self::Pool`] / [`Self::Sqlite`] so callers and
+    /// operators can tell migration drift apart from raw I/O / pool
+    /// faults at a glance — log filters, dashboards, and tests no
+    /// longer need to pattern-match on string contents to discriminate.
+    #[error("schema migration failed: {0}")]
+    MigrationFailed(String),
 }
 
 /// Failure modes inside the writer task itself.
