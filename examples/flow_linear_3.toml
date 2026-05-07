@@ -157,7 +157,7 @@ on_max_exceeded = "escalate"
 [[edges]]
 id = "e_spec_fail"
 to = "failure"
-kind = "escalate"
+kind = "forward"
 
 [edges.from]
 node = "spec_1"
@@ -181,7 +181,7 @@ on_max_exceeded = "escalate"
 [[edges]]
 id = "e_impl_fail"
 to = "failure"
-kind = "escalate"
+kind = "forward"
 
 [edges.from]
 node = "implement_1"
@@ -205,7 +205,7 @@ on_max_exceeded = "escalate"
 [[edges]]
 id = "e_verify_fail"
 to = "failure"
-kind = "escalate"
+kind = "forward"
 
 [edges.from]
 node = "verify_1"

@@ -88,10 +88,7 @@ impl RunReader {
             match row {
                 Ok((seq, ts, kind, blob, schema_version)) => {
                     let inner = migrate_payload(schema_version, &blob).map_err(|e| {
-                        StorageError::Pool(format!(
-                            "schema migration failed for seq={}: {e}",
-                            seq.0
-                        ))
+                        StorageError::MigrationFailed(format!("seq={}: {e}", seq.0))
                     })?;
                     let payload = VersionedEventPayload {
                         schema_version,
@@ -138,9 +135,8 @@ impl RunReader {
             let mut out = Vec::new();
             for r in iter {
                 let (seq, ts, kind, blob, schema_version) = r?;
-                let inner = migrate_payload(schema_version, &blob).map_err(|e| {
-                    StorageError::Pool(format!("schema migration failed for seq={}: {e}", seq.0))
-                })?;
+                let inner = migrate_payload(schema_version, &blob)
+                    .map_err(|e| StorageError::MigrationFailed(format!("seq={}: {e}", seq.0)))?;
                 let payload = VersionedEventPayload {
                     schema_version,
                     payload: inner,

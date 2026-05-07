@@ -96,6 +96,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to drop the parked senders — each waiter wakes with
   `Err(RecvError::Closed)` and exits cleanly. Regression test:
   `daemon_queued_subscribe_test.rs::subscribe_to_queued_then_stop_does_not_leak_waiter`.
+- **Hook executor pipe-buffer deadlock + child-leak on timeout.** The
+  `spawn_via_shell` helper called `child.wait().await` and only THEN
+  drained stdout/stderr. With piped output, a hook that emitted more
+  than the pipe buffer (≈64 KiB Linux, ≈4 KiB Windows) blocked on
+  write and never exited, hanging the engine forever in the await.
+  And on timeout the future was dropped without killing the child,
+  leaving the hook process orphaned. Switched to
+  `child.wait_with_output()` (concurrent stdout/stderr drain + wait)
+  combined with `Command::kill_on_drop(true)` so the timeout path
+  genuinely terminates the hook. Caught in PR #48 review.
+- **`on_error` hooks were skipping the `HookExecuted` audit trail.**
+  `run_on_error_hooks` discarded `HookOutcome::executed()` and only
+  returned the resolved suppression key, contradicting the
+  "every hook invocation appends `HookExecuted`" rule honoured by
+  the pre/post_tool_use and on_outcome chains. The helper now
+  returns `OnErrorResolution { outcome, records }`, and the engine
+  call site in `run_task::execute` persists each record via
+  `record_hook_executed` before consuming the outcome. Unit tests
+  in `run_task::tests` updated to verify the audit invariant.
+  Caught in PR #48 review.
+- **`validate_for_m6_with_resolver` silently dropped non-resolver
+  errors.** The orchestrator-level resolver validator filtered
+  `surge_core::validate_with_resolver` findings to only the
+  `Profile/Template/NamedAgent NotFound` kinds, ignoring every other
+  `Severity::Error` finding (single-edge-per-outcome, reachability,
+  terminal reachability, loop iterable, etc.). Graphs that passed
+  the engine's own structural checks but violated `surge-core`'s
+  broader rules were accepted as valid. The validator now propagates
+  every `Severity::Error` finding, prefixing each with
+  `[ref]` (resolver) or `[structural]` so callers can tell them
+  apart. Caught in PR #48 review and uncovered an unreachable
+  `failure` terminal in `examples/flow_linear_3.toml` — fail-edge
+  `kind` switched from `escalate` to `forward` so the terminal is
+  reachable via forward traversal (semantics unchanged, the
+  `escalate` kind is for parallel error-handler flows, not normal
+  fail-outcome routing).
+- **`StorageError::MigrationFailed` distinguishes schema-migration
+  failures from raw I/O / pool faults.** The persistence read path
+  was mapping `migrate_payload` errors onto `StorageError::Pool`,
+  which surfaced as a misleading "pool error" even though the pool
+  was healthy. Added a dedicated variant so log filters, dashboards,
+  and tests can discriminate without pattern-matching error message
+  strings. Caught in PR #48 review.
+
+### Changed
+
+- **`real_acp_smoke.rs` renamed and rescoped honestly.** The previous
+  `flow_minimal_agent_against_real_agent` test name implied driver +
+  `RunCompleted` / `TokensConsumed` assertions, but the body only
+  validated env vars. Renamed to `real_acp_env_contract_harness`,
+  doc-block now states scope explicitly (env-contract harness today,
+  full driver tracked as Graph-engine-GA follow-up) and the body
+  asserts the env vars resolve to an existing binary file. Caught
+  in PR #48 review.
 
 - **Replay determinism violation in `RunState::apply`.** The proptest above
   uncovered that `apply()` generated `SessionId::new()` on `RunStarted` and

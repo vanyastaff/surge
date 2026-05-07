@@ -128,32 +128,46 @@ pub use validate_for_m6 as validate_for_m5;
 /// can still use the no-resolver `validate_for_m6`.
 ///
 /// # Errors
-/// - All `validate_for_m6` errors.
-/// - [`EngineError::GraphInvalid`] for every reference-resolution failure
-///   reported by the supplied resolver, joined into a single message.
+/// - All `validate_for_m6` errors (engine-level structural rules).
+/// - [`EngineError::GraphInvalid`] for every `Severity::Error` finding
+///   reported by `surge_core::validate_with_resolver` — covering both the
+///   resolver-specific diagnostics (`ProfileNotFound`, `TemplateNotFound`,
+///   `NamedAgentNotFound`) AND the broader structural rules from
+///   `surge_core::validate` that `validate_for_m6` does NOT replicate
+///   (one-edge-per-outcome, reachability, terminal-reachable,
+///   loop-iterable, backtrack-target-reachable, subgraph-cycle,
+///   node-key uniqueness, terminal-outcome-no-edge, etc.).
+///   Resolver failures are tagged with a `[ref]` prefix in the message
+///   so callers can distinguish them from structural errors at a glance.
 pub fn validate_for_m6_with_resolver(
     graph: &Graph,
     resolver: &dyn surge_core::ReferenceResolver,
 ) -> Result<(), EngineError> {
     validate_for_m6(graph)?;
 
-    // Surge-core's reference checks layer on top of the structural pass —
-    // surface only resolver-related diagnostics, since the rest are already
-    // covered by validate_for_m6.
+    // Surge-core covers a different set of rules from `validate_for_m6`
+    // (notably reachability, single-edge-per-outcome, terminal
+    // reachability, etc.) — propagate every Severity::Error finding so
+    // graphs that pass the engine-level checks but fail core-level
+    // structural rules are surfaced rather than silently accepted.
     if let Err(findings) = surge_core::validate_with_resolver(graph, resolver) {
-        let resolver_failures: Vec<String> = findings
-            .into_iter()
-            .filter_map(|f| match f.kind {
+        let mut messages: Vec<String> = Vec::new();
+        for finding in findings {
+            if finding.kind.severity() != surge_core::Severity::Error {
+                continue;
+            }
+            let label = match finding.kind {
                 surge_core::ValidationErrorKind::ProfileNotFound { .. }
                 | surge_core::ValidationErrorKind::TemplateNotFound { .. }
-                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => Some(f.message),
-                _ => None,
-            })
-            .collect();
-        if !resolver_failures.is_empty() {
+                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => "ref",
+                _ => "structural",
+            };
+            messages.push(format!("[{label}] {}", finding.message));
+        }
+        if !messages.is_empty() {
             return Err(EngineError::GraphInvalid(format!(
-                "reference resolution failed: {}",
-                resolver_failures.join("; ")
+                "validate_with_resolver failed: {}",
+                messages.join("; ")
             )));
         }
     }

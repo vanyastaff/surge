@@ -389,8 +389,15 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
 
                 // on_error hooks may suppress the failure into an outcome the
                 // node already declares.
-                let on_error_outcome =
+                let on_error_resolution =
                     run_on_error_hooks(&hook_executor, &node, &cursor.node, &raw_reason).await;
+                // Persist a HookExecuted event for every hook invoked on
+                // the on_error chain so the audit trail matches the
+                // pre/post_tool_use and on_outcome paths.
+                for record in &on_error_resolution.records {
+                    crate::engine::hooks::record_hook_executed(&params.writer, record).await;
+                }
+                let on_error_outcome = on_error_resolution.outcome;
 
                 if let Some(suppressed) = on_error_outcome {
                     tracing::info!(
@@ -582,9 +589,26 @@ fn lookup_in_active_frame<'a>(
     }
 }
 
-/// Run `on_error` hooks against the failing node and return the suppressed
-/// outcome key, if any. Only `Agent` nodes carry hooks today; other node types
-/// short-circuit to `None`.
+/// Result of running the `on_error` hook chain. Carries both the
+/// resolved outcome (if a hook suppressed the failure into a
+/// declared outcome key) AND the `HookExecutionRecord`s for every
+/// invoked hook — the caller is responsible for persisting each
+/// record as `EventPayload::HookExecuted` so the audit trail is
+/// complete (matching the "every hook invocation appends
+/// `HookExecuted`" rule from the plan).
+///
+/// Returning the records to the caller — rather than persisting
+/// inline — keeps `run_on_error_hooks` writer-free and unit-testable
+/// without spinning up a `Storage` + `RunWriter` in tests.
+pub(crate) struct OnErrorResolution {
+    pub outcome: Option<OutcomeKey>,
+    pub records: Vec<crate::engine::hooks::HookExecutionRecord>,
+}
+
+/// Run `on_error` hooks against the failing node and return the
+/// suppressed outcome key (if any) plus the executed-hook audit
+/// records. Only `Agent` nodes carry hooks today; other node types
+/// short-circuit to an empty resolution.
 ///
 /// A `HookOutcome::Suppress { outcome }` is honoured only when `outcome` is
 /// declared on the node — otherwise we WARN and let the original failure
@@ -595,19 +619,26 @@ pub(crate) async fn run_on_error_hooks(
     node: &surge_core::node::Node,
     cursor_node: &surge_core::keys::NodeKey,
     raw_reason: &str,
-) -> Option<OutcomeKey> {
+) -> OnErrorResolution {
     let NodeConfig::Agent(agent_cfg) = &node.config else {
-        return None;
+        return OnErrorResolution {
+            outcome: None,
+            records: Vec::new(),
+        };
     };
     if agent_cfg.hooks.is_empty() {
-        return None;
+        return OnErrorResolution {
+            outcome: None,
+            records: Vec::new(),
+        };
     }
 
     let ctx = HookContext::for_node(cursor_node).with_error(raw_reason);
-    let outcome = executor
+    let hook_outcome = executor
         .run_hooks(&agent_cfg.hooks, HookTrigger::OnError, &ctx)
         .await;
-    match outcome {
+    let records = hook_outcome.executed().to_vec();
+    let outcome = match hook_outcome {
         HookOutcome::Suppress { outcome, .. } => {
             let declared = node.declared_outcomes.iter().any(|d| d.id == outcome);
             if declared {
@@ -624,7 +655,8 @@ pub(crate) async fn run_on_error_hooks(
         },
         // `Reject` cannot un-fail an error; it is treated as `Proceed`.
         HookOutcome::Reject { .. } | HookOutcome::Proceed { .. } => None,
-    }
+    };
+    OnErrorResolution { outcome, records }
 }
 
 async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
@@ -706,12 +738,20 @@ mod tests {
             vec!["done", "retry_later"],
         );
         let cursor = node.id.clone();
-        let result = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        // Audit trail invariant: on every hook invocation the resolution
+        // must carry a corresponding HookExecutionRecord. The shell may
+        // mangle the JSON on some Windows configurations, but the hook
+        // still ran — at least one record must be present.
+        assert!(
+            !resolution.records.is_empty(),
+            "on_error hook must produce at least one HookExecutionRecord for audit"
+        );
         // If the platform shell mangles the JSON (some Windows configurations do),
         // fall back to a sanity check: the helper must at least decline to suppress
         // an undeclared outcome. The declared/undeclared coverage is the primary
         // contract; the shell-quoting compatibility is best-effort.
-        if let Some(out) = result {
+        if let Some(out) = resolution.outcome {
             assert_eq!(out.as_str(), "retry_later");
         }
     }
@@ -724,8 +764,17 @@ mod tests {
             vec!["done"],
         );
         let cursor = node.id.clone();
-        let result = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
-        assert!(result.is_none(), "undeclared outcome must not suppress");
+        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        assert!(
+            resolution.outcome.is_none(),
+            "undeclared outcome must not suppress"
+        );
+        // Even when the suppression is ignored, the hook still ran and
+        // must appear in the audit records.
+        assert!(
+            !resolution.records.is_empty(),
+            "ignored-suppress hook must still emit a HookExecutionRecord"
+        );
     }
 
     #[tokio::test]
@@ -733,8 +782,12 @@ mod tests {
         let executor = HookExecutor::new();
         let node = agent_node(vec![], vec!["done"]);
         let cursor = node.id.clone();
-        let result = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
-        assert!(result.is_none());
+        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        assert!(resolution.outcome.is_none());
+        assert!(
+            resolution.records.is_empty(),
+            "no hooks => no audit records"
+        );
     }
 
     #[tokio::test]
@@ -751,7 +804,11 @@ mod tests {
         };
         let executor = HookExecutor::new();
         let cursor = node.id.clone();
-        let result = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
-        assert!(result.is_none());
+        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        assert!(resolution.outcome.is_none());
+        assert!(
+            resolution.records.is_empty(),
+            "non-agent node must skip hook execution entirely"
+        );
     }
 }

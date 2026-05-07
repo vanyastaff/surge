@@ -38,7 +38,6 @@ use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::profile::Profile;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_persistence::runs::run_writer::RunWriter;
-use tokio::io::AsyncReadExt;
 
 /// Per-call dynamic context the engine assembles for the hook chain.
 ///
@@ -274,44 +273,55 @@ async fn spawn_via_shell(
 
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Without this, dropping `Child` (e.g. when the timeout future
+        // is cancelled below) does NOT terminate the spawned process —
+        // it would leak as a zombie consuming CPU/IO until the daemon
+        // exits. With `kill_on_drop`, dropping the Child sends SIGKILL
+        // (Unix) / TerminateProcess (Windows) so the timeout path
+        // genuinely stops the hook.
+        .kill_on_drop(true);
 
-    let mut child = cmd.spawn()?;
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
+    let child = cmd.spawn()?;
 
-    let wait_fut = async {
-        let status = child.wait().await?;
-        let mut stdout = String::new();
-        if let Some(mut p) = stdout_pipe.take() {
-            let _ = p.read_to_string(&mut stdout).await;
-        }
-        let mut stderr = String::new();
-        if let Some(mut p) = stderr_pipe.take() {
-            let _ = p.read_to_string(&mut stderr).await;
-        }
-        let exit_status = status.code().unwrap_or(-1);
-        Ok::<HookCommandResult, std::io::Error>(HookCommandResult {
-            exit_status,
-            stdout,
-            stderr,
-            timed_out: false,
-        })
-    };
+    // `wait_with_output` consumes the Child and concurrently drains
+    // stdout/stderr while waiting for exit. This is critical for
+    // hooks that emit more output than fits in the pipe buffer
+    // (~64 KiB on Linux, ~4 KiB on Windows): a `child.wait()`
+    // followed by `read_to_string` would deadlock the moment the
+    // pipe filled, hanging the engine forever in this await.
+    let output_fut = child.wait_with_output();
 
-    if let Some(dur) = timeout {
-        match tokio::time::timeout(dur, wait_fut).await {
-            Ok(res) => res,
-            Err(_) => Ok(HookCommandResult {
-                exit_status: 124,
-                stdout: String::new(),
-                stderr: format!("hook command exceeded timeout {dur:?}"),
-                timed_out: true,
-            }),
+    let output = if let Some(dur) = timeout {
+        match tokio::time::timeout(dur, output_fut).await {
+            Ok(res) => res?,
+            Err(_) => {
+                // Timeout fired: dropping `output_fut` here drops the
+                // owned Child, and `kill_on_drop(true)` set above
+                // ensures the OS process is killed before we move on.
+                // We don't recover the partial stdout/stderr — they
+                // would require a more elaborate teardown (kill +
+                // wait + drain) that the timeout exit code does not
+                // need.
+                return Ok(HookCommandResult {
+                    exit_status: 124,
+                    stdout: String::new(),
+                    stderr: format!("hook command exceeded timeout {dur:?}"),
+                    timed_out: true,
+                });
+            },
         }
     } else {
-        wait_fut.await
-    }
+        output_fut.await?
+    };
+
+    let exit_status = output.status.code().unwrap_or(-1);
+    Ok(HookCommandResult {
+        exit_status,
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        timed_out: false,
+    })
 }
 
 /// Hook execution facade. The default spawner runs a real shell; tests use

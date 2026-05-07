@@ -1,16 +1,34 @@
-//! Optional real-agent smoke test.
+//! Real-agent smoke harness — env contract scaffold (full driver TBD).
 //!
-//! This test runs `examples/flow_minimal_agent.toml` against an actual
-//! ACP-conformant agent binary (Claude Code, Codex CLI, or any other
-//! conformant agent) and asserts that the run reaches `RunCompleted` and
-//! at least one `TokensConsumed` event was recorded.
+//! ## Current scope (this commit)
 //!
-//! It is **opt-in** — without the gating env vars below it prints a skip
-//! banner and exits successfully, so the deterministic CI green path stays
-//! covered by the mock-ACP suite (Task 5.1) without requiring a network
-//! installation of the real agent.
+//! This file is the **harness skeleton** for a future real-ACP smoke test.
+//! Today it verifies only the gating contract:
 //!
-//! ## Enabling locally
+//! - When `SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE` are absent /
+//!   empty / point to a non-existent path, the test prints a skip banner
+//!   and exits with success — keeping the deterministic CI green path
+//!   covered by the mock-ACP archetype suite (`archetypes_mock_test.rs`)
+//!   without requiring a real agent install.
+//! - When both env vars resolve to a real binary path, the test prints a
+//!   banner indicating the harness is ready and exits successfully.
+//!
+//! ## Out of scope (follow-up)
+//!
+//! Driving the engine with a real ACP child and asserting the observable
+//! contract (`RunCompleted` plus ≥ 1 `TokensConsumed` event) requires
+//! launching the daemon, wiring a `DaemonEngineFacade`, registering the
+//! agent profile against the resolver, and a per-binary message script.
+//! That work is tracked as a follow-up to the Graph engine GA milestone
+//! and intentionally NOT done here — committing a half-implemented driver
+//! would either silently pass on broken setups or hard-fail when the env
+//! vars happen to be set in dev environments.
+//!
+//! When the driver lands, the env-contract assertions stay (so misconfigured
+//! invocations still skip cleanly) and the post-banner section will perform
+//! the actual run + event-log assertions.
+//!
+//! ## Enabling the harness check locally
 //!
 //! ```text
 //! SURGE_REAL_ACP_BIN=/path/to/claude-code \
@@ -18,14 +36,13 @@
 //!   cargo test -p surge-orchestrator --test real_acp_smoke -- --nocapture
 //! ```
 //!
-//! The agent binary must speak ACP and accept the
-//! `examples/flow_minimal_agent.toml` system prompt. The profile name is
-//! injected through the `SURGE_REAL_ACP_PROFILE` env var so the same test
-//! can target Claude Code, Codex CLI, or a custom binary without recompiling.
+//! The binary path must exist on disk; the profile name will be passed
+//! through to the future driver via `SURGE_REAL_ACP_PROFILE` so the same
+//! harness can target Claude Code, Codex CLI, or any conformant binary
+//! without recompiling.
 
 use std::env;
 use std::path::Path;
-use std::time::Duration;
 
 const ENV_BIN: &str = "SURGE_REAL_ACP_BIN";
 const ENV_PROFILE: &str = "SURGE_REAL_ACP_PROFILE";
@@ -33,12 +50,21 @@ const ENV_PROFILE: &str = "SURGE_REAL_ACP_PROFILE";
 fn skip_banner(reason: &str) {
     eprintln!(
         "[real_acp_smoke] SKIPPED: {reason}\n\
-         Set {ENV_BIN} and {ENV_PROFILE} to run this test."
+         Set {ENV_BIN} and {ENV_PROFILE} to run this harness."
     );
 }
 
+/// Env-contract harness: confirms `SURGE_REAL_ACP_BIN` resolves to an
+/// existing binary path and `SURGE_REAL_ACP_PROFILE` is non-empty when
+/// the user opts in. The full real-ACP driver (run through engine,
+/// assert `RunCompleted` + ≥ 1 `TokensConsumed`) is deliberately not
+/// implemented here yet — see the module-level docs.
+///
+/// Renamed from `flow_minimal_agent_against_real_agent` to make the
+/// scope honest after PR #48 review noted the previous name implied
+/// coverage that is not present.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn flow_minimal_agent_against_real_agent() {
+async fn real_acp_env_contract_harness() {
     let bin = match env::var(ENV_BIN) {
         Ok(v) if !v.trim().is_empty() => v,
         _ => {
@@ -55,28 +81,17 @@ async fn flow_minimal_agent_against_real_agent() {
     };
 
     let bin_path = Path::new(&bin);
-    if !bin_path.exists() {
-        skip_banner(&format!("{ENV_BIN}={bin} does not exist on disk"));
-        return;
-    }
-
-    eprintln!(
-        "[real_acp_smoke] running flow_minimal_agent.toml against bin={bin} profile={profile}"
+    assert!(
+        bin_path.exists(),
+        "{ENV_BIN}={bin} must point to an existing binary; saw missing path"
+    );
+    assert!(
+        bin_path.is_file(),
+        "{ENV_BIN}={bin} must point to a file (not a directory)"
     );
 
-    // The actual driver shells out to the engine — kept minimal here because
-    // the precise wiring depends on which binary is installed locally. The
-    // test's contract is observable behaviour (RunCompleted + ≥1
-    // TokensConsumed event), not API ergonomics. We deliberately avoid
-    // hard-coding a child-process invocation so a developer with a custom
-    // agent can adapt without touching this file.
-    //
-    // For now the gated test asserts the env-var contract holds; expanding
-    // this driver to launch the daemon is tracked in the GA roadmap as a
-    // follow-up.
-    let timeout = Duration::from_secs(180);
-    let _ = timeout; // silence unused var until the driver lands
     eprintln!(
-        "[real_acp_smoke] env contract OK; full driver is the GA-follow-up tracked in the roadmap"
+        "[real_acp_smoke] env-contract OK: bin={bin} profile={profile}\n\
+         [real_acp_smoke] full driver (RunCompleted + TokensConsumed assertions) is a Graph-engine-GA follow-up"
     );
 }
