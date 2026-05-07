@@ -37,9 +37,14 @@ anyhow = { workspace = true }
 tiny_http = { workspace = true }
 surge-notify = { workspace = true }
 insta = { workspace = true }
+criterion = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"
+
+[[bench]]
+name = "stage_transition"
+harness = false
 
 [features]
 _bootstrap_llm_test = []

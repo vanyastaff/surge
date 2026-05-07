@@ -35,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flow_bug_fix.toml`, `flow_refactor.toml`, `flow_spike.toml`. All validate
   through `validate_for_m6_with_resolver` against the bundled
   `implementer@1.0` profile placeholder.
+- **Documentation:** [`docs/hooks.md`](docs/hooks.md) (lifecycle, matcher,
+  failure-mode matrix, suppression directive, profile authoring example) and
+  [`docs/archetypes.md`](docs/archetypes.md) (gallery with mermaid diagrams
+  for every archetype). Both linked from the root README and `docs/README.md`.
+  `docs/ARCHITECTURE.md` § 4 cross-links the Hooks section.
+- **Criterion bench:** `crates/surge-orchestrator/benches/stage_transition.rs`
+  measures `StageEntered → OutcomeReported → EdgeTraversed` for a synchronous
+  Branch node. `P95_BUDGET_US` constant carries the per-transition wall-clock
+  budget. CI gates the bench via a Linux-only `bench` job that builds the
+  bench and runs `cargo bench -- --quick` so a runtime panic in the bench
+  cannot land silently. Full GA baseline is local:
+  `cargo bench -p surge-orchestrator --bench stage_transition -- --save-baseline ga`.
+- **Gated real-ACP smoke test:**
+  `crates/surge-orchestrator/tests/real_acp_smoke.rs` opts in via
+  `SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE` env vars; without them
+  the test prints a `SKIPPED` banner and exits successfully. See
+  [`docs/development.md`](docs/development.md#optional-real-agent-smoke-test).
 
 ### Fixed
 
