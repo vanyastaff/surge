@@ -18,13 +18,13 @@ use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
 use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::hooks::HookExecutor;
-use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use surge_orchestrator::engine::stage::StageError;
+use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use surge_orchestrator::engine::tools::{
     ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload as EngineResultPayload,
 };
-use surge_persistence::runs::seq::EventSeq;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
 
 use fixtures::mock_bridge::MockBridge;
 
@@ -113,8 +113,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let memory = surge_core::run_state::RunMemory::default();
     let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 3);
     let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
@@ -153,7 +152,9 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let mut saw_outcome = false;
     for ev in events {
         match ev.payload.payload {
-            EventPayload::OutcomeRejectedByHook { outcome, hook_id, .. } => {
+            EventPayload::OutcomeRejectedByHook {
+                outcome, hook_id, ..
+            } => {
                 assert_eq!(outcome.as_str(), "pass");
                 assert_eq!(hook_id, "deny-pass");
                 saw_rejection = true;
@@ -202,8 +203,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     // max_retries = 1: first rejection allowed, second tips us over budget.
     let cfg = agent_cfg(vec![outcome_reject_hook("deny-pass", "pass")], 1);
     let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
@@ -250,7 +250,11 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     for ev in events {
         match ev.payload.payload {
             EventPayload::OutcomeRejectedByHook { .. } => rejection_count += 1,
-            EventPayload::StageFailed { reason, retry_available, .. } => {
+            EventPayload::StageFailed {
+                reason,
+                retry_available,
+                ..
+            } => {
                 assert!(reason.contains("rejection budget exhausted"));
                 assert!(!retry_available);
                 saw_stage_failed = true;
@@ -265,5 +269,8 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         rejection_count, 2,
         "expected exactly max_retries+1 OutcomeRejectedByHook events"
     );
-    assert!(saw_stage_failed, "missing StageFailed event after exhaustion");
+    assert!(
+        saw_stage_failed,
+        "missing StageFailed event after exhaustion"
+    );
 }

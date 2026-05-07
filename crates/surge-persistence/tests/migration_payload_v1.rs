@@ -17,8 +17,8 @@ use surge_core::id::RunId;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
-use surge_persistence::runs::seq::EventSeq;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_path_round_trips_v1_events() {

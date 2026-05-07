@@ -14,7 +14,7 @@
 - [x] **Tracker source skeletons** — `TaskSource` trait with GitHub Issues and Linear implementations in `surge-intake`
 - [x] **Inbox + intake pipeline** — Triage LLM dispatch, `InboxActionConsumer`, `SnoozeScheduler`, `TicketStateSync`, desktop action listener, Telegram bot skeleton
 
-- [ ] **Graph engine GA** — end-to-end execution of every `NodeKind` through `flow.toml` (touches `surge-core`, `surge-orchestrator`, `surge-acp`)
+- [x] **Graph engine GA** — end-to-end execution of every `NodeKind` through `flow.toml` (touches `surge-core`, `surge-orchestrator`, `surge-acp`)
   - `Agent` handler: open ACP session via bridge, inject tools, drive turn loop, validate outcome, close session
   - `HumanGate` handler: render summary, emit `ApprovalRequested`, await `ApprovalDecided`, route by decision
   - `Branch` handler: synchronous predicate evaluation against run state, no LLM
@@ -261,3 +261,4 @@
 | Notification multiplexer | 2026-05-06 |
 | Tracker source skeletons | 2026-05-06 |
 | Inbox + intake pipeline | 2026-05-06 |
+| Graph engine GA | 2026-05-07 |

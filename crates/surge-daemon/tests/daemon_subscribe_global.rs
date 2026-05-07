@@ -104,9 +104,11 @@ impl EngineFacade for InstantFinishStubFacade {
         let (tx, rx) = broadcast::channel(8);
         // Emit Terminal then drop the sender so spawn_forward_task's
         // recv loop sees Closed and proceeds to publish RunFinished.
-        let _ = tx.send(EngineRunEvent::Terminal(RunOutcome::Completed {
-            terminal: NodeKey::try_from("end").unwrap(),
-        }));
+        let _ = tx.send(EngineRunEvent::Terminal {
+            outcome: RunOutcome::Completed {
+                terminal: NodeKey::try_from("end").unwrap(),
+            },
+        });
         drop(tx);
         let completion = tokio::spawn(async move {
             RunOutcome::Completed {

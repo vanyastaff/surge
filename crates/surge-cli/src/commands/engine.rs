@@ -170,7 +170,7 @@ async fn run_command(
             match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
                 Ok(Ok(event)) => {
                     print_event(&event);
-                    if matches!(event, EngineRunEvent::Terminal(_)) {
+                    if matches!(event, EngineRunEvent::Terminal { .. }) {
                         break;
                     }
                 },
@@ -235,7 +235,7 @@ async fn watch_command(run_id: String, daemon: bool) -> Result<()> {
         match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
             Ok(Ok(event)) => {
                 print_event(&event);
-                if matches!(event, EngineRunEvent::Terminal(_)) {
+                if matches!(event, EngineRunEvent::Terminal { .. }) {
                     break;
                 }
             },
@@ -453,7 +453,7 @@ fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {
                 other => eprintln!("{prefix} {}", other.discriminant_str()),
             }
         },
-        EngineRunEvent::Terminal(outcome) => {
+        EngineRunEvent::Terminal { outcome } => {
             let label = "Terminal:".if_supports_color(Stream::Stderr, |s| s.yellow());
             eprintln!("{label} {outcome:?}");
         },

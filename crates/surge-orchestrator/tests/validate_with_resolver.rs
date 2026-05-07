@@ -2,8 +2,8 @@
 //! while the syntactic `validate_for_m6` passes the same graph.
 
 use std::path::Path;
-use surge_core::graph::Graph;
 use surge_core::ReferenceResolver;
+use surge_core::graph::Graph;
 use surge_orchestrator::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
 
 fn load_example(name: &str) -> Graph {
@@ -23,7 +23,7 @@ struct StaticResolver {
 
 impl ReferenceResolver for StaticResolver {
     fn profile_exists(&self, name: &str) -> bool {
-        self.profiles.iter().any(|p| *p == name)
+        self.profiles.contains(&name)
     }
     fn template_exists(&self, _: &str) -> bool {
         true

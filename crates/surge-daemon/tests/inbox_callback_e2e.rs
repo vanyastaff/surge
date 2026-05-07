@@ -160,7 +160,9 @@ impl EngineFacade for MockEngineFacade {
                     let outcome = RunOutcome::Completed {
                         terminal: NodeKey::try_new("terminal_success").unwrap(),
                     };
-                    let _ = tx_for_task.send(EngineRunEvent::Terminal(outcome.clone()));
+                    let _ = tx_for_task.send(EngineRunEvent::Terminal {
+                        outcome: outcome.clone(),
+                    });
                     outcome
                 });
                 Ok(RunHandle {

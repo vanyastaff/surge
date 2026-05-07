@@ -1,25 +1,27 @@
-//! Bounded admission queue: when both `max_active` and `max_queue` are
-//! saturated, further `StartRun` requests are rejected with
-//! `Error { code: QueueFull }` instead of growing the daemon's
-//! pending-start map without bound.
+//! Integration test for Task 3.1 — queued-run auto-resubscribe on
+//! admission.
 //!
-//! Setup: `run_server` with `max_active=1, max_queue=1` and a stub
-//! facade whose first `start_run` holds the events channel open
-//! until the test releases it. That keeps run 1 active and the queue
-//! occupied (after run 2 lands), so the third `StartRun` must hit
-//! `AdmissionDecision::QueueFull`.
+//! Verifies that a `Subscribe { run_id }` issued while the run is
+//! still in the FIFO admission queue (not yet admitted) **does not**
+//! return `RunNotActive`. Instead the daemon retains the subscription
+//! and forwards per-run events as soon as the drain task admits the
+//! run — without the client having to issue a fresh `Subscribe`.
+//!
+//! Setup mirrors `daemon_queue_drain.rs`: `max_active = 1`, stub
+//! facade with a controllable first-run hold so we can observe the
+//! queued window.
 //!
 //! Procedure:
-//! 1. `StartRun` for run 1 over raw IPC → expect `StartRunOk`.
-//! 2. `StartRun` for run 2 → expect `StartRunQueued`.
-//! 3. `StartRun` for run 3 → expect `Error { code: QueueFull }`.
-//! 4. Release run 1 to let the drain task admit run 2 and the server
-//!    shut down cleanly.
-//!
-//! Raw IPC (rather than `DaemonEngineFacade::start_run`) for the same
-//! reason as `daemon_queue_drain.rs`: the facade pipelines a
-//! `Subscribe` immediately after the StartRun reply, which fails for
-//! a queued / rejected run that has no per-run channel registered.
+//! 1. `StartRun #1` → expect `StartRunOk` (admitted).
+//! 2. `StartRun #2` → expect `StartRunQueued` (position 0).
+//! 3. `Subscribe(run2)` while run 2 is still queued → expect
+//!    `SubscribeOk` (NOT `RunNotActive`).
+//! 4. Release run 1 — drain task wakes and admits run 2.
+//! 5. Receive a per-run event for run 2 on the same connection's
+//!    inbound frame stream (no re-subscribe). Specifically, the stub
+//!    emits `Terminal` for the second run; we assert that arrives as
+//!    a `DaemonEvent::PerRun { run_id: run2, event: Terminal(_) }`.
+//! 6. Shut down cleanly.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -35,16 +37,14 @@ use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
 use surge_orchestrator::engine::ipc::{
-    DaemonRequest, DaemonResponse, ErrorCode, local_socket_name_from_path, read_response_frame,
-    write_frame,
+    DaemonEvent, DaemonRequest, DaemonResponse, InboundServerFrame, local_socket_name_from_path,
+    read_inbound_server_frame, write_frame,
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-/// macOS caps `sockaddr_un.sun_path` at 104 chars. The system temp dir
-/// on CI runners eats most of that, so we keep the prefix terse.
 fn unique_socket_path(temp: &TempDir, prefix: &str) -> PathBuf {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
@@ -58,7 +58,7 @@ fn make_minimal_graph() -> surge_core::graph::Graph {
     surge_core::graph::Graph {
         schema_version: surge_core::graph::SCHEMA_VERSION,
         metadata: surge_core::graph::GraphMetadata {
-            name: "queue-full-test".into(),
+            name: "queued-subscribe-test".into(),
             description: None,
             template_origin: None,
             created_at: chrono::Utc::now(),
@@ -71,10 +71,11 @@ fn make_minimal_graph() -> surge_core::graph::Graph {
     }
 }
 
-/// Stub facade: first `start_run` holds the events channel open until
-/// `release_first` fires; subsequent runs complete instantly. Used to
-/// pin run 1 in the active set while we test what happens when the
-/// queue fills.
+/// Mirrors `CountingStubFacade` from `daemon_queue_drain.rs`: the
+/// FIRST `start_run` returns a handle that holds its events channel
+/// open until `release_first()` fires. Subsequent calls return a
+/// handle that completes immediately, which lets us observe the
+/// queued→admitted transition for run 2.
 struct CountingStubFacade {
     start_count: AtomicUsize,
     release_first: Arc<tokio::sync::Notify>,
@@ -107,9 +108,7 @@ impl EngineFacade for CountingStubFacade {
 
         let (tx, rx) = broadcast::channel(8);
         let release = self.release_first.clone();
-
         if is_first {
-            // First run: hold events open until released.
             tokio::spawn(async move {
                 release.notified().await;
                 let _ = tx.send(EngineRunEvent::Terminal {
@@ -120,12 +119,23 @@ impl EngineFacade for CountingStubFacade {
                 drop(tx);
             });
         } else {
-            let _ = tx.send(EngineRunEvent::Terminal {
-                outcome: RunOutcome::Completed {
-                    terminal: NodeKey::try_from("end").unwrap(),
-                },
+            // Subsequent runs: send Terminal after a small delay so
+            // the queued-subscribe forwarder has time to attach to
+            // the per-run publisher before any event is pushed. The
+            // pre-fix code path would have lost events here too;
+            // the post-fix path doesn't need the delay because
+            // `subscribe_eventual` resolves before any publisher
+            // send happens. The delay is small but documents the
+            // production scenario where engine events trickle in.
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let _ = tx.send(EngineRunEvent::Terminal {
+                    outcome: RunOutcome::Completed {
+                        terminal: NodeKey::try_from("end").unwrap(),
+                    },
+                });
+                drop(tx);
             });
-            drop(tx);
         }
 
         let completion = tokio::spawn(async move {
@@ -178,13 +188,12 @@ impl EngineFacade for CountingStubFacade {
 }
 
 #[tokio::test]
-async fn third_start_run_at_saturation_returns_queue_full() {
+async fn subscribe_to_queued_run_streams_after_admission() {
     let temp = TempDir::new().unwrap();
-    // Keep the prefix short — see comment on unique_socket_path.
-    let socket = unique_socket_path(&temp, "q_full");
+    let socket = unique_socket_path(&temp, "queue_sub");
     let cfg = ServerConfig {
         max_active: 1,
-        max_queue: 1,
+        max_queue: 4,
         socket_path: socket.clone(),
     };
     let shutdown = CancellationToken::new();
@@ -196,7 +205,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         async move { run_server(cfg, stub_for_facade, shutdown).await }
     });
 
-    // Wait for the listener to come up before connecting.
+    // Wait for listener to come up.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let name = local_socket_name_from_path(&socket).expect("socket name");
@@ -206,7 +215,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
     let (read_half, mut write_half) = stream.split();
     let mut reader = BufReader::new(read_half);
 
-    // --- StartRun #1 — admitted ---
+    // --- StartRun #1 (admitted) ---
     let run1 = RunId::new();
     let req1 = DaemonRequest::StartRun {
         request_id: 1,
@@ -219,19 +228,17 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         .await
         .expect("write StartRun #1");
     write_half.flush().await.expect("flush #1");
-    let resp1 = read_response_frame(&mut reader)
+    let resp1 = read_inbound_server_frame(&mut reader)
         .await
         .expect("read #1")
         .expect("frame #1");
-    match resp1 {
-        DaemonResponse::StartRunOk { request_id, run_id } => {
-            assert_eq!(request_id, 1);
-            assert_eq!(run_id, run1);
-        },
-        other => panic!("expected StartRunOk for run1, got {other:?}"),
-    }
+    let InboundServerFrame::Response(DaemonResponse::StartRunOk { run_id: got1, .. }) = resp1
+    else {
+        panic!("expected StartRunOk for run1, got {resp1:?}");
+    };
+    assert_eq!(got1, run1);
 
-    // --- StartRun #2 — queued ---
+    // --- StartRun #2 (queued) ---
     let run2 = RunId::new();
     let req2 = DaemonRequest::StartRun {
         request_id: 2,
@@ -244,86 +251,75 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         .await
         .expect("write StartRun #2");
     write_half.flush().await.expect("flush #2");
-    let resp2 = read_response_frame(&mut reader)
+    let resp2 = read_inbound_server_frame(&mut reader)
         .await
         .expect("read #2")
         .expect("frame #2");
-    match resp2 {
-        DaemonResponse::StartRunQueued {
-            request_id,
-            run_id,
-            position,
-        } => {
-            assert_eq!(request_id, 2);
-            assert_eq!(run_id, run2);
-            assert_eq!(position, 0);
-        },
-        other => panic!("expected StartRunQueued for run2, got {other:?}"),
-    }
-
-    // --- StartRun #3 — both caps hit, expect QueueFull ---
-    let run3 = RunId::new();
-    let req3 = DaemonRequest::StartRun {
-        request_id: 3,
-        run_id: run3,
-        graph: Box::new(make_minimal_graph()),
-        worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+    let InboundServerFrame::Response(DaemonResponse::StartRunQueued { run_id: got2, .. }) = resp2
+    else {
+        panic!("expected StartRunQueued for run2, got {resp2:?}");
     };
-    write_frame(&mut write_half, &req3)
+    assert_eq!(got2, run2);
+
+    // --- Subscribe(run2) while run2 is still queued ---
+    // Pre-fix this would have returned Error{RunNotActive}. Post-fix
+    // the daemon waits for admission and forwards per-run events.
+    let sub_req = DaemonRequest::Subscribe {
+        request_id: 3,
+        run_id: run2,
+    };
+    write_frame(&mut write_half, &sub_req)
         .await
-        .expect("write StartRun #3");
-    write_half.flush().await.expect("flush #3");
-    let resp3 = read_response_frame(&mut reader)
+        .expect("write Subscribe(run2)");
+    write_half.flush().await.expect("flush Subscribe");
+    let sub_resp = read_inbound_server_frame(&mut reader)
         .await
-        .expect("read #3")
-        .expect("frame #3");
-    match resp3 {
-        DaemonResponse::Error {
-            request_id,
-            code,
-            message,
-        } => {
+        .expect("read Subscribe resp")
+        .expect("frame Subscribe resp");
+    match sub_resp {
+        InboundServerFrame::Response(DaemonResponse::SubscribeOk { request_id }) => {
             assert_eq!(request_id, 3);
-            assert_eq!(code, ErrorCode::QueueFull);
-            assert!(
-                message.contains("queue is full"),
-                "expected diagnostic message; got {message:?}"
-            );
-            assert!(
-                message.contains("1/1"),
-                "message should include queue_len/max_queue numbers; got {message:?}"
-            );
         },
-        other => panic!("expected Error{{QueueFull}} for run3, got {other:?}"),
+        InboundServerFrame::Response(DaemonResponse::Error { code, message, .. }) => {
+            panic!("Subscribe on queued run should succeed; got error {code:?}: {message}");
+        },
+        other => panic!("expected SubscribeOk, got {other:?}"),
     }
 
-    // Now release run 1 so the drain task can admit run 2 and the
-    // server shuts down cleanly. Without this, the held-open events
-    // channel would keep the spawn_forward_task blocked past the
-    // 2s timeout below.
+    // --- Release run 1; drain task admits run 2 ---
     stub.release_first();
 
-    // After release, run 2 will be admitted (start_count == 2).
-    // The rejected run 3 must NOT result in another start_run call.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while std::time::Instant::now() < deadline && stub.start_count.load(Ordering::SeqCst) < 2 {
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    // --- Read frames until we see a per-run event for run 2 ---
+    // Timeout generously; macOS CI runners can be slow.
+    let mut saw_run2_event = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        let next_frame = tokio::time::timeout(
+            Duration::from_millis(500),
+            read_inbound_server_frame(&mut reader),
+        )
+        .await;
+        match next_frame {
+            Ok(Ok(Some(InboundServerFrame::Event(DaemonEvent::PerRun { run_id, event }))))
+                if run_id == run2 =>
+            {
+                saw_run2_event = true;
+                // We expect the Terminal event from the
+                // delayed-finish path of the stub for run 2.
+                assert!(
+                    matches!(event, EngineRunEvent::Terminal { .. }),
+                    "first per-run event for run2 should be Terminal; got {event:?}"
+                );
+                break;
+            },
+            Ok(Ok(Some(_))) => continue, // unrelated frame; keep reading
+            Ok(Ok(None)) => break,       // EOF — daemon closed
+            Ok(Err(_)) | Err(_) => continue,
+        }
     }
-    assert_eq!(
-        stub.start_count.load(Ordering::SeqCst),
-        2,
-        "run 2 must be admitted exactly once via the drain task; run 3 must NOT \
-         have triggered a third start_run"
-    );
-
-    // Belt and braces: give the drain task a brief window to misbehave
-    // (re-admit a phantom run 3) before checking again.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        stub.start_count.load(Ordering::SeqCst),
-        2,
-        "rejected run 3 must not appear in start_run history"
+    assert!(
+        saw_run2_event,
+        "did not receive any per-run event for queued-then-admitted run within deadline"
     );
 
     shutdown.cancel();

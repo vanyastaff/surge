@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Graph engine GA (in progress)
+## [Unreleased] — Graph engine GA
 
 ### Added
 
@@ -52,8 +52,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE` env vars; without them
   the test prints a `SKIPPED` banner and exits successfully. See
   [`docs/development.md`](docs/development.md#optional-real-agent-smoke-test).
+- **Daemon-attached engine path completion (Phase 3).**
+  `BroadcastRegistry::subscribe_eventual` parks a oneshot waiter that is
+  resolved atomically by the next `register(run_id)` call — closing the
+  race where `spawn_forward_task` could push events before a queued
+  subscriber attached. The IPC `Subscribe` handler now uses this path
+  when the run is in the FIFO admission queue, so `subscribe_to_run`
+  remains valid across the queued→admitted transition without an
+  explicit re-subscribe. Covered by
+  `crates/surge-daemon/tests/daemon_queued_subscribe_test.rs`.
+- **Engine-facade parity test.**
+  `crates/surge-daemon/tests/daemon_parity_test.rs` runs
+  `flow_terminal_only.toml` through both `LocalEngineFacade` and
+  `DaemonEngineFacade`, normalises wall-clock fields, and asserts the
+  two event sequences are identical.
+- **Mock-bridge archetype smoke suite.**
+  `crates/surge-orchestrator/tests/archetypes_mock_test.rs` boots the
+  engine against `fixtures::mock_bridge::MockBridge` for every bundled
+  `examples/flow_*.toml` archetype; the terminal-only flow is run to
+  completion and the rest are asserted to start cleanly. Complements
+  `crates/surge-cli/tests/examples_smoke.rs` (parser+validator) and
+  `tests/real_acp_smoke.rs` (gated real-agent path).
 
 ### Fixed
+
+- **`EngineRunEvent::Terminal` IPC serialisation.** The variant was a
+  tuple `Terminal(RunOutcome)` while both `EngineRunEvent` and
+  `RunOutcome` use `#[serde(tag = "kind")]`. Internally-tagged tuple
+  variants flatten the inner object's fields into the outer enum,
+  which produced two `kind` fields on the wire and tripped
+  `serde_json` with `duplicate field "kind"` on read. Changed to
+  `Terminal { outcome: RunOutcome }` (struct variant) so the inner
+  enum's tag nests cleanly. All callers (orchestrator engine, daemon
+  facade, CLI watch loop, daemon inbox state-sync, integration tests)
+  updated to the new field-style pattern.
 
 - **Replay determinism violation in `RunState::apply`.** The proptest above
   uncovered that `apply()` generated `SessionId::new()` on `RunStarted` and

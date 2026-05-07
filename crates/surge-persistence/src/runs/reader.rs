@@ -139,10 +139,7 @@ impl RunReader {
             for r in iter {
                 let (seq, ts, kind, blob, schema_version) = r?;
                 let inner = migrate_payload(schema_version, &blob).map_err(|e| {
-                    StorageError::Pool(format!(
-                        "schema migration failed for seq={}: {e}",
-                        seq.0
-                    ))
+                    StorageError::Pool(format!("schema migration failed for seq={}: {e}", seq.0))
                 })?;
                 let payload = VersionedEventPayload {
                     schema_version,

@@ -178,10 +178,7 @@ mod tests {
 
     #[test]
     fn schema_too_new_displays_found_and_max() {
-        let err = SurgeError::SchemaTooNew {
-            found: 999,
-            max: 1,
-        };
+        let err = SurgeError::SchemaTooNew { found: 999, max: 1 };
         let msg = err.to_string();
         assert!(msg.contains("999"));
         assert!(msg.contains("newer"));

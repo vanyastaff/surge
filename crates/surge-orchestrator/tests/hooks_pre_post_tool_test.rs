@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use surge_acp::bridge::event::{BridgeEvent, ToolCallMeta, ToolResultPayload};
-use surge_acp::bridge::sandbox::SandboxDecision;
 use surge_acp::bridge::facade::BridgeFacade;
+use surge_acp::bridge::sandbox::SandboxDecision;
 use surge_core::agent_config::AgentConfig;
 use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
 use surge_core::id::SessionId;
@@ -127,8 +127,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
     )]);
     let memory = surge_core::run_state::RunMemory::default();
     let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
@@ -231,8 +230,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
     )]);
     let memory = surge_core::run_state::RunMemory::default();
     let node = NodeKey::try_from("agent_1").unwrap();
-    let tool_resolutions =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let tool_resolutions = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {

@@ -46,13 +46,10 @@ fn arb_linear_graph() -> impl Strategy<Value = (Graph, Vec<NodeKey>)> {
                 arb_outcome_key(),
             )
         })
-        .prop_filter(
-            "unique node keys including terminal",
-            |(_, keys, _)| {
-                let set: std::collections::HashSet<_> = keys.iter().collect();
-                set.len() == keys.len()
-            },
-        )
+        .prop_filter("unique node keys including terminal", |(_, keys, _)| {
+            let set: std::collections::HashSet<_> = keys.iter().collect();
+            set.len() == keys.len()
+        })
         .prop_map(|(_, keys, outcome)| build_linear_graph(keys, outcome))
 }
 
@@ -63,17 +60,14 @@ fn build_linear_graph(keys: Vec<NodeKey>, outcome: OutcomeKey) -> (Graph, Vec<No
 
     for (i, k) in keys.iter().enumerate() {
         let is_terminal = i == keys.len() - 1;
-        let config = if is_terminal {
-            NodeConfig::Terminal(TerminalConfig {
-                kind: TerminalKind::Success,
-                message: None,
-            })
-        } else {
-            NodeConfig::Terminal(TerminalConfig {
-                kind: TerminalKind::Success,
-                message: None,
-            })
-        };
+        // Both branches build a `Terminal` node; the proptest only
+        // exercises the linear-terminal-only fold, so non-terminal
+        // nodes are kept as a `Terminal{Success}` placeholder until
+        // the strategy gains a richer node generator.
+        let config = NodeConfig::Terminal(TerminalConfig {
+            kind: TerminalKind::Success,
+            message: None,
+        });
         let outcomes = if is_terminal {
             vec![]
         } else {

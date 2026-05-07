@@ -586,25 +586,57 @@ async fn dispatch(
         },
 
         DaemonRequest::Subscribe { request_id, run_id } => {
-            let rx = broadcast.subscribe(run_id).await;
-            match rx {
-                Some(rx) => {
-                    let writer_for_task = writer.clone();
-                    // F5: store the JoinHandle so Unsubscribe can abort it.
-                    let handle =
-                        tokio::spawn(forward_per_run_to_client(run_id, rx, writer_for_task));
-                    {
-                        let mut s = state.lock().await;
-                        s.subscriptions.insert(run_id);
-                        s.forwarders.insert(run_id, handle);
-                    }
-                    Some(DaemonResponse::SubscribeOk { request_id })
-                },
-                None => Some(DaemonResponse::Error {
-                    request_id,
-                    code: ErrorCode::RunNotActive,
-                    message: format!("run {run_id} not active in this daemon"),
-                }),
+            if let Some(rx) = broadcast.subscribe(run_id).await {
+                let writer_for_task = writer.clone();
+                // F5: store the JoinHandle so Unsubscribe can abort it.
+                let handle = tokio::spawn(forward_per_run_to_client(run_id, rx, writer_for_task));
+                {
+                    let mut s = state.lock().await;
+                    s.subscriptions.insert(run_id);
+                    s.forwarders.insert(run_id, handle);
+                }
+                Some(DaemonResponse::SubscribeOk { request_id })
+            } else {
+                // Run not yet registered in the broadcast registry. If
+                // it is queued (`pending_starts` knows it), wait for
+                // admission instead of rejecting — the per-run
+                // channel is created in `drain_one_pass` BEFORE the
+                // engine emits `RunStarted`, so a forwarder spawned
+                // now will catch every event once admission lands.
+                let is_queued = pending_starts.lock().await.contains_key(&run_id);
+                if !is_queued {
+                    return Some(DaemonResponse::Error {
+                        request_id,
+                        code: ErrorCode::RunNotActive,
+                        message: format!("run {run_id} not active in this daemon"),
+                    });
+                }
+                let writer_for_task = writer.clone();
+                // `subscribe_eventual` parks a waiter inside the
+                // registry and is woken atomically by the next
+                // `register(run_id)` call (drain_one_pass). The
+                // subscriber receiver is attached to the per-run
+                // sender BEFORE register() returns, which is
+                // strictly before `spawn_forward_task` is
+                // spawned and starts pushing events — so no
+                // event can land in the publisher before the
+                // subscriber is in place.
+                let pending_rx = broadcast.subscribe_eventual(run_id).await;
+                tracing::debug!(
+                    run_id = %run_id,
+                    "subscribing to queued run; parked waiter for admission"
+                );
+                let handle = tokio::spawn(forward_queued_to_client(
+                    run_id,
+                    pending_rx,
+                    writer_for_task,
+                ));
+                {
+                    let mut s = state.lock().await;
+                    s.subscriptions.insert(run_id);
+                    s.forwarders.insert(run_id, handle);
+                }
+                Some(DaemonResponse::SubscribeOk { request_id })
             }
         },
 
@@ -841,6 +873,45 @@ async fn forward_per_run_to_client(
                 );
             },
         }
+    }
+}
+
+/// Forwarder for a `Subscribe` issued before the run was admitted.
+/// Awaits the oneshot returned by
+/// [`BroadcastRegistry::subscribe_eventual`]; the registry attaches
+/// a per-run [`broadcast::Receiver`] atomically when the queued run
+/// is admitted by `drain_one_pass`, BEFORE the engine begins
+/// emitting events into the publisher. Exits cleanly if the run is
+/// cancelled while queued (observed as the oneshot resolving with
+/// `Err(RecvError)` because `BroadcastRegistry::deregister` cleared
+/// the waiter without ever calling `register`).
+///
+/// Spawned by the `Subscribe` handler when the run is in
+/// `pending_starts` but not yet in the per-run registry; lets the
+/// CLI's `subscribe_to_run` call survive admission queueing without
+/// requiring an explicit re-subscribe after `RunAccepted`.
+async fn forward_queued_to_client(
+    run_id: RunId,
+    pending_rx: tokio::sync::oneshot::Receiver<tokio::sync::broadcast::Receiver<EngineRunEvent>>,
+    writer: Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
+) {
+    match pending_rx.await {
+        Ok(rx) => {
+            tracing::debug!(
+                run_id = %run_id,
+                "queued subscribe: admission landed; forwarding per-run events"
+            );
+            forward_per_run_to_client(run_id, rx, writer).await;
+        },
+        Err(_) => {
+            // Sender side dropped without delivering — typically
+            // means the queued run was cancelled (StopRun on a
+            // queued run, or daemon shutdown clearing waiters).
+            tracing::debug!(
+                run_id = %run_id,
+                "queued subscribe: registry dropped waiter (run cancelled or daemon shutdown)"
+            );
+        },
     }
 }
 

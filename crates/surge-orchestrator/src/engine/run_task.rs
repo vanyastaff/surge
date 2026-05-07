@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
-use surge_core::id::RunId;
 use surge_core::hooks::HookTrigger;
+use surge_core::id::RunId;
 use surge_core::keys::OutcomeKey;
 use surge_core::node::NodeConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
@@ -105,9 +105,9 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 }))
                 .await;
             let outcome = RunOutcome::Aborted { reason };
-            let _ = params
-                .event_tx
-                .send(EngineRunEvent::Terminal(outcome.clone()));
+            let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                outcome: outcome.clone(),
+            });
             return outcome;
         }
 
@@ -359,23 +359,23 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             Ok(StageOutcome::Routed(k)) => k,
             Ok(StageOutcome::Terminal(TerminalOutcome::Completed { node: n })) => {
                 let outcome = RunOutcome::Completed { terminal: n };
-                let _ = params
-                    .event_tx
-                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                    outcome: outcome.clone(),
+                });
                 return outcome;
             },
             Ok(StageOutcome::Terminal(TerminalOutcome::Failed { error })) => {
                 let outcome = RunOutcome::Failed { error };
-                let _ = params
-                    .event_tx
-                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                    outcome: outcome.clone(),
+                });
                 return outcome;
             },
             Ok(StageOutcome::Terminal(TerminalOutcome::Aborted { reason })) => {
                 let outcome = RunOutcome::Aborted { reason };
-                let _ = params
-                    .event_tx
-                    .send(EngineRunEvent::Terminal(outcome.clone()));
+                let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                    outcome: outcome.clone(),
+                });
                 return outcome;
             },
             Err(e) => {
@@ -582,23 +582,22 @@ fn lookup_in_active_frame<'a>(
     }
 }
 
-/// Run on_error hooks against the failing node and return the suppressed
-/// outcome key, if any. Only Agent nodes carry hooks today; other node types
+/// Run `on_error` hooks against the failing node and return the suppressed
+/// outcome key, if any. Only `Agent` nodes carry hooks today; other node types
 /// short-circuit to `None`.
 ///
 /// A `HookOutcome::Suppress { outcome }` is honoured only when `outcome` is
 /// declared on the node — otherwise we WARN and let the original failure
 /// propagate (matching the plan's "suppression with an undeclared outcome
-/// falls through to StageFailed and emits a WARN log" rule).
+/// falls through to `StageFailed` and emits a WARN log" rule).
 pub(crate) async fn run_on_error_hooks(
     executor: &HookExecutor,
     node: &surge_core::node::Node,
     cursor_node: &surge_core::keys::NodeKey,
     raw_reason: &str,
 ) -> Option<OutcomeKey> {
-    let agent_cfg = match &node.config {
-        NodeConfig::Agent(cfg) => cfg,
-        _ => return None,
+    let NodeConfig::Agent(agent_cfg) = &node.config else {
+        return None;
     };
     if agent_cfg.hooks.is_empty() {
         return None;
@@ -635,11 +634,11 @@ async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
             error: error.clone(),
         }))
         .await;
-    let _ = params
-        .event_tx
-        .send(EngineRunEvent::Terminal(RunOutcome::Failed {
+    let _ = params.event_tx.send(EngineRunEvent::Terminal {
+        outcome: RunOutcome::Failed {
             error: error.clone(),
-        }));
+        },
+    });
     RunOutcome::Failed { error }
 }
 
@@ -673,9 +672,9 @@ mod tests {
                 approvals_override: None,
                 bindings: vec![],
                 rules_overrides: None,
-                limits: Default::default(),
+                limits: surge_core::agent_config::NodeLimits::default(),
                 hooks,
-                custom_fields: Default::default(),
+                custom_fields: std::collections::BTreeMap::default(),
             }),
         }
     }
@@ -684,13 +683,9 @@ mod tests {
         // cmd.exe needs the caret escape (`^"`) for double quotes inside echo.
         // POSIX shells take a literal single-quoted JSON string.
         let command = if cfg!(target_os = "windows") {
-            format!(
-                r#"echo {{^"action^":^"suppress^",^"outcome^":^"{outcome}^"}}"#
-            )
+            format!(r#"echo {{^"action^":^"suppress^",^"outcome^":^"{outcome}^"}}"#)
         } else {
-            format!(
-                r#"printf '%s' '{{"action":"suppress","outcome":"{outcome}"}}'"#
-            )
+            format!(r#"printf '%s' '{{"action":"suppress","outcome":"{outcome}"}}'"#)
         };
         Hook {
             id: id.into(),

@@ -7,8 +7,8 @@
 //! this test guards against regressions in the example shape itself.
 
 use std::path::{Path, PathBuf};
-use surge_core::graph::Graph;
 use surge_core::ReferenceResolver;
+use surge_core::graph::Graph;
 use surge_orchestrator::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
 
 fn examples_dir() -> PathBuf {
@@ -20,8 +20,8 @@ fn examples_dir() -> PathBuf {
 
 fn load(name: &str) -> Graph {
     let path = examples_dir().join(name);
-    let toml_s = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let toml_s =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
     toml::from_str(&toml_s).unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e))
 }
 

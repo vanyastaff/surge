@@ -42,9 +42,8 @@ impl Migration for IdentityV1 {
     }
 
     fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
-        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes).map_err(|e| {
-            SurgeError::Spec(format!("v1 payload decode failed: {e}"))
-        })?;
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v1 payload decode failed: {e}")))?;
         Ok(wrapper.payload)
     }
 }

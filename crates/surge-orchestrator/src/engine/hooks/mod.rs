@@ -229,7 +229,9 @@ pub struct ProcessSpawner;
 #[async_trait]
 impl HookCommandSpawner for ProcessSpawner {
     async fn spawn(&self, hook: &Hook) -> HookCommandResult {
-        let timeout = hook.timeout_seconds.map(|s| Duration::from_secs(u64::from(s)));
+        let timeout = hook
+            .timeout_seconds
+            .map(|s| Duration::from_secs(u64::from(s)));
         match spawn_via_shell(&hook.command, timeout).await {
             Ok(res) => res,
             Err(err) => {
@@ -422,7 +424,9 @@ impl<S: HookCommandSpawner> HookExecutor<S> {
             }
 
             // Successful run — only `on_error` may signal suppression via stdout.
-            if trigger == HookTrigger::OnError && let Some(suppress) = parse_suppress(&res.stdout) {
+            if trigger == HookTrigger::OnError
+                && let Some(suppress) = parse_suppress(&res.stdout)
+            {
                 tracing::info!(
                     target: "engine::hooks",
                     hook_id = %hook.id,
@@ -477,7 +481,10 @@ pub async fn record_hook_executed(writer: &RunWriter, record: &HookExecutionReco
         exit_status: record.exit_status,
         on_failure: record.on_failure,
     };
-    if let Err(err) = writer.append_event(VersionedEventPayload::new(payload)).await {
+    if let Err(err) = writer
+        .append_event(VersionedEventPayload::new(payload))
+        .await
+    {
         tracing::warn!(
             target: "engine::hooks",
             hook_id = %record.hook_id,
@@ -575,9 +582,7 @@ mod tests {
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PreToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PreToolUse, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
         assert_eq!(outcome.executed().len(), 2);
@@ -586,8 +591,7 @@ mod tests {
 
     #[tokio::test]
     async fn reject_short_circuits_chain() {
-        let spawner =
-            RecordingSpawner::with(vec![ok_result(), err_result("blocked"), ok_result()]);
+        let spawner = RecordingSpawner::with(vec![ok_result(), err_result("blocked"), ok_result()]);
         let exec = HookExecutor::with_spawner(spawner.clone());
         let hooks = vec![
             hook("first", HookTrigger::PreToolUse, HookFailureMode::Warn),
@@ -597,9 +601,7 @@ mod tests {
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PreToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PreToolUse, &ctx).await;
 
         match outcome {
             HookOutcome::Reject {
@@ -613,7 +615,10 @@ mod tests {
             },
             other => panic!("expected Reject, got {other:?}"),
         }
-        assert_eq!(spawner.calls(), vec!["first".to_owned(), "blocker".to_owned()]);
+        assert_eq!(
+            spawner.calls(),
+            vec!["first".to_owned(), "blocker".to_owned()]
+        );
     }
 
     #[tokio::test]
@@ -621,15 +626,17 @@ mod tests {
         let spawner = RecordingSpawner::with(vec![err_result("noisy"), ok_result()]);
         let exec = HookExecutor::with_spawner(spawner.clone());
         let hooks = vec![
-            hook("warning-only", HookTrigger::PostToolUse, HookFailureMode::Warn),
+            hook(
+                "warning-only",
+                HookTrigger::PostToolUse,
+                HookFailureMode::Warn,
+            ),
             hook("clean", HookTrigger::PostToolUse, HookFailureMode::Reject),
         ];
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PostToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PostToolUse, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
         assert_eq!(outcome.executed().len(), 2);
@@ -646,9 +653,7 @@ mod tests {
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PostToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PostToolUse, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
     }
@@ -668,9 +673,7 @@ mod tests {
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node).with_tool("read_file", None);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PreToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PreToolUse, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
         assert_eq!(spawner.calls(), vec!["runs".to_owned()]);
@@ -680,14 +683,16 @@ mod tests {
     async fn trigger_mismatch_skips_hook() {
         let spawner = RecordingSpawner::with(vec![]);
         let exec = HookExecutor::with_spawner(spawner.clone());
-        let hooks = vec![hook("only-pre", HookTrigger::PreToolUse, HookFailureMode::Reject)];
+        let hooks = vec![hook(
+            "only-pre",
+            HookTrigger::PreToolUse,
+            HookFailureMode::Reject,
+        )];
 
         let node = NodeKey::try_from("agent_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::OnOutcome, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::OnOutcome, &ctx).await;
 
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
         assert!(spawner.calls().is_empty());
@@ -728,9 +733,7 @@ mod tests {
         let node = NodeKey::try_from("impl_1").unwrap();
         let ctx = HookContext::for_node(&node);
 
-        let outcome = exec
-            .run_hooks(&hooks, HookTrigger::PostToolUse, &ctx)
-            .await;
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PostToolUse, &ctx).await;
 
         // PostToolUse never triggers Suppress even when stdout looks like one.
         assert!(matches!(outcome, HookOutcome::Proceed { .. }));
