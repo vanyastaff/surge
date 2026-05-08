@@ -254,7 +254,7 @@ This plan does **not** touch already-working code paths except where wiring requ
 - **Logging:** INFO `[test][archetype]` per archetype start; DEBUG on event count.
 - **Depends on:** 4.1, 4.2, 4.3.
 
-#### Task 5.2 — Real-ACP smoke test (gated)
+#### [x] Task 5.2 — Real-ACP smoke test (gated)
 
 - **Deliverable:** A real-agent smoke test that runs `flow_minimal_agent.toml` against an actual ACP-conformant agent binary (Claude Code or Codex CLI), gated by env vars (`SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE`). When the env is absent, the test is skipped with a clear message — CI green path does not require a real agent. When env is present, the test asserts the run reaches `RunCompleted` and at least one `TokensConsumed` event is recorded.
 - **Files:**
@@ -264,7 +264,7 @@ This plan does **not** touch already-working code paths except where wiring requ
 - **Logging:** INFO on agent binding selection.
 - **Notes:** Per `decide-or-defer` rule: this test is genuine, opt-in, and complete — it is not a stub. The roadmap's "real agent" verification is satisfied by enabling this test in a developer's local environment. The deterministic CI path is covered by the `mock_acp_agent` subprocess in 5.1.
 
-#### Task 5.3 — Criterion bench: stage-transition p95 with CI regression gate
+#### [x] Task 5.3 — Criterion bench: stage-transition p95 with CI regression gate
 
 - **Deliverable:** A criterion bench measuring the transition latency `StageEntered → OutcomeReported → EdgeTraversed` for a `Branch` node (synchronous, no agent). p95 budget: documented as a numeric value derived from a baseline run (decision: take the p95 of the first clean baseline plus 25% headroom, encoded as `P95_BUDGET_US` constant in the bench source). CI runs `cargo bench --bench stage_transition -- --save-baseline ci` and a small Rust harness compares the latest run against the baseline; regression > 25% fails the job.
 - **Files:**
@@ -290,7 +290,7 @@ This plan does **not** touch already-working code paths except where wiring requ
 - **Logging:** N/A.
 - **Depends on:** 1.5, 2.x, 3.x, 4.x, 5.x.
 
-#### Task 6.2 — GA acceptance check and CHANGELOG entry
+#### [x] Task 6.2 — GA acceptance check and CHANGELOG entry
 
 - **Deliverable:** Run the full local acceptance suite, document results, and draft the changelog. Then commit and push the milestone branch.
   - `cargo build --workspace --exclude surge-ui` — clean.

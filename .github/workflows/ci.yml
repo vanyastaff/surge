@@ -178,9 +178,11 @@ jobs:
       - name: Build stage_transition bench
         run: cargo bench -p surge-orchestrator --bench stage_transition --no-run
 
-      # Quick smoke run with a single sample so CI catches runtime panics
-      # without spending the multi-minute full warmup. P95_BUDGET_US lives
-      # in the bench source — a regression beyond budget surfaces as test
-      # failure once the GA runs include the comparison harness.
-      - name: Smoke-run stage_transition bench
-        run: cargo bench -p surge-orchestrator --bench stage_transition -- --quick
+      # Quick smoke run with the explicit P95 gate enabled. `--save-baseline ci`
+      # keeps Criterion history available on the runner, while
+      # SURGE_STAGE_TRANSITION_BUDGET_CHECK makes the bench fail if the
+      # source-level P95_BUDGET_US budget is exceeded.
+      - name: Budget-check stage_transition bench
+        env:
+          SURGE_STAGE_TRANSITION_BUDGET_CHECK: "1"
+        run: cargo bench -p surge-orchestrator --bench stage_transition -- --quick --save-baseline ci

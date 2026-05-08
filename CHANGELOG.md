@@ -122,13 +122,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures `StageEntered → OutcomeReported → EdgeTraversed` for a synchronous
   Branch node. `P95_BUDGET_US` constant carries the per-transition wall-clock
   budget. CI gates the bench via a Linux-only `bench` job that builds the
-  bench and runs `cargo bench -- --quick` so a runtime panic in the bench
-  cannot land silently. Full GA baseline is local:
+  bench and runs
+  `SURGE_STAGE_TRANSITION_BUDGET_CHECK=1 cargo bench -- --quick --save-baseline ci`
+  so budget regressions and runtime panics cannot land silently. Full GA
+  baseline is local:
   `cargo bench -p surge-orchestrator --bench stage_transition -- --save-baseline ga`.
 - **Gated real-ACP smoke test:**
   `crates/surge-orchestrator/tests/real_acp_smoke.rs` opts in via
-  `SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE` env vars; without them
-  the test prints a `SKIPPED` banner and exits successfully. See
+  `SURGE_REAL_ACP_BIN` and `SURGE_REAL_ACP_PROFILE` env vars, runs
+  `examples/flow_minimal_agent.toml` through the engine against the real
+  ACP child, and asserts both `RunCompleted` and at least one
+  `TokensConsumed` event. Optional `SURGE_REAL_ACP_KIND` and
+  `SURGE_REAL_ACP_ARGS` override launch inference for custom agents. Without
+  the required env vars the test prints a `SKIPPED` banner and exits
+  successfully. See
   [`docs/development.md`](docs/development.md#optional-real-agent-smoke-test).
 - **Daemon-attached engine path completion (Phase 3).**
   `BroadcastRegistry::subscribe_eventual` parks a oneshot waiter that is
@@ -220,14 +227,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`real_acp_smoke.rs` renamed and rescoped honestly.** The previous
-  `flow_minimal_agent_against_real_agent` test name implied driver +
-  `RunCompleted` / `TokensConsumed` assertions, but the body only
-  validated env vars. Renamed to `real_acp_env_contract_harness`,
-  doc-block now states scope explicitly (env-contract harness today,
-  full driver tracked as Graph-engine-GA follow-up) and the body
-  asserts the env vars resolve to an existing binary file. Caught
-  in PR #48 review.
+- **`real_acp_smoke.rs` promoted from env-contract scaffold to real
+  opt-in driver.** The test now mutates the minimal-agent example with a
+  smoke-specific prompt, swaps the engine's mock fallback for the selected
+  real ACP launch kind, waits for run completion, and verifies the persisted
+  event log contains `RunCompleted` plus `TokensConsumed`.
 
 - **Replay determinism violation in `RunState::apply`.** The proptest above
   uncovered that `apply()` generated `SessionId::new()` on `RunStarted` and
