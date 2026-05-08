@@ -20,7 +20,7 @@ use surge_orchestrator::engine::ipc::{
     DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
     read_request_frame, write_frame,
 };
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -761,7 +761,8 @@ async fn dispatch(
                 }
                 let rx = broadcast.subscribe_global();
                 let writer_for_task = writer.clone();
-                let handle = tokio::spawn(forward_global_to_client(rx, writer_for_task));
+                let handle =
+                    tokio::spawn(forward_global_to_client(rx, writer_for_task, request_id));
                 s.global_forwarder = Some(handle);
             }
             Some(DaemonResponse::SubscribeGlobalOk { request_id })
@@ -1008,7 +1009,18 @@ async fn forward_queued_to_client(
 async fn forward_global_to_client(
     mut rx: tokio::sync::broadcast::Receiver<GlobalDaemonEvent>,
     writer: Arc<Mutex<interprocess::local_socket::tokio::SendHalf>>,
+    request_id: RequestId,
 ) {
+    forward_global_to_writer(&mut rx, writer, request_id).await;
+}
+
+async fn forward_global_to_writer<W>(
+    rx: &mut tokio::sync::broadcast::Receiver<GlobalDaemonEvent>,
+    writer: Arc<Mutex<W>>,
+    request_id: RequestId,
+) where
+    W: AsyncWrite + Unpin,
+{
     loop {
         match rx.recv().await {
             Ok(event) => {
@@ -1025,7 +1037,58 @@ async fn forward_global_to_client(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!(dropped = n, "global forwarder lagged");
+                let err = DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::SubscriberLagged,
+                    message: format!("global subscriber lagged by {n} events"),
+                };
+                let mut w = writer.lock().await;
+                let _ = write_frame(&mut *w, &err).await;
+                break;
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn global_forwarder_reports_lag_and_closes() {
+        let (tx, _) = tokio::sync::broadcast::channel(2);
+        let mut rx = tx.subscribe();
+        for _ in 0..5 {
+            tx.send(GlobalDaemonEvent::RunAccepted {
+                run_id: RunId::new(),
+            })
+            .expect("send global event");
+        }
+
+        let (client, server) = tokio::io::duplex(4096);
+        let writer = Arc::new(Mutex::new(server));
+        forward_global_to_writer(&mut rx, writer, 42).await;
+
+        let mut reader = BufReader::new(client);
+        let frame = surge_orchestrator::engine::ipc::read_inbound_server_frame(&mut reader)
+            .await
+            .expect("read lag response")
+            .expect("lag response frame");
+
+        match frame {
+            surge_orchestrator::engine::ipc::InboundServerFrame::Response(
+                DaemonResponse::Error {
+                    request_id,
+                    code,
+                    message,
+                },
+            ) => {
+                assert_eq!(request_id, 42);
+                assert_eq!(code, ErrorCode::SubscriberLagged);
+                assert!(message.contains("lagged"));
+            },
+            other => panic!("expected SubscriberLagged response, got {other:?}"),
         }
     }
 }

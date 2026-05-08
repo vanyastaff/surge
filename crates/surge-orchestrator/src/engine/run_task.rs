@@ -288,14 +288,16 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     Ok(o) => o,
                     Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
                 };
-                let return_to = match crate::engine::routing::edge_target_after_outcome_or_default(
-                    &params.graph,
-                    &cursor.node,
-                    &completed_outcome,
-                ) {
-                    Ok(n) => n,
-                    Err(e) => return failed(&params, format!("loop return_to: {e}")).await,
-                };
+                let return_to =
+                    match crate::engine::routing::edge_target_after_outcome_in_active_graph(
+                        &params.graph,
+                        &cursor.node,
+                        &completed_outcome,
+                        &frames,
+                    ) {
+                        Ok(n) => n,
+                        Err(e) => return failed(&params, format!("loop return_to: {e}")).await,
+                    };
 
                 let effect = match crate::engine::stage::loop_stage::execute_loop_entry(
                     crate::engine::stage::loop_stage::LoopStageParams {
@@ -330,14 +332,16 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     Ok(o) => o,
                     Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
                 };
-                let return_to = match crate::engine::routing::edge_target_after_outcome_or_default(
-                    &params.graph,
-                    &cursor.node,
-                    &completed_outcome,
-                ) {
-                    Ok(n) => n,
-                    Err(e) => return failed(&params, format!("subgraph return_to: {e}")).await,
-                };
+                let return_to =
+                    match crate::engine::routing::edge_target_after_outcome_in_active_graph(
+                        &params.graph,
+                        &cursor.node,
+                        &completed_outcome,
+                        &frames,
+                    ) {
+                        Ok(n) => n,
+                        Err(e) => return failed(&params, format!("subgraph return_to: {e}")).await,
+                    };
 
                 let effect = match crate::engine::stage::subgraph_stage::execute_subgraph_entry(
                     crate::engine::stage::subgraph_stage::SubgraphStageParams {

@@ -84,6 +84,18 @@ outcome = "done"
 [subgraphs.task_body.edges.policy]
 on_max_exceeded = "escalate"
 
+[[subgraphs.task_body.edges]]
+id = "e_body_verify_to_end"
+to = "body_end"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "verify_in_body"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
 [subgraphs.task_body.nodes.impl_in_body]
 id = "impl_in_body"
 
@@ -121,7 +133,7 @@ y = 0.0
 id = "done"
 description = "Body iteration: verification complete"
 edge_kind_hint = "forward"
-is_terminal = true
+is_terminal = false
 
 [subgraphs.task_body.nodes.verify_in_body.config]
 node_kind = "agent"
@@ -135,3 +147,17 @@ max_retries = 3
 max_tokens = 200000
 
 [subgraphs.task_body.nodes.verify_in_body.config.custom_fields]
+
+[subgraphs.task_body.nodes.body_end]
+id = "body_end"
+declared_outcomes = []
+
+[subgraphs.task_body.nodes.body_end.position]
+x = 400.0
+y = 0.0
+
+[subgraphs.task_body.nodes.body_end.config]
+node_kind = "terminal"
+
+[subgraphs.task_body.nodes.body_end.config.kind]
+type = "success"

@@ -50,6 +50,8 @@ pub enum ErrorCode {
     Internal,
     /// The daemon is in graceful shutdown and refusing new work.
     ShuttingDown,
+    /// A subscription receiver fell behind the daemon's broadcast channel.
+    SubscriberLagged,
 }
 
 /// Request frames sent from CLI to daemon.
