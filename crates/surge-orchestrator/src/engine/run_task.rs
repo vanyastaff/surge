@@ -157,6 +157,53 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     hook_executor: &hook_executor,
                 })
                 .await;
+                // Task 10: Flow Generator post-processing — validate the
+                // produced `flow.toml` and either emit `PipelineMaterialized`
+                // (success) or `BootstrapEditRequested` + a synthetic
+                // `OutcomeReported { outcome: validation_failed }` so routing
+                // takes the bundled bootstrap graph's Backtrack edge back to
+                // the Flow Generator agent.
+                let r = match r {
+                    Ok(outcome)
+                        if crate::engine::bootstrap::is_flow_generator_profile(
+                            cfg.profile.as_str(),
+                        ) =>
+                    {
+                        match crate::engine::bootstrap::run_flow_generator_post_processing(
+                            &cursor.node,
+                            &memory,
+                            params.run_config.bootstrap.edit_loop_cap,
+                            &params.worktree_path,
+                            &params.writer,
+                        )
+                        .await
+                        {
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => {
+                                Ok(outcome)
+                            },
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::EditRequested {
+                                ..
+                            }) => Ok(OutcomeKey::try_from(
+                                crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
+                            )
+                            .expect("'validation_failed' is a valid OutcomeKey")),
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded {
+                                cap,
+                            }) => Err(StageError::EditLoopCapExceeded {
+                                stage: surge_core::run_event::BootstrapStage::Flow,
+                                cap,
+                            }),
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::MissingArtifact) => {
+                                Err(StageError::Internal(
+                                    "Flow Generator stage finished without producing flow.toml"
+                                        .into(),
+                                ))
+                            },
+                            Err(e) => Err(e),
+                        }
+                    },
+                    other => other,
+                };
                 r.map(StageOutcome::Routed)
             },
             NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {

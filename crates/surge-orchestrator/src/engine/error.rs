@@ -85,6 +85,27 @@ pub enum EngineError {
         /// Nodes forming the offending cycle, in traversal order.
         nodes: Vec<surge_core::keys::NodeKey>,
     },
+
+    /// The materialized graph carries a `[metadata.archetype]` block whose
+    /// declared archetype does not match the detected topology — e.g., a
+    /// `multi-milestone` archetype without a `Loop` over a `roadmap.milestones`
+    /// iterable. Surfaced by the post-Flow-Generator validator (Task 11).
+    #[error("archetype mismatch: declared {declared}, detected {detected}")]
+    ArchetypeMismatch {
+        /// Archetype name from `[metadata.archetype]` (kebab-case).
+        declared: String,
+        /// Human-readable description of what the topology actually looks like.
+        detected: String,
+    },
+
+    /// A non-bootstrap pipeline graph is missing the `[metadata.archetype]`
+    /// block where one is required (e.g., when running the post-Flow-Generator
+    /// validator on a freshly materialized graph). Reserved for callers that
+    /// want to enforce archetype declarations beyond the bootstrap path; the
+    /// post-Flow-Generator hook itself only enforces consistency when the
+    /// block is present.
+    #[error("archetype block missing: {0}")]
+    ArchetypeMissing(String),
 }
 
 fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {

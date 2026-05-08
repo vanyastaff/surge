@@ -139,6 +139,81 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 #[allow(dead_code)]
 pub use validate_for_m6 as validate_for_m5;
 
+/// Validate that the graph's declared archetype matches its topology.
+///
+/// Runs in addition to [`validate_for_m6`] when the graph carries an
+/// `[metadata.archetype]` block. Today only the `multi-milestone` archetype
+/// has a structural rule: the topology must contain at least one `Loop` node
+/// whose `iterates_over` resolves to an artifact-derived iterable named
+/// `roadmap.milestones`. Other archetypes are linear-shaped and impose no
+/// extra constraints; they pass through silently.
+///
+/// Used by the post-Flow-Generator validation hook (Task 11). When the graph
+/// has no archetype block, this function is a no-op so legacy graphs continue
+/// to validate without modification.
+///
+/// # Errors
+/// Returns [`EngineError::ArchetypeMismatch`] when the declared archetype is
+/// `multi-milestone` but no qualifying `Loop` is present.
+pub fn validate_archetype_topology(graph: &Graph) -> Result<(), EngineError> {
+    use surge_core::ArchetypeName;
+
+    let Some(archetype) = graph.metadata.archetype.as_ref() else {
+        return Ok(());
+    };
+
+    match archetype.name {
+        ArchetypeName::MultiMilestone => {
+            if contains_roadmap_milestones_loop(graph) {
+                Ok(())
+            } else {
+                Err(EngineError::ArchetypeMismatch {
+                    declared: archetype.name.as_str().to_owned(),
+                    detected:
+                        "no Loop node iterating over an artifact named 'roadmap.milestones'"
+                            .to_owned(),
+                })
+            }
+        },
+        // Linear / single-task archetypes have no extra structural rule
+        // beyond `validate_for_m6`. The wildcard arm covers the
+        // `#[non_exhaustive]` future; new archetypes that need a topology
+        // rule must add an explicit arm above before relying on the
+        // post-Flow-Generator validator to enforce it.
+        _ => Ok(()),
+    }
+}
+
+/// Whether `graph` contains at least one `Loop` node whose `iterates_over`
+/// is an artifact-derived iterable named `roadmap.milestones`. Searches the
+/// outer graph and every body subgraph so milestone loops nested in a
+/// containing subgraph still satisfy the multi-milestone invariant.
+fn contains_roadmap_milestones_loop(graph: &Graph) -> bool {
+    use surge_core::loop_config::IterableSource;
+    use surge_core::node::NodeConfig;
+
+    fn loop_matches_milestones(cfg: &surge_core::loop_config::LoopConfig) -> bool {
+        matches!(
+            &cfg.iterates_over,
+            IterableSource::Artifact { name, .. } if name == "roadmap.milestones"
+        )
+    }
+
+    let outer_match = graph.nodes.values().any(|node| match &node.config {
+        NodeConfig::Loop(cfg) => loop_matches_milestones(cfg),
+        _ => false,
+    });
+    if outer_match {
+        return true;
+    }
+    graph.subgraphs.values().any(|sg| {
+        sg.nodes.values().any(|node| match &node.config {
+            NodeConfig::Loop(cfg) => loop_matches_milestones(cfg),
+            _ => false,
+        })
+    })
+}
+
 /// Find a cycle whose edges are all `EdgeKind::Forward`. Returns the
 /// cycle's nodes in traversal order with the entry node repeated at the
 /// end (e.g. `[a, b, a]`), or `None` if no such cycle exists.
@@ -780,4 +855,192 @@ mod tests {
         }
     }
 
+    // --- Task 11: validate_archetype_topology ---
+
+    use surge_core::archetype::{ArchetypeMetadata, ArchetypeName};
+    use surge_core::graph::Subgraph;
+    use surge_core::keys::SubgraphKey;
+    use surge_core::loop_config::{
+        ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+    };
+
+    fn loop_node(loop_key: &NodeKey, body_key: &SubgraphKey, iterable: IterableSource) -> Node {
+        Node {
+            id: loop_key.clone(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Loop(LoopConfig {
+                iterates_over: iterable,
+                body: body_key.clone(),
+                iteration_var_name: "milestone".into(),
+                exit_condition: ExitCondition::AllItems,
+                on_iteration_failure: FailurePolicy::Abort,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            }),
+        }
+    }
+
+    fn graph_with_archetype_and_loop(
+        archetype: Option<ArchetypeMetadata>,
+        iterable: IterableSource,
+    ) -> Graph {
+        let loop_key = NodeKey::try_from("milestones").unwrap();
+        let body_key = SubgraphKey::try_from("body").unwrap();
+        let body_start = NodeKey::try_from("body_start").unwrap();
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(loop_key.clone(), loop_node(&loop_key, &body_key, iterable));
+
+        let mut body_nodes = BTreeMap::new();
+        body_nodes.insert(body_start.clone(), terminal_node("body_start"));
+
+        let mut subgraphs = BTreeMap::new();
+        subgraphs.insert(
+            body_key,
+            Subgraph {
+                start: body_start,
+                nodes: body_nodes,
+                edges: vec![],
+            },
+        );
+
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "archetype-test".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype,
+            },
+            start: loop_key,
+            nodes,
+            edges: vec![],
+            subgraphs,
+        }
+    }
+
+    fn multi_milestone_meta() -> ArchetypeMetadata {
+        ArchetypeMetadata {
+            name: ArchetypeName::MultiMilestone,
+            milestones: Some(3),
+            edit_loop_cap: None,
+        }
+    }
+
+    #[test]
+    fn archetype_topology_no_archetype_block_is_no_op() {
+        let g = graph_with_archetype_and_loop(None, IterableSource::Static(vec![]));
+        assert!(validate_archetype_topology(&g).is_ok());
+    }
+
+    #[test]
+    fn archetype_topology_multi_milestone_with_matching_loop_passes() {
+        let iterable = IterableSource::Artifact {
+            node: NodeKey::try_from("roadmap_planner").unwrap(),
+            name: "roadmap.milestones".into(),
+            jsonpath: "$".into(),
+        };
+        let g = graph_with_archetype_and_loop(Some(multi_milestone_meta()), iterable);
+        assert!(validate_archetype_topology(&g).is_ok());
+    }
+
+    #[test]
+    fn archetype_topology_multi_milestone_without_loop_fails_with_mismatch() {
+        let iterable = IterableSource::Artifact {
+            node: NodeKey::try_from("roadmap_planner").unwrap(),
+            name: "wrong.name".into(),
+            jsonpath: "$".into(),
+        };
+        let g = graph_with_archetype_and_loop(Some(multi_milestone_meta()), iterable);
+        match validate_archetype_topology(&g).unwrap_err() {
+            EngineError::ArchetypeMismatch { declared, detected } => {
+                assert_eq!(declared, "multi-milestone");
+                assert!(detected.contains("roadmap.milestones"));
+            },
+            other => panic!("expected ArchetypeMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn archetype_topology_linear_archetypes_have_no_extra_rule() {
+        let iterable = IterableSource::Static(vec![]);
+        for variant in [
+            ArchetypeName::Linear3,
+            ArchetypeName::LinearWithReview,
+            ArchetypeName::BugFix,
+            ArchetypeName::Refactor,
+            ArchetypeName::Spike,
+            ArchetypeName::SingleTask,
+        ] {
+            let meta = ArchetypeMetadata {
+                name: variant,
+                milestones: None,
+                edit_loop_cap: None,
+            };
+            let g = graph_with_archetype_and_loop(Some(meta), iterable.clone());
+            assert!(
+                validate_archetype_topology(&g).is_ok(),
+                "{variant:?} should not require a milestone loop"
+            );
+        }
+    }
+
+    #[test]
+    fn archetype_topology_multi_milestone_loop_inside_subgraph_passes() {
+        // Outer node is Terminal; the milestone loop lives in a body subgraph.
+        // The detector must descend into subgraphs for the rule to apply.
+        let outer_key = NodeKey::try_from("entry").unwrap();
+        let inner_loop_key = NodeKey::try_from("inner_loop").unwrap();
+        let body_key = SubgraphKey::try_from("body").unwrap();
+        let body_start = NodeKey::try_from("inner_start").unwrap();
+
+        let mut outer_nodes = BTreeMap::new();
+        outer_nodes.insert(outer_key.clone(), terminal_node("entry"));
+
+        let mut body_nodes = BTreeMap::new();
+        body_nodes.insert(body_start.clone(), terminal_node("inner_start"));
+        body_nodes.insert(
+            inner_loop_key.clone(),
+            loop_node(
+                &inner_loop_key,
+                &body_key,
+                IterableSource::Artifact {
+                    node: NodeKey::try_from("roadmap_planner").unwrap(),
+                    name: "roadmap.milestones".into(),
+                    jsonpath: "$".into(),
+                },
+            ),
+        );
+
+        let mut subgraphs = BTreeMap::new();
+        subgraphs.insert(
+            body_key,
+            Subgraph {
+                start: body_start,
+                nodes: body_nodes,
+                edges: vec![],
+            },
+        );
+
+        let g = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "subgraph-archetype".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: Some(multi_milestone_meta()),
+            },
+            start: outer_key,
+            nodes: outer_nodes,
+            edges: vec![],
+            subgraphs,
+        };
+
+        assert!(validate_archetype_topology(&g).is_ok());
+    }
 }
