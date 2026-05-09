@@ -593,7 +593,11 @@ impl Engine {
             let mut gates = active.gate_resolutions.lock().await;
             let key = gates.keys().next().cloned();
             if let Some(k) = key {
-                let tx = gates.remove(&k).expect("just looked up");
+                let Some(tx) = gates.remove(&k) else {
+                    return Err(EngineError::Internal(format!(
+                        "pending HumanGate disappeared before resolving {k:?}"
+                    )));
+                };
                 tx.send(crate::engine::stage::human_gate::HumanGateResolution {
                     outcome,
                     response,
@@ -699,11 +703,12 @@ pub(crate) async fn synthesise_initial_prompt_artifact(
     }
     tokio::fs::write(&absolute_path, prompt_bytes).await?;
     let hash = ContentHash::compute(prompt_bytes);
-    // INITIAL_PROMPT_PRODUCER_NODE is a hardcoded ASCII identifier valid by
-    // NodeKey rules (max 32, leading letter, alphanumeric + `_`); the unwrap
-    // is unreachable.
-    let producer = NodeKey::try_from(INITIAL_PROMPT_PRODUCER_NODE)
-        .expect("INITIAL_PROMPT_PRODUCER_NODE is a valid NodeKey by construction");
+    let producer = NodeKey::try_from(INITIAL_PROMPT_PRODUCER_NODE).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("initial prompt producer node key: {e}"),
+        )
+    })?;
     Ok(InitialPromptArtifact {
         hash,
         relative_path,

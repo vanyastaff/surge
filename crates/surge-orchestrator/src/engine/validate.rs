@@ -255,12 +255,13 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
         color.insert(start, Color::Gray);
 
         while let Some(&node) = path.last() {
-            let i = *iter_idx.last().expect("iter_idx and path stay in lockstep");
+            let &i = iter_idx.last()?;
             let neighbours = adj.get(node);
             let len = neighbours.map_or(0, Vec::len);
             if i < len {
-                *iter_idx.last_mut().expect("iter_idx is non-empty") += 1;
-                let target = neighbours.expect("len > 0 implies present")[i];
+                let last_idx = iter_idx.last_mut()?;
+                *last_idx += 1;
+                let target = neighbours.and_then(|n| n.get(i)).copied()?;
                 match color.get(target) {
                     None => {
                         color.insert(target, Color::Gray);
@@ -272,10 +273,7 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
                         // from the first occurrence of `target` in the
                         // current DFS path and append `target` at the end
                         // for human-readable reporting (`[a, b, a]`).
-                        let idx = path
-                            .iter()
-                            .position(|n| *n == target)
-                            .expect("Gray node must be on the current path");
+                        let idx = path.iter().position(|n| *n == target)?;
                         let mut report: Vec<NodeKey> =
                             path[idx..].iter().map(|n| (*n).clone()).collect();
                         report.push(target.clone());

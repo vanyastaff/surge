@@ -20,6 +20,7 @@ use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
 use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::hooks::HookExecutor;
+use surge_orchestrator::engine::stage::StageError;
 use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use surge_orchestrator::engine::tools::{
     ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
@@ -279,6 +280,80 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
     assert!(
         saw_outcome,
         "OutcomeReported must still be appended even when one declared artifact path is missing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duplicate_artifact_logical_names_fail_before_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::create_dir_all(dir.path().join("docs"))
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(dir.path().join("src"))
+        .await
+        .unwrap();
+    tokio::fs::write(dir.path().join("docs").join("spec.md"), b"docs spec")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.path().join("src").join("spec.md"), b"src spec")
+        .await
+        .unwrap();
+
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let run_id = surge_core::id::RunId::new();
+    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::from_str("done").unwrap(),
+        summary: "colliding artifacts".into(),
+        artifacts_produced: vec!["docs/spec.md".into(), "src/spec.md".into()],
+    })
+    .await;
+
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        mock_for_pump.pump_scripted_events().await;
+    });
+
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let memory = surge_core::run_state::RunMemory::default();
+    let cfg = agent_cfg();
+    let node = NodeKey::try_from("spec_author").unwrap();
+    let tool_resolutions =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let hook_executor = HookExecutor::new();
+    let result = execute_agent_stage(AgentStageParams {
+        node: &node,
+        agent_config: &cfg,
+        declared_outcomes: &[],
+        bridge: &bridge,
+        writer: &writer,
+        artifact_store: &artifact_store,
+        worktree_path: dir.path(),
+        tool_dispatcher: &dispatcher,
+        run_memory: &memory,
+        run_id,
+        tool_resolutions: &tool_resolutions,
+        human_input_timeout: Duration::from_secs(5),
+        mcp_registry: None,
+        mcp_servers: Vec::new(),
+        profile_registry: None,
+        hook_executor: &hook_executor,
+    })
+    .await;
+    pump.await.unwrap();
+
+    assert!(
+        matches!(result, Err(StageError::Internal(message)) if message.contains("duplicate artifact logical name")),
+        "duplicate file stems must fail instead of overwriting the per-run artifact index",
     );
 }
 

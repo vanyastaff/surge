@@ -46,6 +46,9 @@ async fn bootstrap_multi_milestone_materializes_outer_and_inner_loops() {
     assert!(has_roadmap_milestone_outer_loop(
         &materialized.materialized_graph
     ));
+    assert!(has_current_milestone_task_loop(
+        &materialized.materialized_graph
+    ));
 }
 
 fn has_roadmap_milestone_outer_loop(graph: &surge_core::graph::Graph) -> bool {
@@ -62,5 +65,20 @@ fn has_roadmap_milestone_outer_loop(graph: &surge_core::graph::Graph) -> bool {
                     .values()
                     .any(|inner| matches!(inner.config, NodeConfig::Loop(_)))
             })
+    })
+}
+
+fn has_current_milestone_task_loop(graph: &surge_core::graph::Graph) -> bool {
+    graph.subgraphs.values().any(|subgraph| {
+        subgraph.nodes.values().any(|node| {
+            let NodeConfig::Loop(config) = &node.config else {
+                return false;
+            };
+            matches!(
+                &config.iterates_over,
+                IterableSource::LoopItem { var, jsonpath }
+                    if var == "milestone" && jsonpath == "tasks"
+            )
+        })
     })
 }

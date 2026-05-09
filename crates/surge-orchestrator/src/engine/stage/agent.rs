@@ -6,7 +6,7 @@
 //! Phase 6.3: tool dispatch for non-injected tools + token usage persistence.
 //! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -435,6 +435,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
+                    let mut emitted_names = BTreeSet::new();
                     for declared_path in &artifacts_produced {
                         let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
                             tracing::warn!(
@@ -486,6 +487,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             .file_stem()
                             .and_then(|s| s.to_str())
                             .map_or_else(|| declared_path.clone(), str::to_owned);
+                        if !emitted_names.insert(name.clone()) {
+                            return Err(StageError::Internal(format!(
+                                "duplicate artifact logical name '{name}' from declared path '{declared_path}'"
+                            )));
+                        }
                         let artifact_ref = p
                             .artifact_store
                             .put(p.run_id, &name, &bytes)

@@ -197,10 +197,12 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                                 crate::engine::bootstrap::FlowValidationDecision::EditRequested {
                                     ..
                                 },
-                            ) => Ok(OutcomeKey::try_from(
+                            ) => OutcomeKey::try_from(
                                 crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
                             )
-                            .expect("'validation_failed' is a valid OutcomeKey")),
+                            .map_err(|e| {
+                                StageError::Internal(format!("validation retry outcome key: {e}"))
+                            }),
                             Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded {
                                 cap,
                             }) => Err(StageError::EditLoopCapExceeded {
@@ -253,17 +255,24 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     },
                     TerminalSignal::LoopIterDone => {
                         // The most recent OutcomeReported event drives the iteration's outcome.
-                        let just_completed = memory
+                        let just_completed = if let Some(record) = memory
                             .outcomes
                             .get(&cursor.node)
                             .and_then(|recs| recs.last())
-                            .map_or_else(
-                                || {
-                                    surge_core::keys::OutcomeKey::try_from("completed")
-                                        .expect("'completed' is valid OutcomeKey")
+                        {
+                            record.outcome.clone()
+                        } else {
+                            match surge_core::keys::OutcomeKey::try_from("completed") {
+                                Ok(outcome) => outcome,
+                                Err(e) => {
+                                    return failed(
+                                        &params,
+                                        format!("loop default outcome key: {e}"),
+                                    )
+                                    .await;
                                 },
-                                |r| r.outcome.clone(),
-                            );
+                            }
+                        };
 
                         if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
                             &just_completed,

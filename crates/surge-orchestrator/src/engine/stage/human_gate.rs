@@ -171,7 +171,7 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
     // A Bootstrap-mode gate also rejects the run on `reject`: the bootstrap
     // driver treats this as a terminal abort signal.
     if let Some(stage) = bootstrap_stage {
-        let decision = bootstrap_decision_from_outcome(&final_outcome);
+        let decision = bootstrap_decision_from_outcome(&final_outcome)?;
         tracing::info!(
             target: "engine::bootstrap::stage",
             node = %p.node,
@@ -295,16 +295,15 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
 
 /// Translate the operator's `OutcomeKey` choice into a `BootstrapDecision`.
 ///
-/// Recognized canonical keys are `approve`, `edit`, and `reject` (`snake_case`
-/// to match the gate's declared `ApprovalOption.outcome` values used by the
-/// bundled bootstrap profiles in Task 12). Any other outcome is treated as
-/// `Approve` — an opt-in extension for future archetypes that introduce
-/// non-canonical approval keys (e.g., a `defer` outcome).
-fn bootstrap_decision_from_outcome(outcome: &OutcomeKey) -> BootstrapDecision {
+/// Recognized canonical keys are `approve`, `edit`, and `reject`.
+fn bootstrap_decision_from_outcome(outcome: &OutcomeKey) -> Result<BootstrapDecision, StageError> {
     match outcome.as_ref() {
-        "edit" => BootstrapDecision::Edit,
-        "reject" => BootstrapDecision::Reject,
-        _ => BootstrapDecision::Approve,
+        "approve" => Ok(BootstrapDecision::Approve),
+        "edit" => Ok(BootstrapDecision::Edit),
+        "reject" => Ok(BootstrapDecision::Reject),
+        other => Err(StageError::Internal(format!(
+            "unsupported bootstrap outcome: {other}"
+        ))),
     }
 }
 
@@ -666,22 +665,23 @@ mod tests {
     #[test]
     fn bootstrap_decision_mapping_canonical_outcomes() {
         assert_eq!(
-            bootstrap_decision_from_outcome(&OutcomeKey::try_from("approve").unwrap()),
+            bootstrap_decision_from_outcome(&OutcomeKey::try_from("approve").unwrap()).unwrap(),
             BootstrapDecision::Approve,
         );
         assert_eq!(
-            bootstrap_decision_from_outcome(&OutcomeKey::try_from("edit").unwrap()),
+            bootstrap_decision_from_outcome(&OutcomeKey::try_from("edit").unwrap()).unwrap(),
             BootstrapDecision::Edit,
         );
         assert_eq!(
-            bootstrap_decision_from_outcome(&OutcomeKey::try_from("reject").unwrap()),
+            bootstrap_decision_from_outcome(&OutcomeKey::try_from("reject").unwrap()).unwrap(),
             BootstrapDecision::Reject,
         );
-        // Non-canonical outcomes fall back to Approve so future archetypes
-        // that introduce extra approval keys do not silently break.
-        assert_eq!(
-            bootstrap_decision_from_outcome(&OutcomeKey::try_from("defer").unwrap()),
-            BootstrapDecision::Approve,
+        assert!(
+            matches!(
+                bootstrap_decision_from_outcome(&OutcomeKey::try_from("defer").unwrap()),
+                Err(StageError::Internal(_))
+            ),
+            "non-canonical bootstrap outcomes must fail closed",
         );
     }
 

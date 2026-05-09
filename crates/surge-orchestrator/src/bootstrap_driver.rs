@@ -29,12 +29,9 @@ pub struct MaterializedRun {
     pub artifacts: Vec<ArtifactRef>,
 }
 
-/// Errors returned by [`run_bootstrap`] and [`run_bootstrap_in_worktree`].
+/// Errors returned by [`run_bootstrap_in_worktree`].
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
-    /// Current working directory could not be resolved for the default driver.
-    #[error("current directory error: {0}")]
-    CurrentDir(#[from] std::io::Error),
     /// The bundled bootstrap flow is missing from the registry.
     #[error("bundled bootstrap flow is not registered")]
     BundledFlowMissing,
@@ -61,26 +58,10 @@ pub enum BootstrapError {
     ArtifactMissing(String),
 }
 
-/// Run the bundled bootstrap flow in the current directory.
-///
-/// # Errors
-/// Returns [`BootstrapError`] if the current directory cannot be resolved, the
-/// engine fails to start or complete the run, the run does not emit a follow-up
-/// graph, or any required bootstrap artifact is missing.
-pub async fn run_bootstrap(
-    engine: &Engine,
-    prompt: String,
-    run_id: RunId,
-) -> Result<MaterializedRun, BootstrapError> {
-    let worktree_path = std::env::current_dir()?;
-    run_bootstrap_in_worktree(engine, prompt, run_id, worktree_path).await
-}
-
 /// Run the bundled bootstrap flow against an explicit worktree path.
 ///
 /// This is the testable form used by CLI / daemon code that already knows the
-/// run worktree. [`run_bootstrap`] is the convenience wrapper for callers that
-/// want to use the process current directory.
+/// isolated run worktree.
 ///
 /// # Errors
 /// Returns [`BootstrapError`] if the engine run fails, the event log cannot be

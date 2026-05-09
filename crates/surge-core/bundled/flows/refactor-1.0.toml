@@ -107,7 +107,7 @@ is_terminal = false
 
 [nodes.reviewer.config]
 node_kind = "agent"
-profile = "implementer@1.0"
+profile = "reviewer@1.0"
 bindings = []
 hooks = []
 

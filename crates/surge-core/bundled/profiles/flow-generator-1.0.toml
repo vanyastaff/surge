@@ -89,6 +89,7 @@ Pick exactly one archetype and include it in `[metadata.archetype]`:
 For `multi-milestone`, the emitted graph must make the roadmap shape explicit:
 - The outer graph starts with a `Loop` node whose `iterates_over` is an artifact source named `roadmap.milestones`.
 - That outer Loop's body subgraph contains an inner task Loop for the current milestone.
+- The inner task Loop iterates over the current milestone loop item with `type = "loop_item"`, `var = "milestone"`, and `jsonpath = "tasks"`.
 - The inner task Loop's body subgraph contains the concrete Agent nodes for implementation, verification, and any required review.
 - If milestone-by-milestone approval is needed, wire explicit HumanGate nodes between milestone iterations rather than inventing a new node kind.
 
@@ -98,7 +99,7 @@ Rules:
 - Bind every Agent node to a profile reference (`name@MAJOR.MINOR`), not a literal prompt.
 - Declare outcomes per Agent node; do not invent generic "success/failure" pairs.
 - Every non-terminal node must reach a Terminal node.
-- If the validator fails, report `validation_failed` and rewrite with the errors fixed in-place.
+- If `edit_feedback` describes validator failures, rewrite with the errors fixed in-place and still report `drafted`; the runtime emits validation retry outcomes.
 
 When finished:
 1. Write the TOML graph to `flow.toml`.

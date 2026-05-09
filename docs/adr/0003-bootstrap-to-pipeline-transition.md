@@ -61,7 +61,7 @@ We pick **(3) two-graph follow-up run**.
 ## Implementation Footprint
 
 - **Core (no I/O):** add `EngineRunConfig.bootstrap_parent: Option<RunId>` (`surge-orchestrator/src/engine/run_config.rs` is the existing home — confirmed via `EngineRunConfig` struct at lines 41-73).
-- **Orchestrator:** add `bootstrap_driver` module exposing `run_bootstrap(engine, prompt, run_id) -> MaterializedRun` (per Task 19 of the implementation plan).
+- **Orchestrator:** add `bootstrap_driver` module exposing `run_bootstrap_in_worktree(engine, prompt, run_id, worktree_path) -> MaterializedRun` so callers pass the isolated run worktree explicitly (per Task 19 of the implementation plan).
 - **Persistence:** `ArtifactStore::open(parent_run_id, hash)` reads parent artifacts during follow-up run start (Task 20).
 - **CLI:** `surge bootstrap "<prompt>"` calls `run_bootstrap`, then immediately calls `engine::run` with `bootstrap_parent: Some(...)` (Task 13).
 

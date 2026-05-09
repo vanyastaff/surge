@@ -311,7 +311,7 @@ async fn route_validation_failure(
         .map_err(|e| StageError::Storage(format!("append BootstrapEditRequested: {e}")))?;
 
     let synthetic_outcome = OutcomeKey::try_from(VALIDATION_FAILED_OUTCOME)
-        .expect("'validation_failed' is a valid OutcomeKey");
+        .map_err(|e| StageError::Internal(format!("validation retry outcome key: {e}")))?;
     writer
         .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
             node: node.clone(),

@@ -67,7 +67,7 @@ is_terminal = false
 id = "reject"
 description = "bootstrap rejected at description review"
 edge_kind_hint = "escalate"
-is_terminal = true
+is_terminal = false
 
 [nodes.description_gate.config]
 node_kind = "human_gate"
@@ -152,7 +152,7 @@ is_terminal = false
 id = "reject"
 description = "bootstrap rejected at roadmap review"
 edge_kind_hint = "escalate"
-is_terminal = true
+is_terminal = false
 
 [nodes.roadmap_gate.config]
 node_kind = "human_gate"
@@ -241,7 +241,7 @@ is_terminal = false
 id = "reject"
 description = "bootstrap rejected at flow review"
 edge_kind_hint = "escalate"
-is_terminal = true
+is_terminal = false
 
 [nodes.flow_gate.config]
 node_kind = "human_gate"
@@ -336,6 +336,15 @@ node = "description_gate"
 outcome = "edit"
 
 [[edges]]
+id = "e_desc_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "description_gate"
+outcome = "reject"
+
+[[edges]]
 id = "e_roadmap_drafted"
 to = "roadmap_gate"
 kind = "forward"
@@ -372,6 +381,15 @@ node = "roadmap_gate"
 outcome = "edit"
 
 [[edges]]
+id = "e_roadmap_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "roadmap_gate"
+outcome = "reject"
+
+[[edges]]
 id = "e_flow_drafted"
 to = "flow_gate"
 kind = "forward"
@@ -406,3 +424,12 @@ kind = "backtrack"
 [edges.from]
 node = "flow_gate"
 outcome = "edit"
+
+[[edges]]
+id = "e_flow_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "flow_gate"
+outcome = "reject"
