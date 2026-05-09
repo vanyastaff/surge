@@ -112,6 +112,7 @@ fn graph_with_agent(hooks: Vec<Hook>, declared_outcomes: Vec<&str>, edge_outcome
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: agent.clone(),
         nodes,
