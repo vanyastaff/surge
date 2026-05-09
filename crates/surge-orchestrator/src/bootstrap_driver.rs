@@ -196,7 +196,7 @@ fn latest_bootstrap_artifacts(events: &[ReadEvent]) -> Result<Vec<ArtifactRef>, 
             by_name.insert(
                 name.clone(),
                 ArtifactRef {
-                    hash: artifact.clone(),
+                    hash: *artifact,
                     path: path.clone(),
                     name: name.clone(),
                     produced_by: node.clone(),

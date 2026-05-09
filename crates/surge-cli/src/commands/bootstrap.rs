@@ -1,7 +1,7 @@
 //! `surge bootstrap` — adaptive bootstrap flow entrypoint.
 
 use std::io::{self, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -265,7 +265,7 @@ fn prompt_for_gate_decision(
     }
 }
 
-async fn build_local_engine(worktree: &PathBuf) -> Result<(Arc<Engine>, Arc<Storage>)> {
+async fn build_local_engine(worktree: &Path) -> Result<(Arc<Engine>, Arc<Storage>)> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;
@@ -273,7 +273,9 @@ async fn build_local_engine(worktree: &PathBuf) -> Result<(Arc<Engine>, Arc<Stor
         surge_acp::bridge::AcpBridge::with_defaults().context("AcpBridge::with_defaults")?,
     );
     let tool_dispatcher: Arc<dyn surge_orchestrator::engine::tools::ToolDispatcher> = Arc::new(
-        surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(worktree.clone()),
+        surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher::new(
+            worktree.to_path_buf(),
+        ),
     );
     let notifier = build_default_notifier();
     let profile_registry = Arc::new(
