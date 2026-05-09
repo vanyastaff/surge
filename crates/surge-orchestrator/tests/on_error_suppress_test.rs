@@ -37,7 +37,8 @@ fn suppress_command(dir: &Path, outcome: &str) -> String {
     let path = dir.join(format!("suppress-{outcome}.json"));
     std::fs::write(&path, json).unwrap();
     if cfg!(target_os = "windows") {
-        format!("type {}", path.display())
+        let literal_path = path.display().to_string().replace('\'', "''");
+        format!("powershell -NoProfile -Command Get-Content -Raw -LiteralPath '{literal_path}'")
     } else {
         format!(r#"cat "{}""#, path.display())
     }

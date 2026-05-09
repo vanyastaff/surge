@@ -316,6 +316,13 @@ pub enum GlobalDaemonEvent {
     },
     /// The daemon is beginning graceful shutdown.
     DaemonShuttingDown,
+    /// This connection's global-event subscription lagged past the daemon's
+    /// broadcast buffer. The daemon stops forwarding global events after this
+    /// frame; clients should re-subscribe if they still need the stream.
+    SubscriberLagged {
+        /// Number of global events dropped before the lag was detected.
+        dropped: u64,
+    },
 }
 
 // ============================================================================
