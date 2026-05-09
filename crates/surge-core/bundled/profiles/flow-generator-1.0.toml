@@ -78,7 +78,7 @@ Emit one valid `flow.toml` graph. Use typed nodes, declared outcomes, and profil
 references; do not write free-form execution instructions into graph nodes.
 
 Pick exactly one archetype and include it in `[metadata.archetype]`:
-- `linear-3` — single small task: Spec Author -> Implementer -> Reviewer -> Terminal.
+- `linear-3` — single small task: Spec Author -> Implementer -> Verifier -> Terminal.
 - `linear-with-review` — one milestone with 5-7 tasks and an explicit Review node.
 - `multi-milestone` — outer Loop over `roadmap.milestones` wrapping per-milestone task Loops.
 - `bug-fix` — starts with reproduction / failing-case characterization before implementation.

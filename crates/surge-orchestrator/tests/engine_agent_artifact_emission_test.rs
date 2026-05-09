@@ -281,3 +281,107 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         "OutcomeReported must still be appended even when one declared artifact path is missing"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn artifact_paths_that_escape_worktree_are_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("worktree");
+    tokio::fs::create_dir_all(&worktree).await.unwrap();
+    let real_body = b"# Real\ninside worktree.\n";
+    let secret_body = b"# Secret\noutside worktree.\n";
+    let absolute_secret = dir.path().join("absolute-secret.md");
+    tokio::fs::write(worktree.join("real.md"), real_body)
+        .await
+        .unwrap();
+    tokio::fs::write(dir.path().join("secret.md"), secret_body)
+        .await
+        .unwrap();
+    tokio::fs::write(&absolute_secret, secret_body)
+        .await
+        .unwrap();
+
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let run_id = surge_core::id::RunId::new();
+    let writer = storage.create_run(run_id, &worktree, None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::from_str("done").unwrap(),
+        summary: "partial".into(),
+        artifacts_produced: vec![
+            "real.md".into(),
+            "../secret.md".into(),
+            absolute_secret.to_string_lossy().into_owned(),
+        ],
+    })
+    .await;
+
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        mock_for_pump.pump_scripted_events().await;
+    });
+
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let memory = surge_core::run_state::RunMemory::default();
+    let cfg = agent_cfg();
+    let node = NodeKey::try_from("spec_author").unwrap();
+    let tool_resolutions =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let hook_executor = HookExecutor::new();
+    let result = execute_agent_stage(AgentStageParams {
+        node: &node,
+        agent_config: &cfg,
+        declared_outcomes: &[],
+        bridge: &bridge,
+        writer: &writer,
+        artifact_store: &artifact_store,
+        worktree_path: &worktree,
+        tool_dispatcher: &dispatcher,
+        run_memory: &memory,
+        run_id,
+        tool_resolutions: &tool_resolutions,
+        human_input_timeout: Duration::from_secs(5),
+        mcp_registry: None,
+        mcp_servers: Vec::new(),
+        profile_registry: None,
+        hook_executor: &hook_executor,
+    })
+    .await
+    .unwrap();
+    pump.await.unwrap();
+    assert_eq!(result.as_ref(), "done");
+
+    let reader = storage.open_run_reader(run_id).await.expect("reader");
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(64))
+        .await
+        .expect("read_events");
+
+    let artifact_names: Vec<String> = events
+        .iter()
+        .filter_map(|ev| match &ev.payload.payload {
+            EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let saw_outcome = events
+        .iter()
+        .any(|ev| matches!(ev.payload.payload, EventPayload::OutcomeReported { .. }));
+
+    assert_eq!(
+        artifact_names,
+        vec!["real".to_string()],
+        "only worktree-relative artifact paths should be persisted",
+    );
+    assert!(
+        saw_outcome,
+        "OutcomeReported must still be appended when unsafe artifact paths are skipped"
+    );
+}

@@ -7,7 +7,7 @@
 //! Phase 6.4: binding resolution + template substitution for the agent prompt.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use surge_acp::bridge::event::BridgeEvent;
@@ -431,48 +431,86 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // fold rule populates RunMemory.artifacts deterministically.
                 // A missing or unreadable path is logged and skipped — it
                 // does not fail the stage.
-                for declared_path in &artifacts_produced {
-                    let absolute = p.worktree_path.join(declared_path);
-                    let bytes = match tokio::fs::read(&absolute).await {
-                        Ok(b) => b,
-                        Err(e) => {
+                if !artifacts_produced.is_empty() {
+                    let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    for declared_path in &artifacts_produced {
+                        let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
                             tracing::warn!(
                                 target: "engine::stage::agent",
                                 node = %p.node,
                                 path = %declared_path,
-                                err = %e,
-                                "artifact path missing — skipping"
+                                "artifact path escapes worktree — skipping"
                             );
                             continue;
-                        },
-                    };
-                    let path_buf = std::path::PathBuf::from(declared_path);
-                    let name = path_buf
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .map_or_else(|| declared_path.clone(), str::to_owned);
-                    let artifact_ref = p
-                        .artifact_store
-                        .put(p.run_id, &name, &bytes)
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                    tracing::info!(
-                        target: "engine::stage::agent",
-                        node = %p.node,
-                        name = %name,
-                        hash = %artifact_ref.hash,
-                        store_path = %artifact_ref.path.display(),
-                        "artifact_produced"
-                    );
-                    p.writer
-                        .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                            node: p.node.clone(),
-                            artifact: artifact_ref.hash,
-                            path: artifact_ref.path,
-                            name,
-                        }))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                        };
+                        let absolute = p.worktree_path.join(&relative_path);
+                        let canonical_path = match tokio::fs::canonicalize(&absolute).await {
+                            Ok(path) => path,
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "engine::stage::agent",
+                                    node = %p.node,
+                                    path = %declared_path,
+                                    err = %e,
+                                    "artifact path missing — skipping"
+                                );
+                                continue;
+                            },
+                        };
+                        if !canonical_path.starts_with(&canonical_worktree) {
+                            tracing::warn!(
+                                target: "engine::stage::agent",
+                                node = %p.node,
+                                path = %declared_path,
+                                canonical_path = %canonical_path.display(),
+                                "artifact path escapes worktree — skipping"
+                            );
+                            continue;
+                        }
+                        let bytes = match tokio::fs::read(&canonical_path).await {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "engine::stage::agent",
+                                    node = %p.node,
+                                    path = %declared_path,
+                                    err = %e,
+                                    "artifact path missing — skipping"
+                                );
+                                continue;
+                            },
+                        };
+                        let name = relative_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .map_or_else(|| declared_path.clone(), str::to_owned);
+                        let artifact_ref = p
+                            .artifact_store
+                            .put(p.run_id, &name, &bytes)
+                            .await
+                            .map_err(|e| StageError::Storage(e.to_string()))?;
+                        tracing::info!(
+                            target: "engine::stage::agent",
+                            node = %p.node,
+                            name = %name,
+                            hash = %artifact_ref.hash,
+                            store_path = %artifact_ref.path.display(),
+                            "artifact_produced"
+                        );
+                        p.writer
+                            .append_event(VersionedEventPayload::new(
+                                EventPayload::ArtifactProduced {
+                                    node: p.node.clone(),
+                                    artifact: artifact_ref.hash,
+                                    path: artifact_ref.path,
+                                    name,
+                                },
+                            ))
+                            .await
+                            .map_err(|e| StageError::Storage(e.to_string()))?;
+                    }
                 }
 
                 p.writer
@@ -774,6 +812,24 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
     Ok(outcome)
+}
+
+fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
+    if declared_path.trim().is_empty() {
+        return None;
+    }
+
+    let path = Path::new(declared_path);
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {},
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    has_normal_component.then(|| path.to_path_buf())
 }
 
 fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {

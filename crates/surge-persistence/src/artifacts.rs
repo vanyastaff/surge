@@ -5,7 +5,7 @@
 //! content hash produced for that name within the run.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use surge_core::content_hash::ContentHash;
 use surge_core::id::RunId;
@@ -41,6 +41,9 @@ pub enum ArtifactStoreError {
     /// The internal synthetic producer key was invalid.
     #[error("invalid synthetic artifact producer: {0}")]
     InvalidSyntheticProducer(String),
+    /// The fallback path would escape the configured fallback roots.
+    #[error("invalid artifact fallback path: {0}")]
+    InvalidFallbackPath(PathBuf),
 }
 
 /// Content-addressed store rooted at the global runs directory.
@@ -149,12 +152,31 @@ impl ArtifactStore {
             Err(e) => return Err(e),
         }
 
+        let fallback_root = fallback_root.as_ref();
         let fallback_path = if artifact.path.is_absolute() {
             artifact.path.clone()
         } else {
-            fallback_root.as_ref().join(&artifact.path)
+            if !safe_relative_fallback_path(&artifact.path) {
+                return Err(ArtifactStoreError::InvalidFallbackPath(
+                    artifact.path.clone(),
+                ));
+            }
+            fallback_root.join(&artifact.path)
         };
-        let bytes = tokio::fs::read(fallback_path).await?;
+        let canonical_path = tokio::fs::canonicalize(&fallback_path).await?;
+        let canonical_fallback_root = tokio::fs::canonicalize(fallback_root).await?;
+        let canonical_runs_root = tokio::fs::canonicalize(&self.runs_root).await.ok();
+        let under_allowed_root = canonical_path.starts_with(&canonical_fallback_root)
+            || canonical_runs_root
+                .as_ref()
+                .is_some_and(|runs_root| canonical_path.starts_with(runs_root));
+        if !under_allowed_root {
+            return Err(ArtifactStoreError::InvalidFallbackPath(
+                artifact.path.clone(),
+            ));
+        }
+
+        let bytes = tokio::fs::read(canonical_path).await?;
         let actual = ContentHash::compute(&bytes);
         if actual != artifact.hash {
             return Err(ArtifactStoreError::HashMismatch {
@@ -191,6 +213,15 @@ impl ArtifactStore {
         tokio::fs::write(self.index_path(run_id), bytes).await?;
         Ok(())
     }
+}
+
+fn safe_relative_fallback_path(path: &Path) -> bool {
+    path.components().all(|component| {
+        !matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
 }
 
 #[cfg(test)]
@@ -256,5 +287,60 @@ mod tests {
 
         assert_eq!(bytes, content);
         assert!(!store.index_path(run_id).exists());
+    }
+
+    #[tokio::test]
+    async fn open_ref_rejects_parent_dir_fallback_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree = tmp.path().join("worktree");
+        tokio::fs::create_dir_all(&worktree).await.unwrap();
+        let store = test_store(tmp.path());
+        let run_id = RunId::new();
+        let content = b"outside fallback root";
+        tokio::fs::write(tmp.path().join("secret.md"), content)
+            .await
+            .unwrap();
+
+        let artifact = ArtifactRef {
+            hash: ContentHash::compute(content),
+            path: PathBuf::from("../secret.md"),
+            name: "secret".into(),
+            produced_by: NodeKey::try_from("description_author").unwrap(),
+            produced_at_seq: 4,
+        };
+
+        let err = store
+            .open_ref(run_id, &artifact, &worktree)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ArtifactStoreError::InvalidFallbackPath(_)));
+    }
+
+    #[tokio::test]
+    async fn open_ref_rejects_absolute_fallback_outside_allowed_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree = tmp.path().join("worktree");
+        tokio::fs::create_dir_all(&worktree).await.unwrap();
+        let store = test_store(tmp.path());
+        let run_id = RunId::new();
+        let content = b"absolute outside fallback root";
+        let secret = tmp.path().join("secret.md");
+        tokio::fs::write(&secret, content).await.unwrap();
+
+        let artifact = ArtifactRef {
+            hash: ContentHash::compute(content),
+            path: secret,
+            name: "secret".into(),
+            produced_by: NodeKey::try_from("description_author").unwrap(),
+            produced_at_seq: 4,
+        };
+
+        let err = store
+            .open_ref(run_id, &artifact, &worktree)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ArtifactStoreError::InvalidFallbackPath(_)));
     }
 }
