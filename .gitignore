@@ -1,13 +1,19 @@
-/target
+/target/
 **/*.rs.bk
-Cargo.lock
 
 # Surge runtime
 .surge/
 *.pid
 
-# Claude Code local settings
+# Agent/tool local state and generated skill packs
 .claude/
+.agents/
+.codex/
+.ai-factory/evolution/
+.ai-factory/evolutions/
+.ai-factory/specs/
+.ai-factory/patches/
+.ai-factory/qa/
 
 # IDE
 .idea/

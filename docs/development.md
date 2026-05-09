@@ -55,7 +55,7 @@ SURGE_REAL_ACP_PROFILE=implementer@1.0 \
   cargo test -p surge-orchestrator --test real_acp_smoke -- --nocapture
 ```
 
-When the env vars are missing the test prints a `SKIPPED` banner and exits successfully — CI's deterministic green path stays covered by the mock-ACP suite.
+The harness infers `claude-code`, `codex`, or `gemini-cli` launch mode from the binary name. Set `SURGE_REAL_ACP_KIND=claude-code|codex|gemini-cli|custom` to override that, and `SURGE_REAL_ACP_ARGS="--flag value"` for extra ACP process args. When the required env vars are missing the test prints a `SKIPPED` banner and exits successfully — CI's deterministic green path stays covered by the mock-ACP suite.
 
 ## Performance Bench
 
@@ -65,7 +65,13 @@ When the env vars are missing the test prints a `SKIPPED` banner and exits succe
 cargo bench -p surge-orchestrator --bench stage_transition -- --save-baseline ga
 ```
 
-`P95_BUDGET_US` is encoded in the bench source. Bumping it requires a deliberate code change so regressions surface in PR review.
+`P95_BUDGET_US` is encoded in the bench source. CI enables `SURGE_STAGE_TRANSITION_BUDGET_CHECK=1`, which makes the bench fail if the sampled P95 exceeds the source-level budget; bumping it requires a deliberate code change so regressions surface in PR review.
+
+CI records its quick benchmark history with:
+
+```bash
+cargo bench -p surge-orchestrator --bench stage_transition -- --quick --save-baseline ci
+```
 
 ## Local Runtime State
 

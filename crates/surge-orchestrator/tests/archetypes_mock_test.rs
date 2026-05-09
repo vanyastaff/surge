@@ -1,40 +1,44 @@
-//! Task 5.1 — drive every bundled `examples/flow_*.toml` archetype
-//! through the engine against [`fixtures::mock_bridge::MockBridge`].
+//! Task 5.1 — drive every bundled `examples/flow_*.toml` archetype through
+//! the engine against a deterministic mock ACP bridge.
 //!
-//! Scope vs. scope of `crates/surge-cli/tests/examples_smoke.rs`:
-//!
-//! * `examples_smoke.rs` parses each archetype and runs the syntactic
-//!   + resolver-aware validator. It guards the example shape.
-//! * This file boots the engine with a [`MockBridge`] and confirms
-//!   each archetype reaches `start_run` without error. Pure-terminal
-//!   archetypes (e.g. `flow_terminal_only.toml`) are run to
-//!   completion; agent-bearing archetypes are accepted as
-//!   "engine starts cleanly" — the mock bridge intentionally does
-//!   not script per-archetype turn loops, so a deterministic
-//!   completion would require scenario-aware mock scripting that
-//!   belongs in `crates/surge-acp/src/bin/mock_acp_agent.rs`. The
-//!   real-ACP smoke (gated, see `tests/real_acp_smoke.rs`) covers
-//!   the `flow_minimal_agent` happy path against an actual agent.
-//!
-//! Together, the three layers (validator → engine boot → real ACP)
-//! satisfy the acceptance criteria for Task 5.1: every archetype
-//! shape is parseable, validatable, and bootable; full end-to-end
-//! against a real or scripted mock agent is exercised by the gated
-//! real-ACP test and per-feature unit tests in
-//! `crates/surge-orchestrator/tests/`.
+//! The bridge chooses the first declared outcome for every agent session.
+//! The examples are authored so those first outcomes follow the happy path,
+//! which gives this suite a deterministic terminal run for every archetype
+//! without requiring an external ACP binary.
 
-mod fixtures;
-
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+use async_trait::async_trait;
+use surge_acp::bridge::error::{
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+};
+use surge_acp::bridge::event::{BridgeEvent, ToolResultPayload};
 use surge_acp::bridge::facade::BridgeFacade;
+use surge_acp::bridge::session::{MessageContent, SessionConfig, SessionState};
 use surge_core::graph::Graph;
-use surge_core::id::RunId;
+use surge_core::id::{RunId, SessionId};
+use surge_core::keys::OutcomeKey;
+use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
+use tokio::sync::{Mutex, broadcast};
+
+const ARCHETYPES: &[&str] = &[
+    "flow_terminal_only.toml",
+    "flow_minimal_agent.toml",
+    "flow_linear_3.toml",
+    "flow_single_loop.toml",
+    "flow_multi_milestone.toml",
+    "flow_bug_fix.toml",
+    "flow_refactor.toml",
+    "flow_spike.toml",
+];
 
 fn examples_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -50,95 +54,130 @@ fn load_archetype(name: &str) -> Graph {
     toml::from_str(&toml_s).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
-/// Start a run for the given archetype and assert `start_run`
-/// returns Ok. The handle is returned so the caller can drive
-/// completion or just drop (which kills the run).
-async fn start_archetype(
-    name: &str,
-) -> (
-    Arc<Engine>,
-    surge_orchestrator::engine::handle::RunHandle,
-    tempfile::TempDir,
-) {
+struct DeterministicMockBridge {
+    tx: broadcast::Sender<BridgeEvent>,
+    outcomes: Mutex<HashMap<SessionId, OutcomeKey>>,
+}
+
+impl DeterministicMockBridge {
+    fn new() -> Self {
+        let (tx, _) = broadcast::channel(64);
+        Self {
+            tx,
+            outcomes: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl BridgeFacade for DeterministicMockBridge {
+    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+        let session = SessionId::new();
+        let outcome = config
+            .declared_outcomes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
+        self.outcomes.lock().await.insert(session, outcome);
+        Ok(session)
+    }
+
+    async fn send_message(
+        &self,
+        session: SessionId,
+        _content: MessageContent,
+    ) -> Result<(), SendMessageError> {
+        let outcome = self
+            .outcomes
+            .lock()
+            .await
+            .get(&session)
+            .cloned()
+            .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
+        let _ = self.tx.send(BridgeEvent::OutcomeReported {
+            session,
+            outcome,
+            summary: "deterministic mock outcome".into(),
+            artifacts_produced: vec![],
+        });
+        Ok(())
+    }
+
+    async fn session_state(&self, _session: SessionId) -> Result<SessionState, BridgeError> {
+        Err(BridgeError::WorkerDead)
+    }
+
+    async fn close_session(&self, _session: SessionId) -> Result<(), CloseSessionError> {
+        Ok(())
+    }
+
+    async fn reply_to_tool(
+        &self,
+        _session: SessionId,
+        _call_id: String,
+        _payload: ToolResultPayload,
+    ) -> Result<(), ReplyToToolError> {
+        Ok(())
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
+        self.tx.subscribe()
+    }
+}
+
+async fn run_archetype(name: &str) -> Vec<surge_persistence::runs::reader::ReadEvent> {
     let dir = tempfile::tempdir().expect("tempdir");
     let storage = Storage::open(dir.path()).await.expect("storage");
-    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+    let bridge = Arc::new(DeterministicMockBridge::new()) as Arc<dyn BridgeFacade>;
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
-    let engine = Arc::new(Engine::new(
-        bridge,
-        storage,
-        dispatcher,
-        EngineConfig::default(),
-    ));
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
 
-    let graph = load_archetype(name);
     let run_id = RunId::new();
     let handle = engine
         .start_run(
             run_id,
-            graph,
+            load_archetype(name),
             dir.path().to_path_buf(),
             EngineRunConfig::default(),
         )
         .await
         .unwrap_or_else(|e| panic!("{name}: start_run failed: {e}"));
-    (engine, handle, dir)
-}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_terminal_only_completes_against_mock_bridge() {
-    let (_engine, handle, _dir) = start_archetype("flow_terminal_only.toml").await;
-    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.await_completion())
+    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
         .await
-        .expect("flow_terminal_only.toml hung > 5s")
+        .unwrap_or_else(|_| panic!("{name}: run hung > 30s"))
         .expect("await_completion");
     match outcome {
         RunOutcome::Completed { .. } => {},
-        other => panic!("expected Completed, got {other:?}"),
+        other => panic!("{name}: expected Completed, got {other:?}"),
     }
-}
+    drop(engine);
 
-/// All non-terminal-only archetypes need ACP scripting to complete
-/// deterministically; we only assert `start_run` succeeds. The
-/// engine is dropped at end of scope which cancels the run.
-async fn assert_archetype_starts(name: &str) {
-    let (_engine, _handle, _dir) = start_archetype(name).await;
-    // Drop kills the run; the assertion is implicit in start_run not
-    // returning Err above.
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_minimal_agent_starts() {
-    assert_archetype_starts("flow_minimal_agent.toml").await;
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let last = reader.current_seq().await.unwrap();
+    reader
+        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        .await
+        .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_linear_3_starts() {
-    assert_archetype_starts("flow_linear_3.toml").await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_single_loop_starts() {
-    assert_archetype_starts("flow_single_loop.toml").await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_multi_milestone_starts() {
-    assert_archetype_starts("flow_multi_milestone.toml").await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_bug_fix_starts() {
-    assert_archetype_starts("flow_bug_fix.toml").await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_refactor_starts() {
-    assert_archetype_starts("flow_refactor.toml").await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn flow_spike_starts() {
-    assert_archetype_starts("flow_spike.toml").await;
+async fn all_archetypes_complete_against_deterministic_mock_bridge() {
+    for name in ARCHETYPES {
+        let events = run_archetype(name).await;
+        assert!(
+            events.iter().all(|ev| !matches!(
+                ev.payload.payload,
+                EventPayload::StageFailed { .. } | EventPayload::RunFailed { .. }
+            )),
+            "{name}: run contained StageFailed/RunFailed: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev.payload.payload, EventPayload::RunCompleted { .. })),
+            "{name}: missing RunCompleted event"
+        );
+    }
 }

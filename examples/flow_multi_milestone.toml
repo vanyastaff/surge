@@ -111,7 +111,18 @@ on_max_exceeded = "escalate"
 # ── milestone body subgraph: inner Loop ──
 [subgraphs.milestone_body]
 start = "task_loop"
-edges = []
+
+[[subgraphs.milestone_body.edges]]
+id = "e_milestone_tasks_to_end"
+to = "milestone_body_end"
+kind = "forward"
+
+[subgraphs.milestone_body.edges.from]
+node = "task_loop"
+outcome = "completed"
+
+[subgraphs.milestone_body.edges.policy]
+on_max_exceeded = "escalate"
 
 [subgraphs.milestone_body.nodes.task_loop]
 id = "task_loop"
@@ -124,7 +135,7 @@ y = 0.0
 id = "completed"
 description = "Inner-loop tasks done"
 edge_kind_hint = "forward"
-is_terminal = true
+is_terminal = false
 
 [subgraphs.milestone_body.nodes.task_loop.config]
 node_kind = "loop"
@@ -143,6 +154,20 @@ type = "all_items"
 [subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
 type = "abort"
 
+[subgraphs.milestone_body.nodes.milestone_body_end]
+id = "milestone_body_end"
+declared_outcomes = []
+
+[subgraphs.milestone_body.nodes.milestone_body_end.position]
+x = 200.0
+y = 0.0
+
+[subgraphs.milestone_body.nodes.milestone_body_end.config]
+node_kind = "terminal"
+
+[subgraphs.milestone_body.nodes.milestone_body_end.config.kind]
+type = "success"
+
 # ── task body subgraph: implement → verify ──
 [subgraphs.task_body]
 start = "impl_in_task"
@@ -154,6 +179,18 @@ kind = "forward"
 
 [subgraphs.task_body.edges.from]
 node = "impl_in_task"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[[subgraphs.task_body.edges]]
+id = "e_task_verify_to_end"
+to = "task_body_end"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "verify_in_task"
 outcome = "done"
 
 [subgraphs.task_body.edges.policy]
@@ -196,7 +233,7 @@ y = 0.0
 id = "done"
 description = "Task verification complete"
 edge_kind_hint = "forward"
-is_terminal = true
+is_terminal = false
 
 [subgraphs.task_body.nodes.verify_in_task.config]
 node_kind = "agent"
@@ -210,3 +247,17 @@ max_retries = 3
 max_tokens = 200000
 
 [subgraphs.task_body.nodes.verify_in_task.config.custom_fields]
+
+[subgraphs.task_body.nodes.task_body_end]
+id = "task_body_end"
+declared_outcomes = []
+
+[subgraphs.task_body.nodes.task_body_end.position]
+x = 400.0
+y = 0.0
+
+[subgraphs.task_body.nodes.task_body_end.config]
+node_kind = "terminal"
+
+[subgraphs.task_body.nodes.task_body_end.config.kind]
+type = "success"
