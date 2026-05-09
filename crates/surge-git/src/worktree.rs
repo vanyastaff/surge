@@ -486,6 +486,28 @@ impl GitManager {
         crate::run_worktree::resolve_path(&self.repo_path, run_id, &location)
     }
 
+    /// Return the registered git worktree path for a managed run worktree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::WorktreeNotFound`] if git has no worktree registered
+    /// for the run's short id, or if the registered path no longer exists.
+    pub fn find_run_worktree_path(
+        &self,
+        run_id: &surge_core::RunId,
+    ) -> Result<std::path::PathBuf, GitError> {
+        let repo = self.open_repo()?;
+        let short = run_id.short();
+        let wt = repo
+            .find_worktree(&short)
+            .map_err(|_| GitError::WorktreeNotFound(short.clone()))?;
+        let path = wt.path().to_path_buf();
+        if !path.exists() {
+            return Err(GitError::WorktreeNotFound(short));
+        }
+        Ok(path)
+    }
+
     /// Create a new worktree and branch for the given run.
     ///
     /// The worktree branches from `base_branch` if given, otherwise from the
@@ -1079,6 +1101,20 @@ mod tests {
         assert!(info.branch.starts_with("surge/run-"));
         assert!(info.path.exists());
         assert!(info.path.to_string_lossy().contains(&id.short()));
+    }
+
+    #[test]
+    fn find_run_worktree_path_returns_registered_path() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        let info = gm
+            .create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+
+        let found = gm.find_run_worktree_path(&id).unwrap();
+
+        assert_eq!(found, info.path);
     }
 
     #[test]

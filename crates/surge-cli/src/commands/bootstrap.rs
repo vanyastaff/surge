@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 use surge_core::id::RunId;
 use surge_core::run_event::{BootstrapStage, EventPayload};
+use surge_git::{GitManager, WorktreeLocation};
 use surge_orchestrator::bootstrap_driver::{
     MaterializedRun, materialized_run_from_completed, run_bootstrap_in_worktree,
 };
@@ -21,9 +22,9 @@ use surge_persistence::runs::{EventSeq, Storage};
 pub struct BootstrapArgs {
     /// Free-form task prompt used by the Description Author.
     pub prompt: Option<String>,
-    /// Worktree path. Default: current working directory.
-    #[arg(long)]
-    pub worktree: Option<PathBuf>,
+    /// Managed worktree parent directory. Default: sibling `.surge-worktrees/`.
+    #[arg(long = "worktree-root", alias = "worktree")]
+    pub worktree_root: Option<PathBuf>,
     /// Resume an existing bootstrap run.
     #[command(subcommand)]
     pub command: Option<BootstrapCommands>,
@@ -43,23 +44,22 @@ pub enum BootstrapCommands {
 pub async fn run(args: BootstrapArgs) -> Result<()> {
     match args.command {
         Some(BootstrapCommands::Resume { run_id }) => {
-            let worktree = resolve_worktree(args.worktree)?;
-            resume_command(run_id, worktree).await
+            resume_command(run_id, args.worktree_root).await
         },
         None => {
             let prompt = args.prompt.ok_or_else(|| {
                 anyhow!("provide a prompt or use `surge bootstrap resume <run_id>`")
             })?;
-            let worktree = resolve_worktree(args.worktree)?;
-            prompt_command(prompt, worktree).await
+            prompt_command(prompt, args.worktree_root).await
         },
     }
 }
 
-async fn prompt_command(prompt: String, worktree: PathBuf) -> Result<()> {
-    let (engine, storage) = build_local_engine(&worktree).await?;
+async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Result<()> {
     let bootstrap_run_id = RunId::new();
     println!("bootstrap_run_id={bootstrap_run_id}");
+    let worktree = create_bootstrap_worktree(&bootstrap_run_id, worktree_root)?;
+    let (engine, storage) = build_local_engine(&worktree).await?;
 
     let mut approvals = tokio::spawn(poll_console_approvals(
         engine.clone(),
@@ -93,8 +93,9 @@ async fn prompt_command(prompt: String, worktree: PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn resume_command(run_id: String, worktree: PathBuf) -> Result<()> {
+async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Result<()> {
     let bootstrap_run_id = parse_run_id(&run_id)?;
+    let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root)?;
     let (engine, _storage) = build_local_engine(&worktree).await?;
     let handle = engine
         .resume_run(bootstrap_run_id, worktree.clone())
@@ -294,12 +295,39 @@ async fn build_local_engine(worktree: &Path) -> Result<(Arc<Engine>, Arc<Storage
     Ok((engine, storage))
 }
 
-fn resolve_worktree(worktree: Option<PathBuf>) -> Result<PathBuf> {
-    let path = worktree.map_or_else(|| std::env::current_dir().context("cwd"), Ok)?;
-    if !path.exists() {
-        return Err(anyhow!("worktree path does not exist: {}", path.display()));
+fn create_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -> Result<PathBuf> {
+    let manager = GitManager::discover().context("discover git repository for bootstrap")?;
+    let location = bootstrap_worktree_location(worktree_root)?;
+    let info = manager
+        .create_run_worktree(run_id, None, location)
+        .context("create managed bootstrap worktree")?;
+    println!("worktree={}", info.path.display());
+    Ok(info.path)
+}
+
+fn existing_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -> Result<PathBuf> {
+    let manager = GitManager::discover().context("discover git repository for bootstrap")?;
+    let location = bootstrap_worktree_location(worktree_root)?;
+    manager.find_run_worktree_path(run_id).with_context(|| {
+        format!(
+            "managed bootstrap worktree does not exist: {}",
+            manager.run_worktree_path(run_id, location).display()
+        )
+    })
+}
+
+fn bootstrap_worktree_location(worktree_root: Option<PathBuf>) -> Result<WorktreeLocation> {
+    let Some(root) = worktree_root else {
+        return Ok(WorktreeLocation::Sibling);
+    };
+    Ok(WorktreeLocation::Custom(absolute_path(root)?))
+}
+
+fn absolute_path(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path);
     }
-    Ok(path)
+    Ok(std::env::current_dir().context("cwd")?.join(path))
 }
 
 fn parse_run_id(s: &str) -> Result<RunId> {

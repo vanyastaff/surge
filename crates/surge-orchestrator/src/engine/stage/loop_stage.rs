@@ -136,20 +136,26 @@ async fn resolve_iterable(
             resolve_array_path(&parsed, jsonpath)
         },
         IterableSource::LoopItem { var, jsonpath } => {
-            let current_item = frames
+            let loop_frame = frames
                 .iter()
                 .rev()
                 .find_map(|frame| match frame {
                     Frame::Loop(loop_frame) if loop_frame.config.iteration_var_name == *var => {
-                        usize::try_from(loop_frame.current_index)
-                            .ok()
-                            .and_then(|idx| loop_frame.items.get(idx))
+                        Some(loop_frame)
                     },
                     _ => None,
                 })
                 .ok_or_else(|| {
                     StageError::Internal(format!("loop item '{var}' not available in frames"))
                 })?;
+            let current_index = usize::try_from(loop_frame.current_index).map_err(|e| {
+                StageError::Internal(format!("loop item '{var}' index is invalid: {e}"))
+            })?;
+            let current_item = loop_frame.items.get(current_index).ok_or_else(|| {
+                StageError::Internal(format!(
+                    "loop item '{var}' index {current_index} is out of range"
+                ))
+            })?;
             resolve_array_path(current_item, jsonpath)
         },
     }
@@ -792,6 +798,58 @@ tasks = ["task1", "task2", "task3"]
                 toml::Value::String("design".into()),
                 toml::Value::String("implement".into())
             ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn loop_item_iterable_stops_at_stale_matching_inner_frame() {
+        let mut outer_milestone = toml::map::Map::new();
+        outer_milestone.insert(
+            "tasks".into(),
+            toml::Value::Array(vec![toml::Value::String("outer".into())]),
+        );
+        let outer_items = vec![toml::Value::Table(outer_milestone)];
+        let (graph, outer_cfg, outer_loop_key) = graph_with_loop_body(outer_items.clone());
+        let body = match graph.subgraphs.values().next() {
+            Some(body) => body.start.clone(),
+            None => panic!("test graph should contain a loop body"),
+        };
+        let frames = vec![
+            Frame::Loop(LoopFrame {
+                loop_node: outer_loop_key.clone(),
+                config: LoopConfig {
+                    iteration_var_name: "milestone".into(),
+                    ..outer_cfg.clone()
+                },
+                items: outer_items,
+                current_index: 0,
+                attempts_remaining: 0,
+                return_to: body.clone(),
+                traversal_counts: HashMap::new(),
+            }),
+            Frame::Loop(LoopFrame {
+                loop_node: outer_loop_key,
+                config: LoopConfig {
+                    iteration_var_name: "milestone".into(),
+                    ..outer_cfg
+                },
+                items: vec![],
+                current_index: 0,
+                attempts_remaining: 0,
+                return_to: body,
+                traversal_counts: HashMap::new(),
+            }),
+        ];
+        let memory = RunMemory::default();
+        let src = IterableSource::LoopItem {
+            var: "milestone".into(),
+            jsonpath: "$.tasks[*]".into(),
+        };
+
+        let err = resolve_iterable(&src, &memory, &frames).await.unwrap_err();
+        assert!(
+            matches!(err, StageError::Internal(ref message) if message.contains("out of range")),
+            "expected stale inner frame to produce an index error, got {err:?}"
         );
     }
 }

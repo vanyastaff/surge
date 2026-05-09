@@ -67,6 +67,7 @@ pub enum BootstrapError {
 /// Returns [`BootstrapError`] if the engine run fails, the event log cannot be
 /// read, no follow-up graph was materialized, or any required bootstrap
 /// artifact is absent.
+#[must_use = "await the bootstrap driver result and handle failures"]
 pub async fn run_bootstrap_in_worktree(
     engine: &Engine,
     prompt: String,
@@ -118,6 +119,7 @@ pub async fn run_bootstrap_in_worktree(
 /// Returns [`BootstrapError`] if the event log cannot be read, if no
 /// follow-up graph was materialized, or if a required bootstrap artifact is
 /// missing.
+#[must_use = "await the materialized run result and handle failures"]
 pub async fn materialized_run_from_completed(
     engine: &Engine,
     run_id: RunId,
