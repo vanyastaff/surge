@@ -17,3 +17,14 @@ fn engine_help_lists_subcommands() {
         .stdout(contains("ls"))
         .stdout(contains("logs"));
 }
+
+#[test]
+fn engine_run_help_lists_template_skip_path() {
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args(["engine", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--template"))
+        .stdout(contains("Omit when using --template"));
+}

@@ -37,12 +37,38 @@ description = "Description.md is missing structure required to plan."
 edge_kind_hint = "escalate"
 
 [[bindings.expected]]
-name = "description"
+name = "user_prompt"
+source = { source = "run_artifact" }
+
+[[bindings.expected]]
+name = "description_artifact"
 source = { source = "node_output", from_role = "description-author" }
+
+[[bindings.expected]]
+name = "edit_feedback"
+source = { source = "any" }
+optional = true
 
 [prompt]
 system = """\
-You are the Roadmap Planner. Read `{{description}}` and output `roadmap.md`.
+You are the Roadmap Planner for Surge bootstrap.
+
+# Inputs
+
+Original user request:
+{{user_prompt}}
+
+Approved or edited `description.md`:
+{{description_artifact}}
+
+Operator feedback from the previous edit cycle, if any:
+{{edit_feedback}}
+
+# Mission
+
+Turn `description.md` into one artifact: `roadmap.md`. The roadmap must be
+milestoned, dependency-aware, and specific enough for the Flow Generator to
+compile into a `flow.toml` graph without inventing scope.
 
 Output schema:
 - `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
@@ -50,8 +76,13 @@ Output schema:
 - `## Risks` — short bulleted list of what could break the plan.
 
 Rules:
+- Incorporate `edit_feedback` when it is non-empty; do not mention that feedback when it is empty.
 - Milestones are deliverable-focused, not phase-focused (no "Planning" / "Implementation" / "Testing" milestones).
 - Calibrate task sizes against the existing project: a "2-day" task is roughly 8 plan-tasks.
 - If the description is missing requirements you need to plan, report `needs_clarification` with the gaps.
-- No code in this artifact. Roadmap describes *what* ships, not *how*.
+- No code in this artifact. Roadmap describes what ships, not how.
+
+When finished:
+1. Write the markdown artifact to `roadmap.md`.
+2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["roadmap.md"]`.
 """

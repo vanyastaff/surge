@@ -858,7 +858,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: end.clone(),
             nodes,
@@ -937,7 +937,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: plan.clone(),
             nodes,
@@ -1108,9 +1108,7 @@ mod tests {
 
         let state = fold(&events).unwrap();
         match state {
-            RunState::Pipeline {
-                cursor, memory, ..
-            } => {
+            RunState::Pipeline { cursor, memory, .. } => {
                 assert_eq!(cursor.node, agent);
                 assert_eq!(cursor.attempt, 2, "Backtrack must re-enter the stage");
                 assert_eq!(
@@ -1118,7 +1116,9 @@ mod tests {
                     "node_visits must increment exactly once per Backtrack",
                 );
                 assert!(
-                    !memory.node_visits.contains_key(&NodeKey::try_from("start_node").unwrap()),
+                    !memory
+                        .node_visits
+                        .contains_key(&NodeKey::try_from("start_node").unwrap()),
                     "Forward edges must not populate node_visits",
                 );
             },
@@ -1155,7 +1155,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: plan.clone(),
             nodes,

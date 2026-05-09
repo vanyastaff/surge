@@ -34,6 +34,7 @@ pub mod agent_config;
 pub mod approvals;
 pub mod archetype;
 pub mod branch_config;
+pub mod bundled_flows;
 pub mod content_hash;
 pub mod edge;
 pub mod graph;
@@ -69,6 +70,7 @@ pub use state::TaskState;
 
 // ── New re-exports (Surge data model) ──
 pub use archetype::{ArchetypeMetadata, ArchetypeName};
+pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};

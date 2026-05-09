@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Bootstrap & adaptive flow generation
+
+- **`surge bootstrap` CLI** — runs the bundled Description Author →
+  Roadmap Planner → Flow Generator bootstrap graph from a free-form prompt,
+  supports console approve/edit/reject gates, resumes completed bootstrap
+  runs via `surge bootstrap resume <run_id>`, and starts the materialized
+  follow-up graph with inherited bootstrap artifacts.
+- **Bundled flow registry and templates** — `surge-core::BundledFlows`
+  embeds `bootstrap`, `linear-3`, `linear-with-review`, `multi-milestone`,
+  `bug-fix`, `refactor`, `spike`, and `single-task`; `surge engine run
+  --template <name>` resolves bundled or `${SURGE_HOME}/templates/*.toml`
+  user templates and skips bootstrap.
+- **Bootstrap runtime semantics** — bootstrap HumanGates emit structured
+  approval/edit events, `EdgeKind::Backtrack` re-enters authoring agents
+  with fresh `edit_feedback`, Flow Generator output retries on parse or
+  graph-validation failures, and edit-loop caps emit `EscalationRequested`
+  before failing clearly.
+- **Content-addressed bootstrap artifacts** — agent-produced artifacts are
+  copied into the per-run artifact store by content hash, and follow-up runs
+  can inherit `description`, `roadmap`, and `flow` artifacts from their
+  bootstrap parent via `EngineRunConfig::bootstrap_parent`.
+- **Bootstrap telemetry and e2e coverage** — successful bootstrap runs append
+  `BootstrapTelemetry` with stage durations, edit counts, and archetype
+  metadata; mock-agent tests cover `linear-3`, `multi-milestone`,
+  `bug-fix`, `refactor`, `spike`, validation retry, and edit-loop cap paths.
+- **Documentation** — added [`docs/bootstrap.md`](docs/bootstrap.md) and
+  refreshed workflow, CLI, getting-started, and archetype docs for bootstrap
+  and template-skip usage.
+
 ### Added — Profile registry & bundled roles
 
 - **`surge-core::profile::registry`** — pure inheritance + merge resolver.

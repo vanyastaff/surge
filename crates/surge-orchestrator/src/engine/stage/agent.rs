@@ -20,6 +20,7 @@ use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::OutcomeDecl;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
+use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
 
 use surge_core::hooks::HookTrigger;
@@ -46,6 +47,8 @@ pub struct AgentStageParams<'a> {
     pub bridge: &'a Arc<dyn BridgeFacade>,
     /// Run writer (events emitted here in Phase 6.2+).
     pub writer: &'a RunWriter,
+    /// Content-addressed artifact store for canonical run artifacts.
+    pub artifact_store: &'a ArtifactStore,
     /// Isolated git worktree path for this run.
     pub worktree_path: &'a Path,
     /// Dispatcher for non-injected ACP tool calls (wired in Phase 6.3).
@@ -443,28 +446,31 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             continue;
                         },
                     };
-                    let hash = ContentHash::compute(&bytes);
                     let path_buf = std::path::PathBuf::from(declared_path);
                     let name = path_buf
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .map_or_else(|| declared_path.clone(), str::to_owned);
+                    let artifact_ref = p
+                        .artifact_store
+                        .put(p.run_id, &name, &bytes)
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
                     tracing::info!(
                         target: "engine::stage::agent",
                         node = %p.node,
                         name = %name,
-                        hash = %hash,
+                        hash = %artifact_ref.hash,
+                        store_path = %artifact_ref.path.display(),
                         "artifact_produced"
                     );
                     p.writer
-                        .append_event(VersionedEventPayload::new(
-                            EventPayload::ArtifactProduced {
-                                node: p.node.clone(),
-                                artifact: hash,
-                                path: path_buf,
-                                name,
-                            },
-                        ))
+                        .append_event(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                            node: p.node.clone(),
+                            artifact: artifact_ref.hash,
+                            path: artifact_ref.path,
+                            name,
+                        }))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
                 }

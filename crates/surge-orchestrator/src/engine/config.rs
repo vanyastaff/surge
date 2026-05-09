@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use surge_core::id::RunId;
 use surge_core::mcp_config::McpServerRef;
 
 use crate::profile_loader::ProfileRegistry;
@@ -68,6 +69,10 @@ pub struct EngineRunConfig {
     /// runs).
     #[serde(default)]
     pub initial_prompt: String,
+    /// Optional bootstrap run whose produced planning artifacts should seed
+    /// this run before the first stage executes.
+    #[serde(default)]
+    pub bootstrap_parent: Option<RunId>,
     /// Bootstrap-flow knobs. Default values are tuned for the bundled
     /// bootstrap graph; non-bootstrap runs ignore the section entirely.
     #[serde(default)]
@@ -106,6 +111,7 @@ impl Default for EngineRunConfig {
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
             initial_prompt: String::new(),
+            bootstrap_parent: None,
             bootstrap: BootstrapRunConfig::default(),
         }
     }
@@ -155,6 +161,7 @@ mod tests {
                 true,
             )],
             initial_prompt: String::new(),
+            bootstrap_parent: None,
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -172,6 +179,7 @@ mod tests {
         // Legacy blobs without `initial_prompt` must default to the empty
         // string so the engine treats them as non-bootstrap runs.
         assert!(parsed.initial_prompt.is_empty());
+        assert!(parsed.bootstrap_parent.is_none());
     }
 
     #[test]
@@ -181,11 +189,24 @@ mod tests {
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
             initial_prompt: "fix the broken cart-total bug".into(),
+            bootstrap_parent: None,
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.initial_prompt, "fix the broken cart-total bug");
+    }
+
+    #[test]
+    fn engine_run_config_serializes_bootstrap_parent() {
+        let parent = RunId::new();
+        let cfg = EngineRunConfig {
+            bootstrap_parent: Some(parent),
+            ..EngineRunConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.bootstrap_parent, Some(parent));
     }
 
     #[test]
@@ -210,6 +231,7 @@ mod tests {
             stage_timeout_override: None,
             mcp_servers: Vec::new(),
             initial_prompt: String::new(),
+            bootstrap_parent: None,
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
         };
         let json = serde_json::to_string(&cfg).unwrap();

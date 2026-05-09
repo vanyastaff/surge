@@ -200,7 +200,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: NodeKey::try_from("start").unwrap(),
             nodes: BTreeMap::new(),

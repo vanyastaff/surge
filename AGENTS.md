@@ -93,6 +93,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Docs index | `docs/README.md` | Listing of all detailed documentation pages. |
 | Getting Started | `docs/getting-started.md` | Requirements, build, run examples, agent configuration, smoke tests. |
 | CLI | `docs/cli.md` | Command surface, two execution paths, current → target mapping. |
+| Bootstrap | `docs/bootstrap.md` | Adaptive prompt → description → roadmap → flow generation, approvals, archetypes, template skip. |
 | Workflow | `docs/workflow.md` | AFK workflow, flow model, intake sources, run lifecycle. |
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |

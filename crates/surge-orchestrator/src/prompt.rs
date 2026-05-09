@@ -214,4 +214,74 @@ mod tests {
         let surge_err: SurgeError = err.into();
         assert!(matches!(surge_err, SurgeError::Config(msg) if msg.contains("template")));
     }
+
+    fn bundled_prompt(name: &str) -> String {
+        surge_core::profile::bundled::BundledRegistry::by_name_latest(name)
+            .unwrap_or_else(|| panic!("{name} must be bundled"))
+            .prompt
+            .system
+    }
+
+    fn representative_bootstrap_bindings() -> Vec<(TemplateVar, String)> {
+        vec![
+            (
+                TemplateVar("user_prompt".into()),
+                "Build an AFK coding workflow that drafts a roadmap, asks for approval, and then \
+                 opens a PR."
+                    .into(),
+            ),
+            (
+                TemplateVar("description_artifact".into()),
+                "## Goal\nCreate a bootstrap flow for adaptive project execution.\n\n\
+                 ## Requirements\n- Produce description.md\n- Produce roadmap.md"
+                    .into(),
+            ),
+            (
+                TemplateVar("roadmap_artifact".into()),
+                "## Milestones\n1. Bootstrap graph asset\n2. CLI entrypoint\n\n\
+                 ## Dependencies\nBootstrap graph before CLI entrypoint."
+                    .into(),
+            ),
+            (
+                TemplateVar("edit_feedback".into()),
+                "Tighten the scope and make the terminal outcome explicit.".into(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn snapshot_description_author_prompt() {
+        let renderer = PromptRenderer::strict();
+        let out = renderer
+            .render(
+                &bundled_prompt("description-author"),
+                &representative_bootstrap_bindings(),
+            )
+            .unwrap();
+        insta::assert_snapshot!("description_author_bootstrap_prompt", out);
+    }
+
+    #[test]
+    fn snapshot_roadmap_planner_prompt() {
+        let renderer = PromptRenderer::strict();
+        let out = renderer
+            .render(
+                &bundled_prompt("roadmap-planner"),
+                &representative_bootstrap_bindings(),
+            )
+            .unwrap();
+        insta::assert_snapshot!("roadmap_planner_bootstrap_prompt", out);
+    }
+
+    #[test]
+    fn snapshot_flow_generator_prompt() {
+        let renderer = PromptRenderer::strict();
+        let out = renderer
+            .render(
+                &bundled_prompt("flow-generator"),
+                &representative_bootstrap_bindings(),
+            )
+            .unwrap();
+        insta::assert_snapshot!("flow_generator_bootstrap_prompt", out);
+    }
 }

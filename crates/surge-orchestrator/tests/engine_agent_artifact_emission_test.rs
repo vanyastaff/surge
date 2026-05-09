@@ -67,6 +67,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -100,6 +101,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
@@ -140,15 +142,22 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
                 name,
             } => {
                 assert_eq!(producer, &node, "producer node mismatch");
-                let normalized_path = path.to_string_lossy().replace('\\', "/");
                 match name.as_str() {
                     "spec" => {
                         assert_eq!(artifact, &expected_spec_hash);
-                        assert_eq!(normalized_path, "spec.md");
+                        assert_eq!(
+                            path.file_name().unwrap(),
+                            expected_spec_hash.to_hex().as_str()
+                        );
+                        assert_eq!(std::fs::read(path).unwrap(), spec_body);
                     },
                     "design" => {
                         assert_eq!(artifact, &expected_design_hash);
-                        assert_eq!(normalized_path, "design.md");
+                        assert_eq!(
+                            path.file_name().unwrap(),
+                            expected_design_hash.to_hex().as_str()
+                        );
+                        assert_eq!(std::fs::read(path).unwrap(), design_body);
                     },
                     other => panic!("unexpected ArtifactProduced.name: {other}"),
                 }
@@ -166,8 +175,14 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         2,
         "expected one ArtifactProduced event per declared path, got {artifact_indices:?}",
     );
-    assert_eq!(artifact_indices[0].1, "spec", "spec.md must be emitted first");
-    assert_eq!(artifact_indices[1].1, "design", "design.md must be emitted second");
+    assert_eq!(
+        artifact_indices[0].1, "spec",
+        "spec.md must be emitted first"
+    );
+    assert_eq!(
+        artifact_indices[1].1, "design",
+        "design.md must be emitted second"
+    );
     let outcome_idx = outcome_index.expect("OutcomeReported must be persisted");
     assert!(
         artifact_indices.iter().all(|(i, _)| *i < outcome_idx),
@@ -190,6 +205,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -223,6 +239,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
@@ -259,5 +276,8 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         vec!["real".to_string()],
         "only the existing path should produce an ArtifactProduced event",
     );
-    assert!(saw_outcome, "OutcomeReported must still be appended even when one declared artifact path is missing");
+    assert!(
+        saw_outcome,
+        "OutcomeReported must still be appended even when one declared artifact path is missing"
+    );
 }

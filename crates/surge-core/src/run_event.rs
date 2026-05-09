@@ -1,6 +1,7 @@
 //! Run event log entry — append-only event-sourced data model.
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
+use crate::archetype::ArchetypeMetadata;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
 use crate::graph::Graph;
@@ -96,6 +97,11 @@ pub enum EventPayload {
     BootstrapEditRequested {
         stage: BootstrapStage,
         feedback: String,
+    },
+    BootstrapTelemetry {
+        stage_durations: BTreeMap<BootstrapStage, u64>,
+        edit_counts: BTreeMap<BootstrapStage, u32>,
+        archetype: Option<ArchetypeMetadata>,
     },
 
     // Pipeline construction
@@ -337,6 +343,7 @@ impl EventPayload {
             Self::BootstrapApprovalRequested { .. } => "BootstrapApprovalRequested",
             Self::BootstrapApprovalDecided { .. } => "BootstrapApprovalDecided",
             Self::BootstrapEditRequested { .. } => "BootstrapEditRequested",
+            Self::BootstrapTelemetry { .. } => "BootstrapTelemetry",
             Self::PipelineMaterialized { .. } => "PipelineMaterialized",
             Self::StageEntered { .. } => "StageEntered",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
@@ -452,6 +459,31 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_telemetry_roundtrip() {
+        let mut stage_durations = BTreeMap::new();
+        stage_durations.insert(BootstrapStage::Description, 120);
+        stage_durations.insert(BootstrapStage::Roadmap, 340);
+        stage_durations.insert(BootstrapStage::Flow, 560);
+
+        let mut edit_counts = BTreeMap::new();
+        edit_counts.insert(BootstrapStage::Flow, 2);
+
+        let payload = EventPayload::BootstrapTelemetry {
+            stage_durations,
+            edit_counts,
+            archetype: Some(ArchetypeMetadata {
+                name: crate::archetype::ArchetypeName::Linear3,
+                milestones: Some(1),
+                edit_loop_cap: Some(3),
+            }),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "BootstrapTelemetry");
+    }
+
+    #[test]
     fn versioned_wrapper_roundtrip() {
         let v = VersionedEventPayload::new(EventPayload::RunCompleted {
             terminal_node: NodeKey::try_from("end").unwrap(),
@@ -518,7 +550,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: end,
             nodes,
@@ -615,8 +647,7 @@ mod tests {
         // those events decodable as `EdgeKind::Forward`. EventPayload is
         // internally tagged (`tag = "type"`, `rename_all = "snake_case"`),
         // so the legacy on-disk shape is a flat object.
-        let legacy_json =
-            r#"{"type":"edge_traversed","edge":"e_done","from":"a","to":"b"}"#;
+        let legacy_json = r#"{"type":"edge_traversed","edge":"e_done","from":"a","to":"b"}"#;
         let parsed: EventPayload = serde_json::from_str(legacy_json).unwrap();
         match parsed {
             EventPayload::EdgeTraversed { kind, .. } => {

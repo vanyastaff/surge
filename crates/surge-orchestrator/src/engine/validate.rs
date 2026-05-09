@@ -169,9 +169,8 @@ pub fn validate_archetype_topology(graph: &Graph) -> Result<(), EngineError> {
             } else {
                 Err(EngineError::ArchetypeMismatch {
                     declared: archetype.name.as_str().to_owned(),
-                    detected:
-                        "no Loop node iterating over an artifact named 'roadmap.milestones'"
-                            .to_owned(),
+                    detected: "no Loop node iterating over an artifact named 'roadmap.milestones'"
+                        .to_owned(),
                 })
             }
         },
@@ -380,7 +379,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: key,
             nodes,
@@ -469,7 +468,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: loop_key,
             nodes,
@@ -543,7 +542,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: loop_key,
             nodes,
@@ -616,7 +615,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
-            archetype: None,
+                archetype: None,
             },
             start: n_a,
             nodes,
@@ -652,7 +651,12 @@ mod tests {
         }
     }
 
-    fn forward_edge(id: &str, from_node: &str, from_outcome: &str, to: &str) -> surge_core::edge::Edge {
+    fn forward_edge(
+        id: &str,
+        from_node: &str,
+        from_outcome: &str,
+        to: &str,
+    ) -> surge_core::edge::Edge {
         use surge_core::edge::{EdgePolicy, PortRef};
         use surge_core::keys::EdgeKey;
         surge_core::edge::Edge {
@@ -1042,5 +1046,23 @@ mod tests {
         };
 
         assert!(validate_archetype_topology(&g).is_ok());
+    }
+
+    #[test]
+    fn golden_multi_milestone_flow_from_mock_agent_validates() {
+        let raw = include_str!("../../tests/fixtures/golden_multi_milestone_flow.toml");
+        let graph: Graph = toml::from_str(raw).expect("golden flow TOML parses");
+
+        validate_for_m6(&graph).expect("golden multi-milestone graph is structurally valid");
+        validate_archetype_topology(&graph)
+            .expect("golden multi-milestone graph matches declared archetype");
+
+        let archetype = graph
+            .metadata
+            .archetype
+            .as_ref()
+            .expect("golden flow declares archetype metadata");
+        assert_eq!(archetype.name, ArchetypeName::MultiMilestone);
+        assert_eq!(archetype.milestones, Some(3));
     }
 }

@@ -82,6 +82,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -122,6 +123,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
@@ -177,6 +179,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -213,6 +216,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,

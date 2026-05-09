@@ -2,7 +2,7 @@
 
 # Getting Started
 
-This page walks through installing Surge from source, building the workspace, running the smallest possible flow, and configuring an ACP-compatible coding agent.
+This page walks through installing Surge from source, building the workspace, running the bootstrap path, and configuring an ACP-compatible coding agent.
 
 ## Requirements
 
@@ -63,12 +63,30 @@ cargo run -p surge-cli --bin surge -- ping --agent claude
 cargo run -p surge-cli --bin surge -- prompt "Summarize this repository" --agent claude
 ```
 
+## Run the Bootstrap Path
+
+The canonical first useful run is bootstrap:
+
+```bash
+cargo run -p surge-cli --bin surge -- bootstrap "add a small health-check command to this project"
+```
+
+Bootstrap generates `description.md`, `roadmap.md`, and `flow.toml`, asks for
+console approval after each artifact, then starts the generated follow-up graph.
+See [Bootstrap](bootstrap.md) for the edit loop, archetypes, and resume path.
+
 ## Run the Minimal Agent Graph
 
 `examples/flow_minimal_agent.toml` is the smallest flow that opens an ACP session. Run it once at least one agent is wired up:
 
 ```bash
 cargo run -p surge-cli --bin surge -- engine run examples/flow_minimal_agent.toml --watch
+```
+
+You can also skip bootstrap with a bundled template:
+
+```bash
+cargo run -p surge-cli --bin surge -- engine run --template linear-3 --watch
 ```
 
 ## Local State
@@ -78,5 +96,6 @@ Local runtime state lives under `~/.surge/`, including run databases and daemon 
 ## See Also
 
 - [CLI](cli.md) — full `surge` command surface and current-to-target mapping
+- [Bootstrap](bootstrap.md) — adaptive flow generation from a free-form prompt
 - [Workflow](workflow.md) — how a run flows through bootstrap, the engine, and the event log
 - [Development](development.md) — running tests, lints, and ignored long-running checks

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
 /// Central orchestration engine. Drives one or more concurrent runs, each
 /// executing a frozen [`Graph`] through ACP sessions and persistence writes.
@@ -150,6 +151,15 @@ impl Engine {
         self.config.profile_registry.as_ref()
     }
 
+    /// Clone the storage handle backing this engine.
+    ///
+    /// Kept crate-visible for orchestration helpers that need to inspect a
+    /// completed run's event log without widening the public `Engine` API.
+    #[must_use]
+    pub(crate) fn storage(&self) -> Arc<surge_persistence::runs::Storage> {
+        self.storage.clone()
+    }
+
     /// Start a new run.
     #[allow(clippy::too_many_lines)]
     pub async fn start_run(
@@ -186,6 +196,8 @@ impl Engine {
             .create_run(run_id, &worktree_path, None)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
         // Emit RunStarted + PipelineMaterialized atomically.
         let core_run_config = CoreRunConfig {
@@ -211,6 +223,13 @@ impl Engine {
             }),
         ];
 
+        if let Some(parent_run_id) = run_config.bootstrap_parent {
+            let inherited = self
+                .bootstrap_parent_artifact_events(&artifact_store, run_id, parent_run_id)
+                .await?;
+            events.extend(inherited);
+        }
+
         // Surface the operator's free-form prompt as a first-class artifact so
         // bootstrap (or any) agent stage can pull it via the standard binding
         // path through `ArtifactSource::InitialPrompt` (and equivalently via
@@ -234,14 +253,12 @@ impl Engine {
                 prompt_len = run_config.initial_prompt.len(),
                 "seeded user_prompt artifact",
             );
-            events.push(VersionedEventPayload::new(
-                EventPayload::ArtifactProduced {
-                    node: prompt_artifact.producer,
-                    artifact: prompt_artifact.hash,
-                    path: prompt_artifact.relative_path,
-                    name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
-                },
-            ));
+            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: prompt_artifact.producer,
+                artifact: prompt_artifact.hash,
+                path: prompt_artifact.relative_path,
+                name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
+            }));
         }
 
         writer
@@ -280,6 +297,7 @@ impl Engine {
         let params = RunTaskParams {
             run_id,
             writer,
+            artifact_store,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),
@@ -311,6 +329,106 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    async fn bootstrap_parent_artifact_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        child_run_id: RunId,
+        parent_run_id: RunId,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        use surge_core::keys::NodeKey;
+        use surge_core::run_state::ArtifactRef;
+        use surge_persistence::runs::EventSeq;
+
+        const BOOTSTRAP_PARENT_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
+        const BOOTSTRAP_PARENT_NODE: &str = "bootstrap_parent";
+
+        let reader = self
+            .storage
+            .open_run_reader(parent_run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let current = reader
+            .current_seq()
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let parent_events = reader
+            .read_events(EventSeq(1)..current.next())
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        let mut parent_worktree = None;
+        let mut artifacts = std::collections::BTreeMap::new();
+        for event in parent_events {
+            match event.payload.payload {
+                EventPayload::RunStarted { project_path, .. } => {
+                    parent_worktree = Some(project_path);
+                },
+                EventPayload::ArtifactProduced {
+                    node,
+                    artifact,
+                    path,
+                    name,
+                } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str()) => {
+                    artifacts.insert(
+                        name.clone(),
+                        ArtifactRef {
+                            hash: artifact,
+                            path,
+                            name,
+                            produced_by: node,
+                            produced_at_seq: event.seq.as_u64(),
+                        },
+                    );
+                },
+                _ => {},
+            }
+        }
+
+        let parent_worktree = parent_worktree.ok_or_else(|| {
+            EngineError::Internal(format!(
+                "bootstrap parent {parent_run_id} has no RunStarted event"
+            ))
+        })?;
+        let inherited_node = NodeKey::try_from(BOOTSTRAP_PARENT_NODE).map_err(|e| {
+            EngineError::Internal(format!("invalid bootstrap parent producer key: {e}"))
+        })?;
+
+        let mut inherited_events = Vec::with_capacity(BOOTSTRAP_PARENT_ARTIFACTS.len());
+        for name in BOOTSTRAP_PARENT_ARTIFACTS {
+            let artifact = artifacts.get(name).ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "bootstrap parent {parent_run_id} is missing required artifact {name}"
+                ))
+            })?;
+            let bytes = artifact_store
+                .open_ref(parent_run_id, artifact, &parent_worktree)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+            let child_ref = artifact_store
+                .put(child_run_id, name, &bytes)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %child_run_id,
+                bootstrap_parent = %parent_run_id,
+                artifact = name,
+                hash = %child_ref.hash,
+                "inherited bootstrap artifact",
+            );
+
+            inherited_events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: inherited_node.clone(),
+                artifact: child_ref.hash,
+                path: child_ref.path,
+                name: name.to_owned(),
+            }));
+        }
+
+        Ok(inherited_events)
     }
 
     /// Resume an existing run from its latest snapshot + event tail.
@@ -400,10 +518,13 @@ impl Engine {
             )))
         };
         let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
         let params = RunTaskParams {
             run_id,
             writer,
+            artifact_store,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),

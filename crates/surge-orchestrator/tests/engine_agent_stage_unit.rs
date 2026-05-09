@@ -49,6 +49,7 @@ async fn agent_stage_loops_until_outcome_reported() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -85,6 +86,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,

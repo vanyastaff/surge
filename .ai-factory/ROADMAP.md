@@ -50,7 +50,7 @@
   - Resolution surfaces clear errors when a referenced profile is missing or version mismatch
   - Documentation: profile authoring guide in `docs/`
 
-- [ ] **Bootstrap & adaptive flow generation** — three-stage Description → Roadmap → Flow with HumanGate after each (touches `surge-orchestrator`, `surge-core`, `surge-notify`, `surge-cli`)
+- [x] **Bootstrap & adaptive flow generation** — three-stage Description → Roadmap → Flow with HumanGate after each (touches `surge-orchestrator`, `surge-core`, `surge-notify`, `surge-cli`)
   - Description Author Agent profile produces `description.md` (goal, context, requirements, out-of-scope)
   - Roadmap Planner Agent profile produces `roadmap.md` (milestones + tasks + dependencies)
   - Flow Generator Agent profile emits validated `flow.toml`, picks profiles from registry
@@ -263,3 +263,4 @@
 | Inbox + intake pipeline | 2026-05-06 |
 | Graph engine GA | 2026-05-07 |
 | Profile registry & bundled roles | 2026-05-07 |
+| Bootstrap & adaptive flow generation | 2026-05-09 |

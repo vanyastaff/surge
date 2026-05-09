@@ -21,8 +21,8 @@ use surge_core::hooks::HookTrigger;
 use surge_core::id::RunId;
 use surge_core::keys::OutcomeKey;
 use surge_core::node::NodeConfig;
-use surge_core::run_event::{EventPayload, VersionedEventPayload};
-use surge_core::run_state::{Cursor, OutcomeRecord, RunMemory};
+use surge_core::run_event::{EventPayload, RunEvent, VersionedEventPayload};
+use surge_core::run_state::{Cursor, RunMemory};
 use surge_notify::NotifyDeliverer;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::broadcast;
@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct RunTaskParams {
     pub run_id: RunId,
     pub writer: RunWriter,
+    pub artifact_store: surge_persistence::artifacts::ArtifactStore,
     pub bridge: Arc<dyn BridgeFacade>,
     pub tool_dispatcher: Arc<dyn ToolDispatcher>,
     pub notify_deliverer: Arc<dyn NotifyDeliverer>,
@@ -92,7 +93,13 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
     // One executor per run task: stateless aside from its spawner, so a
     // fresh `HookExecutor::new()` is the simplest non-overengineered choice.
     let hook_executor = HookExecutor::new();
-    let mut memory = params.resume_memory.clone().unwrap_or_default();
+    let mut memory = match params.resume_memory.clone() {
+        Some(memory) => memory,
+        None => match load_existing_memory(&params.writer, params.run_id).await {
+            Ok(memory) => memory,
+            Err(e) => return failed(&params, format!("load existing memory: {e}")).await,
+        },
+    };
     let mut frames: Vec<crate::engine::frames::Frame> =
         params.resume_frames.clone().unwrap_or_default();
     let mut root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> =
@@ -135,6 +142,10 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         {
             return failed(&params, format!("write StageEntered: {e}")).await;
         }
+        let stage_start_seq = match params.writer.current_seq().await {
+            Ok(seq) => seq,
+            Err(e) => return failed(&params, format!("current_seq after StageEntered: {e}")).await,
+        };
 
         // Dispatch.
         let stage_result: Result<StageOutcome, StageError> = match &node.config {
@@ -145,6 +156,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     declared_outcomes: &node.declared_outcomes,
                     bridge: &params.bridge,
                     writer: &params.writer,
+                    artifact_store: &params.artifact_store,
                     worktree_path: &params.worktree_path,
                     tool_dispatcher: &params.tool_dispatcher,
                     run_memory: &memory,
@@ -181,9 +193,11 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                             Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => {
                                 Ok(outcome)
                             },
-                            Ok(crate::engine::bootstrap::FlowValidationDecision::EditRequested {
-                                ..
-                            }) => Ok(OutcomeKey::try_from(
+                            Ok(
+                                crate::engine::bootstrap::FlowValidationDecision::EditRequested {
+                                    ..
+                                },
+                            ) => Ok(OutcomeKey::try_from(
                                 crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
                             )
                             .expect("'validation_failed' is a valid OutcomeKey")),
@@ -193,12 +207,11 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                                 stage: surge_core::run_event::BootstrapStage::Flow,
                                 cap,
                             }),
-                            Ok(crate::engine::bootstrap::FlowValidationDecision::MissingArtifact) => {
-                                Err(StageError::Internal(
-                                    "Flow Generator stage finished without producing flow.toml"
-                                        .into(),
-                                ))
-                            },
+                            Ok(
+                                crate::engine::bootstrap::FlowValidationDecision::MissingArtifact,
+                            ) => Err(StageError::Internal(
+                                "Flow Generator stage finished without producing flow.toml".into(),
+                            )),
                             Err(e) => Err(e),
                         }
                     },
@@ -491,16 +504,18 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             },
         };
 
-        // Update memory with outcome (best-effort; storage's own seq is the source of truth).
-        memory
-            .outcomes
-            .entry(cursor.node.clone())
-            .or_default()
-            .push(OutcomeRecord {
-                outcome: outcome.clone(),
-                summary: String::new(),
-                seq: 0,
-            });
+        if let Err(e) =
+            apply_memory_events_after(&params.writer, params.run_id, stage_start_seq, &mut memory)
+                .await
+        {
+            return failed(&params, format!("update run memory from event log: {e}")).await;
+        }
+        let stage_events_applied_seq = match params.writer.current_seq().await {
+            Ok(seq) => seq,
+            Err(e) => {
+                return failed(&params, format!("current_seq after memory update: {e}")).await;
+            },
+        };
 
         // Route to next node.
         let routed = match crate::engine::routing::next_node_after_with_counters(
@@ -589,6 +604,16 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 outcome: outcome.clone(),
             }))
             .await;
+        if let Err(e) = apply_memory_events_after(
+            &params.writer,
+            params.run_id,
+            stage_events_applied_seq,
+            &mut memory,
+        )
+        .await
+        {
+            return failed(&params, format!("update run memory after routing: {e}")).await;
+        }
 
         // Snapshot at stage boundary (per spec §2.6, §12).
         let next_cursor = Cursor {
@@ -708,6 +733,51 @@ pub(crate) async fn run_on_error_hooks(
         HookOutcome::Reject { .. } | HookOutcome::Proceed { .. } => None,
     };
     OnErrorResolution { outcome, records }
+}
+
+async fn load_existing_memory(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    run_id: RunId,
+) -> Result<RunMemory, surge_persistence::runs::StorageError> {
+    let current = writer.current_seq().await?;
+    let events = writer
+        .read_events(surge_persistence::runs::EventSeq(1)..current.next())
+        .await?;
+    let mut memory = RunMemory::default();
+    apply_read_events(run_id, &events, &mut memory);
+    Ok(memory)
+}
+
+async fn apply_memory_events_after(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    run_id: RunId,
+    after: surge_persistence::runs::EventSeq,
+    memory: &mut RunMemory,
+) -> Result<(), surge_persistence::runs::StorageError> {
+    let current = writer.current_seq().await?;
+    if current <= after {
+        return Ok(());
+    }
+    let events = writer.read_events(after.next()..current.next()).await?;
+    apply_read_events(run_id, &events, memory);
+    Ok(())
+}
+
+fn apply_read_events(
+    run_id: RunId,
+    events: &[surge_persistence::runs::ReadEvent],
+    memory: &mut RunMemory,
+) {
+    for event in events {
+        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.timestamp_ms)
+            .unwrap_or_else(chrono::Utc::now);
+        memory.apply_event(&RunEvent {
+            run_id,
+            seq: event.seq.as_u64(),
+            timestamp,
+            payload: event.payload.payload.clone(),
+        });
+    }
 }
 
 async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {

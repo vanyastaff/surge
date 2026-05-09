@@ -40,16 +40,28 @@ pub struct Binding {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArtifactSource {
-    NodeOutput { node: NodeKey, artifact: String },
-    RunArtifact { name: String },
-    GlobPattern { node: NodeKey, pattern: String },
-    Static { content: String },
+    NodeOutput {
+        node: NodeKey,
+        artifact: String,
+    },
+    RunArtifact {
+        name: String,
+    },
+    GlobPattern {
+        node: NodeKey,
+        pattern: String,
+    },
+    Static {
+        content: String,
+    },
     /// Operator-supplied free-text feedback from the most recent
     /// `BootstrapEditRequested` event whose target stage corresponds to
     /// `from_node`. Resolves to an empty string when no edit has yet
     /// occurred. Used by bootstrap profiles when re-entered via the
     /// `Backtrack` edge after an `edit` HumanGate decision.
-    EditFeedback { from_node: NodeKey },
+    EditFeedback {
+        from_node: NodeKey,
+    },
     /// The pipeline run's initial prompt as captured in `RunStarted.initial_prompt`.
     /// Synthesized into `RunMemory` at run start under the artifact name
     /// `"user_prompt"`; this variant is the canonical way for bootstrap

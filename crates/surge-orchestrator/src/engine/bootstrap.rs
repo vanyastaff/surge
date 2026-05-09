@@ -81,19 +81,18 @@ pub enum FlowValidationDecision {
     MissingArtifact,
 }
 
-/// Locate the produced `flow.toml`. Prefer the most recently produced
-/// artifact named `flow` recorded in [`RunMemory.artifacts`] (populated by
-/// the standard `ArtifactProduced` fold rule); fall back to the canonical
-/// worktree-rooted path so a partially-folded memory snapshot does not lose
-/// the artifact pointer.
+/// Locate the produced `flow.toml`. Prefer the canonical worktree-rooted file
+/// because post-processing runs before the current stage's `ArtifactProduced`
+/// event has been folded into [`RunMemory`]. Fall back to the most recently
+/// folded artifact named `flow` for resumed or partially reconstructed runs.
 fn locate_flow_artifact(memory: &RunMemory, worktree: &Path) -> Option<PathBuf> {
-    if let Some(artifact) = memory.artifacts.get("flow") {
-        let absolute = worktree.join(&artifact.path);
-        return Some(absolute);
-    }
     let canonical = worktree.join(FLOW_ARTIFACT_FILENAME);
     if canonical.exists() {
         return Some(canonical);
+    }
+    if let Some(artifact) = memory.artifacts.get("flow") {
+        let absolute = worktree.join(&artifact.path);
+        return Some(absolute);
     }
     None
 }
@@ -280,9 +279,7 @@ async fn route_validation_failure(
             ))
             .await
             .map_err(|e| StageError::Storage(format!("append EscalationRequested: {e}")))?;
-        return Ok(FlowValidationDecision::CapExceeded {
-            cap: edit_loop_cap,
-        });
+        return Ok(FlowValidationDecision::CapExceeded { cap: edit_loop_cap });
     }
 
     if edit_loop_cap > 0 && prior_edits + 1 == edit_loop_cap {
@@ -425,7 +422,9 @@ mod tests {
 
     /// Spin up a fresh per-run Storage and return the writer plus the run id
     /// so the test can later open a reader against the same root.
-    async fn fresh_writer(home: &Path) -> (Arc<Storage>, RunId, surge_persistence::runs::RunWriter) {
+    async fn fresh_writer(
+        home: &Path,
+    ) -> (Arc<Storage>, RunId, surge_persistence::runs::RunWriter) {
         let storage = Storage::open(home).await.expect("open storage");
         let run_id = RunId::new();
         let writer = storage
@@ -436,10 +435,7 @@ mod tests {
     }
 
     async fn payload_kinds(storage: &Arc<Storage>, run_id: RunId) -> Vec<&'static str> {
-        let reader = storage
-            .open_run_reader(run_id)
-            .await
-            .expect("open reader");
+        let reader = storage.open_run_reader(run_id).await.expect("open reader");
         let events = reader
             .read_events(EventSeq(0)..EventSeq(64))
             .await
@@ -450,14 +446,8 @@ mod tests {
             .collect()
     }
 
-    async fn synthetic_outcome_value(
-        storage: &Arc<Storage>,
-        run_id: RunId,
-    ) -> Option<String> {
-        let reader = storage
-            .open_run_reader(run_id)
-            .await
-            .expect("open reader");
+    async fn synthetic_outcome_value(storage: &Arc<Storage>, run_id: RunId) -> Option<String> {
+        let reader = storage.open_run_reader(run_id).await.expect("open reader");
         let events = reader
             .read_events(EventSeq(0)..EventSeq(64))
             .await
@@ -513,7 +503,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let worktree = tmp.path().join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(worktree.join(FLOW_ARTIFACT_FILENAME), "this is not toml = = =").unwrap();
+        std::fs::write(
+            worktree.join(FLOW_ARTIFACT_FILENAME),
+            "this is not toml = = =",
+        )
+        .unwrap();
 
         let (storage, run_id, writer) = fresh_writer(tmp.path()).await;
         let memory = RunMemory::default();
@@ -688,6 +682,9 @@ mod tests {
             .await
             .expect("post processing");
 
-        assert!(matches!(decision, FlowValidationDecision::EditRequested { .. }));
+        assert!(matches!(
+            decision,
+            FlowValidationDecision::EditRequested { .. }
+        ));
     }
 }

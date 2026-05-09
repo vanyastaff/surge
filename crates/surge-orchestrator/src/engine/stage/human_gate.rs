@@ -80,14 +80,11 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
                 stage = ?stage,
                 "human gate dispatched in Bootstrap mode"
             );
-            let channel = p
-                .gate_config
-                .delivery_channels
-                .first()
-                .cloned()
-                .unwrap_or(ApprovalChannel::Desktop {
+            let channel = p.gate_config.delivery_channels.first().cloned().unwrap_or(
+                ApprovalChannel::Desktop {
                     duration: surge_core::approvals::ApprovalDuration::Transient,
-                });
+                },
+            );
             p.writer
                 .append_event(VersionedEventPayload::new(
                     EventPayload::BootstrapApprovalRequested {
@@ -432,7 +429,9 @@ mod tests {
     ) -> Vec<&'static str> {
         let reader = storage.open_run_reader(run_id).await.unwrap();
         let events = reader
-            .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+            )
             .await
             .unwrap();
         events
@@ -582,10 +581,15 @@ mod tests {
 
         let reader = storage.open_run_reader(run_id).await.unwrap();
         let events = reader
-            .read_events(surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64))
+            .read_events(
+                surge_persistence::runs::EventSeq(0)..surge_persistence::runs::EventSeq(64),
+            )
             .await
             .unwrap();
-        let kinds: Vec<&str> = events.iter().map(|re| re.payload.payload.discriminant_str()).collect();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|re| re.payload.payload.discriminant_str())
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -739,7 +743,8 @@ mod tests {
 
         let cfg = bootstrap_gate_config(BootstrapStage::Description);
         let mut mem = RunMemory::default();
-        mem.bootstrap_edit_counts.insert(BootstrapStage::Description, 3);
+        mem.bootstrap_edit_counts
+            .insert(BootstrapStage::Description, 3);
         let node = NodeKey::try_from("description_gate").unwrap();
 
         let (tx, rx) = oneshot::channel();

@@ -44,6 +44,9 @@
 
 pub use error::{PersistenceError, Result};
 
+/// Content-addressed artifact store for run outputs.
+pub mod artifacts;
+
 /// Event aggregator for token usage
 pub mod aggregator;
 
