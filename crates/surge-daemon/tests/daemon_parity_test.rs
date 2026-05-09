@@ -1,24 +1,17 @@
 //! Task 3.3 — regression-guarding parity test.
 //!
-//! Runs `flow_terminal_only.toml` through both
+//! Runs `flow_terminal_only.toml`, `flow_minimal_agent.toml`, and one new
+//! archetype through both
 //! [`LocalEngineFacade`] (direct in-process) and
 //! [`DaemonEngineFacade`] (IPC over a local socket against an
 //! inline-spawned `surge-daemon` server) and asserts the resulting
 //! event sequence is identical modulo wall-clock fields.
 //!
-//! Why terminal-only: the engine reaches `RunCompleted` without
-//! needing an ACP turn loop, so events are deterministic across
-//! both paths. Agent-bearing archetypes require scenario-aware
-//! mock-ACP scripting (covered by `archetypes_mock_test.rs` in
-//! `surge-orchestrator/tests/`), and their event order against a
-//! non-deterministic mock turn loop would not parity-compare
-//! cleanly.
-//!
-//! Future extensions: once `mock_acp_agent.rs` exposes a
-//! `report_sequence` scenario that produces a deterministic event
-//! log against any of the new archetypes, this test should be
-//! extended to include it.
+//! The local bridge used here deterministically reports the first declared
+//! outcome after every agent prompt, which keeps agent-bearing flows comparable
+//! across local and daemon paths.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,9 +23,9 @@ use surge_acp::bridge::error::{
 use surge_acp::bridge::event::{BridgeEvent, ToolResultPayload};
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{MessageContent, SessionConfig, SessionState};
-use surge_core::SessionId;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::{OutcomeKey, SessionId};
 use surge_daemon::{ServerConfig, run_server};
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::{EngineFacade, LocalEngineFacade};
@@ -42,7 +35,7 @@ use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
 use surge_persistence::runs::Storage;
 use tempfile::TempDir;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 
 fn examples_dir() -> PathBuf {
@@ -68,36 +61,56 @@ fn unique_socket_path(temp: &TempDir, prefix: &str) -> PathBuf {
     temp.path().join(format!("{prefix}_{pid}_{nanos}.sock"))
 }
 
-/// Minimal stub bridge for parity-test usage. The terminal-only
-/// archetype never opens an ACP session, so every method is
-/// allowed to return Err / a default. Mirrors the shape of
-/// `daemon_e2e_smoke::StubFacade` but for [`BridgeFacade`].
-struct StubBridge {
+/// Deterministic bridge for parity-test usage. Terminal-only flows
+/// never call it; agent flows receive their first declared outcome
+/// immediately after the engine sends the stage prompt.
+struct AutoOutcomeBridge {
     tx: broadcast::Sender<BridgeEvent>,
+    outcomes: Mutex<HashMap<SessionId, OutcomeKey>>,
 }
 
-impl StubBridge {
+impl AutoOutcomeBridge {
     fn new() -> Self {
         let (tx, _) = broadcast::channel(8);
-        Self { tx }
+        Self {
+            tx,
+            outcomes: Mutex::new(HashMap::new()),
+        }
     }
 }
 
 #[async_trait]
-impl BridgeFacade for StubBridge {
-    async fn open_session(&self, _config: SessionConfig) -> Result<SessionId, OpenSessionError> {
-        // Terminal-only flow never opens an ACP session, so reaching
-        // this in the parity test would be a real failure. Return a
-        // clearly-labelled error rather than a default success.
-        Err(OpenSessionError::Bridge(BridgeError::WorkerDead))
+impl BridgeFacade for AutoOutcomeBridge {
+    async fn open_session(&self, config: SessionConfig) -> Result<SessionId, OpenSessionError> {
+        let session = SessionId::new();
+        let outcome = config
+            .declared_outcomes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
+        self.outcomes.lock().await.insert(session, outcome);
+        Ok(session)
     }
 
     async fn send_message(
         &self,
-        _session: SessionId,
+        session: SessionId,
         _content: MessageContent,
     ) -> Result<(), SendMessageError> {
-        Err(SendMessageError::Bridge(BridgeError::WorkerDead))
+        let outcome = self
+            .outcomes
+            .lock()
+            .await
+            .get(&session)
+            .cloned()
+            .unwrap_or_else(|| OutcomeKey::try_from("done").expect("'done' is a valid outcome"));
+        let _ = self.tx.send(BridgeEvent::OutcomeReported {
+            session,
+            outcome,
+            summary: "auto parity outcome".into(),
+            artifacts_produced: vec![],
+        });
+        Ok(())
     }
 
     async fn session_state(&self, _session: SessionId) -> Result<SessionState, BridgeError> {
@@ -124,7 +137,7 @@ impl BridgeFacade for StubBridge {
 
 async fn build_local_engine(dir: &Path) -> Arc<Engine> {
     let storage = Storage::open(dir).await.expect("storage");
-    let bridge = Arc::new(StubBridge::new()) as Arc<dyn BridgeFacade>;
+    let bridge = Arc::new(AutoOutcomeBridge::new()) as Arc<dyn BridgeFacade>;
     let dispatcher =
         Arc::new(WorktreeToolDispatcher::new(dir.to_path_buf())) as Arc<dyn ToolDispatcher>;
     Arc::new(Engine::new(
@@ -205,18 +218,11 @@ async fn run_through_facade<F: EngineFacade>(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn parity_flow_terminal_only_local_vs_daemon() {
+async fn parity_terminal_minimal_agent_and_spike_local_vs_daemon() {
     // --- Local path ---
     let local_dir = TempDir::new().unwrap();
     let local_engine = build_local_engine(local_dir.path()).await;
     let local_facade = LocalEngineFacade::new(local_engine);
-    let local_events = run_through_facade(
-        &local_facade,
-        "flow_terminal_only.toml",
-        local_dir.path().to_path_buf(),
-    )
-    .await;
-
     // --- Daemon path ---
     let daemon_dir = TempDir::new().unwrap();
     let daemon_engine = build_local_engine(daemon_dir.path()).await;
@@ -237,28 +243,30 @@ async fn parity_flow_terminal_only_local_vs_daemon() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let daemon_facade = DaemonEngineFacade::connect(socket).await.expect("connect");
-    let daemon_events = run_through_facade(
-        &daemon_facade,
+    for archetype in [
         "flow_terminal_only.toml",
-        daemon_dir.path().to_path_buf(),
-    )
-    .await;
+        "flow_minimal_agent.toml",
+        "flow_spike.toml",
+    ] {
+        let local_events =
+            run_through_facade(&local_facade, archetype, local_dir.path().to_path_buf()).await;
+        let daemon_events =
+            run_through_facade(&daemon_facade, archetype, daemon_dir.path().to_path_buf()).await;
+
+        assert_eq!(
+            local_events, daemon_events,
+            "{archetype}: local vs daemon event sequences must match modulo wall-clock fields\nLocal: {local_events:?}\nDaemon: {daemon_events:?}"
+        );
+        assert!(
+            local_events.iter().any(|e| e.starts_with("terminal:")),
+            "{archetype}: local sequence must include a Terminal event"
+        );
+        assert!(
+            daemon_events.iter().any(|e| e.starts_with("terminal:")),
+            "{archetype}: daemon sequence must include a Terminal event"
+        );
+    }
 
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
-
-    // --- Parity assertion ---
-    assert_eq!(
-        local_events, daemon_events,
-        "local vs daemon event sequences must match modulo wall-clock fields\nLocal: {local_events:?}\nDaemon: {daemon_events:?}"
-    );
-    // Sanity: at least one Terminal event in both.
-    assert!(
-        local_events.iter().any(|e| e.starts_with("terminal:")),
-        "local sequence must include a Terminal event"
-    );
-    assert!(
-        daemon_events.iter().any(|e| e.starts_with("terminal:")),
-        "daemon sequence must include a Terminal event"
-    );
 }

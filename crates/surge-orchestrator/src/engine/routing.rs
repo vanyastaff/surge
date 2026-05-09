@@ -134,8 +134,27 @@ pub fn edge_target_after_outcome_or_default(
     node: &NodeKey,
     outcome: &OutcomeKey,
 ) -> Result<NodeKey, RoutingError> {
-    graph
-        .edges
+    edge_target_in_edges(&graph.edges, node, outcome)
+}
+
+/// Like [`edge_target_after_outcome_or_default`], but resolves against the
+/// currently active graph/subgraph edge set. Used when pushing nested Loop or
+/// Subgraph frames so their `return_to` points to the correct graph scope.
+pub fn edge_target_after_outcome_in_active_graph(
+    graph: &Graph,
+    node: &NodeKey,
+    outcome: &OutcomeKey,
+    frames: &[crate::engine::frames::Frame],
+) -> Result<NodeKey, RoutingError> {
+    edge_target_in_edges(active_edge_set(graph, frames), node, outcome)
+}
+
+fn edge_target_in_edges(
+    edges: &[Edge],
+    node: &NodeKey,
+    outcome: &OutcomeKey,
+) -> Result<NodeKey, RoutingError> {
+    edges
         .iter()
         .find(|e| &e.from.node == node && &e.from.outcome == outcome)
         .map(|e| e.to.clone())
