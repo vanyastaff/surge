@@ -1114,7 +1114,10 @@ mod tests {
 
         let found = gm.find_run_worktree_path(&id).unwrap();
 
-        assert_eq!(found, info.path);
+        assert_eq!(
+            std::fs::canonicalize(found).unwrap(),
+            std::fs::canonicalize(info.path).unwrap()
+        );
     }
 
     #[test]
