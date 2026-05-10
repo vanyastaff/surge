@@ -80,6 +80,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -136,6 +137,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
@@ -186,6 +188,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
     let storage = Storage::open(dir.path()).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
 
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -240,6 +243,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,

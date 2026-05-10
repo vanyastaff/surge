@@ -1,5 +1,6 @@
 //! Top-level pipeline graph.
 
+use crate::archetype::ArchetypeMetadata;
 use crate::edge::Edge;
 use crate::keys::{NodeKey, SubgraphKey, TemplateKey};
 use crate::node::Node;
@@ -32,6 +33,22 @@ pub struct Subgraph {
     pub edges: Vec<Edge>,
 }
 
+impl GraphMetadata {
+    /// Construct a minimal metadata block with `name` and `created_at`.
+    /// All other fields default to `None`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, created_at: DateTime<Utc>) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            template_origin: None,
+            created_at,
+            author: None,
+            archetype: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphMetadata {
     pub name: String,
@@ -42,6 +59,10 @@ pub struct GraphMetadata {
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub author: Option<String>,
+    /// Optional archetype tag attached by Flow Generator (or hand-authored).
+    /// `None` for graphs that pre-date the bootstrap milestone.
+    #[serde(default)]
+    pub archetype: Option<ArchetypeMetadata>,
 }
 
 #[cfg(test)]
@@ -58,6 +79,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: NodeKey::try_from("placeholder").unwrap(),
             nodes: BTreeMap::new(),

@@ -1,7 +1,9 @@
 //! Run event log entry — append-only event-sourced data model.
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
+use crate::archetype::ArchetypeMetadata;
 use crate::content_hash::ContentHash;
+use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::hooks::HookFailureMode;
 use crate::id::{RunId, SessionId};
@@ -96,6 +98,11 @@ pub enum EventPayload {
         stage: BootstrapStage,
         feedback: String,
     },
+    BootstrapTelemetry {
+        stage_durations: BTreeMap<BootstrapStage, u64>,
+        edit_counts: BTreeMap<BootstrapStage, u32>,
+        archetype: Option<ArchetypeMetadata>,
+    },
 
     // Pipeline construction
     /// Frozen graph for the run. The `graph` payload is the source of truth —
@@ -163,6 +170,13 @@ pub enum EventPayload {
         edge: EdgeKey,
         from: NodeKey,
         to: NodeKey,
+        /// Edge kind selected by routing. `#[serde(default)]` keeps the
+        /// pre-Task-27 on-disk shape (which omitted this field) decodable as
+        /// `EdgeKind::Forward` so legacy event logs replay unchanged.
+        /// Bootstrap-mode HumanGate edit loops emit `kind = Backtrack` so
+        /// fold can drive `RunMemory.node_visits` deterministically.
+        #[serde(default)]
+        kind: EdgeKind,
     },
     LoopIterationStarted {
         loop_id: NodeKey,
@@ -277,6 +291,23 @@ pub enum EventPayload {
         /// Error message if delivery failed; `None` on success.
         error: Option<String>,
     },
+    /// Operator-facing escalation request — emitted when an automated path
+    /// hits a hard limit (e.g., the bootstrap edit-loop cap) and the engine
+    /// gives up. Distinct from `NotifyDelivered` because the engine emits it
+    /// directly (no Notify node) and the operator may not see a delivery
+    /// confirmation at all. Carries enough context for an out-of-band
+    /// dispatcher (telegram, email, dashboard) to surface a clear message
+    /// without needing to replay the event log.
+    EscalationRequested {
+        /// Bootstrap stage that ran out of retries, when the escalation
+        /// originates from the bootstrap flow. `None` for non-bootstrap
+        /// escalations.
+        #[serde(default)]
+        stage: Option<BootstrapStage>,
+        /// Free-form operator-readable explanation (e.g., the cap value
+        /// and the failure mode).
+        reason: String,
+    },
 }
 
 impl EventPayload {
@@ -312,6 +343,7 @@ impl EventPayload {
             Self::BootstrapApprovalRequested { .. } => "BootstrapApprovalRequested",
             Self::BootstrapApprovalDecided { .. } => "BootstrapApprovalDecided",
             Self::BootstrapEditRequested { .. } => "BootstrapEditRequested",
+            Self::BootstrapTelemetry { .. } => "BootstrapTelemetry",
             Self::PipelineMaterialized { .. } => "PipelineMaterialized",
             Self::StageEntered { .. } => "StageEntered",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
@@ -341,11 +373,12 @@ impl EventPayload {
             Self::SubgraphEntered { .. } => "SubgraphEntered",
             Self::SubgraphExited { .. } => "SubgraphExited",
             Self::NotifyDelivered { .. } => "NotifyDelivered",
+            Self::EscalationRequested { .. } => "EscalationRequested",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BootstrapStage {
     Description,
@@ -426,6 +459,31 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_telemetry_roundtrip() {
+        let mut stage_durations = BTreeMap::new();
+        stage_durations.insert(BootstrapStage::Description, 120);
+        stage_durations.insert(BootstrapStage::Roadmap, 340);
+        stage_durations.insert(BootstrapStage::Flow, 560);
+
+        let mut edit_counts = BTreeMap::new();
+        edit_counts.insert(BootstrapStage::Flow, 2);
+
+        let payload = EventPayload::BootstrapTelemetry {
+            stage_durations,
+            edit_counts,
+            archetype: Some(ArchetypeMetadata {
+                name: crate::archetype::ArchetypeName::Linear3,
+                milestones: Some(1),
+                edit_loop_cap: Some(3),
+            }),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "BootstrapTelemetry");
+    }
+
+    #[test]
     fn versioned_wrapper_roundtrip() {
         let v = VersionedEventPayload::new(EventPayload::RunCompleted {
             terminal_node: NodeKey::try_from("end").unwrap(),
@@ -492,6 +550,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: end,
             nodes,
@@ -558,10 +617,44 @@ mod tests {
             edge: EdgeKey::try_from("e_done").unwrap(),
             from: NodeKey::try_from("a").unwrap(),
             to: NodeKey::try_from("b").unwrap(),
+            kind: EdgeKind::Forward,
         };
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn edge_traversed_backtrack_roundtrip() {
+        // Bootstrap edit-loop traversals must round-trip with their
+        // discriminant intact — fold relies on the kind field to bump
+        // `RunMemory.node_visits` on the target node.
+        let payload = EventPayload::EdgeTraversed {
+            edge: EdgeKey::try_from("e_edit").unwrap(),
+            from: NodeKey::try_from("gate1").unwrap(),
+            to: NodeKey::try_from("desc_author").unwrap(),
+            kind: EdgeKind::Backtrack,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn edge_traversed_legacy_json_defaults_to_forward() {
+        // Persistence migrates legacy JSON payloads that pre-date Task 27 and
+        // therefore omit the `kind` field. `#[serde(default)]` must keep
+        // those events decodable as `EdgeKind::Forward`. EventPayload is
+        // internally tagged (`tag = "type"`, `rename_all = "snake_case"`),
+        // so the legacy on-disk shape is a flat object.
+        let legacy_json = r#"{"type":"edge_traversed","edge":"e_done","from":"a","to":"b"}"#;
+        let parsed: EventPayload = serde_json::from_str(legacy_json).unwrap();
+        match parsed {
+            EventPayload::EdgeTraversed { kind, .. } => {
+                assert_eq!(kind, EdgeKind::Forward);
+            },
+            other => panic!("expected EdgeTraversed, got {other:?}"),
+        }
     }
 
     #[test]

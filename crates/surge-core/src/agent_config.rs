@@ -40,10 +40,34 @@ pub struct Binding {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArtifactSource {
-    NodeOutput { node: NodeKey, artifact: String },
-    RunArtifact { name: String },
-    GlobPattern { node: NodeKey, pattern: String },
-    Static { content: String },
+    NodeOutput {
+        node: NodeKey,
+        artifact: String,
+    },
+    RunArtifact {
+        name: String,
+    },
+    GlobPattern {
+        node: NodeKey,
+        pattern: String,
+    },
+    Static {
+        content: String,
+    },
+    /// Operator-supplied free-text feedback from the most recent
+    /// `BootstrapEditRequested` event whose target stage corresponds to
+    /// `from_node`. Resolves to an empty string when no edit has yet
+    /// occurred. Used by bootstrap profiles when re-entered via the
+    /// `Backtrack` edge after an `edit` HumanGate decision.
+    EditFeedback {
+        from_node: NodeKey,
+    },
+    /// The pipeline run's initial prompt as captured in `RunStarted.initial_prompt`.
+    /// Synthesized into `RunMemory` at run start under the artifact name
+    /// `"user_prompt"`; this variant is the canonical way for bootstrap
+    /// profiles to bind the user's free-form intent into a `{{user_prompt}}`
+    /// template variable.
+    InitialPrompt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -158,6 +182,30 @@ mod tests {
                 artifact: "spec.md".into(),
             },
             target: TemplateVar("spec".into()),
+        };
+        let toml_s = toml::to_string(&b).unwrap();
+        let parsed: Binding = toml::from_str(&toml_s).unwrap();
+        assert_eq!(b, parsed);
+    }
+
+    #[test]
+    fn edit_feedback_source_round_trips() {
+        let b = Binding {
+            source: ArtifactSource::EditFeedback {
+                from_node: NodeKey::try_from("description_author").unwrap(),
+            },
+            target: TemplateVar("edit_feedback".into()),
+        };
+        let toml_s = toml::to_string(&b).unwrap();
+        let parsed: Binding = toml::from_str(&toml_s).unwrap();
+        assert_eq!(b, parsed);
+    }
+
+    #[test]
+    fn initial_prompt_source_round_trips() {
+        let b = Binding {
+            source: ArtifactSource::InitialPrompt,
+            target: TemplateVar("user_prompt".into()),
         };
         let toml_s = toml::to_string(&b).unwrap();
         let parsed: Binding = toml::from_str(&toml_s).unwrap();

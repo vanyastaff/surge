@@ -1,0 +1,183 @@
+# Refactor archetype: capture behaviour first, then refactor, verify, and
+# require an explicit reviewer pass before terminal success. Encodes the
+# convention that refactors must establish a behavioural baseline before
+# touching production code.
+
+schema_version = 1
+start = "behaviour_capture"
+
+[metadata]
+name = "refactor"
+created_at = "2026-05-06T00:00:00Z"
+
+# ── behaviour capture ──
+[nodes.behaviour_capture]
+id = "behaviour_capture"
+
+[nodes.behaviour_capture.position]
+x = 0.0
+y = 0.0
+
+[[nodes.behaviour_capture.declared_outcomes]]
+id = "captured"
+description = "Behaviour characterized via tests/snapshots"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.behaviour_capture.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.behaviour_capture.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.behaviour_capture.config.custom_fields]
+
+# ── implement ──
+[nodes.implement_1]
+id = "implement_1"
+
+[nodes.implement_1.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_1.declared_outcomes]]
+id = "refactored"
+description = "Refactor applied"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_1.config.custom_fields]
+
+# ── verify ──
+[nodes.verify_1]
+id = "verify_1"
+
+[nodes.verify_1.position]
+x = 400.0
+y = 0.0
+
+[[nodes.verify_1.declared_outcomes]]
+id = "pass"
+description = "Behaviour preserved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.verify_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.verify_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.verify_1.config.custom_fields]
+
+# ── reviewer ──
+[nodes.reviewer]
+id = "reviewer"
+
+[nodes.reviewer.position]
+x = 600.0
+y = 0.0
+
+[[nodes.reviewer.declared_outcomes]]
+id = "approved"
+description = "Reviewer approved the refactor"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.reviewer.config]
+node_kind = "agent"
+profile = "reviewer@1.0"
+bindings = []
+hooks = []
+
+[nodes.reviewer.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.reviewer.config.custom_fields]
+
+# ── terminal ──
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 800.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+# ── edges ──
+[[edges]]
+id = "e_capture_to_impl"
+to = "implement_1"
+kind = "forward"
+
+[edges.from]
+node = "behaviour_capture"
+outcome = "captured"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_to_verify"
+to = "verify_1"
+kind = "forward"
+
+[edges.from]
+node = "implement_1"
+outcome = "refactored"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_to_review"
+to = "reviewer"
+kind = "forward"
+
+[edges.from]
+node = "verify_1"
+outcome = "pass"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "reviewer"
+outcome = "approved"
+
+[edges.policy]
+on_max_exceeded = "escalate"

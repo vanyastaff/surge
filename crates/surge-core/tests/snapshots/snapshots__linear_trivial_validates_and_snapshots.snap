@@ -1,5 +1,6 @@
 ---
 source: crates/surge-core/tests/snapshots.rs
+assertion_line: 30
 expression: g
 ---
 Graph {
@@ -10,6 +11,7 @@ Graph {
         template_origin: None,
         created_at: 2026-05-02T00:00:00Z,
         author: None,
+        archetype: None,
     },
     start: NodeKey("impl_1"),
     nodes: {

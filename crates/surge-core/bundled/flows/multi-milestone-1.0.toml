@@ -1,0 +1,212 @@
+# Multi-milestone-loop archetype: outer Loop iterates 2 milestones; per
+# iteration an inner Loop iterates 2 tasks. Inner body runs Implement →
+# Verify. After the outer completes, a Final Review agent gates the success
+# terminal.
+
+schema_version = 1
+start = "milestone_loop"
+
+[metadata]
+name = "multi-milestone"
+created_at = "2026-05-06T00:00:00Z"
+
+# ── outer milestone loop ──
+[nodes.milestone_loop]
+id = "milestone_loop"
+
+[nodes.milestone_loop.position]
+x = 0.0
+y = 0.0
+
+[[nodes.milestone_loop.declared_outcomes]]
+id = "completed"
+description = "All milestones processed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.milestone_loop.config]
+node_kind = "loop"
+body = "milestone_body"
+iteration_var_name = "milestone"
+parallelism = "sequential"
+gate_after_each = false
+
+[nodes.milestone_loop.config.iterates_over]
+type = "static"
+value = ["m1", "m2"]
+
+[nodes.milestone_loop.config.exit_condition]
+type = "all_items"
+
+[nodes.milestone_loop.config.on_iteration_failure]
+type = "abort"
+
+# ── final review ──
+[nodes.final_review]
+id = "final_review"
+
+[nodes.final_review.position]
+x = 200.0
+y = 0.0
+
+[[nodes.final_review.declared_outcomes]]
+id = "approved"
+description = "Final review approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.final_review.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.final_review.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.final_review.config.custom_fields]
+
+# ── terminal ──
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 400.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+# ── outer edges ──
+[[edges]]
+id = "e_outer_done"
+to = "final_review"
+kind = "forward"
+
+[edges.from]
+node = "milestone_loop"
+outcome = "completed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "final_review"
+outcome = "approved"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+# ── milestone body subgraph: inner Loop ──
+[subgraphs.milestone_body]
+start = "task_loop"
+edges = []
+
+[subgraphs.milestone_body.nodes.task_loop]
+id = "task_loop"
+
+[subgraphs.milestone_body.nodes.task_loop.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "completed"
+description = "Inner-loop tasks done"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.milestone_body.nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
+type = "static"
+value = ["t1", "t2"]
+
+[subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
+type = "all_items"
+
+[subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+# ── task body subgraph: implement → verify ──
+[subgraphs.task_body]
+start = "impl_in_task"
+
+[[subgraphs.task_body.edges]]
+id = "e_task_impl_to_verify"
+to = "verify_in_task"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "impl_in_task"
+outcome = "done"
+
+[subgraphs.task_body.edges.policy]
+on_max_exceeded = "escalate"
+
+[subgraphs.task_body.nodes.impl_in_task]
+id = "impl_in_task"
+
+[subgraphs.task_body.nodes.impl_in_task.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.impl_in_task.declared_outcomes]]
+id = "done"
+description = "Task implementation complete"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.impl_in_task.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.impl_in_task.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.task_body.nodes.impl_in_task.config.custom_fields]
+
+[subgraphs.task_body.nodes.verify_in_task]
+id = "verify_in_task"
+
+[subgraphs.task_body.nodes.verify_in_task.position]
+x = 200.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.verify_in_task.declared_outcomes]]
+id = "done"
+description = "Task verification complete"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.task_body.nodes.verify_in_task.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[subgraphs.task_body.nodes.verify_in_task.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[subgraphs.task_body.nodes.verify_in_task.config.custom_fields]

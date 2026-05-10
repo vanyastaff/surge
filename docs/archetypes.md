@@ -2,9 +2,10 @@
 
 # Archetype Gallery
 
-Every shape Surge supports today, in copy-paste form. The bundled
-TOML files live under [`examples/`](../examples/) and are validated
-in CI by [`crates/surge-cli/tests/examples_smoke.rs`](../crates/surge-cli/tests/examples_smoke.rs).
+Every shape Surge supports today, in copy-paste form. Reference examples
+live under [`examples/`](../examples/); the first-party templates used by
+`surge engine run --template <name>` are embedded from
+[`crates/surge-core/bundled/flows/`](../crates/surge-core/bundled/flows/).
 
 | Archetype          | File                                            | When to use                                                              |
 |--------------------|-------------------------------------------------|---------------------------------------------------------------------------|
@@ -16,6 +17,12 @@ in CI by [`crates/surge-cli/tests/examples_smoke.rs`](../crates/surge-cli/tests/
 | Bug-fix           | [`flow_bug_fix.toml`][f5]                        | `Reproduce → Implement → Verify` with `regressed` Backtrack edge.         |
 | Refactor          | [`flow_refactor.toml`][f6]                       | Capture behaviour first, then refactor under reviewer approval.           |
 | Spike             | [`flow_spike.toml`][f7]                          | Two-node experiment that explicitly skips Architect / Reviewer.            |
+
+Run a bundled archetype directly:
+
+```bash
+surge engine run --template linear-3 --watch
+```
 
 [f0]: ../examples/flow_terminal_only.toml
 [f1]: ../examples/flow_minimal_agent.toml

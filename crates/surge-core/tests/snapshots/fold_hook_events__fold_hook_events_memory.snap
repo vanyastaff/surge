@@ -1,5 +1,6 @@
 ---
 source: crates/surge-core/tests/fold_hook_events.rs
+assertion_line: 236
 expression: memory
 ---
 RunMemory {
@@ -25,4 +26,7 @@ RunMemory {
         cache_hits: 0,
         cost_usd: 0.0,
     },
+    bootstrap_edit_counts: {},
+    node_visits: {},
+    last_edit_feedback_by_stage: {},
 }

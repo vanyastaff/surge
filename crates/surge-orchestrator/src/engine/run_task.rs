@@ -21,8 +21,8 @@ use surge_core::hooks::HookTrigger;
 use surge_core::id::RunId;
 use surge_core::keys::OutcomeKey;
 use surge_core::node::NodeConfig;
-use surge_core::run_event::{EventPayload, VersionedEventPayload};
-use surge_core::run_state::{Cursor, OutcomeRecord, RunMemory};
+use surge_core::run_event::{EventPayload, RunEvent, VersionedEventPayload};
+use surge_core::run_state::{Cursor, RunMemory};
 use surge_notify::NotifyDeliverer;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::broadcast;
@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct RunTaskParams {
     pub run_id: RunId,
     pub writer: RunWriter,
+    pub artifact_store: surge_persistence::artifacts::ArtifactStore,
     pub bridge: Arc<dyn BridgeFacade>,
     pub tool_dispatcher: Arc<dyn ToolDispatcher>,
     pub notify_deliverer: Arc<dyn NotifyDeliverer>,
@@ -92,7 +93,13 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
     // One executor per run task: stateless aside from its spawner, so a
     // fresh `HookExecutor::new()` is the simplest non-overengineered choice.
     let hook_executor = HookExecutor::new();
-    let mut memory = params.resume_memory.clone().unwrap_or_default();
+    let mut memory = match params.resume_memory.clone() {
+        Some(memory) => memory,
+        None => match load_existing_memory(&params.writer, params.run_id).await {
+            Ok(memory) => memory,
+            Err(e) => return failed(&params, format!("load existing memory: {e}")).await,
+        },
+    };
     let mut frames: Vec<crate::engine::frames::Frame> =
         params.resume_frames.clone().unwrap_or_default();
     let mut root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> =
@@ -135,6 +142,10 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         {
             return failed(&params, format!("write StageEntered: {e}")).await;
         }
+        let stage_start_seq = match params.writer.current_seq().await {
+            Ok(seq) => seq,
+            Err(e) => return failed(&params, format!("current_seq after StageEntered: {e}")).await,
+        };
 
         // Dispatch.
         let stage_result: Result<StageOutcome, StageError> = match &node.config {
@@ -145,6 +156,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     declared_outcomes: &node.declared_outcomes,
                     bridge: &params.bridge,
                     writer: &params.writer,
+                    artifact_store: &params.artifact_store,
                     worktree_path: &params.worktree_path,
                     tool_dispatcher: &params.tool_dispatcher,
                     run_memory: &memory,
@@ -157,6 +169,56 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     hook_executor: &hook_executor,
                 })
                 .await;
+                // Task 10: Flow Generator post-processing — validate the
+                // produced `flow.toml` and either emit `PipelineMaterialized`
+                // (success) or `BootstrapEditRequested` + a synthetic
+                // `OutcomeReported { outcome: validation_failed }` so routing
+                // takes the bundled bootstrap graph's Backtrack edge back to
+                // the Flow Generator agent.
+                let r = match r {
+                    Ok(outcome)
+                        if crate::engine::bootstrap::is_flow_generator_profile(
+                            cfg.profile.as_str(),
+                        ) =>
+                    {
+                        match crate::engine::bootstrap::run_flow_generator_post_processing(
+                            &cursor.node,
+                            &memory,
+                            params.run_config.bootstrap.edit_loop_cap,
+                            &params.worktree_path,
+                            &params.writer,
+                        )
+                        .await
+                        {
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => {
+                                Ok(outcome)
+                            },
+                            Ok(
+                                crate::engine::bootstrap::FlowValidationDecision::EditRequested {
+                                    ..
+                                },
+                            ) => OutcomeKey::try_from(
+                                crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
+                            )
+                            .map_err(|e| {
+                                StageError::Internal(format!("validation retry outcome key: {e}"))
+                            }),
+                            Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded {
+                                cap,
+                            }) => Err(StageError::EditLoopCapExceeded {
+                                stage: surge_core::run_event::BootstrapStage::Flow,
+                                cap,
+                            }),
+                            Ok(
+                                crate::engine::bootstrap::FlowValidationDecision::MissingArtifact,
+                            ) => Err(StageError::Internal(
+                                "Flow Generator stage finished without producing flow.toml".into(),
+                            )),
+                            Err(e) => Err(e),
+                        }
+                    },
+                    other => other,
+                };
                 r.map(StageOutcome::Routed)
             },
             NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
@@ -193,17 +255,24 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     },
                     TerminalSignal::LoopIterDone => {
                         // The most recent OutcomeReported event drives the iteration's outcome.
-                        let just_completed = memory
+                        let just_completed = if let Some(record) = memory
                             .outcomes
                             .get(&cursor.node)
                             .and_then(|recs| recs.last())
-                            .map_or_else(
-                                || {
-                                    surge_core::keys::OutcomeKey::try_from("completed")
-                                        .expect("'completed' is valid OutcomeKey")
+                        {
+                            record.outcome.clone()
+                        } else {
+                            match surge_core::keys::OutcomeKey::try_from("completed") {
+                                Ok(outcome) => outcome,
+                                Err(e) => {
+                                    return failed(
+                                        &params,
+                                        format!("loop default outcome key: {e}"),
+                                    )
+                                    .await;
                                 },
-                                |r| r.outcome.clone(),
-                            );
+                            }
+                        };
 
                         if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
                             &just_completed,
@@ -277,6 +346,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     run_memory: &memory,
                     resolution_rx: Some(rx),
                     default_timeout: params.run_config.human_input_timeout,
+                    bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
                 })
                 .await;
                 params.gate_resolutions.lock().await.remove(&cursor.node);
@@ -447,26 +517,28 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             },
         };
 
-        // Update memory with outcome (best-effort; storage's own seq is the source of truth).
-        memory
-            .outcomes
-            .entry(cursor.node.clone())
-            .or_default()
-            .push(OutcomeRecord {
-                outcome: outcome.clone(),
-                summary: String::new(),
-                seq: 0,
-            });
+        if let Err(e) =
+            apply_memory_events_after(&params.writer, params.run_id, stage_start_seq, &mut memory)
+                .await
+        {
+            return failed(&params, format!("update run memory from event log: {e}")).await;
+        }
+        let stage_events_applied_seq = match params.writer.current_seq().await {
+            Ok(seq) => seq,
+            Err(e) => {
+                return failed(&params, format!("current_seq after memory update: {e}")).await;
+            },
+        };
 
         // Route to next node.
-        let next = match crate::engine::routing::next_node_after_with_counters(
+        let routed = match crate::engine::routing::next_node_after_with_counters(
             &params.graph,
             &cursor.node,
             &outcome,
             &mut frames,
             &mut root_traversal_counts,
         ) {
-            Ok(n) => n,
+            Ok(r) => r,
             Err(crate::engine::routing::RoutingError::ExceededTraversal {
                 edge,
                 action,
@@ -493,7 +565,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                             &mut frames,
                             &mut root_traversal_counts,
                         ) {
-                            Ok(n) => n,
+                            Ok(r) => r,
                             Err(_) => {
                                 return failed(
                                     &params,
@@ -516,32 +588,28 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             },
             Err(e) => return failed(&params, format!("routing: {e}")).await,
         };
+        let next = routed.target.clone();
 
-        // EdgeTraversed + StageCompleted.
-        // Synthesize a fallback edge id; if the formatted string is not a valid
-        // EdgeKey (e.g. too long or invalid chars), propagate as a routing error
-        // rather than panicking.
-        let edge_id = params
-            .graph
-            .edges
-            .iter()
-            .find(|e| e.from.node == cursor.node && e.from.outcome == outcome)
-            .map(|e| e.id.clone())
-            .or_else(|| {
-                let synth = format!("{}_{}", cursor.node, next);
-                surge_core::keys::EdgeKey::try_from(synth.as_str()).ok()
-            });
+        tracing::debug!(
+            target: "engine::routing",
+            from = %cursor.node,
+            to = %next,
+            kind = ?routed.kind,
+            "traversing edge",
+        );
 
-        if let Some(eid) = edge_id {
-            let _ = params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
-                    edge: eid,
-                    from: cursor.node.clone(),
-                    to: next.clone(),
-                }))
-                .await;
-        }
+        // Emit the EdgeTraversed event with the actual routed kind so fold
+        // can drive `RunMemory.node_visits` deterministically (Backtrack
+        // edges increment the target's visit counter).
+        let _ = params
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
+                edge: routed.edge_id,
+                from: cursor.node.clone(),
+                to: next.clone(),
+                kind: routed.kind,
+            }))
+            .await;
         let _ = params
             .writer
             .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
@@ -549,6 +617,16 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 outcome: outcome.clone(),
             }))
             .await;
+        if let Err(e) = apply_memory_events_after(
+            &params.writer,
+            params.run_id,
+            stage_events_applied_seq,
+            &mut memory,
+        )
+        .await
+        {
+            return failed(&params, format!("update run memory after routing: {e}")).await;
+        }
 
         // Snapshot at stage boundary (per spec §2.6, §12).
         let next_cursor = Cursor {
@@ -668,6 +746,51 @@ pub(crate) async fn run_on_error_hooks(
         HookOutcome::Reject { .. } | HookOutcome::Proceed { .. } => None,
     };
     OnErrorResolution { outcome, records }
+}
+
+async fn load_existing_memory(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    run_id: RunId,
+) -> Result<RunMemory, surge_persistence::runs::StorageError> {
+    let current = writer.current_seq().await?;
+    let events = writer
+        .read_events(surge_persistence::runs::EventSeq(1)..current.next())
+        .await?;
+    let mut memory = RunMemory::default();
+    apply_read_events(run_id, &events, &mut memory);
+    Ok(memory)
+}
+
+async fn apply_memory_events_after(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    run_id: RunId,
+    after: surge_persistence::runs::EventSeq,
+    memory: &mut RunMemory,
+) -> Result<(), surge_persistence::runs::StorageError> {
+    let current = writer.current_seq().await?;
+    if current <= after {
+        return Ok(());
+    }
+    let events = writer.read_events(after.next()..current.next()).await?;
+    apply_read_events(run_id, &events, memory);
+    Ok(())
+}
+
+fn apply_read_events(
+    run_id: RunId,
+    events: &[surge_persistence::runs::ReadEvent],
+    memory: &mut RunMemory,
+) {
+    for event in events {
+        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.timestamp_ms)
+            .unwrap_or_else(chrono::Utc::now);
+        memory.apply_event(&RunEvent {
+            run_id,
+            seq: event.seq.as_u64(),
+            timestamp,
+            payload: event.payload.payload.clone(),
+        });
+    }
 }
 
 async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {

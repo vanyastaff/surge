@@ -1,0 +1,184 @@
+# Golden Flow Generator output for a three-milestone roadmap.
+#
+# Shape required by Task 18:
+# - graph metadata declares the multi-milestone archetype
+# - outer Loop iterates over artifact name `roadmap.milestones`
+# - outer body contains an inner task Loop
+# - inner task body contains concrete Agent work
+
+schema_version = 1
+start = "milestone_loop"
+
+[metadata]
+name = "golden_multi_milestone"
+created_at = "2026-05-07T00:00:00Z"
+
+[metadata.archetype]
+name = "multi-milestone"
+milestones = 3
+
+[nodes.milestone_loop]
+id = "milestone_loop"
+
+[nodes.milestone_loop.position]
+x = 0.0
+y = 0.0
+
+[[nodes.milestone_loop.declared_outcomes]]
+id = "completed"
+description = "All roadmap milestones completed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.milestone_loop.config]
+node_kind = "loop"
+body = "milestone_body"
+iteration_var_name = "milestone"
+parallelism = "sequential"
+gate_after_each = false
+
+[nodes.milestone_loop.config.iterates_over]
+type = "artifact"
+
+[nodes.milestone_loop.config.iterates_over.value]
+node = "roadmap_planner"
+name = "roadmap.milestones"
+jsonpath = "milestones"
+
+[nodes.milestone_loop.config.exit_condition]
+type = "all_items"
+
+[nodes.milestone_loop.config.on_iteration_failure]
+type = "abort"
+
+[nodes.final_review]
+id = "final_review"
+
+[nodes.final_review.position]
+x = 240.0
+y = 0.0
+
+[[nodes.final_review.declared_outcomes]]
+id = "approved"
+description = "Final review approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.final_review.config]
+node_kind = "agent"
+profile = "reviewer@1.0"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 480.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_milestones_done"
+to = "final_review"
+kind = "forward"
+
+[edges.from]
+node = "milestone_loop"
+outcome = "completed"
+
+[[edges]]
+id = "e_review_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "final_review"
+outcome = "approved"
+
+[subgraphs.milestone_body]
+start = "task_loop"
+edges = []
+
+[subgraphs.milestone_body.nodes.task_loop]
+id = "task_loop"
+
+[subgraphs.milestone_body.nodes.task_loop.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.milestone_body.nodes.task_loop.declared_outcomes]]
+id = "completed"
+description = "Milestone tasks completed"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.milestone_body.nodes.task_loop.config]
+node_kind = "loop"
+body = "task_body"
+iteration_var_name = "task"
+parallelism = "sequential"
+gate_after_each = false
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over]
+type = "loop_item"
+
+[subgraphs.milestone_body.nodes.task_loop.config.iterates_over.value]
+var = "milestone"
+jsonpath = "tasks"
+
+[subgraphs.milestone_body.nodes.task_loop.config.exit_condition]
+type = "all_items"
+
+[subgraphs.milestone_body.nodes.task_loop.config.on_iteration_failure]
+type = "abort"
+
+[subgraphs.task_body]
+start = "impl_task"
+
+[[subgraphs.task_body.edges]]
+id = "e_impl_verify"
+to = "verify_task"
+kind = "forward"
+
+[subgraphs.task_body.edges.from]
+node = "impl_task"
+outcome = "done"
+
+[subgraphs.task_body.nodes.impl_task]
+id = "impl_task"
+
+[subgraphs.task_body.nodes.impl_task.position]
+x = 0.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.impl_task.declared_outcomes]]
+id = "done"
+description = "Task implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[subgraphs.task_body.nodes.impl_task.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+
+[subgraphs.task_body.nodes.verify_task]
+id = "verify_task"
+
+[subgraphs.task_body.nodes.verify_task.position]
+x = 220.0
+y = 0.0
+
+[[subgraphs.task_body.nodes.verify_task.declared_outcomes]]
+id = "done"
+description = "Task verified"
+edge_kind_hint = "forward"
+is_terminal = true
+
+[subgraphs.task_body.nodes.verify_task.config]
+node_kind = "agent"
+profile = "verifier@1.0"

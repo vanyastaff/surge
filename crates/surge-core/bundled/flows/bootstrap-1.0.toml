@@ -1,0 +1,435 @@
+# Bootstrap flow — Description Author -> Roadmap Planner -> Flow Generator.
+#
+# This graph drives the adaptive bootstrap run. Each authoring agent is
+# followed by a bootstrap-mode HumanGate. Operator `edit` choices backtrack
+# to the preceding agent with fresh `edit_feedback`; `reject` fails the run.
+
+schema_version = 1
+start = "description_author"
+
+[metadata]
+name = "bootstrap"
+description = "Three-stage adaptive bootstrap flow that materializes a follow-up flow.toml."
+created_at = "2026-05-07T00:00:00Z"
+author = "surge"
+
+[nodes.description_author]
+id = "description_author"
+
+[nodes.description_author.position]
+x = 0.0
+y = 0.0
+
+[[nodes.description_author.declared_outcomes]]
+id = "drafted"
+description = "description.md drafted and ready for review"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.description_author.declared_outcomes]]
+id = "needs_clarification"
+description = "description could not be drafted without more input"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.description_author.config]
+node_kind = "agent"
+profile = "description-author@1.0"
+
+[[nodes.description_author.config.bindings]]
+target = "user_prompt"
+source = { type = "initial_prompt" }
+
+[[nodes.description_author.config.bindings]]
+target = "edit_feedback"
+source = { type = "edit_feedback", from_node = "description_author" }
+
+[nodes.description_gate]
+id = "description_gate"
+
+[nodes.description_gate.position]
+x = 260.0
+y = 0.0
+
+[[nodes.description_gate.declared_outcomes]]
+id = "approve"
+description = "description.md approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.description_gate.declared_outcomes]]
+id = "edit"
+description = "description.md needs edits"
+edge_kind_hint = "backtrack"
+is_terminal = false
+
+[[nodes.description_gate.declared_outcomes]]
+id = "reject"
+description = "bootstrap rejected at description review"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.description_gate.config]
+node_kind = "human_gate"
+delivery_channels = []
+allow_freetext = true
+mode = { bootstrap = { stage = "description" } }
+
+[nodes.description_gate.config.summary]
+title = "Approve description?"
+body = "Review description.md and choose approve, edit, or reject."
+
+[[nodes.description_gate.config.options]]
+outcome = "approve"
+label = "Approve"
+style = "primary"
+
+[[nodes.description_gate.config.options]]
+outcome = "edit"
+label = "Edit"
+style = "warn"
+
+[[nodes.description_gate.config.options]]
+outcome = "reject"
+label = "Reject"
+style = "danger"
+
+[nodes.roadmap_planner]
+id = "roadmap_planner"
+
+[nodes.roadmap_planner.position]
+x = 520.0
+y = 0.0
+
+[[nodes.roadmap_planner.declared_outcomes]]
+id = "drafted"
+description = "roadmap.md drafted and ready for review"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.roadmap_planner.declared_outcomes]]
+id = "needs_clarification"
+description = "roadmap could not be drafted without more input"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.roadmap_planner.config]
+node_kind = "agent"
+profile = "roadmap-planner@1.0"
+
+[[nodes.roadmap_planner.config.bindings]]
+target = "user_prompt"
+source = { type = "initial_prompt" }
+
+[[nodes.roadmap_planner.config.bindings]]
+target = "description_artifact"
+source = { type = "node_output", node = "description_author", artifact = "description" }
+
+[[nodes.roadmap_planner.config.bindings]]
+target = "edit_feedback"
+source = { type = "edit_feedback", from_node = "roadmap_planner" }
+
+[nodes.roadmap_gate]
+id = "roadmap_gate"
+
+[nodes.roadmap_gate.position]
+x = 780.0
+y = 0.0
+
+[[nodes.roadmap_gate.declared_outcomes]]
+id = "approve"
+description = "roadmap.md approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.roadmap_gate.declared_outcomes]]
+id = "edit"
+description = "roadmap.md needs edits"
+edge_kind_hint = "backtrack"
+is_terminal = false
+
+[[nodes.roadmap_gate.declared_outcomes]]
+id = "reject"
+description = "bootstrap rejected at roadmap review"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.roadmap_gate.config]
+node_kind = "human_gate"
+delivery_channels = []
+allow_freetext = true
+mode = { bootstrap = { stage = "roadmap" } }
+
+[nodes.roadmap_gate.config.summary]
+title = "Approve roadmap?"
+body = "Review roadmap.md and choose approve, edit, or reject."
+
+[[nodes.roadmap_gate.config.options]]
+outcome = "approve"
+label = "Approve"
+style = "primary"
+
+[[nodes.roadmap_gate.config.options]]
+outcome = "edit"
+label = "Edit"
+style = "warn"
+
+[[nodes.roadmap_gate.config.options]]
+outcome = "reject"
+label = "Reject"
+style = "danger"
+
+[nodes.flow_generator]
+id = "flow_generator"
+
+[nodes.flow_generator.position]
+x = 1040.0
+y = 0.0
+
+[[nodes.flow_generator.declared_outcomes]]
+id = "drafted"
+description = "flow.toml drafted and passed bootstrap post-processing"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.flow_generator.declared_outcomes]]
+id = "validation_failed"
+description = "flow.toml failed validation and should be regenerated"
+edge_kind_hint = "backtrack"
+is_terminal = false
+
+[nodes.flow_generator.config]
+node_kind = "agent"
+profile = "flow-generator@1.0"
+
+[[nodes.flow_generator.config.bindings]]
+target = "user_prompt"
+source = { type = "initial_prompt" }
+
+[[nodes.flow_generator.config.bindings]]
+target = "description_artifact"
+source = { type = "node_output", node = "description_author", artifact = "description" }
+
+[[nodes.flow_generator.config.bindings]]
+target = "roadmap_artifact"
+source = { type = "node_output", node = "roadmap_planner", artifact = "roadmap" }
+
+[[nodes.flow_generator.config.bindings]]
+target = "edit_feedback"
+source = { type = "edit_feedback", from_node = "flow_generator" }
+
+[nodes.flow_gate]
+id = "flow_gate"
+
+[nodes.flow_gate.position]
+x = 1300.0
+y = 0.0
+
+[[nodes.flow_gate.declared_outcomes]]
+id = "approve"
+description = "materialized flow.toml approved"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.flow_gate.declared_outcomes]]
+id = "edit"
+description = "materialized flow.toml needs edits"
+edge_kind_hint = "backtrack"
+is_terminal = false
+
+[[nodes.flow_gate.declared_outcomes]]
+id = "reject"
+description = "bootstrap rejected at flow review"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.flow_gate.config]
+node_kind = "human_gate"
+delivery_channels = []
+allow_freetext = true
+mode = { bootstrap = { stage = "flow" } }
+
+[nodes.flow_gate.config.summary]
+title = "Approve generated flow?"
+body = "Review flow.toml and choose approve, edit, or reject."
+
+[[nodes.flow_gate.config.options]]
+outcome = "approve"
+label = "Approve"
+style = "primary"
+
+[[nodes.flow_gate.config.options]]
+outcome = "edit"
+label = "Edit"
+style = "warn"
+
+[[nodes.flow_gate.config.options]]
+outcome = "reject"
+label = "Reject"
+style = "danger"
+
+[nodes.bootstrap_complete]
+id = "bootstrap_complete"
+declared_outcomes = []
+
+[nodes.bootstrap_complete.position]
+x = 1560.0
+y = 0.0
+
+[nodes.bootstrap_complete.config]
+node_kind = "terminal"
+message = "Bootstrap flow materialized and approved."
+
+[nodes.bootstrap_complete.config.kind]
+type = "success"
+
+[nodes.bootstrap_failed]
+id = "bootstrap_failed"
+declared_outcomes = []
+
+[nodes.bootstrap_failed.position]
+x = 1560.0
+y = 180.0
+
+[nodes.bootstrap_failed.config]
+node_kind = "terminal"
+message = "Bootstrap needs clarification or was rejected."
+
+[nodes.bootstrap_failed.config.kind]
+type = "failure"
+exit_code = 1
+
+[[edges]]
+id = "e_desc_drafted"
+to = "description_gate"
+kind = "forward"
+
+[edges.from]
+node = "description_author"
+outcome = "drafted"
+
+[[edges]]
+id = "e_desc_needs"
+to = "bootstrap_failed"
+kind = "forward"
+
+[edges.from]
+node = "description_author"
+outcome = "needs_clarification"
+
+[[edges]]
+id = "e_desc_gate_approve"
+to = "roadmap_planner"
+kind = "forward"
+
+[edges.from]
+node = "description_gate"
+outcome = "approve"
+
+[[edges]]
+id = "e_desc_gate_edit"
+to = "description_author"
+kind = "backtrack"
+
+[edges.from]
+node = "description_gate"
+outcome = "edit"
+
+[[edges]]
+id = "e_desc_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "description_gate"
+outcome = "reject"
+
+[[edges]]
+id = "e_roadmap_drafted"
+to = "roadmap_gate"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_planner"
+outcome = "drafted"
+
+[[edges]]
+id = "e_roadmap_needs"
+to = "bootstrap_failed"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_planner"
+outcome = "needs_clarification"
+
+[[edges]]
+id = "e_roadmap_gate_approve"
+to = "flow_generator"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_gate"
+outcome = "approve"
+
+[[edges]]
+id = "e_roadmap_gate_edit"
+to = "roadmap_planner"
+kind = "backtrack"
+
+[edges.from]
+node = "roadmap_gate"
+outcome = "edit"
+
+[[edges]]
+id = "e_roadmap_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "roadmap_gate"
+outcome = "reject"
+
+[[edges]]
+id = "e_flow_drafted"
+to = "flow_gate"
+kind = "forward"
+
+[edges.from]
+node = "flow_generator"
+outcome = "drafted"
+
+[[edges]]
+id = "e_flow_validation_failed"
+to = "flow_generator"
+kind = "backtrack"
+
+[edges.from]
+node = "flow_generator"
+outcome = "validation_failed"
+
+[[edges]]
+id = "e_flow_gate_approve"
+to = "bootstrap_complete"
+kind = "forward"
+
+[edges.from]
+node = "flow_gate"
+outcome = "approve"
+
+[[edges]]
+id = "e_flow_gate_edit"
+to = "flow_generator"
+kind = "backtrack"
+
+[edges.from]
+node = "flow_gate"
+outcome = "edit"
+
+[[edges]]
+id = "e_flow_gate_reject"
+to = "bootstrap_failed"
+kind = "escalate"
+
+[edges.from]
+node = "flow_gate"
+outcome = "reject"

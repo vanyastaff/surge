@@ -26,6 +26,10 @@ pub enum IterableSource {
         name: String,
         jsonpath: String,
     },
+    LoopItem {
+        var: String,
+        jsonpath: String,
+    },
     Static(Vec<toml::Value>),
 }
 
@@ -84,6 +88,25 @@ mod tests {
             iteration_var_name: "milestone".into(),
             exit_condition: ExitCondition::AllItems,
             on_iteration_failure: FailurePolicy::Retry { max: 2 },
+            parallelism: ParallelismMode::Sequential,
+            gate_after_each: false,
+        };
+        let toml_s = toml::to_string(&cfg).unwrap();
+        let parsed: LoopConfig = toml::from_str(&toml_s).unwrap();
+        assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn loop_with_loop_item_iterator_roundtrips() {
+        let cfg = LoopConfig {
+            iterates_over: IterableSource::LoopItem {
+                var: "milestone".into(),
+                jsonpath: "tasks".into(),
+            },
+            body: SubgraphKey::try_from("task_body").unwrap(),
+            iteration_var_name: "task".into(),
+            exit_condition: ExitCondition::AllItems,
+            on_iteration_failure: FailurePolicy::Abort,
             parallelism: ParallelismMode::Sequential,
             gate_after_each: false,
         };

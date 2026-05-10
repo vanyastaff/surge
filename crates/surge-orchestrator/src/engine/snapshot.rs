@@ -172,10 +172,12 @@ impl From<crate::engine::frames::Frame> for SerializableFrame {
                 // `iterable_source_json` field is `null` for that variant.
                 let iterable_source_json = match &lf.config.iterates_over {
                     IterableSource::Static(_) => None,
-                    src @ IterableSource::Artifact { .. } => Some(
-                        serde_json::to_string(src)
-                            .expect("IterableSource::Artifact is json-serializable"),
-                    ),
+                    src @ (IterableSource::Artifact { .. } | IterableSource::LoopItem { .. }) => {
+                        Some(
+                            serde_json::to_string(src)
+                                .expect("non-static IterableSource is json-serializable"),
+                        )
+                    },
                 };
                 Self::Loop(SerializableLoopFrame {
                     loop_node: lf.loop_node.to_string(),
@@ -645,7 +647,7 @@ mod tests {
                         assert_eq!(name, "plan.toml");
                         assert_eq!(jsonpath, "tasks");
                     },
-                    other @ IterableSource::Static(_) => panic!("expected Artifact, got {other:?}"),
+                    other => panic!("expected Artifact, got {other:?}"),
                 }
             },
             other @ Frame::Subgraph(_) => panic!("expected Loop frame, got {other:?}"),

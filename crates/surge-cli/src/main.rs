@@ -15,9 +15,9 @@ use tokio::signal;
 mod commands;
 
 use commands::{
-    agent::AgentCommands, analytics::AnalyticsCommands, config::ConfigCommands,
-    insights::InsightsCommands, memory::MemoryCommands, registry::RegistryCommands,
-    spec::SpecCommands, tracker::TrackerCommand,
+    agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,
+    config::ConfigCommands, insights::InsightsCommands, memory::MemoryCommands,
+    registry::RegistryCommands, spec::SpecCommands, tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -191,6 +191,9 @@ enum Commands {
         command: AnalyticsCommands,
     },
 
+    /// Bootstrap an adaptive flow from a free-form prompt.
+    Bootstrap(BootstrapArgs),
+
     /// New M6 engine commands — runs flow.toml graphs in-process.
     Engine {
         #[command(subcommand)]
@@ -336,6 +339,7 @@ async fn main() -> Result<()> {
         Commands::Init
             | Commands::Clean { .. }
             | Commands::Config { .. }
+            | Commands::Bootstrap(_)
             | Commands::Engine { .. }
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
@@ -533,6 +537,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Analytics { command } => {
             commands::analytics::run(command)?;
+        },
+
+        Commands::Bootstrap(args) => {
+            commands::bootstrap::run(args).await?;
         },
 
         Commands::Engine { command } => {

@@ -1,0 +1,215 @@
+# Linear 3-stage flow: Spec → Implement → Verify → Terminal.
+#
+# Three Agent stages wired to the bundled `implementer@1.0` placeholder
+# profile (resolves through the same path as `flow_minimal_agent.toml`).
+# Each stage declares `pass` (forward) and `fail` (escalate to failure
+# terminal). Demonstrates the smallest non-trivial pipeline shape.
+
+schema_version = 1
+start = "spec_1"
+
+[metadata]
+name = "linear-3"
+created_at = "2026-05-06T00:00:00Z"
+
+# ── spec_1 ──
+[nodes.spec_1]
+id = "spec_1"
+
+[nodes.spec_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.spec_1.declared_outcomes]]
+id = "pass"
+description = "Spec accepted"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.spec_1.declared_outcomes]]
+id = "fail"
+description = "Spec unrecoverable"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.spec_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.spec_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.spec_1.config.custom_fields]
+
+# ── implement_1 ──
+[nodes.implement_1]
+id = "implement_1"
+
+[nodes.implement_1.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_1.declared_outcomes]]
+id = "pass"
+description = "Implementation done"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.implement_1.declared_outcomes]]
+id = "fail"
+description = "Implementation blocked"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.implement_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_1.config.custom_fields]
+
+# ── verify_1 ──
+[nodes.verify_1]
+id = "verify_1"
+
+[nodes.verify_1.position]
+x = 400.0
+y = 0.0
+
+[[nodes.verify_1.declared_outcomes]]
+id = "pass"
+description = "Verification clean"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[[nodes.verify_1.declared_outcomes]]
+id = "fail"
+description = "Regression detected"
+edge_kind_hint = "escalate"
+is_terminal = false
+
+[nodes.verify_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.verify_1.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.verify_1.config.custom_fields]
+
+# ── terminals ──
+[nodes.success]
+id = "success"
+declared_outcomes = []
+
+[nodes.success.position]
+x = 600.0
+y = 0.0
+
+[nodes.success.config]
+node_kind = "terminal"
+
+[nodes.success.config.kind]
+type = "success"
+
+[nodes.failure]
+id = "failure"
+declared_outcomes = []
+
+[nodes.failure.position]
+x = 600.0
+y = 200.0
+
+[nodes.failure.config]
+node_kind = "terminal"
+
+[nodes.failure.config.kind]
+type = "failure"
+exit_code = 1
+
+# ── edges ──
+[[edges]]
+id = "e_spec_pass"
+to = "implement_1"
+kind = "forward"
+
+[edges.from]
+node = "spec_1"
+outcome = "pass"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_spec_fail"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "spec_1"
+outcome = "fail"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_pass"
+to = "verify_1"
+kind = "forward"
+
+[edges.from]
+node = "implement_1"
+outcome = "pass"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_fail"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "implement_1"
+outcome = "fail"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_pass"
+to = "success"
+kind = "forward"
+
+[edges.from]
+node = "verify_1"
+outcome = "pass"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_fail"
+to = "failure"
+kind = "forward"
+
+[edges.from]
+node = "verify_1"
+outcome = "fail"
+
+[edges.policy]
+on_max_exceeded = "escalate"

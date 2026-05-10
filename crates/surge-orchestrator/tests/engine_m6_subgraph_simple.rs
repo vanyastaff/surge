@@ -115,6 +115,7 @@ fn build_subgraph_graph() -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: sg_node_key,
         nodes,

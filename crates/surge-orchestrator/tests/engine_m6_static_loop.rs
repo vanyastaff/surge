@@ -112,6 +112,7 @@ fn build_static_loop_graph() -> Graph {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: loop_key,
         nodes,

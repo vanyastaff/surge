@@ -120,6 +120,22 @@ fn resolve_artifact_source(
             "ArtifactSource::GlobPattern not yet implemented in M6 (M7+)".into(),
         )),
         ArtifactSource::Static { content } => Ok(serde_json::Value::String(content.clone())),
+        ArtifactSource::InitialPrompt => {
+            let aref = memory.artifacts.get("user_prompt").ok_or_else(|| {
+                StageError::Internal(
+                    "ArtifactSource::InitialPrompt requested but no \"user_prompt\" artifact \
+                     present in RunMemory (engine seed not yet wired)"
+                        .into(),
+                )
+            })?;
+            Ok(serde_json::json!({
+                "path": aref.path.to_string_lossy(),
+                "hash": aref.hash.to_string(),
+            }))
+        },
+        ArtifactSource::EditFeedback { from_node: _ } => Err(StageError::Internal(
+            "ArtifactSource::EditFeedback resolution not yet wired (bootstrap milestone)".into(),
+        )),
     }
 }
 
@@ -272,6 +288,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: outer_key.clone(),
             nodes,
@@ -346,6 +363,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: outer_key.clone(),
             nodes,

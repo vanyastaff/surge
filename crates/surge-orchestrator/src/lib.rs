@@ -50,7 +50,9 @@
 #![allow(clippy::manual_string_new)]
 #![allow(clippy::match_wildcard_for_single_variants)]
 
+pub mod archetype_registry;
 pub mod bootstrap;
+pub mod bootstrap_driver;
 pub mod budget;
 pub mod circuit_breaker;
 pub mod conflict;

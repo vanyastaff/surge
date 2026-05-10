@@ -114,6 +114,31 @@ pub enum SurgeError {
     /// A profile key reference (`name@version`) failed to parse.
     #[error("invalid profile key reference: {0}")]
     InvalidProfileKey(String),
+
+    // ── Bootstrap errors (Bootstrap & adaptive flow generation milestone) ──
+    /// A bootstrap stage transition referenced a stage that has not been started.
+    #[error("bootstrap stage missing: {stage}")]
+    BootstrapStageMissing { stage: String },
+
+    /// The bootstrap edit-loop cap was exceeded for a given stage.
+    #[error("bootstrap edit loop cap exceeded for stage {stage}: cap={cap}")]
+    EditLoopCapExceeded { stage: String, cap: u32 },
+
+    /// Flow Generator output failed validation more times than the configured retry budget.
+    #[error("bootstrap validation retry exhausted at stage {stage}")]
+    ValidationRetryExhausted { stage: String },
+
+    /// The materialized pipeline graph emitted by Flow Generator is invalid.
+    #[error("materialized pipeline graph invalid: {reason}")]
+    MaterializedGraphInvalid { reason: String },
+
+    /// Flow Generator output omitted the required `[metadata.archetype]` block.
+    #[error("bootstrap archetype block missing in materialized graph")]
+    BootstrapArchetypeMissing,
+
+    /// The declared archetype does not match the detected graph topology.
+    #[error("bootstrap archetype mismatch: declared {declared}, detected {detected}")]
+    BootstrapArchetypeMismatch { declared: String, detected: String },
 }
 
 impl SurgeError {
@@ -214,5 +239,41 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("999"));
         assert!(msg.contains("newer"));
+    }
+
+    #[test]
+    fn edit_loop_cap_exceeded_includes_stage_and_cap() {
+        let err = SurgeError::EditLoopCapExceeded {
+            stage: "flow".into(),
+            cap: 3,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("flow"));
+        assert!(msg.contains("cap=3"));
+    }
+
+    #[test]
+    fn bootstrap_archetype_mismatch_shows_both_sides() {
+        let err = SurgeError::BootstrapArchetypeMismatch {
+            declared: "multi-milestone".into(),
+            detected: "linear-3".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("multi-milestone"));
+        assert!(msg.contains("linear-3"));
+    }
+
+    #[test]
+    fn materialized_graph_invalid_carries_reason() {
+        let err = SurgeError::MaterializedGraphInvalid {
+            reason: "missing start node".into(),
+        };
+        assert!(err.to_string().contains("missing start node"));
+    }
+
+    #[test]
+    fn bootstrap_archetype_missing_renders() {
+        let err = SurgeError::BootstrapArchetypeMissing;
+        assert!(err.to_string().contains("archetype"));
     }
 }

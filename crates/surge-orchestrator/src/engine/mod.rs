@@ -27,6 +27,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 // Submodules added incrementally as later phases land.
+pub mod bootstrap;
 pub mod config;
 pub mod daemon_facade;
 pub mod engine;

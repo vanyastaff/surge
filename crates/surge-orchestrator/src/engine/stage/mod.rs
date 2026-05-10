@@ -72,6 +72,18 @@ pub enum StageError {
     /// Notify channel delivery failed and `on_failure: Fail` is configured. (Reserved for Phase 8.)
     #[error("notify delivery error: {0}")]
     NotifyDelivery(String),
+
+    /// Bootstrap edit-loop cap exceeded: the operator chose `edit` more
+    /// times than `EngineRunConfig.bootstrap.edit_loop_cap` allows for the
+    /// given stage. Engine surfaces this as a terminal failure plus an
+    /// `EscalationRequested` notify event.
+    #[error("bootstrap edit-loop cap exceeded for stage {stage:?} (cap = {cap})")]
+    EditLoopCapExceeded {
+        /// Bootstrap stage that ran out of retries.
+        stage: surge_core::run_event::BootstrapStage,
+        /// The configured cap value.
+        cap: u32,
+    },
 }
 
 impl From<StageError> for EngineError {

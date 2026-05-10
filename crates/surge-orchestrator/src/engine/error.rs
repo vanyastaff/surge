@@ -72,6 +72,48 @@ pub enum EngineError {
     /// A Subgraph node references an inner subgraph that is not in `graph.subgraphs`.
     #[error("subgraph reference {0} not found in graph.subgraphs")]
     SubgraphMissing(surge_core::keys::SubgraphKey),
+
+    /// A pure-`Forward` cycle was detected during pre-execution validation.
+    /// Cycles are permitted iff at least one edge in the cycle has
+    /// `EdgeKind::Backtrack` (deliberate iteration, e.g. bootstrap edit
+    /// loops); a `Forward`-only cycle is a livelock and the engine refuses
+    /// to start such a run. The `nodes` vector lists the nodes that form
+    /// the cycle, in traversal order, with the entry node repeated at the
+    /// end for readability (e.g. `[a, b, a]` for `a → b → a`).
+    #[error("forward-only cycle detected: {}", format_node_cycle(.nodes))]
+    ForwardCycleDetected {
+        /// Nodes forming the offending cycle, in traversal order.
+        nodes: Vec<surge_core::keys::NodeKey>,
+    },
+
+    /// The materialized graph carries a `[metadata.archetype]` block whose
+    /// declared archetype does not match the detected topology — e.g., a
+    /// `multi-milestone` archetype without a `Loop` over a `roadmap.milestones`
+    /// iterable. Surfaced by the post-Flow-Generator validator (Task 11).
+    #[error("archetype mismatch: declared {declared}, detected {detected}")]
+    ArchetypeMismatch {
+        /// Archetype name from `[metadata.archetype]` (kebab-case).
+        declared: String,
+        /// Human-readable description of what the topology actually looks like.
+        detected: String,
+    },
+
+    /// A non-bootstrap pipeline graph is missing the `[metadata.archetype]`
+    /// block where one is required (e.g., when running the post-Flow-Generator
+    /// validator on a freshly materialized graph). Reserved for callers that
+    /// want to enforce archetype declarations beyond the bootstrap path; the
+    /// post-Flow-Generator hook itself only enforces consistency when the
+    /// block is present.
+    #[error("archetype block missing: {0}")]
+    ArchetypeMissing(String),
+}
+
+fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {
+    nodes
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" -> ")
 }
 
 #[cfg(test)]

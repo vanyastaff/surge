@@ -36,12 +36,14 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   │   │   │   ├── keyref.rs               #   `name@version` parser → ProfileKeyRef
 │   │   │   │   ├── registry.rs             #   ResolvedProfile, merge_chain, collect_chain
 │   │   │   │   └── bundled.rs              #   17 bundled profiles via include_str!
+│   │   │   ├── bundled_flows.rs            # Bundled flow registry via include_str!
 │   │   │   ├── sandbox.rs                  # SandboxIntent / launch profiles
 │   │   │   ├── validation.rs               # Graph invariants
 │   │   │   ├── error.rs                    # SurgeError (thiserror, #[non_exhaustive])
 │   │   │   ├── id.rs / keys.rs             # ULID-based IDs, NodeKey / OutcomeKey
 │   │   │   └── *_config.rs                 # One config struct per file
 │   │   ├── bundled/profiles/               # 17 *.toml assets baked in via include_str!
+│   │   ├── bundled/flows/                  # First-party flow.toml assets baked in via include_str!
 │   │   └── benches/                        # criterion benches (harness = false)
 │   │
 │   ├── surge-spec/                         # Legacy structured-spec format (kept while flow.toml stabilizes)
@@ -50,6 +52,8 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   ├── surge-orchestrator/                 # Engine: graph executor + legacy spec pipeline
 │   │   ├── src/
 │   │   │   ├── prompt.rs                   # PromptRenderer — Handlebars wrapper (strict + lenient)
+│   │   │   ├── archetype_registry.rs       # User/bundled flow template lookup
+│   │   │   ├── bootstrap_driver.rs         # Bootstrap graph runner → materialized follow-up graph
 │   │   │   ├── profile_loader/             # Disk + bundled resolution (I/O-touching)
 │   │   │   │   ├── paths.rs                #   surge_home() / profiles_dir() honouring SURGE_HOME
 │   │   │   │   ├── disk.rs                 #   DiskProfileSet::scan(*.toml, warn-and-skip)
@@ -57,7 +61,7 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   │   │   └── engine/                     # graph executor + stage handlers + hooks
 │   │
 │   │   ── Adapter layer (one external concern per crate) ─────────────────────
-│   ├── surge-persistence/                  # SQLite event log, materialized views, memory, analytics
+│   ├── surge-persistence/                  # SQLite event log, content-addressed artifacts, views, memory
 │   ├── surge-acp/                          # ACP bridge (dedicated OS thread, !Send futures)
 │   ├── surge-git/                          # git2-based worktree and branch lifecycle
 │   ├── surge-intake/                       # TaskSource trait + GitHub Issues / Linear impls

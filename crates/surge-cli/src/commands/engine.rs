@@ -14,8 +14,11 @@ use surge_persistence::runs::Storage;
 pub enum EngineCommands {
     /// Start a new run from a flow.toml graph.
     Run {
-        /// Path to the flow.toml file.
-        spec_path: PathBuf,
+        /// Path to the flow.toml file. Omit when using --template.
+        spec_path: Option<PathBuf>,
+        /// Bundled or user archetype template name. Skips bootstrap.
+        #[arg(long)]
+        template: Option<String>,
         /// Stream events to stderr until the run terminates.
         #[arg(long)]
         watch: bool,
@@ -78,10 +81,11 @@ pub async fn run(command: EngineCommands) -> Result<()> {
     match command {
         EngineCommands::Run {
             spec_path,
+            template,
             watch,
             worktree,
             daemon,
-        } => run_command(spec_path, watch, worktree, daemon).await,
+        } => run_command(spec_path, template, watch, worktree, daemon).await,
         EngineCommands::Watch { run_id, daemon } => watch_command(run_id, daemon).await,
         EngineCommands::Resume { run_id, daemon } => resume_command(run_id, daemon).await,
         EngineCommands::Stop {
@@ -99,7 +103,8 @@ pub async fn run(command: EngineCommands) -> Result<()> {
 }
 
 async fn run_command(
-    spec_path: PathBuf,
+    spec_path: Option<PathBuf>,
+    template: Option<String>,
     watch: bool,
     worktree: Option<PathBuf>,
     daemon: bool,
@@ -109,10 +114,35 @@ async fn run_command(
     use surge_orchestrator::engine::facade::EngineFacade;
     use surge_orchestrator::engine::handle::EngineRunEvent;
 
-    let toml_text = std::fs::read_to_string(&spec_path)
-        .with_context(|| format!("read {}", spec_path.display()))?;
-    let graph: Graph =
-        toml::from_str(&toml_text).with_context(|| format!("parse {}", spec_path.display()))?;
+    let graph: Graph = match (spec_path, template) {
+        (Some(_), Some(template)) => {
+            return Err(anyhow!(
+                "pass either SPEC_PATH or --template {template}, not both; either form skips bootstrap"
+            ));
+        },
+        (Some(path), None) => {
+            let toml_text = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            toml::from_str(&toml_text).with_context(|| format!("parse {}", path.display()))?
+        },
+        (None, Some(template)) => {
+            let registry = surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
+                .context("load archetype registry")?;
+            let resolved = registry
+                .resolve(&template)
+                .with_context(|| format!("resolve template {template:?}"))?;
+            eprintln!(
+                "using template {} ({:?})",
+                resolved.name, resolved.provenance
+            );
+            resolved.graph
+        },
+        (None, None) => {
+            return Err(anyhow!(
+                "provide SPEC_PATH or --template <name>; both forms skip bootstrap"
+            ));
+        },
+    };
 
     let worktree_path = worktree.map_or_else(|| std::env::current_dir().context("cwd"), Ok)?;
     if !worktree_path.exists() {

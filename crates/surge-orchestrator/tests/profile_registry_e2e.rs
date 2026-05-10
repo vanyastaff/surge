@@ -117,6 +117,8 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
         .create_run(run_id, storage_dir.path(), None)
         .await
         .unwrap();
+    let artifact_store =
+        surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -166,6 +168,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: storage_dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,
@@ -225,6 +228,8 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
         .create_run(run_id, storage_dir.path(), None)
         .await
         .unwrap();
+    let artifact_store =
+        surge_persistence::artifacts::ArtifactStore::new(storage_dir.path().join("runs"));
 
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -269,6 +274,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
+        artifact_store: &artifact_store,
         worktree_path: storage_dir.path(),
         tool_dispatcher: &dispatcher,
         run_memory: &memory,

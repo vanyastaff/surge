@@ -1,6 +1,7 @@
 //! Run state machine — derived purely by folding events.
 
 use crate::content_hash::ContentHash;
+use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
@@ -79,6 +80,25 @@ pub struct RunMemory {
     pub artifacts_by_node: BTreeMap<NodeKey, Vec<ArtifactRef>>,
     pub outcomes: BTreeMap<NodeKey, Vec<OutcomeRecord>>,
     pub costs: CostSummary,
+    /// Per-bootstrap-stage edit-loop counter. Incremented on every
+    /// `BootstrapEditRequested` event. Read by the bootstrap HumanGate
+    /// handler to enforce `EngineRunConfig.bootstrap.edit_loop_cap`.
+    /// Empty for non-bootstrap runs.
+    pub bootstrap_edit_counts: BTreeMap<BootstrapStage, u32>,
+    /// Per-node visit counter for `EdgeKind::Backtrack` re-entries. The
+    /// value is incremented exactly once per `EdgeTraversed { kind: Backtrack }`
+    /// event keyed by the *target* node. Forward-edge traversals do not
+    /// touch this map. Bootstrap engine code (and any future
+    /// backtrack-aware feature) reads it to detect re-entries without
+    /// scanning the event log.
+    pub node_visits: BTreeMap<NodeKey, u32>,
+    /// Per-bootstrap-stage latest edit feedback. Updated on every
+    /// `BootstrapEditRequested { stage, feedback }` event — the newest
+    /// feedback overwrites the previous entry for that stage. Read by the
+    /// `ArtifactSource::EditFeedback` binding resolver in the orchestrator
+    /// to expose the most recent operator feedback to the re-entered agent
+    /// stage. Empty for non-bootstrap runs.
+    pub last_edit_feedback_by_stage: BTreeMap<BootstrapStage, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -351,6 +371,32 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::EdgeTraversed {
+                kind: EdgeKind::Backtrack,
+                to,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                *memory.node_visits.entry(to.clone()).or_insert(0) += 1;
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
         (state @ RunState::Pipeline { .. }, EventPayload::HumanInputResolved { .. }) => {
             if let RunState::Pipeline {
                 graph,
@@ -489,6 +535,18 @@ impl RunMemory {
                 self.costs.cache_hits += u64::from(*cache_hits);
                 self.costs.cost_usd += cost_usd.unwrap_or(0.0);
             },
+            EventPayload::BootstrapEditRequested { stage, feedback } => {
+                *self.bootstrap_edit_counts.entry(*stage).or_insert(0) += 1;
+                self.last_edit_feedback_by_stage
+                    .insert(*stage, feedback.clone());
+            },
+            EventPayload::EdgeTraversed {
+                kind: EdgeKind::Backtrack,
+                to,
+                ..
+            } => {
+                *self.node_visits.entry(to.clone()).or_insert(0) += 1;
+            },
             _ => {},
         }
     }
@@ -618,6 +676,154 @@ mod tests {
         let m = RunMemory::default();
         assert!(m.artifacts.is_empty());
         assert_eq!(m.costs.tokens_in, 0);
+        assert!(m.bootstrap_edit_counts.is_empty());
+        assert!(m.node_visits.is_empty());
+    }
+
+    #[test]
+    fn node_visits_counter_increments_on_backtrack_only() {
+        // Forward traversals (`kind: Forward`) must NOT touch node_visits;
+        // only Backtrack edges contribute, keyed by the target node.
+        use crate::keys::EdgeKey;
+
+        let mut m = RunMemory::default();
+        let target = NodeKey::try_from("desc_author").unwrap();
+        let other = NodeKey::try_from("plan_author").unwrap();
+
+        // Forward — should be ignored.
+        m.apply_event(&make_event(
+            1,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_fwd").unwrap(),
+                from: NodeKey::try_from("start").unwrap(),
+                to: target.clone(),
+                kind: EdgeKind::Forward,
+            },
+        ));
+        assert!(m.node_visits.is_empty());
+
+        // First Backtrack into `target` — counter becomes 1.
+        m.apply_event(&make_event(
+            2,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_bt1").unwrap(),
+                from: NodeKey::try_from("gate1").unwrap(),
+                to: target.clone(),
+                kind: EdgeKind::Backtrack,
+            },
+        ));
+        assert_eq!(m.node_visits[&target], 1);
+
+        // Second Backtrack into the same node — counter becomes 2.
+        m.apply_event(&make_event(
+            3,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_bt2").unwrap(),
+                from: NodeKey::try_from("gate1").unwrap(),
+                to: target.clone(),
+                kind: EdgeKind::Backtrack,
+            },
+        ));
+        assert_eq!(m.node_visits[&target], 2);
+
+        // Backtrack into a different target — independent counter.
+        m.apply_event(&make_event(
+            4,
+            EventPayload::EdgeTraversed {
+                edge: EdgeKey::try_from("e_bt3").unwrap(),
+                from: NodeKey::try_from("gate2").unwrap(),
+                to: other.clone(),
+                kind: EdgeKind::Backtrack,
+            },
+        ));
+        assert_eq!(m.node_visits[&target], 2);
+        assert_eq!(m.node_visits[&other], 1);
+    }
+
+    #[test]
+    fn node_visits_fold_is_deterministic() {
+        // Replay-determinism guard: folding the same event sequence twice
+        // must produce identical `node_visits` maps. Confirms there is no
+        // hidden mutation of prior outcomes when a backtrack lands on a
+        // node whose stage already executed.
+        use crate::keys::EdgeKey;
+
+        let target = NodeKey::try_from("flow_gen").unwrap();
+        let events: Vec<RunEvent> = (1u64..=4)
+            .map(|seq| {
+                make_event(
+                    seq,
+                    EventPayload::EdgeTraversed {
+                        edge: EdgeKey::try_from(&*format!("e_{seq}")).unwrap(),
+                        from: NodeKey::try_from("gate").unwrap(),
+                        to: target.clone(),
+                        kind: EdgeKind::Backtrack,
+                    },
+                )
+            })
+            .collect();
+
+        let mut a = RunMemory::default();
+        let mut b = RunMemory::default();
+        for e in &events {
+            a.apply_event(e);
+            b.apply_event(e);
+        }
+        assert_eq!(a.node_visits, b.node_visits);
+        assert_eq!(a.node_visits[&target], 4);
+    }
+
+    #[test]
+    fn bootstrap_edit_counter_increments_per_stage() {
+        let mut m = RunMemory::default();
+        for &stage in &[
+            BootstrapStage::Description,
+            BootstrapStage::Description,
+            BootstrapStage::Roadmap,
+        ] {
+            let evt = make_event(
+                1,
+                EventPayload::BootstrapEditRequested {
+                    stage,
+                    feedback: "tighten".into(),
+                },
+            );
+            m.apply_event(&evt);
+        }
+        assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Description], 2);
+        assert_eq!(m.bootstrap_edit_counts[&BootstrapStage::Roadmap], 1);
+        assert!(!m.bootstrap_edit_counts.contains_key(&BootstrapStage::Flow));
+    }
+
+    #[test]
+    fn bootstrap_edit_counter_is_deterministic() {
+        // Folding the same event sequence twice must produce identical
+        // bootstrap_edit_counts maps. Replay determinism guard.
+        let events: Vec<RunEvent> = (1..=5)
+            .map(|seq| {
+                make_event(
+                    seq,
+                    EventPayload::BootstrapEditRequested {
+                        stage: if seq % 2 == 0 {
+                            BootstrapStage::Description
+                        } else {
+                            BootstrapStage::Flow
+                        },
+                        feedback: format!("note-{seq}"),
+                    },
+                )
+            })
+            .collect();
+
+        let mut a = RunMemory::default();
+        let mut b = RunMemory::default();
+        for e in &events {
+            a.apply_event(e);
+            b.apply_event(e);
+        }
+        assert_eq!(a.bootstrap_edit_counts, b.bootstrap_edit_counts);
+        assert_eq!(a.bootstrap_edit_counts[&BootstrapStage::Description], 2);
+        assert_eq!(a.bootstrap_edit_counts[&BootstrapStage::Flow], 3);
     }
 
     #[test]
@@ -652,6 +858,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: end.clone(),
             nodes,
@@ -730,6 +937,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: plan.clone(),
             nodes,
@@ -785,6 +993,140 @@ mod tests {
     }
 
     #[test]
+    fn backtrack_traversal_then_re_entry_advances_cursor_and_increments_visits() {
+        // End-to-end fold-level proof of Task 27 semantics. The event log
+        // models a HumanGate edit-loop: an Agent stage runs and reports an
+        // outcome (`needs_edit`), the gate emits a `Backtrack` traversal
+        // back to that same Agent node, and the engine re-enters the stage
+        // (StageEntered, attempt=2). Folding the log must produce a
+        // `Pipeline` state whose cursor sits on the Agent node with
+        // attempt=2 and whose `RunMemory.node_visits[<agent>]` equals 1
+        // (one Backtrack into that node so far). Forward traversals
+        // earlier in the log must NOT contribute to the counter.
+        use crate::approvals::ApprovalPolicy;
+        use crate::content_hash::ContentHash;
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::EdgeKey;
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::run_event::RunConfig;
+        use crate::sandbox::SandboxMode;
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+
+        let agent = NodeKey::try_from("desc_author").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            agent.clone(),
+            Node {
+                id: agent.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "bootstrap-edit-loop".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: agent.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "build".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"hash"),
+                },
+            ),
+            make_event(
+                3,
+                EventPayload::StageEntered {
+                    node: agent.clone(),
+                    attempt: 1,
+                },
+            ),
+            // Forward traversal earlier in the run — must NOT bump
+            // node_visits.
+            make_event(
+                4,
+                EventPayload::EdgeTraversed {
+                    edge: EdgeKey::try_from("e_fwd").unwrap(),
+                    from: NodeKey::try_from("start_node").unwrap(),
+                    to: agent.clone(),
+                    kind: EdgeKind::Forward,
+                },
+            ),
+            // Operator selects "edit" — gate routes back via Backtrack.
+            make_event(
+                5,
+                EventPayload::EdgeTraversed {
+                    edge: EdgeKey::try_from("e_back").unwrap(),
+                    from: NodeKey::try_from("gate_desc").unwrap(),
+                    to: agent.clone(),
+                    kind: EdgeKind::Backtrack,
+                },
+            ),
+            // Engine re-enters the Agent stage with a fresh attempt
+            // counter — the standard StageEntered fold rule advances the
+            // cursor.
+            make_event(
+                6,
+                EventPayload::StageEntered {
+                    node: agent.clone(),
+                    attempt: 2,
+                },
+            ),
+        ];
+
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline { cursor, memory, .. } => {
+                assert_eq!(cursor.node, agent);
+                assert_eq!(cursor.attempt, 2, "Backtrack must re-enter the stage");
+                assert_eq!(
+                    memory.node_visits[&agent], 1,
+                    "node_visits must increment exactly once per Backtrack",
+                );
+                assert!(
+                    !memory
+                        .node_visits
+                        .contains_key(&NodeKey::try_from("start_node").unwrap()),
+                    "Forward edges must not populate node_visits",
+                );
+            },
+            other => panic!("expected Pipeline, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn human_input_resolution_clears_pending_field() {
         use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
         use crate::node::{Node, NodeConfig, Position};
@@ -813,6 +1155,7 @@ mod tests {
                 template_origin: None,
                 created_at: chrono::Utc::now(),
                 author: None,
+                archetype: None,
             },
             start: plan.clone(),
             nodes,

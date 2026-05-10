@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use surge_core::branch_config::{BranchArm, BranchConfig, Predicate};
+use surge_core::edge::EdgeKind;
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
@@ -126,6 +127,7 @@ async fn execute_one_transition(fixture: &BenchFixture, writer: &RunWriter) {
             edge: fixture.edge.clone(),
             from: fixture.node.clone(),
             to: fixture.next.clone(),
+            kind: EdgeKind::Forward,
         }))
         .await
         .expect("append EdgeTraversed");

@@ -199,6 +199,7 @@ fn three_concurrent_real_runs_complete_independently() {
                         template_origin: None,
                         created_at: chrono::Utc::now(),
                         author: None,
+                        archetype: None,
                     },
                     start: agent_key,
                     nodes,

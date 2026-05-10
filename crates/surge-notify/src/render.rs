@@ -116,7 +116,10 @@ fn resolve_artifact_path(
             .and_then(|list| list.iter().find(|a| a.name == *artifact))
             .map(|a| a.path.clone()),
         ArtifactSource::RunArtifact { name } => memory.artifacts.get(name).map(|a| a.path.clone()),
-        ArtifactSource::GlobPattern { .. } | ArtifactSource::Static { .. } => None,
+        ArtifactSource::GlobPattern { .. }
+        | ArtifactSource::Static { .. }
+        | ArtifactSource::EditFeedback { .. }
+        | ArtifactSource::InitialPrompt => None,
     }
 }
 

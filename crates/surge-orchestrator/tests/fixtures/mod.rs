@@ -1,5 +1,6 @@
 //! Test fixtures for surge-orchestrator E2E tests.
 
+pub mod bootstrap;
 pub mod mock_bridge;
 
 use std::path::PathBuf;

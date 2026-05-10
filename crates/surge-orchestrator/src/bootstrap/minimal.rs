@@ -199,6 +199,7 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
             template_origin: None,
             created_at: chrono::Utc::now(),
             author: None,
+            archetype: None,
         },
         start: agent_key,
         nodes,

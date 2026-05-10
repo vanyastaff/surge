@@ -204,13 +204,58 @@ flowchart TD
 
 Current practical paths:
 
+- `surge bootstrap "<prompt>"` starts from free-form work, generates `description.md`, `roadmap.md`, and `flow.toml`, then launches the materialized follow-up graph.
 - `surge engine run <flow.toml>` starts from an already-authored graph.
+- `surge engine run --template <name>` starts from a bundled or user archetype template and skips bootstrap.
 - `surge run <spec_id>` uses the older spec pipeline.
 
 Target paths:
 
 - CLI / Telegram / UI natural-language work enters the bootstrap path.
 - GitHub Issues and Linear issues are fetched, normalized, and fed into the same bootstrap path.
+
+## Current Bootstrap Implementation
+
+The implemented bootstrap path is a graph like any other graph. The bundled
+`bootstrap` flow runs three authoring agents with HumanGates between them:
+
+```mermaid
+flowchart LR
+    Prompt[User prompt]
+    Description[Description Author]
+    DescriptionGate{Approve description?}
+    Roadmap[Roadmap Planner]
+    RoadmapGate{Approve roadmap?}
+    Flow[Flow Generator]
+    Validate[Parse + validate flow.toml]
+    FlowGate{Approve flow?}
+    Followup[Follow-up graph run]
+
+    Prompt --> Description
+    Description --> DescriptionGate
+    DescriptionGate -->|approve| Roadmap
+    DescriptionGate -. edit .-> Description
+    Roadmap --> RoadmapGate
+    RoadmapGate -->|approve| Flow
+    RoadmapGate -. edit .-> Roadmap
+    Flow --> Validate
+    Validate -->|valid| FlowGate
+    Validate -. invalid .-> Flow
+    FlowGate -->|approve| Followup
+    FlowGate -. edit .-> Flow
+```
+
+`edit` decisions append `BootstrapEditRequested` and backtrack to the preceding
+agent with the latest feedback bound as `edit_feedback`. The default cap is
+three edits per bootstrap stage; exceeding it emits `EscalationRequested` and
+fails the run. Flow Generator output also passes through the graph validator
+before the flow gate appears, so invalid `flow.toml` output is retried without
+asking the user to approve a broken graph.
+
+After approval, the bootstrap driver extracts the latest `description`,
+`roadmap`, and `flow` artifacts, appends `BootstrapTelemetry`, and starts the
+follow-up run with those artifacts inherited through the content-addressed
+artifact store.
 
 ## Roadmap Amendments
 

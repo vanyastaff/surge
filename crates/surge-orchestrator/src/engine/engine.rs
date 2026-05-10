@@ -13,6 +13,7 @@ use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
 /// Central orchestration engine. Drives one or more concurrent runs, each
 /// executing a frozen [`Graph`] through ACP sessions and persistence writes.
@@ -150,6 +151,15 @@ impl Engine {
         self.config.profile_registry.as_ref()
     }
 
+    /// Clone the storage handle backing this engine.
+    ///
+    /// Kept crate-visible for orchestration helpers that need to inspect a
+    /// completed run's event log without widening the public `Engine` API.
+    #[must_use]
+    pub(crate) fn storage(&self) -> Arc<surge_persistence::runs::Storage> {
+        self.storage.clone()
+    }
+
     /// Start a new run.
     #[allow(clippy::too_many_lines)]
     pub async fn start_run(
@@ -186,6 +196,8 @@ impl Engine {
             .create_run(run_id, &worktree_path, None)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
         // Emit RunStarted + PipelineMaterialized atomically.
         let core_run_config = CoreRunConfig {
@@ -198,19 +210,59 @@ impl Engine {
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
         let graph_hash = ContentHash::compute(&graph_bytes);
 
+        let mut events = vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree_path.clone(),
+                initial_prompt: run_config.initial_prompt.clone(),
+                config: core_run_config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash,
+            }),
+        ];
+
+        if let Some(parent_run_id) = run_config.bootstrap_parent {
+            let inherited = self
+                .bootstrap_parent_artifact_events(&artifact_store, run_id, parent_run_id)
+                .await?;
+            events.extend(inherited);
+        }
+
+        // Surface the operator's free-form prompt as a first-class artifact so
+        // bootstrap (or any) agent stage can pull it via the standard binding
+        // path through `ArtifactSource::InitialPrompt` (and equivalently via
+        // `ArtifactSource::RunArtifact { name: "user_prompt" }`). The artifact
+        // body is stored at `<worktree>/.surge/user_prompt.txt`; the
+        // `ArtifactProduced` event records its content hash, relative path,
+        // and a synthetic producer node so the existing fold rule populates
+        // `RunMemory.artifacts["user_prompt"]` deterministically.
+        if !run_config.initial_prompt.is_empty() {
+            let prompt_artifact = synthesise_initial_prompt_artifact(
+                &worktree_path,
+                run_config.initial_prompt.as_bytes(),
+            )
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
+            })?;
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %run_id,
+                prompt_len = run_config.initial_prompt.len(),
+                "seeded user_prompt artifact",
+            );
+            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: prompt_artifact.producer,
+                artifact: prompt_artifact.hash,
+                path: prompt_artifact.relative_path,
+                name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
+            }));
+        }
+
         writer
-            .append_events(vec![
-                VersionedEventPayload::new(EventPayload::RunStarted {
-                    pipeline_template: None,
-                    project_path: worktree_path.clone(),
-                    initial_prompt: String::new(),
-                    config: core_run_config,
-                }),
-                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
-                    graph: Box::new(graph.clone()),
-                    graph_hash,
-                }),
-            ])
+            .append_events(events)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
@@ -245,6 +297,7 @@ impl Engine {
         let params = RunTaskParams {
             run_id,
             writer,
+            artifact_store,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),
@@ -276,6 +329,106 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    async fn bootstrap_parent_artifact_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        child_run_id: RunId,
+        parent_run_id: RunId,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        use surge_core::keys::NodeKey;
+        use surge_core::run_state::ArtifactRef;
+        use surge_persistence::runs::EventSeq;
+
+        const BOOTSTRAP_PARENT_ARTIFACTS: [&str; 3] = ["description", "roadmap", "flow"];
+        const BOOTSTRAP_PARENT_NODE: &str = "bootstrap_parent";
+
+        let reader = self
+            .storage
+            .open_run_reader(parent_run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let current = reader
+            .current_seq()
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let parent_events = reader
+            .read_events(EventSeq(1)..current.next())
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+        let mut parent_worktree = None;
+        let mut artifacts = std::collections::BTreeMap::new();
+        for event in parent_events {
+            match event.payload.payload {
+                EventPayload::RunStarted { project_path, .. } => {
+                    parent_worktree = Some(project_path);
+                },
+                EventPayload::ArtifactProduced {
+                    node,
+                    artifact,
+                    path,
+                    name,
+                } if BOOTSTRAP_PARENT_ARTIFACTS.contains(&name.as_str()) => {
+                    artifacts.insert(
+                        name.clone(),
+                        ArtifactRef {
+                            hash: artifact,
+                            path,
+                            name,
+                            produced_by: node,
+                            produced_at_seq: event.seq.as_u64(),
+                        },
+                    );
+                },
+                _ => {},
+            }
+        }
+
+        let parent_worktree = parent_worktree.ok_or_else(|| {
+            EngineError::Internal(format!(
+                "bootstrap parent {parent_run_id} has no RunStarted event"
+            ))
+        })?;
+        let inherited_node = NodeKey::try_from(BOOTSTRAP_PARENT_NODE).map_err(|e| {
+            EngineError::Internal(format!("invalid bootstrap parent producer key: {e}"))
+        })?;
+
+        let mut inherited_events = Vec::with_capacity(BOOTSTRAP_PARENT_ARTIFACTS.len());
+        for name in BOOTSTRAP_PARENT_ARTIFACTS {
+            let artifact = artifacts.get(name).ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "bootstrap parent {parent_run_id} is missing required artifact {name}"
+                ))
+            })?;
+            let bytes = artifact_store
+                .open_ref(parent_run_id, artifact, &parent_worktree)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+            let child_ref = artifact_store
+                .put(child_run_id, name, &bytes)
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %child_run_id,
+                bootstrap_parent = %parent_run_id,
+                artifact = name,
+                hash = %child_ref.hash,
+                "inherited bootstrap artifact",
+            );
+
+            inherited_events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: inherited_node.clone(),
+                artifact: child_ref.hash,
+                path: child_ref.path,
+                name: name.to_owned(),
+            }));
+        }
+
+        Ok(inherited_events)
     }
 
     /// Resume an existing run from its latest snapshot + event tail.
@@ -365,10 +518,13 @@ impl Engine {
             )))
         };
         let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();
+        let artifact_store =
+            surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
         let params = RunTaskParams {
             run_id,
             writer,
+            artifact_store,
             bridge: self.bridge.clone(),
             tool_dispatcher: self.tool_dispatcher.clone(),
             notify_deliverer: self.notify_deliverer.clone(),
@@ -437,7 +593,11 @@ impl Engine {
             let mut gates = active.gate_resolutions.lock().await;
             let key = gates.keys().next().cloned();
             if let Some(k) = key {
-                let tx = gates.remove(&k).expect("just looked up");
+                let Some(tx) = gates.remove(&k) else {
+                    return Err(EngineError::Internal(format!(
+                        "pending HumanGate disappeared before resolving {k:?}"
+                    )));
+                };
                 tx.send(crate::engine::stage::human_gate::HumanGateResolution {
                     outcome,
                     response,
@@ -499,4 +659,59 @@ impl Engine {
 #[allow(dead_code)]
 fn _engine_config_used(e: &Engine) {
     let _ = &e.config;
+}
+
+/// Canonical artifact name under which the run's free-form initial prompt is
+/// surfaced to agent stages. Bootstrap profiles bind to this name (either via
+/// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
+pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
+
+/// Relative path within the worktree where the seeded prompt body is stored.
+const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
+
+/// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
+/// Bootstrap graphs do not have a real `start_node` user node, so the
+/// engine attributes the prompt to a stable synthetic key.
+const INITIAL_PROMPT_PRODUCER_NODE: &str = "start_node";
+
+/// Output of [`synthesise_initial_prompt_artifact`].
+pub(crate) struct InitialPromptArtifact {
+    pub hash: surge_core::content_hash::ContentHash,
+    pub relative_path: PathBuf,
+    pub producer: surge_core::keys::NodeKey,
+}
+
+/// Persist the operator-supplied prompt body to a stable location inside the
+/// run's worktree and compute the metadata needed to record an
+/// `ArtifactProduced` event. Returns the content hash, the relative on-disk
+/// path, and the synthetic producer node key.
+///
+/// Writes `<worktree>/.surge/user_prompt.txt`, creating the parent directory
+/// when missing. Idempotent for identical content (the file is overwritten
+/// each call, and `ContentHash::compute` is purely a function of bytes).
+pub(crate) async fn synthesise_initial_prompt_artifact(
+    worktree_path: &std::path::Path,
+    prompt_bytes: &[u8],
+) -> std::io::Result<InitialPromptArtifact> {
+    use surge_core::content_hash::ContentHash;
+    use surge_core::keys::NodeKey;
+
+    let relative_path = PathBuf::from(INITIAL_PROMPT_ARTIFACT_RELPATH);
+    let absolute_path = worktree_path.join(&relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&absolute_path, prompt_bytes).await?;
+    let hash = ContentHash::compute(prompt_bytes);
+    let producer = NodeKey::try_from(INITIAL_PROMPT_PRODUCER_NODE).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("initial prompt producer node key: {e}"),
+        )
+    })?;
+    Ok(InitialPromptArtifact {
+        hash,
+        relative_path,
+        producer,
+    })
 }
