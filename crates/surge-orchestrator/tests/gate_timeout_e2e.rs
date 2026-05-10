@@ -202,7 +202,7 @@ fn test_gate_timeout_different_phases() {
 ///
 /// Verifies:
 /// - Short timeouts (1 second) work correctly
-/// - Longer timeouts (5 seconds) work correctly
+/// - Longer timeouts (3 seconds) work correctly
 /// - Gates don't timeout before their configured duration
 #[test]
 #[ignore = "e2e test — run with cargo test -- --ignored"]
@@ -211,37 +211,38 @@ fn test_gate_timeout_different_durations() {
     let specs_dir = test_dir.join("specs");
     fs::create_dir_all(&specs_dir).expect("Failed to create specs dir");
 
-    // Test with 2 second timeout
-    eprintln!("\nTesting 2-second timeout...");
-    let manager_2s = GateManager::with_timeout(
+    // Test with 3 second timeout. Gate state stores whole seconds, so avoid
+    // assertions close to the timeout boundary.
+    eprintln!("\nTesting 3-second timeout...");
+    let manager_3s = GateManager::with_timeout(
         all_gates_config(),
         specs_dir.clone(),
-        Duration::from_secs(2),
+        Duration::from_secs(3),
     );
 
-    let spec_id_2s = SpecId::new();
-    let spec_dir_2s = specs_dir.join(spec_id_2s.to_string());
-    fs::create_dir_all(&spec_dir_2s).expect("Failed to create spec dir");
+    let spec_id_3s = SpecId::new();
+    let spec_dir_3s = specs_dir.join(spec_id_3s.to_string());
+    fs::create_dir_all(&spec_dir_3s).expect("Failed to create spec dir");
 
-    manager_2s.trigger_gate(spec_id_2s, Phase::Planning);
+    manager_3s.trigger_gate(spec_id_3s, Phase::Planning);
 
     // Check at 1 second - should not timeout yet
     std::thread::sleep(Duration::from_millis(1100));
-    let action = manager_2s.check_gate(Phase::Planning, spec_id_2s);
+    let action = manager_3s.check_gate(Phase::Planning, spec_id_3s);
     assert!(
         matches!(action, GateAction::Pause { .. }),
-        "Should still be paused after 1 second (timeout is 2 seconds)"
+        "Should still be paused after 1 second (timeout is 3 seconds)"
     );
     eprintln!("✓ Not timed out after 1 second");
 
-    // Wait another 1.5 seconds - should timeout now
-    std::thread::sleep(Duration::from_millis(1500));
-    let action = manager_2s.check_gate(Phase::Planning, spec_id_2s);
+    // Wait long enough to pass the 3 second timeout even with second-granularity timestamps.
+    std::thread::sleep(Duration::from_millis(2500));
+    let action = manager_3s.check_gate(Phase::Planning, spec_id_3s);
     assert!(
         matches!(action, GateAction::Timeout { .. }),
-        "Should timeout after 2+ seconds"
+        "Should timeout after 3+ seconds"
     );
-    eprintln!("✓ Timed out after 2+ seconds");
+    eprintln!("✓ Timed out after 3+ seconds");
 
     cleanup_dir(&test_dir);
 }

@@ -203,7 +203,8 @@ async fn run_command(
     let run_id = RunId::new();
     println!("{run_id}");
 
-    let app_config = SurgeConfig::load_or_default().context("load surge config")?;
+    let app_config =
+        SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
     let run_config = surge_orchestrator::project_context::with_project_context_seed(
         EngineRunConfig::default(),
         &worktree_path,

@@ -97,7 +97,7 @@ fn scan_project_records_size_budget_and_generated_directory_skips() {
         skipped.relative_path.as_path() == Path::new("README.md")
             && skipped.reason == "oversized_file"
             && skipped.byte_len == Some(128)
-            && skipped.hash.is_some()
+            && skipped.hash.is_none()
     }));
     assert!(scan.skipped_files.iter().any(|skipped| {
         skipped.relative_path.as_path() == Path::new("target")

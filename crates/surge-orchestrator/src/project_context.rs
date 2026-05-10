@@ -284,8 +284,15 @@ async fn invoke_project_context_author(
         .await
         .map_err(|e| ProjectContextError::Bridge(format!("send_message: {e}")))?;
 
+    let deadline = tokio::time::Instant::now() + PROJECT_CONTEXT_AUTHOR_TIMEOUT;
     loop {
-        let event = tokio::time::timeout(PROJECT_CONTEXT_AUTHOR_TIMEOUT, receiver.recv())
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(ProjectContextError::Bridge(
+                "timed out waiting for OutcomeReported".to_string(),
+            ));
+        }
+        let event = tokio::time::timeout(deadline.duration_since(now), receiver.recv())
             .await
             .map_err(|_| {
                 ProjectContextError::Bridge("timed out waiting for OutcomeReported".to_string())
@@ -482,7 +489,6 @@ pub fn scan_project(root: &Path, limits: ScanLimits) -> Result<ProjectScan, Proj
         }
         let byte_len = metadata.len();
         if byte_len > limits.max_file_bytes {
-            let hash = read_hash(&absolute_path).ok();
             warn!(
                 category = "size_budget",
                 path = %relative_path.display(),
@@ -493,7 +499,7 @@ pub fn scan_project(root: &Path, limits: ScanLimits) -> Result<ProjectScan, Proj
                 relative_path,
                 reason: "oversized_file".to_string(),
                 byte_len: Some(byte_len),
-                hash,
+                hash: None,
             });
             continue;
         }
@@ -509,7 +515,7 @@ pub fn scan_project(root: &Path, limits: ScanLimits) -> Result<ProjectScan, Proj
                 relative_path,
                 reason: "total_budget_exceeded".to_string(),
                 byte_len: Some(byte_len),
-                hash: read_hash(&absolute_path).ok(),
+                hash: None,
             });
             continue;
         }
@@ -760,7 +766,11 @@ fn ensure_project_context_metadata(
 fn stack_lines(scan: &ProjectScan) -> String {
     let mut lines = Vec::new();
     if scan_has_file(scan, "Cargo.toml") {
-        lines.push("- Rust 2024 workspace managed by Cargo.".to_string());
+        if let Some(edition) = cargo_edition(scan) {
+            lines.push(format!("- Rust {edition} workspace managed by Cargo."));
+        } else {
+            lines.push("- Rust workspace managed by Cargo.".to_string());
+        }
     }
     if file_contains(scan, "Cargo.toml", "tokio") {
         lines.push("- Async runtime: tokio.".to_string());
@@ -779,6 +789,25 @@ fn stack_lines(scan: &ProjectScan) -> String {
     } else {
         lines.join("\n")
     }
+}
+
+fn cargo_edition(scan: &ProjectScan) -> Option<String> {
+    let manifest = scan
+        .files
+        .iter()
+        .find(|file| file.relative_path.as_path() == Path::new("Cargo.toml"))?;
+    let value = toml::from_str::<toml::Value>(&manifest.content).ok()?;
+    value
+        .get("workspace")
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(|package| package.get("edition"))
+        .or_else(|| {
+            value
+                .get("package")
+                .and_then(|package| package.get("edition"))
+        })
+        .and_then(toml::Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn directory_lines(root: &Path) -> String {
@@ -925,11 +954,6 @@ fn skipped_directory_summary(root: &Path) -> Vec<SkippedFile> {
         }
     }
     skipped
-}
-
-fn read_hash(path: &Path) -> std::io::Result<ContentHash> {
-    let bytes = std::fs::read(path)?;
-    Ok(ContentHash::compute(&bytes))
 }
 
 fn redact_secret_like_values(raw: &str) -> (String, usize) {

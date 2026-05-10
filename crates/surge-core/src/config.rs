@@ -992,8 +992,13 @@ impl SurgeConfig {
         let start_dir = std::env::current_dir().map_err(|e| {
             crate::SurgeError::Config(format!("Failed to get current directory: {e}"))
         })?;
+        Self::discover_from(&start_dir)
+    }
 
-        match Self::find_config_file(&start_dir) {
+    /// Discover surge.toml by searching `start_dir` and parent directories.
+    /// Returns a default configuration if no file is found.
+    pub fn discover_from(start_dir: &Path) -> Result<Self, crate::SurgeError> {
+        match Self::find_config_file(start_dir) {
             Ok(config_path) => Self::load(&config_path),
             Err(_) => Ok(Self::default()),
         }

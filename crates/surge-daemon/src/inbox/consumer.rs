@@ -29,6 +29,10 @@ pub struct InboxActionConsumer {
     pub sources: Arc<HashMap<String, Arc<dyn TaskSource>>>,
     /// Root directory under which per-run worktrees are created.
     pub worktrees_root: PathBuf,
+    /// Project root used for config and project-context seeding.
+    pub project_root: PathBuf,
+    /// Config captured from the daemon's project root.
+    pub config: SurgeConfig,
     /// How often the queue is polled.
     pub poll_interval: Duration,
 }
@@ -146,19 +150,10 @@ impl InboxActionConsumer {
             .map_err(|e| format!("bootstrap.build: {e}"))?;
 
         // Start the run.
-        let config_path = worktree.join("surge.toml");
-        let config = SurgeConfig::load(&config_path).unwrap_or_else(|e| {
-            tracing::debug!(
-                path = %config_path.display(),
-                error = %e,
-                "using default config for inbox project-context seed"
-            );
-            SurgeConfig::default()
-        });
         let run_config = surge_orchestrator::project_context::with_project_context_seed(
             EngineRunConfig::default(),
-            &worktree,
-            &config,
+            &self.project_root,
+            &self.config,
         );
         let handle = self
             .engine

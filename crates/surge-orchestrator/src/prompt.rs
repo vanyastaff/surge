@@ -246,6 +246,10 @@ mod tests {
                 TemplateVar("edit_feedback".into()),
                 "Tighten the scope and make the terminal outcome explicit.".into(),
             ),
+            (
+                TemplateVar("project_context".into()),
+                "## Project name\nsurge\n\n## Primary language\nRust".into(),
+            ),
         ]
     }
 

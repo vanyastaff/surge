@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
+use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_daemon::inbox::consumer::InboxActionConsumer;
 use surge_intake::TaskSource;
@@ -214,6 +215,8 @@ fn make_consumer(
         engine,
         sources: Arc::new(sources),
         worktrees_root: std::env::temp_dir().join("inbox_test_worktrees"),
+        project_root: std::env::temp_dir(),
+        config: SurgeConfig::default(),
         poll_interval: Duration::from_millis(50),
     }
 }

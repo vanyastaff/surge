@@ -290,10 +290,9 @@ async fn dispatch(
             worktree_path,
             mut run_config,
         } => {
-            let config_path = worktree_path.join("surge.toml");
-            let config = SurgeConfig::load(&config_path).unwrap_or_else(|e| {
+            let config = SurgeConfig::discover_from(&worktree_path).unwrap_or_else(|e| {
                 tracing::debug!(
-                    path = %config_path.display(),
+                    path = %worktree_path.display(),
                     error = %e,
                     "using default config for daemon project-context seed"
                 );
