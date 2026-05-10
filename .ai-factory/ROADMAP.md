@@ -68,7 +68,7 @@
   - Edit-loop cap: after N rejections of same stage, escalate to `request_human_input`
   - Integration tests covering each archetype end-to-end against mock agent
 
-- [ ] **Project initialization & stable context** — `surge init` wizard + `surge project describe` + `project.md` as persistent project context (touches `surge-cli`, `surge-orchestrator`, `surge-core`, `surge-persistence`)
+- [x] **Project initialization & stable context** — `surge init` wizard + `surge project describe` + `project.md` as persistent project context (touches `surge-cli`, `surge-orchestrator`, `surge-core`, `surge-persistence`)
   - `surge init` interactive wizard: detects ACP clients on PATH, walks through agent registration, sandbox defaults, worktree path, approvals channels, Telegram setup token
   - `surge init --default` skip path: sensible safe defaults, no questions, fast onboarding
   - ACP client auto-detection: scan PATH for known binaries (`claude`, `codex`, `gemini-cli`) and offer to register found ones with appropriate launch profiles
@@ -264,3 +264,4 @@
 | Graph engine GA | 2026-05-07 |
 | Profile registry & bundled roles | 2026-05-07 |
 | Bootstrap & adaptive flow generation | 2026-05-09 |
+| Project initialization & stable context | 2026-05-10 |

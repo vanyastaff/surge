@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use surge_core::content_hash::ContentHash;
 use surge_core::id::RunId;
 use surge_core::mcp_config::McpServerRef;
 
@@ -73,10 +74,37 @@ pub struct EngineRunConfig {
     /// this run before the first stage executes.
     #[serde(default)]
     pub bootstrap_parent: Option<RunId>,
+    /// Optional stable project context captured at run start.
+    #[serde(default)]
+    pub project_context: Option<ProjectContextSeed>,
     /// Bootstrap-flow knobs. Default values are tuned for the bundled
     /// bootstrap graph; non-bootstrap runs ignore the section entirely.
     #[serde(default)]
     pub bootstrap: BootstrapRunConfig,
+}
+
+/// Stable project context input copied into a run's artifact store.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProjectContextSeed {
+    /// Source file path that supplied the context.
+    pub path: std::path::PathBuf,
+    /// Captured markdown content.
+    pub content: String,
+    /// Hash of `content`, computed before the run starts.
+    pub hash: ContentHash,
+}
+
+impl ProjectContextSeed {
+    /// Build a seed and compute its content hash.
+    #[must_use]
+    pub fn new(path: std::path::PathBuf, content: String) -> Self {
+        let hash = ContentHash::compute(content.as_bytes());
+        Self {
+            path,
+            content,
+            hash,
+        }
+    }
 }
 
 /// Knobs for the bootstrap-driven adaptive flow. See
@@ -112,6 +140,7 @@ impl Default for EngineRunConfig {
             mcp_servers: Vec::new(),
             initial_prompt: String::new(),
             bootstrap_parent: None,
+            project_context: None,
             bootstrap: BootstrapRunConfig::default(),
         }
     }
@@ -162,6 +191,7 @@ mod tests {
             )],
             initial_prompt: String::new(),
             bootstrap_parent: None,
+            project_context: None,
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -190,6 +220,7 @@ mod tests {
             mcp_servers: Vec::new(),
             initial_prompt: "fix the broken cart-total bug".into(),
             bootstrap_parent: None,
+            project_context: None,
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -232,6 +263,7 @@ mod tests {
             mcp_servers: Vec::new(),
             initial_prompt: String::new(),
             bootstrap_parent: None,
+            project_context: None,
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
         };
         let json = serde_json::to_string(&cfg).unwrap();

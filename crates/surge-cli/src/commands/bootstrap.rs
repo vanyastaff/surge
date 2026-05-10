@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
+use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_core::run_event::{BootstrapStage, EventPayload};
 use surge_git::{GitManager, WorktreeLocation};
@@ -58,8 +59,11 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
 async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Result<()> {
     let bootstrap_run_id = RunId::new();
     println!("bootstrap_run_id={bootstrap_run_id}");
-    let worktree = create_bootstrap_worktree(&bootstrap_run_id, worktree_root)?;
+    let (config, project_root) = load_project_config_for_current_repo()?;
+    let worktree = create_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
     let (engine, storage) = build_local_engine(&worktree).await?;
+    let project_context =
+        surge_orchestrator::project_context::load_project_context_seed(&project_root, &config);
 
     let mut approvals = tokio::spawn(poll_console_approvals(
         engine.clone(),
@@ -74,6 +78,7 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
             prompt,
             bootstrap_run_id,
             driver_worktree,
+            project_context,
         )
         .await
     });
@@ -89,13 +94,14 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
         }
     };
 
-    start_followup_run(engine, materialized, worktree).await?;
+    start_followup_run(engine, materialized, worktree, project_root, config).await?;
     Ok(())
 }
 
 async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Result<()> {
     let bootstrap_run_id = parse_run_id(&run_id)?;
-    let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root)?;
+    let (config, project_root) = load_project_config_for_current_repo()?;
+    let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
     let (engine, _storage) = build_local_engine(&worktree).await?;
     let handle = engine
         .resume_run(bootstrap_run_id, worktree.clone())
@@ -109,7 +115,7 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
     }
 
     let materialized = materialized_run_from_completed(engine.as_ref(), bootstrap_run_id).await?;
-    start_followup_run(engine, materialized, worktree).await?;
+    start_followup_run(engine, materialized, worktree, project_root, config).await?;
     Ok(())
 }
 
@@ -117,6 +123,8 @@ async fn start_followup_run(
     engine: Arc<Engine>,
     materialized: MaterializedRun,
     worktree: PathBuf,
+    project_root: PathBuf,
+    config: SurgeConfig,
 ) -> Result<RunOutcome> {
     let followup_run_id = RunId::new();
     println!("followup_run_id={followup_run_id}");
@@ -124,11 +132,15 @@ async fn start_followup_run(
         .start_run(
             followup_run_id,
             materialized.materialized_graph,
-            worktree,
-            EngineRunConfig {
-                bootstrap_parent: Some(materialized.bootstrap_run_id),
-                ..EngineRunConfig::default()
-            },
+            worktree.clone(),
+            surge_orchestrator::project_context::with_project_context_seed(
+                EngineRunConfig {
+                    bootstrap_parent: Some(materialized.bootstrap_run_id),
+                    ..EngineRunConfig::default()
+                },
+                &project_root,
+                &config,
+            ),
         )
         .await?;
     drive_run_handle(engine, handle).await
@@ -295,9 +307,13 @@ async fn build_local_engine(worktree: &Path) -> Result<(Arc<Engine>, Arc<Storage
     Ok((engine, storage))
 }
 
-fn create_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -> Result<PathBuf> {
+fn create_bootstrap_worktree(
+    run_id: &RunId,
+    worktree_root: Option<PathBuf>,
+    config: &SurgeConfig,
+) -> Result<PathBuf> {
     let manager = GitManager::discover().context("discover git repository for bootstrap")?;
-    let location = bootstrap_worktree_location(worktree_root)?;
+    let location = bootstrap_worktree_location(worktree_root, config, manager.repo_path())?;
     let info = manager
         .create_run_worktree(run_id, None, location)
         .context("create managed bootstrap worktree")?;
@@ -305,9 +321,13 @@ fn create_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -> 
     Ok(info.path)
 }
 
-fn existing_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -> Result<PathBuf> {
+fn existing_bootstrap_worktree(
+    run_id: &RunId,
+    worktree_root: Option<PathBuf>,
+    config: &SurgeConfig,
+) -> Result<PathBuf> {
     let manager = GitManager::discover().context("discover git repository for bootstrap")?;
-    let location = bootstrap_worktree_location(worktree_root)?;
+    let location = bootstrap_worktree_location(worktree_root, config, manager.repo_path())?;
     manager.find_run_worktree_path(run_id).with_context(|| {
         format!(
             "managed bootstrap worktree does not exist: {}",
@@ -316,11 +336,21 @@ fn existing_bootstrap_worktree(run_id: &RunId, worktree_root: Option<PathBuf>) -
     })
 }
 
-fn bootstrap_worktree_location(worktree_root: Option<PathBuf>) -> Result<WorktreeLocation> {
-    let Some(root) = worktree_root else {
-        return Ok(WorktreeLocation::Sibling);
-    };
-    Ok(WorktreeLocation::Custom(absolute_path(root)?))
+fn bootstrap_worktree_location(
+    worktree_root: Option<PathBuf>,
+    config: &SurgeConfig,
+    project_root: &Path,
+) -> Result<WorktreeLocation> {
+    if let Some(root) = worktree_root {
+        return Ok(WorktreeLocation::Custom(absolute_path(root)?));
+    }
+    match config.init.worktree_location {
+        surge_core::config::WorktreeLocationConfig::Sibling => Ok(WorktreeLocation::Sibling),
+        surge_core::config::WorktreeLocationConfig::Central => Ok(WorktreeLocation::Central),
+        surge_core::config::WorktreeLocationConfig::Custom => Ok(WorktreeLocation::Custom(
+            absolute_path_from(project_root, config.init.worktree_root.clone()),
+        )),
+    }
 }
 
 fn absolute_path(path: PathBuf) -> Result<PathBuf> {
@@ -328,6 +358,28 @@ fn absolute_path(path: PathBuf) -> Result<PathBuf> {
         return Ok(path);
     }
     Ok(std::env::current_dir().context("cwd")?.join(path))
+}
+
+fn absolute_path_from(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn load_project_config_for_current_repo() -> Result<(SurgeConfig, PathBuf)> {
+    let project_root = GitManager::discover()
+        .map(|manager| manager.repo_path().to_path_buf())
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let config_path = project_root.join("surge.toml");
+    let config = if config_path.exists() {
+        SurgeConfig::load(&config_path)
+            .with_context(|| format!("load {}", config_path.display()))?
+    } else {
+        SurgeConfig::load_or_default().context("load surge config")?
+    };
+    Ok((config, project_root))
 }
 
 fn parse_run_id(s: &str) -> Result<RunId> {
@@ -365,5 +417,54 @@ fn print_bootstrap_event(seq: u64, payload: &EventPayload) {
             eprintln!("[{seq}] graph materialized: {}", graph.metadata.name);
         },
         other => eprintln!("[{seq}] {}", other.discriminant_str()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_core::config::WorktreeLocationConfig;
+
+    #[test]
+    fn bootstrap_worktree_location_uses_config_default() {
+        let project = tempfile::tempdir().unwrap();
+        let mut config = SurgeConfig::default();
+        config.init.worktree_location = WorktreeLocationConfig::Central;
+
+        let location = bootstrap_worktree_location(None, &config, project.path()).unwrap();
+
+        assert!(matches!(location, WorktreeLocation::Central));
+    }
+
+    #[test]
+    fn bootstrap_worktree_location_resolves_custom_root_from_project_root() {
+        let project = tempfile::tempdir().unwrap();
+        let mut config = SurgeConfig::default();
+        config.init.worktree_location = WorktreeLocationConfig::Custom;
+        config.init.worktree_root = PathBuf::from(".runs");
+
+        let location = bootstrap_worktree_location(None, &config, project.path()).unwrap();
+
+        match location {
+            WorktreeLocation::Custom(path) => assert_eq!(path, project.path().join(".runs")),
+            other => panic!("expected custom worktree location, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bootstrap_worktree_location_prefers_cli_override() {
+        let project = tempfile::tempdir().unwrap();
+        let override_root = project.path().join("override");
+        let mut config = SurgeConfig::default();
+        config.init.worktree_location = WorktreeLocationConfig::Central;
+
+        let location =
+            bootstrap_worktree_location(Some(override_root.clone()), &config, project.path())
+                .unwrap();
+
+        match location {
+            WorktreeLocation::Custom(path) => assert_eq!(path, override_root),
+            other => panic!("expected custom worktree location, got {other:?}"),
+        }
     }
 }

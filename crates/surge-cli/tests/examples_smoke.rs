@@ -6,6 +6,8 @@
 //! job of Task 5.1 (`crates/surge-orchestrator/tests/archetypes_mock_test.rs`);
 //! this test guards against regressions in the example shape itself.
 
+use assert_cmd::Command;
+use predicates::str::contains;
 use std::path::{Path, PathBuf};
 use surge_core::ReferenceResolver;
 use surge_core::graph::Graph;
@@ -85,4 +87,55 @@ fn flow_refactor_validates() {
 #[test]
 fn flow_spike_validates() {
     assert_archetype_clean("flow_spike.toml");
+}
+
+#[test]
+fn onboarding_smoke_can_init_describe_and_start_example_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(temp.path().join("README.md"), "# Smoke\n").unwrap();
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[workspace]
+resolver = "2"
+members = []
+"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args(["init", "--default"])
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .assert()
+        .success();
+
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args(["project", "describe", "--author-mode", "deterministic"])
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .assert()
+        .success();
+
+    let example = examples_dir().join("flow_minimal_agent.toml");
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args([
+            "engine",
+            "run",
+            example.to_str().unwrap(),
+            "--worktree",
+            temp.path().to_str().unwrap(),
+        ])
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .assert()
+        .success()
+        .stdout(contains("run-"));
 }

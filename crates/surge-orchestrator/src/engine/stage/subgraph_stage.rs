@@ -425,6 +425,7 @@ mod tests {
                     content: "val".into(),
                 },
                 target: TemplateVar("unused".into()),
+                optional: false,
             },
             inner_var: TemplateVar("x".into()),
         }];

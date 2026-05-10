@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use surge_acp::Registry;
 use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::SessionId;
@@ -98,6 +99,20 @@ fn registry_resolves_disk_override_with_latest_provenance() {
     assert_eq!(resolved.profile.prompt.system, OVERRIDE_PROMPT);
     // Disk profile says agent_id = "mock"; merged profile should agree.
     assert_eq!(resolved.profile.runtime.agent_id, "mock");
+}
+
+#[test]
+fn project_context_author_runtime_id_normalizes_against_acp_registry() {
+    let registry = ProfileRegistry::new(DiskProfileSet::empty());
+    let key_ref = parse_key_ref("project-context-author@1.0").unwrap();
+    let resolved = registry.resolve(&key_ref).unwrap();
+    let acp_registry = Registry::builtin();
+
+    assert_eq!(resolved.profile.runtime.agent_id, "claude-code");
+    assert_eq!(
+        acp_registry.normalize_agent_id(&resolved.profile.runtime.agent_id),
+        Some("claude-acp".to_string()),
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

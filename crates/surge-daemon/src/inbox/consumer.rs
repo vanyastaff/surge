@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use surge_core::SurgeConfig;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
@@ -145,9 +146,23 @@ impl InboxActionConsumer {
             .map_err(|e| format!("bootstrap.build: {e}"))?;
 
         // Start the run.
+        let config_path = worktree.join("surge.toml");
+        let config = SurgeConfig::load(&config_path).unwrap_or_else(|e| {
+            tracing::debug!(
+                path = %config_path.display(),
+                error = %e,
+                "using default config for inbox project-context seed"
+            );
+            SurgeConfig::default()
+        });
+        let run_config = surge_orchestrator::project_context::with_project_context_seed(
+            EngineRunConfig::default(),
+            &worktree,
+            &config,
+        );
         let handle = self
             .engine
-            .start_run(run_id, graph, worktree, EngineRunConfig::default())
+            .start_run(run_id, graph, worktree, run_config)
             .await
             .map_err(|e| format!("engine.start_run: {e}"))?;
 

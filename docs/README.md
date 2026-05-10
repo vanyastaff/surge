@@ -6,8 +6,8 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 
 | Page | Description |
 |---|---|
-| [Getting Started](getting-started.md) | Requirements, build, run examples, agent configuration, smoke tests |
-| [CLI](cli.md) | Command surface, two execution paths, current → target mapping |
+| [Getting Started](getting-started.md) | Requirements, build, project initialization, run examples, agent configuration, smoke tests |
+| [CLI](cli.md) | Command surface, project context commands, execution paths, current → target mapping |
 | [Bootstrap](bootstrap.md) | Adaptive prompt → description → roadmap → flow generation |
 | [Workflow](workflow.md) | AFK workflow, flow model, intake sources, run lifecycle |
 | [Architecture](ARCHITECTURE.md) | Canonical architecture: positioning, principles, engine, ACP bridge, storage |

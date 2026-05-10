@@ -910,9 +910,22 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
         return Ok(AgentKind::Mock { args: vec![] });
     }
     let agent_registry = surge_acp::Registry::builtin();
-    let entry = agent_registry.find(agent_id).ok_or_else(|| {
+    let normalized_agent_id = agent_registry.normalize_agent_id(agent_id).ok_or_else(|| {
+        let known = agent_registry.known_ids_and_aliases().join(", ");
+        tracing::warn!(
+            target: "engine::stage::agent",
+            profile = %profile_str,
+            agent_id = %agent_id,
+            known = %known,
+            "unknown profile runtime agent id"
+        );
         StageError::Internal(format!(
-            "profile {profile_str:?} references agent_id {agent_id:?} not present in surge_acp::Registry"
+            "profile {profile_str:?} references agent_id {agent_id:?} not present in surge_acp::Registry. Known ids and aliases: {known}"
+        ))
+    })?;
+    let entry = agent_registry.find(&normalized_agent_id).ok_or_else(|| {
+        StageError::Internal(format!(
+            "normalized agent_id {normalized_agent_id:?} missing from surge_acp::Registry"
         ))
     })?;
     let binary = std::path::PathBuf::from(&entry.command);
@@ -930,6 +943,7 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
         target: "engine::stage::agent",
         profile = %profile_str,
         agent_id = %agent_id,
+        normalized_agent_id = %entry.id,
         kind = kind.label(),
         "derived AgentKind from profile registry"
     );

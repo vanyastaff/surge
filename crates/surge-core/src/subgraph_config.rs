@@ -40,6 +40,7 @@ mod tests {
                         artifact: "plan.md".into(),
                     },
                     target: TemplateVar("plan".into()),
+                    optional: false,
                 },
                 inner_var: TemplateVar("plan".into()),
             }],

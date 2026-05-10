@@ -129,6 +129,7 @@ pub fn test_surge_config(agent_name: &str, command: &str) -> SurgeConfig {
         task_sources: vec![],
         telegram: None,
         inbox: surge_core::config::InboxConfig::default(),
+        init: surge_core::config::InitConfig::default(),
     }
 }
 

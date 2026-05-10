@@ -12,6 +12,7 @@ use interprocess::local_socket::tokio::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -287,8 +288,22 @@ async fn dispatch(
             run_id,
             graph,
             worktree_path,
-            run_config,
+            mut run_config,
         } => {
+            let config_path = worktree_path.join("surge.toml");
+            let config = SurgeConfig::load(&config_path).unwrap_or_else(|e| {
+                tracing::debug!(
+                    path = %config_path.display(),
+                    error = %e,
+                    "using default config for daemon project-context seed"
+                );
+                SurgeConfig::default()
+            });
+            run_config = surge_orchestrator::project_context::with_project_context_seed(
+                run_config,
+                &worktree_path,
+                &config,
+            );
             // Insert into `pending_starts` BEFORE `try_admit`. If we did
             // it after, an unrelated active run could complete in the
             // gap, wake the drain task, which would `pop_queued` our

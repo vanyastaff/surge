@@ -66,6 +66,7 @@ pub mod pipeline;
 pub mod planner;
 pub mod profile_loader;
 pub mod project;
+pub mod project_context;
 pub mod prompt;
 pub mod qa;
 pub mod retry;

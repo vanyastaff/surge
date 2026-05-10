@@ -184,6 +184,37 @@ impl Registry {
         self.entries.iter().find(|e| e.id == id)
     }
 
+    /// Find an entry by current id or by a compatibility alias used by older profiles.
+    #[must_use]
+    pub fn find_normalized(&self, id: &str) -> Option<&RegistryEntry> {
+        let normalized = self.normalize_agent_id(id)?;
+        self.find(&normalized)
+    }
+
+    /// Normalize older profile runtime ids to current registry ids.
+    #[must_use]
+    pub fn normalize_agent_id(&self, id: &str) -> Option<String> {
+        if self.find(id).is_some() {
+            return Some(id.to_string());
+        }
+        let canonical = registry_alias_target(id)?;
+        self.find(canonical).map(|_| canonical.to_string())
+    }
+
+    /// Known registry ids and compatibility aliases for diagnostics.
+    #[must_use]
+    pub fn known_ids_and_aliases(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.entries.iter().map(|entry| entry.id.clone()).collect();
+        ids.extend(
+            REGISTRY_ID_ALIASES
+                .iter()
+                .map(|(alias, _)| (*alias).to_string()),
+        );
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     #[must_use]
     pub fn detect_installed(&self) -> Vec<&RegistryEntry> {
         self.entries.iter().filter(|e| e.is_installed()).collect()
@@ -483,6 +514,22 @@ const BUILTIN_REGISTRY_JSON: &str = include_str!("../builtin_registry.json");
 
 fn builtin_agents() -> Vec<RegistryEntry> {
     serde_json::from_str(BUILTIN_REGISTRY_JSON).expect("builtin_registry.json should be valid JSON")
+}
+
+const REGISTRY_ID_ALIASES: &[(&str, &str)] = &[
+    ("claude", "claude-acp"),
+    ("claude-code", "claude-acp"),
+    ("codex", "codex-acp"),
+    ("codex-cli", "codex-acp"),
+    ("gemini-cli", "gemini"),
+    ("github-copilot", "github-copilot-cli"),
+    ("copilot", "github-copilot-cli"),
+];
+
+fn registry_alias_target(id: &str) -> Option<&'static str> {
+    REGISTRY_ID_ALIASES
+        .iter()
+        .find_map(|(alias, canonical)| (*alias == id).then_some(*canonical))
 }
 
 // ── Registry cache ───────────────────────────────────────────────────

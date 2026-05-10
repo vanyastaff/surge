@@ -45,10 +45,18 @@ name = "description"
 source = { source = "node_output", from_role = "description-author" }
 optional = true
 
+[[bindings.expected]]
+name = "project_context"
+source = { source = "run_artifact" }
+optional = true
+
 [prompt]
 system = """\
-You are the Spec Author. Read `{{milestone}}` and `{{description}}` and emit `spec.md`
-following the project's Spec convention.
+You are the Spec Author. Read `{{milestone}}`, `{{description}}`, and the optional
+stable project context below, then emit `spec.md` following the project's Spec convention.
+
+Stable project context:
+{{project_context}}
 
 Output schema:
 - `## Goal` — restated for this milestone.

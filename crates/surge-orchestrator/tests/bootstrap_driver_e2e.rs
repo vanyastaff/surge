@@ -95,6 +95,7 @@ async fn run_bootstrap_materializes_followup_graph() {
             "build an adaptive bootstrap flow".into(),
             run_id,
             worktree,
+            None,
         )
         .await
     });

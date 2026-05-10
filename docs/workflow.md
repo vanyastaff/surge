@@ -204,6 +204,8 @@ flowchart TD
 
 Current practical paths:
 
+- `surge init --default` writes safe project defaults; `surge init` runs the interactive setup/edit wizard.
+- `surge project describe` creates or refreshes `project.md`, the stable project summary captured into new runs as the `project_context` artifact.
 - `surge bootstrap "<prompt>"` starts from free-form work, generates `description.md`, `roadmap.md`, and `flow.toml`, then launches the materialized follow-up graph.
 - `surge engine run <flow.toml>` starts from an already-authored graph.
 - `surge engine run --template <name>` starts from a bundled or user archetype template and skips bootstrap.
@@ -255,7 +257,9 @@ asking the user to approve a broken graph.
 After approval, the bootstrap driver extracts the latest `description`,
 `roadmap`, and `flow` artifacts, appends `BootstrapTelemetry`, and starts the
 follow-up run with those artifacts inherited through the content-addressed
-artifact store.
+artifact store. If `project.md` exists, its current content is captured at the
+same run boundary as `project_context`; later edits to `project.md` affect only
+future runs, not replay or resume of the current run.
 
 ## Roadmap Amendments
 
