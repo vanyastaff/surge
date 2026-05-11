@@ -1,0 +1,136 @@
+# Migration convention flow: plan, migrate, rollback-validate, terminal success.
+
+schema_version = 1
+start = "migration_plan"
+
+[metadata]
+name = "migration"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes.migration_plan]
+id = "migration_plan"
+
+[nodes.migration_plan.position]
+x = 0.0
+y = 0.0
+
+[[nodes.migration_plan.declared_outcomes]]
+id = "planned"
+description = "Migration and rollback plan documented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.migration_plan.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.migration_plan.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.migration_plan.config.custom_fields]
+
+[nodes.implement_migration]
+id = "implement_migration"
+
+[nodes.implement_migration.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_migration.declared_outcomes]]
+id = "migrated"
+description = "Migration implemented and data integrity checked"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement_migration.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_migration.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_migration.config.custom_fields]
+
+[nodes.validate_rollback]
+id = "validate_rollback"
+
+[nodes.validate_rollback.position]
+x = 400.0
+y = 0.0
+
+[[nodes.validate_rollback.declared_outcomes]]
+id = "validated"
+description = "Rollback procedure tested and confirmed"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.validate_rollback.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.validate_rollback.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.validate_rollback.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_plan_to_migrate"
+to = "implement_migration"
+kind = "forward"
+
+[edges.from]
+node = "migration_plan"
+outcome = "planned"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_migrate_to_rollback"
+to = "validate_rollback"
+kind = "forward"
+
+[edges.from]
+node = "implement_migration"
+outcome = "migrated"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_rollback_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "validate_rollback"
+outcome = "validated"
+
+[edges.policy]
+on_max_exceeded = "escalate"

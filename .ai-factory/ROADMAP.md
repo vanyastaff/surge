@@ -84,7 +84,7 @@
   - First-run UX polish: clear error messages on missing dependencies (no agent on PATH, not a git repo, etc.) with actionable next steps
   - Documentation: `getting-started.md` updated to use wizard flow as canonical onboarding path
 
-- [ ] **Artifact format & convention library** — canonical output contract for every role; surge owns *what* artifacts look like, agents own *how* they think (touches `surge-core`, `surge-orchestrator`, profiles registry, `docs/`)
+- [x] **Artifact format & convention library** — canonical output contract for every role; surge owns *what* artifacts look like, agents own *how* they think (touches `surge-core`, `surge-orchestrator`, profiles registry, `docs/`)
   - Bundled `flow.toml` templates extracted from `surge-spec/templates.rs`: Feature / Bugfix / Refactor / Performance / Security / Docs / Migration, registered for `--template=<name>` consumption
   - Profile output schemas: Description Author → markdown sections (Goal / Context / Requirements / Out-of-Scope); Roadmap Planner → `surge_core::Roadmap` typed output; Spec Author → `surge_core::Spec` typed output with subtasks + acceptance criteria; Architect → ADR with frontmatter
   - Output validation as `on_outcome` reject hook (uses Graph engine GA primitive): post-stage validator runs against schema, retries on schema violation
@@ -265,3 +265,4 @@
 | Profile registry & bundled roles | 2026-05-07 |
 | Bootstrap & adaptive flow generation | 2026-05-09 |
 | Project initialization & stable context | 2026-05-10 |
+| Artifact format & convention library | 2026-05-11 |

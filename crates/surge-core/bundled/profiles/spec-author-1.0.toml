@@ -27,9 +27,17 @@ default_skills = ["aif-best-practices"]
 
 [[outcomes]]
 id = "drafted"
-description = "Spec drafted with subtasks and acceptance criteria."
+description = "Spec artifacts drafted with subtasks and acceptance criteria."
 edge_kind_hint = "forward"
-required_artifacts = ["spec.md"]
+required_artifacts = ["spec.toml", "spec.md"]
+
+[[outcomes.produced_artifacts]]
+path = "spec.toml"
+contract = { kind = "spec", schema_version = 1 }
+
+[[outcomes.produced_artifacts]]
+path = "spec.md"
+contract = { kind = "spec", schema_version = 1 }
 
 [[outcomes]]
 id = "needs_clarification"
@@ -50,24 +58,50 @@ name = "project_context"
 source = { source = "run_artifact" }
 optional = true
 
+[[hooks.entries]]
+id = "validate-spec-toml"
+trigger = "on_outcome"
+matcher = { outcome = "drafted" }
+command = "{surge} artifact validate --kind spec spec.toml"
+on_failure = "reject"
+timeout_seconds = 30
+
+[[hooks.entries]]
+id = "validate-spec-md"
+trigger = "on_outcome"
+matcher = { outcome = "drafted" }
+command = "{surge} artifact validate --kind spec spec.md"
+on_failure = "reject"
+timeout_seconds = 30
+
 [prompt]
 system = """\
 You are the Spec Author. Read `{{milestone}}`, `{{description}}`, and the optional
-stable project context below, then emit `spec.md` following the project's Spec convention.
+stable project context below, then emit Spec contract artifacts: `spec.toml` and
+the human compatibility view `spec.md`.
 
 Stable project context:
 {{project_context}}
 
-Output schema:
+`spec.toml` schema:
+- Top-level `schema_version = 1`.
+- `[spec]` contains `id`, `title`, `description`, `complexity`, and `subtasks`.
+- Each `[[spec.subtasks]]` contains `id`, `title`, `description`, `complexity`, optional `files`, optional `depends_on`, and optional `story_file`.
+- Each subtask has one or more `[[spec.subtasks.acceptance_criteria]]` entries with `description`.
+
+`spec.md` compatibility sections:
 - `## Goal` — restated for this milestone.
-- `## Subtasks` — numbered list. Each subtask has a one-line summary and a bullet list of
-  acceptance criteria (machine-readable, used by Verifier).
-- `## Story Files` — when subtasks reference long-form stories, list them under `stories/story-NNN.md`.
+- `## Subtasks` — numbered list. Each subtask has a one-line summary and a bullet list of acceptance criteria.
+- `## Acceptance Criteria` — grouped by subtask and written as testable checkboxes.
+- `## Story Files` — long-form story paths under `stories/story-NNN.md` when needed.
 - `## Constraints` — performance budgets, public API stability, deprecation deadlines.
 
 Rules:
 - Acceptance criteria are testable: "X compiles", "test Y passes", "metric Z under N ms".
-- No code in this artifact. Spec describes *what* must hold, not *how* to make it hold.
-- Each subtask is independently completable; sequencing is captured by explicit `dependsOn` lists, not by ordering.
+- No code in these artifacts. Spec describes *what* must hold, not *how* to make it hold.
+- Each subtask is independently completable; sequencing is captured by explicit `depends_on` lists, not by ordering.
+- If a subtask needs long context, create `stories/story-NNN.md` with `## Context`, `## What needs to be done`, `## Architecture decisions`, `## Files to modify`, `## Acceptance criteria`, and `## Out of scope`.
 - If the milestone is missing context you need, report `needs_clarification` with the specific gap.
+
+When finished, call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["spec.toml", "spec.md"]`.
 """

@@ -1,7 +1,51 @@
 //! Spec types for Surge task definitions.
 
+use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
 use crate::id::{SpecId, SubtaskId};
 use serde::{Deserialize, Serialize};
+
+/// Machine-readable `spec.toml` artifact wrapper.
+///
+/// The existing [`Spec`] type remains the execution model. This wrapper adds
+/// the artifact contract schema version around it so authored files can evolve
+/// independently from the in-memory spec fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecArtifact {
+    /// Artifact contract schema version.
+    #[serde(default = "default_artifact_schema_version")]
+    pub schema_version: u32,
+    /// Executable spec payload.
+    pub spec: Spec,
+}
+
+impl SpecArtifact {
+    /// Wrap a spec with the current artifact schema version.
+    #[must_use]
+    pub fn new(spec: Spec) -> Self {
+        Self {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            spec,
+        }
+    }
+
+    /// Consume the artifact and return the underlying execution spec.
+    #[must_use]
+    pub fn into_spec(self) -> Spec {
+        self.spec
+    }
+}
+
+impl From<Spec> for SpecArtifact {
+    fn from(spec: Spec) -> Self {
+        Self::new(spec)
+    }
+}
+
+impl From<SpecArtifact> for Spec {
+    fn from(artifact: SpecArtifact) -> Self {
+        artifact.spec
+    }
+}
 
 /// Execution state of a single subtask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -113,6 +157,10 @@ pub struct Spec {
     pub subtasks: Vec<Subtask>,
 }
 
+fn default_artifact_schema_version() -> u32 {
+    ARTIFACT_SCHEMA_VERSION
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +232,35 @@ mod tests {
         assert_eq!(
             deserialized.subtasks[0].acceptance_criteria[0].description,
             "It compiles"
+        );
+    }
+
+    #[test]
+    fn test_spec_artifact_toml_roundtrip() {
+        let spec = Spec {
+            id: SpecId::new(),
+            title: "Artifact spec".to_string(),
+            description: "A versioned specification".to_string(),
+            complexity: Complexity::Standard,
+            subtasks: vec![Subtask {
+                acceptance_criteria: vec![AcceptanceCriteria {
+                    description: "Artifact validates".to_string(),
+                    met: false,
+                }],
+                ..make_subtask()
+            }],
+        };
+        let artifact = SpecArtifact::new(spec);
+
+        let toml_str = toml::to_string(&artifact).unwrap();
+        let deserialized: SpecArtifact = toml::from_str(&toml_str).unwrap();
+        let roundtrip_spec = deserialized.into_spec();
+
+        assert!(toml_str.contains("schema_version = 1"));
+        assert_eq!(roundtrip_spec.title, "Artifact spec");
+        assert_eq!(
+            roundtrip_spec.subtasks[0].acceptance_criteria[0].description,
+            "Artifact validates"
         );
     }
 

@@ -83,9 +83,18 @@ The canonical first useful run is bootstrap:
 cargo run -p surge-cli --bin surge -- bootstrap "add a small health-check command to this project"
 ```
 
-Bootstrap generates `description.md`, `roadmap.md`, and `flow.toml`, asks for
-console approval after each artifact, then starts the generated follow-up graph.
+Bootstrap generates `description.md`, `roadmap.toml`, `roadmap.md`, and
+`flow.toml`, asks for console approval after each artifact, then starts the
+generated follow-up graph.
 See [Bootstrap](bootstrap.md) for the edit loop, archetypes, and resume path.
+
+You can validate generated artifacts directly while debugging a run:
+
+```bash
+cargo run -p surge-cli --bin surge -- artifact validate --kind description description.md
+cargo run -p surge-cli --bin surge -- artifact validate --kind roadmap roadmap.toml
+cargo run -p surge-cli --bin surge -- artifact validate --kind flow flow.toml
+```
 
 ## Run the Minimal Agent Graph
 
@@ -110,6 +119,7 @@ For setup troubleshooting, run commands with `RUST_LOG=surge=debug` to see agent
 ## See Also
 
 - [CLI](cli.md) — full `surge` command surface and current-to-target mapping
+- [Artifact Conventions](conventions/README.md) — generated artifact names, schemas, and validator examples
 - [Bootstrap](bootstrap.md) — adaptive flow generation from a free-form prompt
 - [Workflow](workflow.md) — how a run flows through bootstrap, the engine, and the event log
 - [Development](development.md) — running tests, lints, and ignored long-running checks

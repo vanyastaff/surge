@@ -23,7 +23,7 @@ use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayl
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
 
-use surge_core::hooks::HookTrigger;
+use surge_core::hooks::{Hook, HookTrigger};
 
 use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome, record_hook_executed};
 use crate::engine::sandbox_factory::build_sandbox;
@@ -82,6 +82,31 @@ pub struct AgentStageParams<'a> {
     pub hook_executor: &'a HookExecutor,
 }
 
+/// Merge profile-level hooks with node-level hooks for one effective agent run.
+///
+/// Profile hooks run first. A node hook with the same `id` replaces the
+/// profile hook in-place, giving per-node config the final say without losing
+/// deterministic ordering.
+#[must_use]
+pub(crate) fn effective_agent_hooks(
+    agent_config: &AgentConfig,
+    resolved_profile: Option<&surge_core::profile::registry::ResolvedProfile>,
+) -> Vec<Hook> {
+    let mut hooks = resolved_profile
+        .map(|profile| profile.profile.hooks.entries.clone())
+        .unwrap_or_default();
+
+    for node_hook in &agent_config.hooks {
+        if let Some(existing) = hooks.iter_mut().find(|hook| hook.id == node_hook.id) {
+            *existing = node_hook.clone();
+        } else {
+            hooks.push(node_hook.clone());
+        }
+    }
+
+    hooks
+}
+
 /// Execute a single agent stage.
 ///
 /// Phase 6.2: opens a session, sends an empty placeholder message, then drives
@@ -135,6 +160,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     } else {
         None
     };
+    let effective_hooks = effective_agent_hooks(p.agent_config, resolved_profile.as_ref());
 
     // Prompt selection: explicit prompt_overrides.system wins; then
     // prompt_overrides.append_system; then the resolved profile's
@@ -369,11 +395,12 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // A rejecting hook lets the agent attempt a different outcome
                 // until `limits.max_retries` is exhausted.
                 let hook_ctx = HookContext::for_node(p.node)
+                    .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_outcome(&outcome);
                 let outcome_chain = p
                     .hook_executor
-                    .run_hooks(&p.agent_config.hooks, HookTrigger::OnOutcome, &hook_ctx)
+                    .run_hooks(&effective_hooks, HookTrigger::OnOutcome, &hook_ctx)
                     .await;
                 for record in outcome_chain.executed() {
                     record_hook_executed(p.writer, record).await;
@@ -582,11 +609,12 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // the call: we send a synthetic tool-error reply and continue
                 // the agent loop without invoking the dispatcher.
                 let hook_ctx = HookContext::for_node(p.node)
+                    .with_worktree_path(p.worktree_path)
                     .with_session(session_id)
                     .with_tool(tool.as_str(), Some(args_redacted_json.as_str()));
                 let pre_outcome = p
                     .hook_executor
-                    .run_hooks(&p.agent_config.hooks, HookTrigger::PreToolUse, &hook_ctx)
+                    .run_hooks(&effective_hooks, HookTrigger::PreToolUse, &hook_ctx)
                     .await;
                 for record in pre_outcome.executed() {
                     record_hook_executed(p.writer, record).await;
@@ -676,7 +704,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // result above.
                 let post_outcome = p
                     .hook_executor
-                    .run_hooks(&p.agent_config.hooks, HookTrigger::PostToolUse, &hook_ctx)
+                    .run_hooks(&effective_hooks, HookTrigger::PostToolUse, &hook_ctx)
                     .await;
                 for record in post_outcome.executed() {
                     record_hook_executed(p.writer, record).await;
@@ -967,5 +995,117 @@ fn sandbox_allows_mcp_tool(
         | SandboxMode::WorkspaceNetwork
         | SandboxMode::FullAccess
         | SandboxMode::Custom => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_core::approvals::ApprovalConfig;
+    use surge_core::edge::EdgeKind;
+    use surge_core::hooks::{HookFailureMode, HookInheritance, MatcherSpec};
+    use surge_core::profile::registry::{Provenance, ResolvedProfile};
+    use surge_core::profile::{
+        InspectorUi, Profile, ProfileBindings, ProfileHooks, ProfileOutcome, PromptTemplate, Role,
+        RoleCategory, RuntimeCfg, ToolsCfg,
+    };
+    use surge_core::sandbox::SandboxConfig;
+
+    fn hook(id: &str, command: &str) -> Hook {
+        Hook {
+            id: id.to_string(),
+            trigger: HookTrigger::PreToolUse,
+            matcher: MatcherSpec::default(),
+            command: command.to_string(),
+            on_failure: HookFailureMode::Warn,
+            timeout_seconds: None,
+            inherit: HookInheritance::default(),
+        }
+    }
+
+    fn agent_config(hooks: Vec<Hook>) -> AgentConfig {
+        AgentConfig {
+            profile: surge_core::keys::ProfileKey::try_from("implementer@1.0").unwrap(),
+            prompt_overrides: None,
+            tool_overrides: None,
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: Vec::new(),
+            rules_overrides: None,
+            limits: surge_core::agent_config::NodeLimits::default(),
+            hooks,
+            custom_fields: BTreeMap::new(),
+        }
+    }
+
+    fn resolved_profile(hooks: Vec<Hook>) -> ResolvedProfile {
+        let profile_key = surge_core::keys::ProfileKey::try_from("implementer").unwrap();
+        ResolvedProfile {
+            profile: Profile {
+                schema_version: 1,
+                role: Role {
+                    id: profile_key.clone(),
+                    version: semver::Version::new(1, 0, 0),
+                    display_name: "Implementer".into(),
+                    icon: None,
+                    category: RoleCategory::Agents,
+                    description: "Implements".into(),
+                    when_to_use: "Tests".into(),
+                    extends: None,
+                },
+                runtime: RuntimeCfg {
+                    recommended_model: "claude-opus-4-7".into(),
+                    default_temperature: 0.2,
+                    default_max_tokens: 200_000,
+                    load_rules_lazily: None,
+                    agent_id: "claude-code".into(),
+                },
+                sandbox: SandboxConfig::default(),
+                tools: ToolsCfg::default(),
+                approvals: ApprovalConfig::default(),
+                outcomes: vec![ProfileOutcome {
+                    id: OutcomeKey::try_from("done").unwrap(),
+                    description: "Done".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    required_artifacts: Vec::new(),
+                    produced_artifacts: Vec::new(),
+                }],
+                bindings: ProfileBindings::default(),
+                hooks: ProfileHooks { entries: hooks },
+                prompt: PromptTemplate {
+                    system: "Implement".into(),
+                },
+                inspector_ui: InspectorUi::default(),
+            },
+            provenance: Provenance::Bundled,
+            chain: vec![profile_key],
+        }
+    }
+
+    #[test]
+    fn effective_hooks_append_node_hooks_after_profile_hooks() {
+        let profile = resolved_profile(vec![hook("profile", "profile-cmd")]);
+        let agent = agent_config(vec![hook("node", "node-cmd")]);
+
+        let effective = effective_agent_hooks(&agent, Some(&profile));
+
+        assert_eq!(
+            effective
+                .iter()
+                .map(|hook| hook.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["profile", "node"]
+        );
+    }
+
+    #[test]
+    fn node_hooks_override_profile_hooks_by_id() {
+        let profile = resolved_profile(vec![hook("validate", "profile-cmd")]);
+        let agent = agent_config(vec![hook("validate", "node-cmd")]);
+
+        let effective = effective_agent_hooks(&agent, Some(&profile));
+
+        assert_eq!(effective.len(), 1);
+        assert_eq!(effective[0].command, "node-cmd");
     }
 }

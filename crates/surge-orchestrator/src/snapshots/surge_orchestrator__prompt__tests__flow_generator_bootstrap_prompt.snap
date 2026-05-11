@@ -17,7 +17,7 @@ Create a bootstrap flow for adaptive project execution.
 - Produce description.md
 - Produce roadmap.md
 
-Approved or edited `roadmap.md`:
+Approved or edited Roadmap contract artifact (`roadmap.toml`, with `roadmap.md` as compatibility context when present):
 ## Milestones
 1. Bootstrap graph asset
 2. CLI entrypoint
@@ -30,15 +30,21 @@ Tighten the scope and make the terminal outcome explicit.
 
 # Mission
 
-Emit one valid `flow.toml` graph. Use typed nodes, declared outcomes, and profile
+Emit one valid Flow contract artifact: `flow.toml` with `schema_version = 1`.
+Use typed nodes, declared outcomes, and profile
 references; do not write free-form execution instructions into graph nodes.
 
 Pick exactly one archetype and include it in `[metadata.archetype]`:
+- `feature` — design/plan -> implement core -> integration/tests for standard feature work.
 - `linear-3` — single small task: Spec Author -> Implementer -> Verifier -> Terminal.
 - `linear-with-review` — one milestone with 5-7 tasks and an explicit Review node.
 - `multi-milestone` — outer Loop over `roadmap.milestones` wrapping per-milestone task Loops.
 - `bug-fix` — starts with reproduction / failing-case characterization before implementation.
 - `refactor` — starts with behavior characterization before implementation.
+- `performance` — baseline/profile -> optimize -> benchmark/validate.
+- `security` — security audit -> fixes -> security regression tests.
+- `docs` — outline -> write -> review/publish documentation.
+- `migration` — migration plan -> implementation -> rollback validation.
 - `spike` — bounded research/prototype path; may skip Architect and Reviewer when appropriate.
 - `single-task` — one focused Agent node plus Terminal for tiny, low-risk work.
 

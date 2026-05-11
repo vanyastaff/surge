@@ -140,6 +140,7 @@ fn parse(raw: &str, expected_name: &str) -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifact_contract::ArtifactKind;
 
     #[test]
     fn all_returns_expected_count() {
@@ -179,6 +180,36 @@ mod tests {
     fn implementer_default_agent_is_claude_code() {
         let p = BundledRegistry::by_name_latest("implementer").expect("bundled");
         assert_eq!(p.runtime.agent_id, "claude-code");
+    }
+
+    #[test]
+    fn bootstrap_profiles_declare_produced_artifact_contracts() {
+        for (profile, kind, path) in [
+            (
+                "description-author",
+                ArtifactKind::Description,
+                "description.md",
+            ),
+            ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml"),
+            ("flow-generator", ArtifactKind::Flow, "flow.toml"),
+            ("spec-author", ArtifactKind::Spec, "spec.toml"),
+            ("architect", ArtifactKind::Adr, "docs/adr/<NNNN>-<slug>.md"),
+        ] {
+            let profile = BundledRegistry::by_name_latest(profile).expect("bundled profile");
+            let drafted = profile
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.id.as_ref() == "drafted")
+                .expect("drafted outcome");
+            let declaration = drafted
+                .produced_artifacts
+                .iter()
+                .find(|artifact| artifact.contract.kind == kind)
+                .expect("artifact declaration");
+
+            assert_eq!(declaration.path, path);
+            assert_eq!(declaration.contract.schema_version, 1);
+        }
     }
 
     #[test]

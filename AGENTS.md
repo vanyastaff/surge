@@ -52,6 +52,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │
 ├── docs/                            # Project documentation
 │   ├── ARCHITECTURE.md              # Canonical architecture document
+│   ├── conventions/                 # Generated artifact contracts, examples, validator guidance
 │   └── README.md
 │
 ├── .ai-factory/                     # AI Factory context (this run)
@@ -78,10 +79,12 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `crates/surge-cli/src/main.rs` | `surge` CLI binary entrypoint — clap-derived command tree (init, project, agents, specs, worktrees, engine, daemon, registry). |
 | `crates/surge-cli/src/commands/init.rs` | `surge init` wizard and `--default` project onboarding. |
 | `crates/surge-cli/src/commands/project.rs` | `surge project describe` stable project-context command. |
+| `crates/surge-cli/src/commands/artifact.rs` | `surge artifact validate` contract validation surface for generated artifacts. |
 | `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
+| `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |
 | `surge.toml` / `surge.example.toml` | User-facing runtime configuration. The `.example` file documents every field. |
 | `project.md` | Generated stable project summary captured into new runs as `project_context` when present. |
@@ -101,6 +104,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Bootstrap | `docs/bootstrap.md` | Adaptive prompt → description → roadmap → flow generation, approvals, archetypes, template skip. |
 | Workflow | `docs/workflow.md` | AFK workflow, flow model, intake sources, run lifecycle. |
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
+| Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 

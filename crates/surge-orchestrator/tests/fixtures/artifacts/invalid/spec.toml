@@ -1,0 +1,13 @@
+schema_version = 1
+
+[spec]
+id = "artifact-validation"
+title = "Artifact validation"
+description = "Missing acceptance criteria."
+complexity = "small"
+
+[[spec.subtasks]]
+id = "missing-criteria"
+title = "Missing criteria"
+description = "This subtask is not testable."
+complexity = "small"

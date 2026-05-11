@@ -11,6 +11,7 @@
 //! Process spawning is hidden behind [`HookCommandSpawner`] so tests can
 //! substitute an in-memory recorder. Production wiring uses
 //! [`ProcessSpawner`], which spawns `tokio::process::Command` with the
+//! run worktree as cwd, portable `SURGE_*` environment variables, and the
 //! per-hook `timeout_seconds`.
 //!
 //! ## Outcome semantics
@@ -63,6 +64,8 @@ pub struct HookContext<'a> {
     pub last_error: Option<&'a str>,
     /// File path used by `MatcherSpec::file_glob`.
     pub file_path: Option<&'a Path>,
+    /// Worktree root used as the hook process working directory.
+    pub worktree_path: Option<&'a Path>,
 }
 
 impl<'a> HookContext<'a> {
@@ -79,6 +82,7 @@ impl<'a> HookContext<'a> {
             outcome: None,
             last_error: None,
             file_path: None,
+            worktree_path: None,
         }
     }
 
@@ -115,6 +119,13 @@ impl<'a> HookContext<'a> {
     #[must_use]
     pub fn with_file_path(mut self, path: &'a Path) -> Self {
         self.file_path = Some(path);
+        self
+    }
+
+    /// Attach the run worktree root used as the hook process working directory.
+    #[must_use]
+    pub fn with_worktree_path(mut self, path: &'a Path) -> Self {
+        self.worktree_path = Some(path);
         self
     }
 
@@ -218,7 +229,7 @@ pub trait HookCommandSpawner: Send + Sync {
     /// Run the hook's command and return the captured outcome. Implementations
     /// must surface timeouts as `exit_status: 124, timed_out: true` rather than
     /// returning an error so the executor can apply `HookFailureMode` mapping.
-    async fn spawn(&self, hook: &Hook) -> HookCommandResult;
+    async fn spawn(&self, hook: &Hook, ctx: &HookContext<'_>) -> HookCommandResult;
 }
 
 /// Production [`HookCommandSpawner`] backed by `tokio::process::Command`.
@@ -227,16 +238,29 @@ pub struct ProcessSpawner;
 
 #[async_trait]
 impl HookCommandSpawner for ProcessSpawner {
-    async fn spawn(&self, hook: &Hook) -> HookCommandResult {
+    async fn spawn(&self, hook: &Hook, ctx: &HookContext<'_>) -> HookCommandResult {
         let timeout = hook
             .timeout_seconds
             .map(|s| Duration::from_secs(u64::from(s)));
-        match spawn_via_shell(&hook.command, timeout).await {
+        let surge_bin = resolve_surge_bin();
+        let command = render_portable_hook_command(&hook.command, surge_bin.as_deref());
+        let working_dir = resolve_hook_worktree(hook, ctx);
+        let env = hook_environment(ctx, working_dir.as_deref(), surge_bin.as_deref());
+        tracing::debug!(
+            target: "engine::hooks",
+            hook_id = %hook.id,
+            node = %ctx.node,
+            cwd = working_dir.as_ref().map(|path| path.display().to_string()).as_deref(),
+            env_keys = "SURGE_WORKTREE,SURGE_NODE,SURGE_OUTCOME,SURGE_SESSION,SURGE_BIN",
+            "hook process context prepared"
+        );
+        match spawn_via_shell(&command, timeout, working_dir.as_deref(), &env).await {
             Ok(res) => res,
             Err(err) => {
                 tracing::error!(
                     target: "engine::hooks",
                     hook_id = %hook.id,
+                    node = %ctx.node,
                     err = %err,
                     "hook command spawn failed"
                 );
@@ -254,6 +278,8 @@ impl HookCommandSpawner for ProcessSpawner {
 async fn spawn_via_shell(
     command: &str,
     timeout: Option<Duration>,
+    working_dir: Option<&Path>,
+    env: &[(&'static str, String)],
 ) -> Result<HookCommandResult, std::io::Error> {
     use tokio::process::Command;
 
@@ -281,6 +307,13 @@ async fn spawn_via_shell(
         // (Unix) / TerminateProcess (Windows) so the timeout path
         // genuinely stops the hook.
         .kill_on_drop(true);
+
+    if let Some(working_dir) = working_dir {
+        cmd.current_dir(working_dir);
+    }
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
 
     let child = cmd.spawn()?;
 
@@ -322,6 +355,98 @@ async fn spawn_via_shell(
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         timed_out: false,
     })
+}
+
+fn resolve_hook_worktree(hook: &Hook, ctx: &HookContext<'_>) -> Option<std::path::PathBuf> {
+    let Some(worktree_path) = ctx.worktree_path else {
+        tracing::error!(
+            target: "engine::hooks",
+            hook_id = %hook.id,
+            node = %ctx.node,
+            "hook worktree path missing; running hook in inherited cwd"
+        );
+        return None;
+    };
+
+    match std::fs::canonicalize(worktree_path) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            tracing::error!(
+                target: "engine::hooks",
+                hook_id = %hook.id,
+                node = %ctx.node,
+                worktree = %worktree_path.display(),
+                err = %err,
+                "failed to canonicalize hook worktree; using original path"
+            );
+            Some(worktree_path.to_path_buf())
+        },
+    }
+}
+
+fn hook_environment(
+    ctx: &HookContext<'_>,
+    worktree_path: Option<&Path>,
+    surge_bin: Option<&Path>,
+) -> Vec<(&'static str, String)> {
+    let mut env = vec![("SURGE_NODE", ctx.node.to_string())];
+    if let Some(worktree_path) = worktree_path {
+        env.push(("SURGE_WORKTREE", worktree_path.display().to_string()));
+    }
+    if let Some(outcome) = ctx.outcome {
+        env.push(("SURGE_OUTCOME", outcome.to_string()));
+    }
+    if let Some(session) = ctx.session {
+        env.push(("SURGE_SESSION", session.to_string()));
+    }
+    if let Some(surge_bin) = surge_bin {
+        env.push(("SURGE_BIN", surge_bin.display().to_string()));
+    }
+    env
+}
+
+fn resolve_surge_bin() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("SURGE_BIN").map(std::path::PathBuf::from) {
+        return Some(path);
+    }
+
+    let current = std::env::current_exe().ok()?;
+    if current
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("surge"))
+    {
+        return Some(current);
+    }
+
+    let sibling = current.with_file_name(surge_executable_name());
+    if sibling.exists() {
+        return Some(sibling);
+    }
+
+    Some(current)
+}
+
+fn surge_executable_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "surge.exe"
+    } else {
+        "surge"
+    }
+}
+
+fn render_portable_hook_command(command: &str, surge_bin: Option<&Path>) -> String {
+    if !command.contains("{surge}") {
+        return command.to_owned();
+    }
+    let Some(surge_bin) = surge_bin else {
+        return command.to_owned();
+    };
+    command.replace("{surge}", &quote_shell_path(surge_bin))
+}
+
+fn quote_shell_path(path: &Path) -> String {
+    format!("\"{}\"", path.display().to_string().replace('"', "\\\""))
 }
 
 /// Hook execution facade. The default spawner runs a real shell; tests use
@@ -381,7 +506,7 @@ impl<S: HookCommandSpawner> HookExecutor<S> {
                 node = %ctx.node,
                 "hook.start"
             );
-            let res = self.spawner.spawn(hook).await;
+            let res = self.spawner.spawn(hook, ctx).await;
             tracing::debug!(
                 target: "engine::hooks",
                 hook_id = %hook.id,
@@ -518,6 +643,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingSpawner {
         calls: Mutex<Vec<String>>,
+        worktrees: Mutex<Vec<Option<String>>>,
         scripted: Mutex<Vec<HookCommandResult>>,
     }
 
@@ -525,6 +651,7 @@ mod tests {
         fn with(results: Vec<HookCommandResult>) -> Arc<Self> {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
+                worktrees: Mutex::new(Vec::new()),
                 scripted: Mutex::new(results),
             })
         }
@@ -532,12 +659,20 @@ mod tests {
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
         }
+
+        fn worktrees(&self) -> Vec<Option<String>> {
+            self.worktrees.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
     impl HookCommandSpawner for Arc<RecordingSpawner> {
-        async fn spawn(&self, hook: &Hook) -> HookCommandResult {
+        async fn spawn(&self, hook: &Hook, ctx: &HookContext<'_>) -> HookCommandResult {
             self.calls.lock().unwrap().push(hook.id.clone());
+            self.worktrees
+                .lock()
+                .unwrap()
+                .push(ctx.worktree_path.map(|path| path.display().to_string()));
             self.scripted.lock().unwrap().remove(0)
         }
     }
@@ -690,6 +825,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hook_context_carries_worktree_to_spawner() {
+        let spawner = RecordingSpawner::with(vec![ok_result()]);
+        let exec = HookExecutor::with_spawner(spawner.clone());
+        let hooks = vec![hook(
+            "worktree-aware",
+            HookTrigger::PreToolUse,
+            HookFailureMode::Reject,
+        )];
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let worktree = Path::new("workspace-root");
+        let ctx = HookContext::for_node(&node).with_worktree_path(worktree);
+
+        let outcome = exec.run_hooks(&hooks, HookTrigger::PreToolUse, &ctx).await;
+
+        assert!(outcome.is_proceed());
+        assert_eq!(
+            spawner.worktrees(),
+            vec![Some("workspace-root".to_string())]
+        );
+    }
+
+    #[test]
+    fn surge_placeholder_renders_to_current_binary_path() {
+        let rendered = render_portable_hook_command(
+            "{surge} artifact validate --kind flow flow.toml",
+            resolve_surge_bin().as_deref(),
+        );
+
+        assert!(!rendered.contains("{surge}"));
+        assert!(rendered.contains("artifact validate --kind flow flow.toml"));
+    }
+
+    #[test]
+    fn hook_environment_contains_portable_context() {
+        let node = NodeKey::try_from("agent_1").unwrap();
+        let outcome = OutcomeKey::try_from("drafted").unwrap();
+        let worktree = Path::new("workspace-root");
+        let surge_bin = Path::new("surge-bin");
+        let ctx = HookContext::for_node(&node)
+            .with_worktree_path(worktree)
+            .with_outcome(&outcome);
+
+        let env = hook_environment(&ctx, Some(worktree), Some(surge_bin));
+
+        assert!(env.contains(&("SURGE_NODE", "agent_1".to_string())));
+        assert!(env.contains(&("SURGE_WORKTREE", "workspace-root".to_string())));
+        assert!(env.contains(&("SURGE_OUTCOME", "drafted".to_string())));
+        assert!(env.contains(&("SURGE_BIN", "surge-bin".to_string())));
+    }
+
+    #[tokio::test]
     async fn trigger_mismatch_skips_hook() {
         let spawner = RecordingSpawner::with(vec![]);
         let exec = HookExecutor::with_spawner(spawner.clone());
@@ -769,7 +955,8 @@ mod tests {
         };
 
         let node = NodeKey::try_from("agent_1").unwrap();
-        let ctx = HookContext::for_node(&node);
+        let cwd = std::env::current_dir().unwrap();
+        let ctx = HookContext::for_node(&node).with_worktree_path(&cwd);
 
         let outcome = exec.run_hooks(&[h], HookTrigger::PostToolUse, &ctx).await;
         assert!(outcome.is_proceed(), "got {outcome:?}");

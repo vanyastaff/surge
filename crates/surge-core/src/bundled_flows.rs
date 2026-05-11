@@ -9,17 +9,22 @@ use semver::Version;
 use crate::graph::Graph;
 
 const BOOTSTRAP_1_0_TOML: &str = include_str!("../bundled/flows/bootstrap-1.0.toml");
+const FEATURE_1_0_TOML: &str = include_str!("../bundled/flows/feature-1.0.toml");
 const LINEAR_3_1_0_TOML: &str = include_str!("../bundled/flows/linear-3-1.0.toml");
 const LINEAR_WITH_REVIEW_1_0_TOML: &str =
     include_str!("../bundled/flows/linear-with-review-1.0.toml");
 const MULTI_MILESTONE_1_0_TOML: &str = include_str!("../bundled/flows/multi-milestone-1.0.toml");
 const BUG_FIX_1_0_TOML: &str = include_str!("../bundled/flows/bug-fix-1.0.toml");
 const REFACTOR_1_0_TOML: &str = include_str!("../bundled/flows/refactor-1.0.toml");
+const PERFORMANCE_1_0_TOML: &str = include_str!("../bundled/flows/performance-1.0.toml");
+const SECURITY_1_0_TOML: &str = include_str!("../bundled/flows/security-1.0.toml");
+const DOCS_1_0_TOML: &str = include_str!("../bundled/flows/docs-1.0.toml");
+const MIGRATION_1_0_TOML: &str = include_str!("../bundled/flows/migration-1.0.toml");
 const SPIKE_1_0_TOML: &str = include_str!("../bundled/flows/spike-1.0.toml");
 const SINGLE_TASK_1_0_TOML: &str = include_str!("../bundled/flows/single-task-1.0.toml");
 
 /// Total number of bundled flow assets registered in [`BundledFlows`].
-pub const BUNDLED_FLOW_COUNT: usize = 8;
+pub const BUNDLED_FLOW_COUNT: usize = 13;
 
 /// Parsed bundled flow plus registry metadata derived from the asset name.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +42,19 @@ pub struct BundledFlow {
 pub struct BundledFlows;
 
 impl BundledFlows {
+    /// Return the canonical bundled-flow name for a user-supplied lookup name.
+    #[must_use]
+    pub fn canonical_name(name: &str) -> String {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "bugfix" | "fix" => "bug-fix".to_string(),
+            "perf" => "performance".to_string(),
+            "sec" => "security".to_string(),
+            "doc" => "docs".to_string(),
+            "migrate" => "migration".to_string(),
+            canonical => canonical.to_string(),
+        }
+    }
+
     /// Return every bundled flow, freshly parsed.
     ///
     /// # Panics
@@ -46,11 +64,16 @@ impl BundledFlows {
     pub fn all() -> Vec<BundledFlow> {
         vec![
             parse(BOOTSTRAP_1_0_TOML, "bootstrap", "1.0.0"),
+            parse(FEATURE_1_0_TOML, "feature", "1.0.0"),
             parse(LINEAR_3_1_0_TOML, "linear-3", "1.0.0"),
             parse(LINEAR_WITH_REVIEW_1_0_TOML, "linear-with-review", "1.0.0"),
             parse(MULTI_MILESTONE_1_0_TOML, "multi-milestone", "1.0.0"),
             parse(BUG_FIX_1_0_TOML, "bug-fix", "1.0.0"),
             parse(REFACTOR_1_0_TOML, "refactor", "1.0.0"),
+            parse(PERFORMANCE_1_0_TOML, "performance", "1.0.0"),
+            parse(SECURITY_1_0_TOML, "security", "1.0.0"),
+            parse(DOCS_1_0_TOML, "docs", "1.0.0"),
+            parse(MIGRATION_1_0_TOML, "migration", "1.0.0"),
             parse(SPIKE_1_0_TOML, "spike", "1.0.0"),
             parse(SINGLE_TASK_1_0_TOML, "single-task", "1.0.0"),
         ]
@@ -59,6 +82,7 @@ impl BundledFlows {
     /// Find a bundled flow by exact `(name, version)`.
     #[must_use]
     pub fn by_name_version(name: &str, version: &Version) -> Option<BundledFlow> {
+        let name = Self::canonical_name(name);
         Self::all()
             .into_iter()
             .find(|flow| flow.name == name && &flow.version == version)
@@ -67,6 +91,7 @@ impl BundledFlows {
     /// Find the highest-version bundled flow with the given name.
     #[must_use]
     pub fn by_name_latest(name: &str) -> Option<BundledFlow> {
+        let name = Self::canonical_name(name);
         Self::all()
             .into_iter()
             .filter(|flow| flow.name == name)
@@ -129,17 +154,37 @@ mod tests {
     #[test]
     fn archetype_templates_resolve_by_latest_name() {
         for name in [
+            "feature",
             "linear-3",
             "linear-with-review",
             "multi-milestone",
             "bug-fix",
             "refactor",
+            "performance",
+            "security",
+            "docs",
+            "migration",
             "spike",
             "single-task",
         ] {
             let flow = BundledFlows::by_name_latest(name).expect("archetype flow is bundled");
             assert_eq!(flow.name, name);
             assert_eq!(flow.version, Version::new(1, 0, 0));
+        }
+    }
+
+    #[test]
+    fn legacy_template_aliases_resolve_to_canonical_names() {
+        for (alias, canonical) in [
+            ("bugfix", "bug-fix"),
+            ("fix", "bug-fix"),
+            ("perf", "performance"),
+            ("sec", "security"),
+            ("doc", "docs"),
+            ("migrate", "migration"),
+        ] {
+            let flow = BundledFlows::by_name_latest(alias).expect("alias resolves");
+            assert_eq!(flow.name, canonical);
         }
     }
 }

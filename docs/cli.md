@@ -17,6 +17,7 @@ surge spec ...          manage legacy specs
 surge run ...           execute the legacy spec pipeline
 surge bootstrap ...     generate an adaptive flow from a free-form prompt
 surge engine ...        execute flow.toml graphs
+surge artifact ...      validate generated artifacts against Surge contracts
 surge daemon ...        manage the long-running local engine host
 surge clean             clean up orphaned worktrees and merged branches
 surge worktrees         list active worktrees
@@ -63,6 +64,22 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
 
+## Artifact Validation
+
+Generated role artifacts can be validated directly:
+
+```text
+surge artifact validate --kind description description.md
+surge artifact validate --kind roadmap roadmap.toml
+surge artifact validate --kind spec spec.toml
+surge artifact validate --kind flow flow.toml
+```
+
+Use `--format json` for structured diagnostics. The same validator surface is
+used by bundled profile `on_outcome` hooks for description, roadmap, and spec
+artifacts. See [Artifact Conventions](conventions/README.md) for every
+canonical path and minimal example.
+
 ## Project Initialization And Context
 
 `surge init --default` is the non-interactive setup path. It writes a complete validated `surge.toml`, chooses the best detected ACP registry agent when possible, and keeps an existing config unchanged. `surge init` without flags enters the wizard and can update onboarding sections in an existing config while preserving unrelated TOML content.
@@ -93,5 +110,6 @@ surge feature ...       amend roadmap with a new feature
 ## See Also
 
 - [Getting Started](getting-started.md) — install Surge and run the first flow
+- [Artifact Conventions](conventions/README.md) — generated artifact contracts and validator examples
 - [Workflow](workflow.md) — how runs are bootstrapped, executed, and logged
 - [Architecture](ARCHITECTURE.md) — the canonical architecture document

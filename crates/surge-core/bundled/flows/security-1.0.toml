@@ -1,0 +1,136 @@
+# Security convention flow: audit, fix, test, terminal success.
+
+schema_version = 1
+start = "security_audit"
+
+[metadata]
+name = "security"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes.security_audit]
+id = "security_audit"
+
+[nodes.security_audit.position]
+x = 0.0
+y = 0.0
+
+[[nodes.security_audit.declared_outcomes]]
+id = "audited"
+description = "Security findings documented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.security_audit.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.security_audit.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.security_audit.config.custom_fields]
+
+[nodes.implement_fixes]
+id = "implement_fixes"
+
+[nodes.implement_fixes.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_fixes.declared_outcomes]]
+id = "fixed"
+description = "Security fixes implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement_fixes.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_fixes.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_fixes.config.custom_fields]
+
+[nodes.security_tests]
+id = "security_tests"
+
+[nodes.security_tests.position]
+x = 400.0
+y = 0.0
+
+[[nodes.security_tests.declared_outcomes]]
+id = "verified"
+description = "Security regression tests pass"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.security_tests.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.security_tests.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.security_tests.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_audit_to_fix"
+to = "implement_fixes"
+kind = "forward"
+
+[edges.from]
+node = "security_audit"
+outcome = "audited"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_fix_to_tests"
+to = "security_tests"
+kind = "forward"
+
+[edges.from]
+node = "implement_fixes"
+outcome = "fixed"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_tests_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "security_tests"
+outcome = "verified"
+
+[edges.policy]
+on_max_exceeded = "escalate"

@@ -22,8 +22,10 @@ use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::SessionId;
 use surge_core::agent_config::AgentConfig;
+use surge_core::hooks::{HookFailureMode, HookTrigger};
 use surge_core::id::RunId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
+use surge_core::profile::bundled::BundledRegistry;
 use surge_core::profile::keyref::parse_key_ref;
 use surge_core::profile::registry::Provenance;
 use surge_orchestrator::engine::hooks::HookExecutor;
@@ -112,6 +114,39 @@ fn project_context_author_runtime_id_normalizes_against_acp_registry() {
     assert_eq!(
         acp_registry.normalize_agent_id(&resolved.profile.runtime.agent_id),
         Some("claude-acp".to_string()),
+    );
+}
+
+#[test]
+fn all_bundled_profiles_resolve_and_validator_hooks_are_portable() {
+    let registry = ProfileRegistry::new(DiskProfileSet::empty());
+    let mut validator_hook_count = 0;
+
+    for bundled in BundledRegistry::all() {
+        let profile_ref = format!("{}@{}", bundled.role.id.as_str(), bundled.role.version);
+        let key_ref = parse_key_ref(&profile_ref).unwrap();
+        let resolved = registry
+            .resolve(&key_ref)
+            .unwrap_or_else(|error| panic!("resolve {profile_ref}: {error}"));
+
+        for hook in &resolved.profile.hooks.entries {
+            if !hook.id.starts_with("validate-") {
+                continue;
+            }
+            validator_hook_count += 1;
+            assert_eq!(hook.trigger, HookTrigger::OnOutcome, "{profile_ref}");
+            assert_eq!(hook.on_failure, HookFailureMode::Reject, "{profile_ref}");
+            assert!(
+                hook.command.starts_with("{surge} artifact validate"),
+                "{profile_ref} validator hook should use portable {{surge}} placeholder: {}",
+                hook.command
+            );
+        }
+    }
+
+    assert_eq!(
+        validator_hook_count, 5,
+        "description, roadmap, and spec profiles should register artifact validators"
     );
 }
 

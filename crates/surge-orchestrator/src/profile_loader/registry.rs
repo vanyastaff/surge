@@ -136,6 +136,7 @@ impl ProfileRegistry {
             chain_len = chain_keys.len(),
             "profile resolved"
         );
+        log_profile_artifact_contracts(&merged);
 
         Ok(ResolvedProfile {
             profile: merged,
@@ -272,6 +273,22 @@ impl ProfileRegistry {
     #[must_use]
     pub fn bundled(&self) -> &[Profile] {
         &self.bundled
+    }
+}
+
+fn log_profile_artifact_contracts(profile: &Profile) {
+    for outcome in &profile.outcomes {
+        for artifact in &outcome.produced_artifacts {
+            tracing::debug!(
+                target: "profile::registry",
+                profile = profile.role.id.as_str(),
+                outcome = outcome.id.as_ref(),
+                artifact = artifact.path.as_str(),
+                artifact_kind = artifact.contract.kind.as_str(),
+                schema_version = artifact.contract.schema_version,
+                "profile artifact contract resolved"
+            );
+        }
     }
 }
 
