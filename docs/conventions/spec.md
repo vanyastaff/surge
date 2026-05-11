@@ -3,9 +3,9 @@
 Spec Author emits a typed `spec.toml` plus a human-compatible `spec.md` for a
 single milestone or bounded task set.
 
-Primary path: `spec.toml`  
-Compatibility path: `spec.md`  
-Validator kind: `spec`  
+Primary path: `spec.toml`
+Compatibility path: `spec.md`
+Validator kind: `spec`
 Schema version: `schema_version = 1`, owned by the artifact contract.
 
 ## Minimal Valid TOML

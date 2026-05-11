@@ -3,8 +3,8 @@
 `requirements.md` captures product requirements when a run needs a more formal
 requirements surface than the bootstrap description.
 
-Path: `requirements.md`  
-Validator kind: `requirements`  
+Path: `requirements.md`
+Validator kind: `requirements`
 Schema version: none; human-readable Markdown contract.
 
 ## Minimal Valid Example

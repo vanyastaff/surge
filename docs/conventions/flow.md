@@ -2,8 +2,8 @@
 
 `flow.toml` is the executable workflow graph consumed by the engine.
 
-Path: `flow.toml`  
-Validator kind: `flow`  
+Path: `flow.toml`
+Validator kind: `flow`
 Schema version: `schema_version = 1`, owned by the graph schema.
 
 ## Minimal Valid Example

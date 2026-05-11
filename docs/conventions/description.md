@@ -3,8 +3,8 @@
 `description.md` is the first bootstrap artifact. It turns the user's request
 into stable context for planners and generators.
 
-Path: `description.md`  
-Validator kind: `description`  
+Path: `description.md`
+Validator kind: `description`
 Schema version: none; human-readable Markdown contract.
 
 ## Minimal Valid Example

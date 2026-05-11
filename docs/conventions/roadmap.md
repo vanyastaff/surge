@@ -3,9 +3,9 @@
 Roadmap Planner emits a machine-readable `roadmap.toml` plus human-compatible
 `roadmap.md`.
 
-Primary path: `roadmap.toml`  
-Compatibility path: `roadmap.md`  
-Validator kind: `roadmap`  
+Primary path: `roadmap.toml`
+Compatibility path: `roadmap.md`
+Validator kind: `roadmap`
 Schema version: `schema_version = 1`, owned by the artifact contract.
 
 ## Minimal Valid TOML

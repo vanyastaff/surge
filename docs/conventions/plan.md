@@ -3,8 +3,8 @@
 Plan artifacts break a bounded implementation into executable tasks. AI Factory
 plans live under `.ai-factory/plans/`; generic role plans may use `plan.md`.
 
-Path: `plan.md`  
-Validator kind: `plan`  
+Path: `plan.md`
+Validator kind: `plan`
 Schema version: none; human-readable Markdown contract.
 
 ## Minimal Valid Example

@@ -3,8 +3,8 @@
 Story files carry long-form subtask context that would make `spec.toml` too
 large or prose-heavy.
 
-Path pattern: `stories/story-NNN.md`  
-Validator kind: `story`  
+Path pattern: `stories/story-NNN.md`
+Validator kind: `story`
 Schema version: none; human-readable Markdown contract.
 
 ## Minimal Valid Example

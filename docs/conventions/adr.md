@@ -3,8 +3,8 @@
 Architect writes ADRs for decisions that affect multiple modules, public
 contracts, or future work.
 
-Path pattern: `docs/adr/<NNNN>-<slug>.md`  
-Validator kind: `adr`  
+Path pattern: `docs/adr/<NNNN>-<slug>.md`
+Validator kind: `adr`
 Schema version: none; TOML frontmatter plus Markdown body.
 
 ## Minimal Valid Example
