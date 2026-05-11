@@ -192,6 +192,18 @@ fn render_roadmap_amendment(payload: &RoadmapAmendmentNotificationPayload) -> Re
     if !payload.conflict_codes.is_empty() {
         let _ = write!(body, "\nconflicts={}", payload.conflict_codes.join(", "));
     }
+    if let Some(status) = payload.status {
+        let _ = write!(body, "\nstatus={}", roadmap_patch_status_label(status));
+    }
+    if !payload.conflict_choices.is_empty() {
+        let choices = payload
+            .conflict_choices
+            .iter()
+            .map(|choice| operator_conflict_choice_label(*choice))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(body, "\nconflict_choices={choices}");
+    }
     RenderedNotification {
         severity,
         title: format!("Roadmap amendment: {}", payload.kind.as_str()),
@@ -206,6 +218,26 @@ fn amendment_target_label(target: &RoadmapPatchTarget) -> String {
             format!("project:{roadmap_path}")
         },
         RoadmapPatchTarget::RunRoadmap { run_id, .. } => format!("run:{run_id}"),
+    }
+}
+
+const fn roadmap_patch_status_label(status: RoadmapPatchStatus) -> &'static str {
+    match status {
+        RoadmapPatchStatus::Drafted => "drafted",
+        RoadmapPatchStatus::PendingApproval => "pending_approval",
+        RoadmapPatchStatus::Approved => "approved",
+        RoadmapPatchStatus::Applied => "applied",
+        RoadmapPatchStatus::Rejected => "rejected",
+        RoadmapPatchStatus::Superseded => "superseded",
+    }
+}
+
+const fn operator_conflict_choice_label(choice: OperatorConflictChoice) -> &'static str {
+    match choice {
+        OperatorConflictChoice::DeferToNextMilestone => "defer_to_next_milestone",
+        OperatorConflictChoice::AbortCurrentRun => "abort_current_run",
+        OperatorConflictChoice::CreateFollowUpRun => "create_follow_up_run",
+        OperatorConflictChoice::RejectPatch => "reject_patch",
     }
 }
 
@@ -263,6 +295,12 @@ mod inbox_card_tests {
         assert_eq!(rendered.severity, NotifySeverity::Warn);
         assert!(rendered.body.contains(patch_id.as_str()));
         assert!(rendered.body.contains("running_milestone"));
+        assert!(rendered.body.contains("status=approved"));
+        assert!(
+            rendered
+                .body
+                .contains("conflict_choices=create_follow_up_run")
+        );
         assert_eq!(rendered.artifact_paths.len(), 1);
     }
 }

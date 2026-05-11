@@ -88,7 +88,7 @@ impl DaemonClient {
                     Ok(Some(InboundServerFrame::Event(ev))) => match *ev {
                         DaemonEvent::PerRun { run_id, event } => {
                             let event = *event;
-                            let is_terminal = matches!(event, EngineRunEvent::Terminal { .. });
+                            let is_terminal = matches!(&event, EngineRunEvent::Terminal { .. });
                             if is_terminal {
                                 if let EngineRunEvent::Terminal { outcome } = &event {
                                     if let Some(tx) =
