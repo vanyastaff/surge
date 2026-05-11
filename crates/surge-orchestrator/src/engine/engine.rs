@@ -9,7 +9,7 @@ use crate::engine::tools::ToolDispatcher;
 use crate::profile_loader::ProfileRegistry;
 use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
@@ -165,7 +165,6 @@ impl Engine {
     }
 
     /// Start a new run.
-    #[allow(clippy::too_many_lines)]
     pub async fn start_run(
         &self,
         run_id: RunId,
@@ -176,12 +175,6 @@ impl Engine {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
         use crate::engine::validate::validate_for_m6;
-        use surge_core::approvals::ApprovalPolicy;
-        use surge_core::content_hash::ContentHash;
-        use surge_core::run_event::{
-            EventPayload, RunConfig as CoreRunConfig, VersionedEventPayload,
-        };
-        use surge_core::sandbox::SandboxMode;
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
@@ -203,128 +196,9 @@ impl Engine {
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
-        // Emit RunStarted + PipelineMaterialized atomically.
-        let core_run_config = CoreRunConfig {
-            sandbox_default: SandboxMode::WorkspaceWrite,
-            approval_default: ApprovalPolicy::OnRequest,
-            auto_pr: false,
-            mcp_servers: run_config.mcp_servers.clone(),
-        };
-        let graph_bytes = serde_json::to_vec(&graph)
-            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
-        let graph_hash = ContentHash::compute(&graph_bytes);
-
-        let mut events = vec![
-            VersionedEventPayload::new(EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: worktree_path.clone(),
-                initial_prompt: run_config.initial_prompt.clone(),
-                config: core_run_config,
-            }),
-            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
-                graph: Box::new(graph.clone()),
-                graph_hash,
-            }),
-        ];
-
-        if let Some(parent_run_id) = run_config.bootstrap_parent {
-            let inherited = self
-                .bootstrap_parent_artifact_events(&artifact_store, run_id, parent_run_id)
-                .await?;
-            events.extend(inherited);
-        }
-
-        if let Some(seed) = &run_config.project_context {
-            let project_context_artifact = artifact_store
-                .put(
-                    run_id,
-                    PROJECT_CONTEXT_ARTIFACT_NAME,
-                    seed.content.as_bytes(),
-                )
-                .await
-                .map_err(|e| EngineError::Storage(e.to_string()))?;
-            let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
-                .map_err(|e| EngineError::Internal(format!("project context producer key: {e}")))?;
-            tracing::debug!(
-                target: "engine::startup",
-                run_id = %run_id,
-                path = %seed.path.display(),
-                bytes = seed.content.len(),
-                hash = %project_context_artifact.hash,
-                "seeded project_context artifact"
-            );
-            tracing::info!(
-                target: "engine::startup",
-                run_id = %run_id,
-                path = %seed.path.display(),
-                hash = %project_context_artifact.hash,
-                "project context captured for run"
-            );
-            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: producer,
-                artifact: project_context_artifact.hash,
-                path: project_context_artifact.path,
-                name: PROJECT_CONTEXT_ARTIFACT_NAME.to_string(),
-            }));
-        }
-
-        for seed in &run_config.seed_artifacts {
-            let seeded_artifact = synthesise_run_seed_artifact(&worktree_path, seed)
-                .await
-                .map_err(|e| {
-                    EngineError::Internal(format!(
-                        "seed artifact {} synthesis failed: {e}",
-                        seed.name
-                    ))
-                })?;
-            tracing::debug!(
-                target: "engine::startup",
-                run_id = %run_id,
-                name = seed.name.as_str(),
-                path = %seed.relative_path.display(),
-                bytes = seed.content.len(),
-                hash = %seeded_artifact.hash,
-                "seeded run artifact"
-            );
-            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: seeded_artifact.producer,
-                artifact: seeded_artifact.hash,
-                path: seeded_artifact.relative_path,
-                name: seed.name.clone(),
-            }));
-        }
-
-        // Surface the operator's free-form prompt as a first-class artifact so
-        // bootstrap (or any) agent stage can pull it via the standard binding
-        // path through `ArtifactSource::InitialPrompt` (and equivalently via
-        // `ArtifactSource::RunArtifact { name: "user_prompt" }`). The artifact
-        // body is stored at `<worktree>/.surge/user_prompt.txt`; the
-        // `ArtifactProduced` event records its content hash, relative path,
-        // and a synthetic producer node so the existing fold rule populates
-        // `RunMemory.artifacts["user_prompt"]` deterministically.
-        if !run_config.initial_prompt.is_empty() {
-            let prompt_artifact = synthesise_initial_prompt_artifact(
-                &worktree_path,
-                run_config.initial_prompt.as_bytes(),
-            )
-            .await
-            .map_err(|e| {
-                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
-            })?;
-            tracing::debug!(
-                target: "engine::startup",
-                run_id = %run_id,
-                prompt_len = run_config.initial_prompt.len(),
-                "seeded user_prompt artifact",
-            );
-            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: prompt_artifact.producer,
-                artifact: prompt_artifact.hash,
-                path: prompt_artifact.relative_path,
-                name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
-            }));
-        }
-
+        let events = self
+            .build_startup_events(&artifact_store, run_id, &graph, &worktree_path, &run_config)
+            .await?;
         writer
             .append_events(events)
             .await
@@ -397,6 +271,84 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    async fn build_startup_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        run_id: RunId,
+        graph: &Graph,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        let mut events = Self::startup_run_events(graph, worktree_path, run_config)?;
+        events.extend(
+            self.collect_startup_artifact_events(artifact_store, run_id, worktree_path, run_config)
+                .await?,
+        );
+        Ok(events)
+    }
+
+    fn startup_run_events(
+        graph: &Graph,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        use surge_core::approvals::ApprovalPolicy;
+        use surge_core::content_hash::ContentHash;
+        use surge_core::run_event::RunConfig as CoreRunConfig;
+        use surge_core::sandbox::SandboxMode;
+
+        let graph_bytes = serde_json::to_vec(graph)
+            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
+        let graph_hash = ContentHash::compute(&graph_bytes);
+        let core_run_config = CoreRunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: run_config.mcp_servers.clone(),
+        };
+
+        Ok(vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree_path.to_path_buf(),
+                initial_prompt: run_config.initial_prompt.clone(),
+                config: core_run_config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash,
+            }),
+        ])
+    }
+
+    async fn collect_startup_artifact_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        run_id: RunId,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        let mut events = Vec::new();
+        if let Some(parent_run_id) = run_config.bootstrap_parent {
+            events.extend(
+                self.bootstrap_parent_artifact_events(artifact_store, run_id, parent_run_id)
+                    .await?,
+            );
+        }
+        if let Some(event) =
+            project_context_artifact_event(artifact_store, run_id, run_config).await?
+        {
+            events.push(event);
+        }
+        events.extend(run_seed_artifact_events(run_id, worktree_path, run_config).await?);
+        if let Some(event) =
+            initial_prompt_artifact_event(run_id, worktree_path, run_config).await?
+        {
+            events.push(event);
+        }
+        Ok(events)
     }
 
     async fn bootstrap_parent_artifact_events(
@@ -772,6 +724,120 @@ impl Engine {
 #[allow(dead_code)]
 fn _engine_config_used(e: &Engine) {
     let _ = &e.config;
+}
+
+async fn project_context_artifact_event(
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    let Some(seed) = &run_config.project_context else {
+        return Ok(None);
+    };
+    let project_context_artifact = artifact_store
+        .put(
+            run_id,
+            PROJECT_CONTEXT_ARTIFACT_NAME,
+            seed.content.as_bytes(),
+        )
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+        .map_err(|e| EngineError::Internal(format!("project context producer key: {e}")))?;
+    tracing::debug!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        bytes = seed.content.len(),
+        hash = %project_context_artifact.hash,
+        "seeded project_context artifact"
+    );
+    tracing::info!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        hash = %project_context_artifact.hash,
+        "project context captured for run"
+    );
+    Ok(Some(artifact_produced_event(
+        producer,
+        project_context_artifact.hash,
+        project_context_artifact.path,
+        PROJECT_CONTEXT_ARTIFACT_NAME,
+    )))
+}
+
+async fn run_seed_artifact_events(
+    run_id: RunId,
+    worktree_path: &Path,
+    run_config: &EngineRunConfig,
+) -> Result<Vec<VersionedEventPayload>, EngineError> {
+    let mut events = Vec::with_capacity(run_config.seed_artifacts.len());
+    for seed in &run_config.seed_artifacts {
+        let seeded_artifact = synthesise_run_seed_artifact(worktree_path, seed)
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("seed artifact {} synthesis failed: {e}", seed.name))
+            })?;
+        tracing::debug!(
+            target: "engine::startup",
+            run_id = %run_id,
+            name = seed.name.as_str(),
+            path = %seed.relative_path.display(),
+            bytes = seed.content.len(),
+            hash = %seeded_artifact.hash,
+            "seeded run artifact"
+        );
+        events.push(artifact_produced_event(
+            seeded_artifact.producer,
+            seeded_artifact.hash,
+            seeded_artifact.relative_path,
+            &seed.name,
+        ));
+    }
+    Ok(events)
+}
+
+async fn initial_prompt_artifact_event(
+    run_id: RunId,
+    worktree_path: &Path,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    if run_config.initial_prompt.is_empty() {
+        return Ok(None);
+    }
+    let prompt_artifact =
+        synthesise_initial_prompt_artifact(worktree_path, run_config.initial_prompt.as_bytes())
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
+            })?;
+    tracing::debug!(
+        target: "engine::startup",
+        run_id = %run_id,
+        prompt_len = run_config.initial_prompt.len(),
+        "seeded user_prompt artifact",
+    );
+    Ok(Some(artifact_produced_event(
+        prompt_artifact.producer,
+        prompt_artifact.hash,
+        prompt_artifact.relative_path,
+        INITIAL_PROMPT_ARTIFACT_NAME,
+    )))
+}
+
+fn artifact_produced_event(
+    node: surge_core::keys::NodeKey,
+    artifact: surge_core::content_hash::ContentHash,
+    path: PathBuf,
+    name: &str,
+) -> VersionedEventPayload {
+    VersionedEventPayload::new(EventPayload::ArtifactProduced {
+        node,
+        artifact,
+        path,
+        name: name.to_owned(),
+    })
 }
 
 /// Canonical artifact name under which the run's free-form initial prompt is

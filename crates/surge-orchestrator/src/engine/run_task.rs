@@ -103,646 +103,758 @@ pub(crate) struct RunTaskParams {
     pub profile_registry: Option<Arc<crate::profile_loader::ProfileRegistry>>,
 }
 
-#[allow(clippy::too_many_lines)]
 pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
-    let mut active_graph = params.graph.clone();
-    let mut cursor = params.resume_cursor.clone().unwrap_or_else(|| Cursor {
-        node: active_graph.start.clone(),
-        attempt: 1,
-    });
-    // One executor per run task: stateless aside from its spawner, so a
-    // fresh `HookExecutor::new()` is the simplest non-overengineered choice.
-    let hook_executor = HookExecutor::new();
-    let mut memory = match params.resume_memory.clone() {
-        Some(memory) => memory,
-        None => match load_existing_memory(&params.writer, params.run_id).await {
-            Ok(memory) => memory,
-            Err(e) => return failed(&params, format!("load existing memory: {e}")).await,
-        },
-    };
-    let mut frames: Vec<crate::engine::frames::Frame> =
-        params.resume_frames.clone().unwrap_or_default();
-    let mut root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32> =
-        params
-            .resume_root_traversal_counts
-            .clone()
-            .unwrap_or_default();
-    let mut applied_graph_revision_seq = params.resume_applied_graph_revision_seq.unwrap_or(0);
-    let mut processed_graph_revision_seq = applied_graph_revision_seq;
-    let mut pending_graph_revisions = match load_pending_graph_revisions_after(
-        &params.writer,
-        applied_graph_revision_seq,
-    )
-    .await
-    {
-        Ok(revisions) => revisions,
-        Err(e) => {
-            return failed(&params, format!("load pending graph revisions: {e}")).await;
-        },
+    let mut state = match initial_execution_state(&params).await {
+        Ok(state) => state,
+        Err(error) => return failed(&params, error).await,
     };
 
     loop {
-        if frames.is_empty() {
-            let mut roadmap_queue = RoadmapAmendmentQueue {
-                writer: &params.writer,
-                artifact_store: &params.artifact_store,
-                run_id: params.run_id,
-                receiver: &mut params.roadmap_amendments,
-            };
-            if let Err(error) = roadmap_queue
-                .drain(
-                    &mut active_graph,
-                    &cursor,
-                    &mut memory,
-                    &mut pending_graph_revisions,
-                    &mut processed_graph_revision_seq,
-                    &mut applied_graph_revision_seq,
-                )
-                .await
-            {
+        if state.frames.is_empty() {
+            if let Err(error) = drain_roadmap_queue(&mut params, &mut state).await {
                 return failed(&params, format!("apply queued roadmap amendments: {error}")).await;
             }
         }
-        maybe_apply_pending_graph_revision(
-            &mut active_graph,
-            &cursor,
-            &frames,
-            &mut pending_graph_revisions,
-            &mut processed_graph_revision_seq,
-            &mut applied_graph_revision_seq,
-        );
 
-        if params.cancel.is_cancelled() {
-            let reason = "stop_run requested".to_string();
-            let _ = params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
-                    reason: reason.clone(),
-                }))
-                .await;
-            let outcome = RunOutcome::Aborted { reason };
-            let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                outcome: outcome.clone(),
-            });
+        apply_pending_revisions(&mut state);
+
+        if let Some(outcome) = abort_if_cancelled(&params).await {
             return outcome;
         }
 
-        let node = if let Some(n) = lookup_in_active_frame(&active_graph, &cursor.node, &frames) {
+        let node = if let Some(n) =
+            lookup_in_active_frame(&state.active_graph, &state.cursor.node, &state.frames)
+        {
             n.clone()
         } else {
-            let err = format!("cursor at unknown node {}", cursor.node);
+            let err = format!("cursor at unknown node {}", state.cursor.node);
             return failed(&params, err).await;
         };
 
-        // Emit StageEntered.
-        if let Err(e) = params
-            .writer
-            .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
-                node: cursor.node.clone(),
-                attempt: cursor.attempt,
-            }))
-            .await
-        {
-            return failed(&params, format!("write StageEntered: {e}")).await;
-        }
-        let stage_start_seq = match params.writer.current_seq().await {
+        let stage_start_seq = match enter_stage(&params, &state.cursor).await {
             Ok(seq) => seq,
-            Err(e) => return failed(&params, format!("current_seq after StageEntered: {e}")).await,
+            Err(error) => return failed(&params, error).await,
         };
 
-        // Dispatch.
-        let stage_result: Result<StageOutcome, StageError> = match &node.config {
-            NodeConfig::Agent(cfg) => {
-                let r = execute_agent_stage(AgentStageParams {
-                    node: &cursor.node,
-                    agent_config: cfg,
-                    declared_outcomes: &node.declared_outcomes,
-                    bridge: &params.bridge,
-                    writer: &params.writer,
-                    artifact_store: &params.artifact_store,
-                    worktree_path: &params.worktree_path,
-                    tool_dispatcher: &params.tool_dispatcher,
-                    run_memory: &memory,
-                    run_id: params.run_id,
-                    tool_resolutions: &params.tool_resolutions,
-                    human_input_timeout: params.run_config.human_input_timeout,
-                    mcp_registry: params.mcp_registry.clone(),
-                    mcp_servers: params.mcp_servers.clone(),
-                    profile_registry: params.profile_registry.clone(),
-                    hook_executor: &hook_executor,
-                })
-                .await;
-                // Task 10: Flow Generator post-processing — validate the
-                // produced `flow.toml` and either emit `PipelineMaterialized`
-                // (success) or `BootstrapEditRequested` + a synthetic
-                // `OutcomeReported { outcome: validation_failed }` so routing
-                // takes the bundled bootstrap graph's Backtrack edge back to
-                // the Flow Generator agent.
-                let r = match r {
-                    Ok(outcome)
-                        if crate::engine::bootstrap::is_flow_generator_profile(
-                            cfg.profile.as_str(),
-                        ) =>
-                    {
-                        match crate::engine::bootstrap::run_flow_generator_post_processing(
-                            &cursor.node,
-                            &memory,
-                            params.run_config.bootstrap.edit_loop_cap,
-                            &params.worktree_path,
-                            &params.writer,
-                        )
-                        .await
-                        {
-                            Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => {
-                                Ok(outcome)
-                            },
-                            Ok(
-                                crate::engine::bootstrap::FlowValidationDecision::EditRequested {
-                                    ..
-                                },
-                            ) => OutcomeKey::try_from(
-                                crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME,
-                            )
-                            .map_err(|e| {
-                                StageError::Internal(format!("validation retry outcome key: {e}"))
-                            }),
-                            Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded {
-                                cap,
-                            }) => Err(StageError::EditLoopCapExceeded {
-                                stage: surge_core::run_event::BootstrapStage::Flow,
-                                cap,
-                            }),
-                            Ok(
-                                crate::engine::bootstrap::FlowValidationDecision::MissingArtifact,
-                            ) => Err(StageError::Internal(
-                                "Flow Generator stage finished without producing flow.toml".into(),
-                            )),
-                            Err(e) => Err(e),
-                        }
-                    },
-                    other => other,
-                };
-                r.map(StageOutcome::Routed)
-            },
-            NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
-                node: &cursor.node,
-                branch_config: cfg,
-                writer: &params.writer,
-                run_memory: &memory,
-                worktree_root: &params.worktree_path,
-            })
-            .await
-            .map(StageOutcome::Routed),
-            NodeConfig::Notify(cfg) => execute_notify_stage(NotifyStageParams {
-                node: &cursor.node,
-                notify_config: cfg,
-                declared_outcomes: &node.declared_outcomes,
-                writer: &params.writer,
-                run_memory: &memory,
-                run_id: params.run_id,
-                deliverer: params.notify_deliverer.clone(),
-            })
-            .await
-            .map(StageOutcome::Routed),
-            NodeConfig::Terminal(cfg) => {
-                use crate::engine::frames::TerminalSignal;
-                match crate::engine::frames::on_terminal_decision(&frames, &cursor) {
-                    TerminalSignal::OuterComplete => {
-                        let r = execute_terminal_stage(TerminalStageParams {
-                            node: &cursor.node,
-                            terminal_config: cfg,
-                            writer: &params.writer,
-                        })
-                        .await;
-                        r.map(StageOutcome::Terminal)
-                    },
-                    TerminalSignal::LoopIterDone => {
-                        // The most recent OutcomeReported event drives the iteration's outcome.
-                        let just_completed = if let Some(record) = memory
-                            .outcomes
-                            .get(&cursor.node)
-                            .and_then(|recs| recs.last())
-                        {
-                            record.outcome.clone()
-                        } else {
-                            match surge_core::keys::OutcomeKey::try_from("completed") {
-                                Ok(outcome) => outcome,
-                                Err(e) => {
-                                    return failed(
-                                        &params,
-                                        format!("loop default outcome key: {e}"),
-                                    )
-                                    .await;
-                                },
-                            }
-                        };
-
-                        if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
-                            &just_completed,
-                            &active_graph,
-                            &mut frames,
-                            &mut cursor,
-                            &params.writer,
-                        )
-                        .await
-                        {
-                            return failed(&params, format!("loop iter done: {e}")).await;
-                        }
-                        continue;
-                    },
-                    TerminalSignal::SubgraphDone => {
-                        // Look up the outer SubgraphConfig::outputs by walking back to the
-                        // outer node referenced by the top frame.
-                        let outputs = match frames.last() {
-                            Some(crate::engine::frames::Frame::Subgraph(sf)) => {
-                                match active_graph.nodes.get(&sf.outer_node).map(|n| &n.config) {
-                                    Some(surge_core::node::NodeConfig::Subgraph(cfg)) => {
-                                        cfg.outputs.clone()
-                                    },
-                                    _ => {
-                                        return failed(
-                                            &params,
-                                            format!(
-                                                "outer subgraph node {} missing or wrong kind",
-                                                sf.outer_node
-                                            ),
-                                        )
-                                        .await;
-                                    },
-                                }
-                            },
-                            _ => {
-                                return failed(
-                                    &params,
-                                    "SubgraphDone signal but no Subgraph frame on top".into(),
-                                )
-                                .await;
-                            },
-                        };
-
-                        if let Err(e) = crate::engine::stage::subgraph_stage::on_subgraph_done(
-                            &outputs,
-                            &memory,
-                            &mut frames,
-                            &mut cursor,
-                            &params.writer,
-                        )
-                        .await
-                        {
-                            return failed(&params, format!("subgraph done: {e}")).await;
-                        }
-                        continue;
-                    },
-                }
-            },
-            NodeConfig::HumanGate(cfg) => {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                params
-                    .gate_resolutions
-                    .lock()
-                    .await
-                    .insert(cursor.node.clone(), tx);
-                let r = execute_human_gate_stage(HumanGateStageParams {
-                    node: &cursor.node,
-                    gate_config: cfg,
-                    writer: &params.writer,
-                    run_memory: &memory,
-                    resolution_rx: Some(rx),
-                    default_timeout: params.run_config.human_input_timeout,
-                    bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
-                })
-                .await;
-                params.gate_resolutions.lock().await.remove(&cursor.node);
-                r.map(StageOutcome::Routed)
-            },
-            NodeConfig::Loop(cfg) => {
-                // Compute return_to (outer-graph node to advance to when loop completes).
-                let completed_outcome = match surge_core::keys::OutcomeKey::try_from("completed") {
-                    Ok(o) => o,
-                    Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
-                };
-                let return_to =
-                    match crate::engine::routing::edge_target_after_outcome_in_active_graph(
-                        &active_graph,
-                        &cursor.node,
-                        &completed_outcome,
-                        &frames,
-                    ) {
-                        Ok(n) => n,
-                        Err(e) => return failed(&params, format!("loop return_to: {e}")).await,
-                    };
-
-                let effect = match crate::engine::stage::loop_stage::execute_loop_entry(
-                    crate::engine::stage::loop_stage::LoopStageParams {
-                        node: &cursor.node,
-                        loop_config: cfg,
-                        graph: &active_graph,
-                        run_memory: &memory,
-                        writer: &params.writer,
-                        frames: &mut frames,
-                        return_to,
-                    },
-                )
-                .await
-                {
-                    Ok(e) => e,
-                    Err(e) => return failed(&params, format!("loop entry: {e}")).await,
-                };
-
-                match effect {
-                    crate::engine::stage::loop_stage::LoopEntryEffect::Skipped(outcome) => {
-                        Ok(StageOutcome::Routed(outcome))
-                    },
-                    crate::engine::stage::loop_stage::LoopEntryEffect::Entered(body_start) => {
-                        cursor.node = body_start;
-                        cursor.attempt = 1;
-                        continue; // Skip the routing block below — we're in a fresh frame's body.
-                    },
-                }
-            },
-            NodeConfig::Subgraph(cfg) => {
-                let completed_outcome = match surge_core::keys::OutcomeKey::try_from("completed") {
-                    Ok(o) => o,
-                    Err(e) => return failed(&params, format!("'completed' outcome: {e}")).await,
-                };
-                let return_to =
-                    match crate::engine::routing::edge_target_after_outcome_in_active_graph(
-                        &active_graph,
-                        &cursor.node,
-                        &completed_outcome,
-                        &frames,
-                    ) {
-                        Ok(n) => n,
-                        Err(e) => return failed(&params, format!("subgraph return_to: {e}")).await,
-                    };
-
-                let effect = match crate::engine::stage::subgraph_stage::execute_subgraph_entry(
-                    crate::engine::stage::subgraph_stage::SubgraphStageParams {
-                        node: &cursor.node,
-                        subgraph_config: cfg,
-                        graph: &active_graph,
-                        run_memory: &memory,
-                        writer: &params.writer,
-                        frames: &mut frames,
-                        return_to,
-                    },
-                )
-                .await
-                {
-                    Ok(e) => e,
-                    Err(e) => return failed(&params, format!("subgraph entry: {e}")).await,
-                };
-
-                cursor.node = effect.inner_start;
-                cursor.attempt = 1;
-                continue; // Skip routing block — we're now in the inner subgraph's body.
-            },
+        let stage_result = match dispatch_node_stage(&params, &mut state, &node).await {
+            StageDispatch::StageResult(result) => result,
+            StageDispatch::Continue => continue,
+            StageDispatch::Failed(error) => return failed(&params, error).await,
         };
 
-        let outcome: OutcomeKey = match stage_result {
-            Ok(StageOutcome::Routed(k)) => k,
-            Ok(StageOutcome::Terminal(TerminalOutcome::Completed { node: n })) => {
-                let outcome = RunOutcome::Completed { terminal: n };
-                let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                    outcome: outcome.clone(),
-                });
-                return outcome;
-            },
-            Ok(StageOutcome::Terminal(TerminalOutcome::Failed { error })) => {
-                let outcome = RunOutcome::Failed { error };
-                let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                    outcome: outcome.clone(),
-                });
-                return outcome;
-            },
-            Ok(StageOutcome::Terminal(TerminalOutcome::Aborted { reason })) => {
-                let outcome = RunOutcome::Aborted { reason };
-                let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                    outcome: outcome.clone(),
-                });
-                return outcome;
-            },
-            Err(e) => {
-                let raw_reason = format!("stage error at {}: {e}", cursor.node);
-                tracing::warn!(
-                    target: "engine::stage::error",
-                    node = %cursor.node,
-                    err = %e,
-                    "stage error captured; running on_error hooks"
-                );
-
-                // on_error hooks may suppress the failure into an outcome the
-                // node already declares.
-                let on_error_resolution = run_on_error_hooks(
-                    &hook_executor,
-                    &node,
-                    &cursor.node,
-                    &raw_reason,
-                    &params.worktree_path,
-                    params.profile_registry.as_deref(),
-                )
-                .await;
-                // Persist a HookExecuted event for every hook invoked on
-                // the on_error chain so the audit trail matches the
-                // pre/post_tool_use and on_outcome paths.
-                for record in &on_error_resolution.records {
-                    crate::engine::hooks::record_hook_executed(&params.writer, record).await;
-                }
-                let on_error_outcome = on_error_resolution.outcome;
-
-                if let Some(suppressed) = on_error_outcome {
-                    tracing::info!(
-                        target: "engine::stage::error",
-                        node = %cursor.node,
-                        outcome = %suppressed,
-                        "on_error hook suppressed failure; recording OutcomeReported"
-                    );
-                    if let Err(write_err) = params
-                        .writer
-                        .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
-                            node: cursor.node.clone(),
-                            outcome: suppressed.clone(),
-                            summary: format!("on_error hook suppressed: {raw_reason}"),
-                        }))
-                        .await
-                    {
-                        return failed(
-                            &params,
-                            format!("write OutcomeReported (suppressed): {write_err}"),
-                        )
-                        .await;
-                    }
-                    suppressed
-                } else {
-                    let _ = params
-                        .writer
-                        .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
-                            node: cursor.node.clone(),
-                            reason: raw_reason.clone(),
-                            retry_available: false,
-                        }))
-                        .await;
-                    return failed(&params, raw_reason).await;
-                }
-            },
-        };
-
-        let applied_events = match apply_memory_events_after(
-            &params.writer,
-            params.run_id,
-            stage_start_seq,
-            &mut memory,
-        )
-        .await
+        let resolution = match resolve_stage_result(&params, &mut state, &node, stage_result).await
         {
-            Ok(events) => events,
-            Err(e) => {
-                return failed(&params, format!("update run memory from event log: {e}")).await;
-            },
-        };
-        pending_graph_revisions.extend(applied_events.graph_revisions);
-        maybe_apply_pending_graph_revision(
-            &mut active_graph,
-            &cursor,
-            &frames,
-            &mut pending_graph_revisions,
-            &mut processed_graph_revision_seq,
-            &mut applied_graph_revision_seq,
-        );
-        let stage_events_applied_seq = match params.writer.current_seq().await {
-            Ok(seq) => seq,
-            Err(e) => {
-                return failed(&params, format!("current_seq after memory update: {e}")).await;
-            },
+            Ok(resolution) => resolution,
+            Err(outcome) => return outcome,
         };
 
-        // Route to next node.
-        let routed = match crate::engine::routing::next_node_after_with_counters(
-            &active_graph,
-            &cursor.node,
-            &outcome,
-            &mut frames,
-            &mut root_traversal_counts,
-        ) {
-            Ok(r) => r,
-            Err(crate::engine::routing::RoutingError::ExceededTraversal {
-                edge,
-                action,
-                count: _,
-                max: _,
-            }) => {
-                use surge_core::edge::ExceededAction;
-                match action {
-                    ExceededAction::Escalate => {
-                        // Synthesise a max_traversals_exceeded outcome and re-route.
-                        let synthetic =
-                            match surge_core::keys::OutcomeKey::try_from("max_traversals_exceeded")
-                            {
-                                Ok(o) => o,
-                                Err(e) => {
-                                    return failed(&params, format!("synthetic outcome: {e}"))
-                                        .await;
-                                },
-                            };
-                        match crate::engine::routing::next_node_after_with_counters(
-                            &active_graph,
-                            &cursor.node,
-                            &synthetic,
-                            &mut frames,
-                            &mut root_traversal_counts,
-                        ) {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return failed(
-                                    &params,
-                                    format!(
-                                        "max_traversals exceeded on edge {edge} and no escalate route declared"
-                                    ),
-                                )
-                                .await;
-                            },
-                        }
-                    },
-                    ExceededAction::Fail => {
-                        return failed(
-                            &params,
-                            format!("max_traversals exceeded on edge {edge} (action: Fail)"),
-                        )
-                        .await;
-                    },
+        match resolution {
+            StageResolution::Terminal(outcome) => return outcome,
+            StageResolution::Outcome(outcome) => {
+                if let Err(error) =
+                    route_and_snapshot(&params, &mut state, &outcome, stage_start_seq).await
+                {
+                    return failed(&params, error).await;
                 }
             },
-            Err(e) => return failed(&params, format!("routing: {e}")).await,
-        };
-        let next = routed.target.clone();
-
-        tracing::debug!(
-            target: "engine::routing",
-            from = %cursor.node,
-            to = %next,
-            kind = ?routed.kind,
-            "traversing edge",
-        );
-
-        // Emit the EdgeTraversed event with the actual routed kind so fold
-        // can drive `RunMemory.node_visits` deterministically (Backtrack
-        // edges increment the target's visit counter).
-        let _ = params
-            .writer
-            .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
-                edge: routed.edge_id,
-                from: cursor.node.clone(),
-                to: next.clone(),
-                kind: routed.kind,
-            }))
-            .await;
-        let _ = params
-            .writer
-            .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
-                node: cursor.node.clone(),
-                outcome: outcome.clone(),
-            }))
-            .await;
-        let applied_events = match apply_memory_events_after(
-            &params.writer,
-            params.run_id,
-            stage_events_applied_seq,
-            &mut memory,
-        )
-        .await
-        {
-            Ok(events) => events,
-            Err(e) => {
-                return failed(&params, format!("update run memory after routing: {e}")).await;
-            },
-        };
-        pending_graph_revisions.extend(applied_events.graph_revisions);
-
-        // Snapshot at stage boundary (per spec §2.6, §12).
-        let next_cursor = Cursor {
-            node: next.clone(),
-            attempt: 1,
-        };
-        let current_seq = match params.writer.current_seq().await {
-            Ok(s) => s,
-            Err(e) => return failed(&params, format!("current_seq: {e}")).await,
-        };
-        let mut snapshot = crate::engine::snapshot::EngineSnapshot::new(
-            &next_cursor,
-            current_seq.as_u64(),
-            current_seq.as_u64(),
-        );
-        snapshot.applied_graph_revision_seq = applied_graph_revision_seq;
-        let blob = match serde_json::to_vec(&snapshot) {
-            Ok(b) => b,
-            Err(e) => return failed(&params, format!("snapshot serialize: {e}")).await,
-        };
-        if let Err(e) = params.writer.write_graph_snapshot(current_seq, blob).await {
-            return failed(&params, format!("write_graph_snapshot: {e}")).await;
         }
-
-        cursor = next_cursor;
     }
+}
+
+struct RunExecutionState {
+    active_graph: Graph,
+    cursor: Cursor,
+    hook_executor: HookExecutor,
+    memory: RunMemory,
+    frames: Vec<crate::engine::frames::Frame>,
+    root_traversal_counts: std::collections::HashMap<surge_core::keys::EdgeKey, u32>,
+    applied_graph_revision_seq: u64,
+    processed_graph_revision_seq: u64,
+    pending_graph_revisions: Vec<ObservedGraphRevision>,
+}
+
+async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
+    let active_graph = params.graph.clone();
+    let cursor = params.resume_cursor.clone().unwrap_or_else(|| Cursor {
+        node: active_graph.start.clone(),
+        attempt: 1,
+    });
+    let memory = match params.resume_memory.clone() {
+        Some(memory) => memory,
+        None => load_existing_memory(&params.writer, params.run_id)
+            .await
+            .map_err(|e| format!("load existing memory: {e}"))?,
+    };
+    let applied_graph_revision_seq = params.resume_applied_graph_revision_seq.unwrap_or(0);
+    let pending_graph_revisions =
+        load_pending_graph_revisions_after(&params.writer, applied_graph_revision_seq)
+            .await
+            .map_err(|e| format!("load pending graph revisions: {e}"))?;
+
+    Ok(RunExecutionState {
+        active_graph,
+        cursor,
+        hook_executor: HookExecutor::new(),
+        memory,
+        frames: params.resume_frames.clone().unwrap_or_default(),
+        root_traversal_counts: params
+            .resume_root_traversal_counts
+            .clone()
+            .unwrap_or_default(),
+        applied_graph_revision_seq,
+        processed_graph_revision_seq: applied_graph_revision_seq,
+        pending_graph_revisions,
+    })
+}
+
+async fn drain_roadmap_queue(
+    params: &mut RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Result<(), surge_persistence::runs::StorageError> {
+    let mut roadmap_queue = RoadmapAmendmentQueue {
+        writer: &params.writer,
+        artifact_store: &params.artifact_store,
+        run_id: params.run_id,
+        receiver: &mut params.roadmap_amendments,
+    };
+    roadmap_queue
+        .drain(
+            &mut state.active_graph,
+            &state.cursor,
+            &mut state.memory,
+            &mut state.pending_graph_revisions,
+            &mut state.processed_graph_revision_seq,
+            &mut state.applied_graph_revision_seq,
+        )
+        .await
+}
+
+fn apply_pending_revisions(state: &mut RunExecutionState) {
+    maybe_apply_pending_graph_revision(
+        &mut state.active_graph,
+        &state.cursor,
+        &state.frames,
+        &mut state.pending_graph_revisions,
+        &mut state.processed_graph_revision_seq,
+        &mut state.applied_graph_revision_seq,
+    );
+}
+
+async fn abort_if_cancelled(params: &RunTaskParams) -> Option<RunOutcome> {
+    if !params.cancel.is_cancelled() {
+        return None;
+    }
+
+    let reason = "stop_run requested".to_string();
+    let _ = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+            reason: reason.clone(),
+        }))
+        .await;
+    let outcome = RunOutcome::Aborted { reason };
+    let _ = params.event_tx.send(EngineRunEvent::Terminal {
+        outcome: outcome.clone(),
+    });
+    Some(outcome)
+}
+
+async fn enter_stage(
+    params: &RunTaskParams,
+    cursor: &Cursor,
+) -> Result<surge_persistence::runs::EventSeq, String> {
+    params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::StageEntered {
+            node: cursor.node.clone(),
+            attempt: cursor.attempt,
+        }))
+        .await
+        .map_err(|e| format!("write StageEntered: {e}"))?;
+    params
+        .writer
+        .current_seq()
+        .await
+        .map_err(|e| format!("current_seq after StageEntered: {e}"))
+}
+
+enum StageDispatch {
+    StageResult(Result<StageOutcome, StageError>),
+    Continue,
+    Failed(String),
+}
+
+async fn dispatch_node_stage(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+) -> StageDispatch {
+    let stage_result = match &node.config {
+        NodeConfig::Agent(cfg) => execute_agent_node(params, state, node, cfg).await,
+        NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
+            node: &state.cursor.node,
+            branch_config: cfg,
+            writer: &params.writer,
+            run_memory: &state.memory,
+            worktree_root: &params.worktree_path,
+        })
+        .await
+        .map(StageOutcome::Routed),
+        NodeConfig::Notify(cfg) => execute_notify_stage(NotifyStageParams {
+            node: &state.cursor.node,
+            notify_config: cfg,
+            declared_outcomes: &node.declared_outcomes,
+            writer: &params.writer,
+            run_memory: &state.memory,
+            run_id: params.run_id,
+            deliverer: params.notify_deliverer.clone(),
+        })
+        .await
+        .map(StageOutcome::Routed),
+        NodeConfig::Terminal(cfg) => return dispatch_terminal_node(params, state, cfg).await,
+        NodeConfig::HumanGate(cfg) => execute_human_gate_node(params, state, cfg).await,
+        NodeConfig::Loop(cfg) => return enter_loop_node(params, state, cfg).await,
+        NodeConfig::Subgraph(cfg) => return enter_subgraph_node(params, state, cfg).await,
+    };
+    StageDispatch::StageResult(stage_result)
+}
+
+async fn execute_agent_node(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    node: &surge_core::node::Node,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Result<StageOutcome, StageError> {
+    let stage_result = execute_agent_stage(AgentStageParams {
+        node: &state.cursor.node,
+        agent_config: cfg,
+        declared_outcomes: &node.declared_outcomes,
+        bridge: &params.bridge,
+        writer: &params.writer,
+        artifact_store: &params.artifact_store,
+        worktree_path: &params.worktree_path,
+        tool_dispatcher: &params.tool_dispatcher,
+        run_memory: &state.memory,
+        run_id: params.run_id,
+        tool_resolutions: &params.tool_resolutions,
+        human_input_timeout: params.run_config.human_input_timeout,
+        mcp_registry: params.mcp_registry.clone(),
+        mcp_servers: params.mcp_servers.clone(),
+        profile_registry: params.profile_registry.clone(),
+        hook_executor: &state.hook_executor,
+    })
+    .await;
+
+    let stage_result = if crate::engine::bootstrap::is_flow_generator_profile(cfg.profile.as_str())
+    {
+        handle_flow_generator_result(params, state, stage_result).await
+    } else {
+        stage_result
+    };
+    stage_result.map(StageOutcome::Routed)
+}
+
+async fn handle_flow_generator_result(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    stage_result: Result<OutcomeKey, StageError>,
+) -> Result<OutcomeKey, StageError> {
+    let Ok(outcome) = stage_result else {
+        return stage_result;
+    };
+    match crate::engine::bootstrap::run_flow_generator_post_processing(
+        &state.cursor.node,
+        &state.memory,
+        params.run_config.bootstrap.edit_loop_cap,
+        &params.worktree_path,
+        &params.writer,
+    )
+    .await
+    {
+        Ok(crate::engine::bootstrap::FlowValidationDecision::Materialized) => Ok(outcome),
+        Ok(crate::engine::bootstrap::FlowValidationDecision::EditRequested { .. }) => {
+            OutcomeKey::try_from(crate::engine::bootstrap::VALIDATION_FAILED_OUTCOME)
+                .map_err(|e| StageError::Internal(format!("validation retry outcome key: {e}")))
+        },
+        Ok(crate::engine::bootstrap::FlowValidationDecision::CapExceeded { cap }) => {
+            Err(StageError::EditLoopCapExceeded {
+                stage: surge_core::run_event::BootstrapStage::Flow,
+                cap,
+            })
+        },
+        Ok(crate::engine::bootstrap::FlowValidationDecision::MissingArtifact) => {
+            Err(StageError::Internal(
+                "Flow Generator stage finished without producing flow.toml".into(),
+            ))
+        },
+        Err(error) => Err(error),
+    }
+}
+
+async fn dispatch_terminal_node(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    cfg: &surge_core::terminal_config::TerminalConfig,
+) -> StageDispatch {
+    use crate::engine::frames::TerminalSignal;
+
+    match crate::engine::frames::on_terminal_decision(&state.frames, &state.cursor) {
+        TerminalSignal::OuterComplete => {
+            let result = execute_terminal_stage(TerminalStageParams {
+                node: &state.cursor.node,
+                terminal_config: cfg,
+                writer: &params.writer,
+            })
+            .await
+            .map(StageOutcome::Terminal);
+            StageDispatch::StageResult(result)
+        },
+        TerminalSignal::LoopIterDone => finish_loop_iteration(params, state).await,
+        TerminalSignal::SubgraphDone => finish_subgraph_frame(params, state).await,
+    }
+}
+
+async fn finish_loop_iteration(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+) -> StageDispatch {
+    let just_completed = match latest_loop_outcome(state) {
+        Ok(outcome) => outcome,
+        Err(error) => return StageDispatch::Failed(error),
+    };
+    match crate::engine::stage::loop_stage::on_loop_iteration_done(
+        &just_completed,
+        &state.active_graph,
+        &mut state.frames,
+        &mut state.cursor,
+        &params.writer,
+    )
+    .await
+    {
+        Ok(()) => StageDispatch::Continue,
+        Err(error) => StageDispatch::Failed(format!("loop iter done: {error}")),
+    }
+}
+
+fn latest_loop_outcome(state: &RunExecutionState) -> Result<OutcomeKey, String> {
+    if let Some(record) = state
+        .memory
+        .outcomes
+        .get(&state.cursor.node)
+        .and_then(|records| records.last())
+    {
+        return Ok(record.outcome.clone());
+    }
+    OutcomeKey::try_from("completed").map_err(|e| format!("loop default outcome key: {e}"))
+}
+
+async fn finish_subgraph_frame(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+) -> StageDispatch {
+    let outputs = match current_subgraph_outputs(state) {
+        Ok(outputs) => outputs,
+        Err(error) => return StageDispatch::Failed(error),
+    };
+    match crate::engine::stage::subgraph_stage::on_subgraph_done(
+        &outputs,
+        &state.memory,
+        &mut state.frames,
+        &mut state.cursor,
+        &params.writer,
+    )
+    .await
+    {
+        Ok(()) => StageDispatch::Continue,
+        Err(error) => StageDispatch::Failed(format!("subgraph done: {error}")),
+    }
+}
+
+fn current_subgraph_outputs(
+    state: &RunExecutionState,
+) -> Result<Vec<surge_core::subgraph_config::SubgraphOutput>, String> {
+    let Some(crate::engine::frames::Frame::Subgraph(frame)) = state.frames.last() else {
+        return Err("SubgraphDone signal but no Subgraph frame on top".into());
+    };
+    match state
+        .active_graph
+        .nodes
+        .get(&frame.outer_node)
+        .map(|node| &node.config)
+    {
+        Some(NodeConfig::Subgraph(cfg)) => Ok(cfg.outputs.clone()),
+        _ => Err(format!(
+            "outer subgraph node {} missing or wrong kind",
+            frame.outer_node
+        )),
+    }
+}
+
+async fn execute_human_gate_node(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    cfg: &surge_core::human_gate_config::HumanGateConfig,
+) -> Result<StageOutcome, StageError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    params
+        .gate_resolutions
+        .lock()
+        .await
+        .insert(state.cursor.node.clone(), tx);
+    let result = execute_human_gate_stage(HumanGateStageParams {
+        node: &state.cursor.node,
+        gate_config: cfg,
+        writer: &params.writer,
+        run_memory: &state.memory,
+        resolution_rx: Some(rx),
+        default_timeout: params.run_config.human_input_timeout,
+        bootstrap_edit_loop_cap: params.run_config.bootstrap.edit_loop_cap,
+    })
+    .await;
+    params
+        .gate_resolutions
+        .lock()
+        .await
+        .remove(&state.cursor.node);
+    result.map(StageOutcome::Routed)
+}
+
+async fn enter_loop_node(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    cfg: &surge_core::loop_config::LoopConfig,
+) -> StageDispatch {
+    let return_to =
+        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+            Ok(node) => node,
+            Err(error) => return StageDispatch::Failed(format!("loop return_to: {error}")),
+        };
+    let effect = crate::engine::stage::loop_stage::execute_loop_entry(
+        crate::engine::stage::loop_stage::LoopStageParams {
+            node: &state.cursor.node,
+            loop_config: cfg,
+            graph: &state.active_graph,
+            run_memory: &state.memory,
+            writer: &params.writer,
+            frames: &mut state.frames,
+            return_to,
+        },
+    )
+    .await;
+
+    match effect {
+        Ok(crate::engine::stage::loop_stage::LoopEntryEffect::Skipped(outcome)) => {
+            StageDispatch::StageResult(Ok(StageOutcome::Routed(outcome)))
+        },
+        Ok(crate::engine::stage::loop_stage::LoopEntryEffect::Entered(body_start)) => {
+            state.cursor.node = body_start;
+            state.cursor.attempt = 1;
+            StageDispatch::Continue
+        },
+        Err(error) => StageDispatch::Failed(format!("loop entry: {error}")),
+    }
+}
+
+async fn enter_subgraph_node(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    cfg: &surge_core::subgraph_config::SubgraphConfig,
+) -> StageDispatch {
+    let return_to =
+        match return_to_after_completed(&state.active_graph, &state.cursor, &state.frames) {
+            Ok(node) => node,
+            Err(error) => return StageDispatch::Failed(format!("subgraph return_to: {error}")),
+        };
+    let effect = crate::engine::stage::subgraph_stage::execute_subgraph_entry(
+        crate::engine::stage::subgraph_stage::SubgraphStageParams {
+            node: &state.cursor.node,
+            subgraph_config: cfg,
+            graph: &state.active_graph,
+            run_memory: &state.memory,
+            writer: &params.writer,
+            frames: &mut state.frames,
+            return_to,
+        },
+    )
+    .await;
+
+    match effect {
+        Ok(effect) => {
+            state.cursor.node = effect.inner_start;
+            state.cursor.attempt = 1;
+            StageDispatch::Continue
+        },
+        Err(error) => StageDispatch::Failed(format!("subgraph entry: {error}")),
+    }
+}
+
+fn return_to_after_completed(
+    graph: &Graph,
+    cursor: &Cursor,
+    frames: &[crate::engine::frames::Frame],
+) -> Result<surge_core::keys::NodeKey, String> {
+    let completed =
+        OutcomeKey::try_from("completed").map_err(|e| format!("'completed' outcome: {e}"))?;
+    crate::engine::routing::edge_target_after_outcome_in_active_graph(
+        graph,
+        &cursor.node,
+        &completed,
+        frames,
+    )
+    .map_err(|e| e.to_string())
+}
+
+enum StageResolution {
+    Outcome(OutcomeKey),
+    Terminal(RunOutcome),
+}
+
+async fn resolve_stage_result(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    stage_result: Result<StageOutcome, StageError>,
+) -> Result<StageResolution, RunOutcome> {
+    match stage_result {
+        Ok(StageOutcome::Routed(outcome)) => Ok(StageResolution::Outcome(outcome)),
+        Ok(StageOutcome::Terminal(terminal)) => {
+            let outcome = terminal_run_outcome(terminal);
+            let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                outcome: outcome.clone(),
+            });
+            Ok(StageResolution::Terminal(outcome))
+        },
+        Err(error) => resolve_stage_error(params, state, node, error)
+            .await
+            .map(StageResolution::Outcome),
+    }
+}
+
+fn terminal_run_outcome(terminal: TerminalOutcome) -> RunOutcome {
+    match terminal {
+        TerminalOutcome::Completed { node } => RunOutcome::Completed { terminal: node },
+        TerminalOutcome::Failed { error } => RunOutcome::Failed { error },
+        TerminalOutcome::Aborted { reason } => RunOutcome::Aborted { reason },
+    }
+}
+
+async fn resolve_stage_error(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    node: &surge_core::node::Node,
+    error: StageError,
+) -> Result<OutcomeKey, RunOutcome> {
+    let raw_reason = format!("stage error at {}: {error}", state.cursor.node);
+    tracing::warn!(
+        target: "engine::stage::error",
+        node = %state.cursor.node,
+        err = %error,
+        "stage error captured; running on_error hooks"
+    );
+
+    let on_error_resolution = run_on_error_hooks(
+        &state.hook_executor,
+        node,
+        &state.cursor.node,
+        &raw_reason,
+        &params.worktree_path,
+        params.profile_registry.as_deref(),
+    )
+    .await;
+    for record in &on_error_resolution.records {
+        crate::engine::hooks::record_hook_executed(&params.writer, record).await;
+    }
+
+    if let Some(suppressed) = on_error_resolution.outcome {
+        return record_suppressed_error(params, state, suppressed, &raw_reason).await;
+    }
+
+    let _ = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
+            node: state.cursor.node.clone(),
+            reason: raw_reason.clone(),
+            retry_available: false,
+        }))
+        .await;
+    Err(failed(params, raw_reason).await)
+}
+
+async fn record_suppressed_error(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    suppressed: OutcomeKey,
+    raw_reason: &str,
+) -> Result<OutcomeKey, RunOutcome> {
+    tracing::info!(
+        target: "engine::stage::error",
+        node = %state.cursor.node,
+        outcome = %suppressed,
+        "on_error hook suppressed failure; recording OutcomeReported"
+    );
+    if let Err(write_err) = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::OutcomeReported {
+            node: state.cursor.node.clone(),
+            outcome: suppressed.clone(),
+            summary: format!("on_error hook suppressed: {raw_reason}"),
+        }))
+        .await
+    {
+        return Err(failed(
+            params,
+            format!("write OutcomeReported (suppressed): {write_err}"),
+        )
+        .await);
+    }
+    Ok(suppressed)
+}
+
+async fn route_and_snapshot(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    outcome: &OutcomeKey,
+    stage_start_seq: surge_persistence::runs::EventSeq,
+) -> Result<(), String> {
+    let applied_events = apply_memory_events_after(
+        &params.writer,
+        params.run_id,
+        stage_start_seq,
+        &mut state.memory,
+    )
+    .await
+    .map_err(|e| format!("update run memory from event log: {e}"))?;
+    state
+        .pending_graph_revisions
+        .extend(applied_events.graph_revisions);
+    apply_pending_revisions(state);
+    let stage_events_applied_seq = params
+        .writer
+        .current_seq()
+        .await
+        .map_err(|e| format!("current_seq after memory update: {e}"))?;
+
+    let routed = route_stage_outcome(state, outcome)?;
+    write_routing_events(params, state, outcome, &routed).await;
+    let post_route_events = apply_memory_events_after(
+        &params.writer,
+        params.run_id,
+        stage_events_applied_seq,
+        &mut state.memory,
+    )
+    .await
+    .map_err(|e| format!("update run memory after routing: {e}"))?;
+    state
+        .pending_graph_revisions
+        .extend(post_route_events.graph_revisions);
+
+    let next_cursor = Cursor {
+        node: routed.target,
+        attempt: 1,
+    };
+    write_stage_boundary_snapshot(params, state, &next_cursor).await?;
+    state.cursor = next_cursor;
+    Ok(())
+}
+
+fn route_stage_outcome(
+    state: &mut RunExecutionState,
+    outcome: &OutcomeKey,
+) -> Result<crate::engine::routing::RoutedEdge, String> {
+    match crate::engine::routing::next_node_after_with_counters(
+        &state.active_graph,
+        &state.cursor.node,
+        outcome,
+        &mut state.frames,
+        &mut state.root_traversal_counts,
+    ) {
+        Ok(routed) => Ok(routed),
+        Err(crate::engine::routing::RoutingError::ExceededTraversal { edge, action, .. }) => {
+            route_after_max_traversal(state, &edge, action)
+        },
+        Err(error) => Err(format!("routing: {error}")),
+    }
+}
+
+fn route_after_max_traversal(
+    state: &mut RunExecutionState,
+    edge: &surge_core::keys::EdgeKey,
+    action: surge_core::edge::ExceededAction,
+) -> Result<crate::engine::routing::RoutedEdge, String> {
+    match action {
+        surge_core::edge::ExceededAction::Escalate => {
+            let synthetic = OutcomeKey::try_from("max_traversals_exceeded")
+                .map_err(|e| format!("synthetic outcome: {e}"))?;
+            crate::engine::routing::next_node_after_with_counters(
+                &state.active_graph,
+                &state.cursor.node,
+                &synthetic,
+                &mut state.frames,
+                &mut state.root_traversal_counts,
+            )
+            .map_err(|_| {
+                format!("max_traversals exceeded on edge {edge} and no escalate route declared")
+            })
+        },
+        surge_core::edge::ExceededAction::Fail => Err(format!(
+            "max_traversals exceeded on edge {edge} (action: Fail)"
+        )),
+    }
+}
+
+async fn write_routing_events(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    outcome: &OutcomeKey,
+    routed: &crate::engine::routing::RoutedEdge,
+) {
+    tracing::debug!(
+        target: "engine::routing",
+        from = %state.cursor.node,
+        to = %routed.target,
+        kind = ?routed.kind,
+        "traversing edge",
+    );
+    let _ = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::EdgeTraversed {
+            edge: routed.edge_id.clone(),
+            from: state.cursor.node.clone(),
+            to: routed.target.clone(),
+            kind: routed.kind,
+        }))
+        .await;
+    let _ = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::StageCompleted {
+            node: state.cursor.node.clone(),
+            outcome: outcome.clone(),
+        }))
+        .await;
+}
+
+async fn write_stage_boundary_snapshot(
+    params: &RunTaskParams,
+    state: &RunExecutionState,
+    next_cursor: &Cursor,
+) -> Result<(), String> {
+    let current_seq = params
+        .writer
+        .current_seq()
+        .await
+        .map_err(|e| format!("current_seq: {e}"))?;
+    let mut snapshot = crate::engine::snapshot::EngineSnapshot::new(
+        next_cursor,
+        current_seq.as_u64(),
+        current_seq.as_u64(),
+    );
+    snapshot.applied_graph_revision_seq = state.applied_graph_revision_seq;
+    let blob = serde_json::to_vec(&snapshot).map_err(|e| format!("snapshot serialize: {e}"))?;
+    params
+        .writer
+        .write_graph_snapshot(current_seq, blob)
+        .await
+        .map_err(|e| format!("write_graph_snapshot: {e}"))
 }
 
 enum StageOutcome {
