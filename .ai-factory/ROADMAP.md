@@ -99,23 +99,22 @@
   - Artifact authoring guide for new role types in `docs/`
   - Validator failure UX: schema-rejected outputs surface a concise diff in Telegram cards so the user sees *what failed*
 
-- [ ] **Roadmap amendments via `surge feature`** — live mutation of an active roadmap or follow-up runs from a completed one (touches `surge-cli`, `surge-orchestrator`, `surge-core`, `surge-persistence`, `surge-notify`)
-  - `surge feature describe <prompt>` opens a chat session with Feature Planner profile to clarify scope before patch generation
-  - Feature Planner produces a `RoadmapPatch`: insertion point (which milestone, which position), new milestone / task items, dependencies, rationale
-  - `RoadmapPatch` is a typed structure in `surge-core` with `schema_version`
-  - HumanGate on patch before apply: approve / edit / reject with redo loop
-  - Approved patch applied to `roadmap.md`: versioned suffix (`vNext`) or commit-based history; original preserved for replay
-  - Approved patch applied to active `flow.toml`: new milestone / task nodes inserted, edges rewired, validation re-run, rollback on validation failure
-  - New `RoadmapUpdated` event in `surge-core` event types (joins `RunStarted`, `StageEntered`, etc.)
-  - Active runner detection: daemon checks if a run is currently executing this roadmap via run-status query
-  - If active and roadmap-flow execution enabled: emit `RoadmapUpdated`; runner picks up new pending work in next outer milestone Loop iteration
-  - If terminal or roadmap-flow disabled: spawn follow-up run from the appended portion only — completed history is never mutated
-  - Idempotency: re-applying the same `RoadmapPatch` is a no-op (content-hash dedup)
-  - Conflict detection: patch referencing a milestone that's already running surfaces a clear conflict to user with options (defer to next milestone, abort current, follow-up run)
-  - Telegram surface: notification card on patch approval, runner pickup, or follow-up run creation
-  - CLI mirrors: `surge feature list` (pending patches), `surge feature show <id>`, `surge feature reject <id>`
-  - Integration tests: amendment during running roadmap, amendment after terminal roadmap, malformed patch rejection, conflicting patch on running milestone
-  - Documentation: amendment lifecycle diagram in `docs/workflow.md`-aligned format
+- [x] **Roadmap amendments via `surge feature`** — live mutation of an active roadmap or follow-up runs from a completed one (touches `surge-cli`, `surge-orchestrator`, `surge-core`, `surge-persistence`, `surge-notify`)
+  - `surge feature describe <prompt>` runs the Feature Planner profile against a project or run roadmap target and stores a normalized `roadmap-patch.toml`
+  - Feature Planner produces a typed `RoadmapPatch`: insertion point, new milestone/task items, dependencies, rationale, conflicts, and lifecycle status
+  - `RoadmapPatch` is a typed structure in `surge-core` with `schema_version`, validation, content hashing, and pure apply semantics
+  - Patch approval loop records approve / edit / reject decisions with optional conflict choices and an edit-loop cap
+  - Approved typed project-roadmap patches apply to the selected roadmap artifact/file and preserve replay through content-addressed artifacts and events
+  - Approved active-flow patches can produce graph revisions with new milestone/task nodes, rewired edges, validation, and rollback-on-failure semantics
+  - `RoadmapPatchDrafted`, `RoadmapPatchApprovalRequested`, `RoadmapPatchApprovalDecided`, `RoadmapPatchApplied`, `RoadmapUpdated`, and `GraphRevisionAccepted` events live in `surge-core`
+  - Target resolver detects project, active-run, deferred, and terminal-run amendment points from registry/run status and artifact views
+  - Active runners observe accepted graph revisions at safe boundaries; terminal or follow-up-only targets create follow-up run requests from appended work
+  - Idempotency: registry-level content-hash dedup keeps duplicate `RoadmapPatch` rows stable
+  - Conflict detection: running/completed roadmap conflicts surface stable codes and operator choices: defer to next milestone, abort current run, create follow-up run, or reject patch
+  - Notification payloads cover patch approval, apply, runner pickup, follow-up run creation, conflicts, and rejection; Telegram can render richer cards from the same schema later
+  - CLI mirrors: `surge feature list`, `surge feature show <id>`, `surge feature reject <id>`, plus `--conflict-choice` on describe/reject
+  - Regression tests cover malformed patch rejection, duplicate idempotency, running conflicts, follow-up request creation, CLI mirrors, replay/snapshot views, and notification rendering
+  - Documentation: amendment lifecycle and command reference live in `docs/workflow.md`, `docs/cli.md`, and `docs/conventions/roadmap.md`
 
 - [ ] **Legacy pipeline retirement** — remove `surge-spec` crate and the parallel-execution path in `surge-orchestrator` (touches `surge-spec`, `surge-orchestrator`, `surge-cli`, workspace root)
   - **Parity checklist** completed before any deletion: every behavior of the legacy pipeline has a verified equivalent in the graph executor
@@ -266,3 +265,4 @@
 | Bootstrap & adaptive flow generation | 2026-05-09 |
 | Project initialization & stable context | 2026-05-10 |
 | Artifact format & convention library | 2026-05-11 |
+| Roadmap amendments via `surge feature` | 2026-05-11 |

@@ -53,8 +53,8 @@ Full setup, agent configuration, and daemon usage are in [`docs/getting-started.
 | Guide | Description |
 |---|---|
 | [Getting Started](docs/getting-started.md) | Requirements, build, run examples, agent configuration, smoke tests |
-| [CLI](docs/cli.md) | Command surface, two execution paths, current → target mapping |
-| [Workflow](docs/workflow.md) | AFK workflow, flow model, intake sources, run lifecycle |
+| [CLI](docs/cli.md) | Command surface, execution paths, project context, roadmap amendments |
+| [Workflow](docs/workflow.md) | AFK workflow, flow model, intake sources, roadmap amendments, run lifecycle |
 | [Architecture](docs/ARCHITECTURE.md) | Positioning, principles, engine, ACP bridge, storage, crate layout |
 | [Hooks](docs/hooks.md) | `pre_tool_use` / `post_tool_use` / `on_outcome` / `on_error` lifecycle, matcher, failure modes |
 | [Archetypes](docs/archetypes.md) | Bundled `flow.toml` archetypes with mermaid diagrams |

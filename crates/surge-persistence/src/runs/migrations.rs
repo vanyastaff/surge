@@ -37,13 +37,23 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0005-inbox-queues",
         include_str!("migrations/registry/0005_inbox_queues.sql"),
     ),
+    (
+        "registry-0006-roadmap-patch-index",
+        include_str!("migrations/registry/0006_roadmap_patch_index.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
-pub const PER_RUN_MIGRATIONS: MigrationSet = &[(
-    "per-run-0001-initial",
-    include_str!("migrations/per_run/0001_initial.sql"),
-)];
+pub const PER_RUN_MIGRATIONS: MigrationSet = &[
+    (
+        "per-run-0001-initial",
+        include_str!("migrations/per_run/0001_initial.sql"),
+    ),
+    (
+        "per-run-0002-roadmap-patches",
+        include_str!("migrations/per_run/0002_roadmap_patches.sql"),
+    ),
+];
 
 /// Errors from the migration runner.
 #[derive(Debug, thiserror::Error)]
@@ -154,6 +164,16 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
 
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table' AND name='roadmap_patch_index'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
         let applied: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations", [], |r| r.get(0))
             .unwrap();
@@ -174,6 +194,7 @@ mod tests {
             "pending_approvals",
             "cost_summary",
             "graph_snapshots",
+            "roadmap_patches",
         ] {
             let n: i64 = conn
                 .query_row(

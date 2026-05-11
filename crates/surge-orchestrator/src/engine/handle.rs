@@ -42,7 +42,7 @@ pub enum EngineRunEvent {
         /// Monotonically-increasing sequence number assigned to this event.
         seq: u64,
         /// The persisted event payload.
-        payload: EventPayload,
+        payload: Box<EventPayload>,
     },
     /// The run reached a terminal state.
     ///

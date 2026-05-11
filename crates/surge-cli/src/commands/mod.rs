@@ -5,6 +5,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod daemon;
 pub mod engine;
+pub mod feature;
 pub mod format;
 pub mod git;
 pub mod init;

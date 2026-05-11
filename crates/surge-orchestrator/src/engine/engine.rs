@@ -7,12 +7,14 @@ use crate::engine::error::EngineError;
 use crate::engine::handle::RunHandle;
 use crate::engine::tools::ToolDispatcher;
 use crate::profile_loader::ProfileRegistry;
+use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
 /// Central orchestration engine. Drives one or more concurrent runs, each
@@ -47,6 +49,8 @@ pub(crate) struct ActiveRun {
     >,
     pub tool_resolutions:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub roadmap_amendments:
+        tokio::sync::mpsc::Sender<crate::engine::run_task::RoadmapAmendmentCommand>,
 }
 
 impl Engine {
@@ -161,7 +165,6 @@ impl Engine {
     }
 
     /// Start a new run.
-    #[allow(clippy::too_many_lines)]
     pub async fn start_run(
         &self,
         run_id: RunId,
@@ -172,12 +175,6 @@ impl Engine {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
         use crate::engine::validate::validate_for_m6;
-        use surge_core::approvals::ApprovalPolicy;
-        use surge_core::content_hash::ContentHash;
-        use surge_core::run_event::{
-            EventPayload, RunConfig as CoreRunConfig, VersionedEventPayload,
-        };
-        use surge_core::sandbox::SandboxMode;
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
@@ -199,102 +196,9 @@ impl Engine {
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
-        // Emit RunStarted + PipelineMaterialized atomically.
-        let core_run_config = CoreRunConfig {
-            sandbox_default: SandboxMode::WorkspaceWrite,
-            approval_default: ApprovalPolicy::OnRequest,
-            auto_pr: false,
-            mcp_servers: run_config.mcp_servers.clone(),
-        };
-        let graph_bytes = serde_json::to_vec(&graph)
-            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
-        let graph_hash = ContentHash::compute(&graph_bytes);
-
-        let mut events = vec![
-            VersionedEventPayload::new(EventPayload::RunStarted {
-                pipeline_template: None,
-                project_path: worktree_path.clone(),
-                initial_prompt: run_config.initial_prompt.clone(),
-                config: core_run_config,
-            }),
-            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
-                graph: Box::new(graph.clone()),
-                graph_hash,
-            }),
-        ];
-
-        if let Some(parent_run_id) = run_config.bootstrap_parent {
-            let inherited = self
-                .bootstrap_parent_artifact_events(&artifact_store, run_id, parent_run_id)
-                .await?;
-            events.extend(inherited);
-        }
-
-        if let Some(seed) = &run_config.project_context {
-            let project_context_artifact = artifact_store
-                .put(
-                    run_id,
-                    PROJECT_CONTEXT_ARTIFACT_NAME,
-                    seed.content.as_bytes(),
-                )
-                .await
-                .map_err(|e| EngineError::Storage(e.to_string()))?;
-            let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
-                .map_err(|e| EngineError::Internal(format!("project context producer key: {e}")))?;
-            tracing::debug!(
-                target: "engine::startup",
-                run_id = %run_id,
-                path = %seed.path.display(),
-                bytes = seed.content.len(),
-                hash = %project_context_artifact.hash,
-                "seeded project_context artifact"
-            );
-            tracing::info!(
-                target: "engine::startup",
-                run_id = %run_id,
-                path = %seed.path.display(),
-                hash = %project_context_artifact.hash,
-                "project context captured for run"
-            );
-            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: producer,
-                artifact: project_context_artifact.hash,
-                path: project_context_artifact.path,
-                name: PROJECT_CONTEXT_ARTIFACT_NAME.to_string(),
-            }));
-        }
-
-        // Surface the operator's free-form prompt as a first-class artifact so
-        // bootstrap (or any) agent stage can pull it via the standard binding
-        // path through `ArtifactSource::InitialPrompt` (and equivalently via
-        // `ArtifactSource::RunArtifact { name: "user_prompt" }`). The artifact
-        // body is stored at `<worktree>/.surge/user_prompt.txt`; the
-        // `ArtifactProduced` event records its content hash, relative path,
-        // and a synthetic producer node so the existing fold rule populates
-        // `RunMemory.artifacts["user_prompt"]` deterministically.
-        if !run_config.initial_prompt.is_empty() {
-            let prompt_artifact = synthesise_initial_prompt_artifact(
-                &worktree_path,
-                run_config.initial_prompt.as_bytes(),
-            )
-            .await
-            .map_err(|e| {
-                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
-            })?;
-            tracing::debug!(
-                target: "engine::startup",
-                run_id = %run_id,
-                prompt_len = run_config.initial_prompt.len(),
-                "seeded user_prompt artifact",
-            );
-            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
-                node: prompt_artifact.producer,
-                artifact: prompt_artifact.hash,
-                path: prompt_artifact.relative_path,
-                name: INITIAL_PROMPT_ARTIFACT_NAME.to_string(),
-            }));
-        }
-
+        let events = self
+            .build_startup_events(&artifact_store, run_id, &graph, &worktree_path, &run_config)
+            .await?;
         writer
             .append_events(events)
             .await
@@ -321,10 +225,12 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
+            roadmap_amendments: roadmap_amendment_tx,
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -344,8 +250,10 @@ impl Engine {
             resume_memory: None,
             resume_frames: None,
             resume_root_traversal_counts: None,
+            resume_applied_graph_revision_seq: None,
             gate_resolutions,
             tool_resolutions,
+            roadmap_amendments: roadmap_amendment_rx,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
@@ -363,6 +271,84 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    async fn build_startup_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        run_id: RunId,
+        graph: &Graph,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        let mut events = Self::startup_run_events(graph, worktree_path, run_config)?;
+        events.extend(
+            self.collect_startup_artifact_events(artifact_store, run_id, worktree_path, run_config)
+                .await?,
+        );
+        Ok(events)
+    }
+
+    fn startup_run_events(
+        graph: &Graph,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        use surge_core::approvals::ApprovalPolicy;
+        use surge_core::content_hash::ContentHash;
+        use surge_core::run_event::RunConfig as CoreRunConfig;
+        use surge_core::sandbox::SandboxMode;
+
+        let graph_bytes = serde_json::to_vec(graph)
+            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
+        let graph_hash = ContentHash::compute(&graph_bytes);
+        let core_run_config = CoreRunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: run_config.mcp_servers.clone(),
+        };
+
+        Ok(vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree_path.to_path_buf(),
+                initial_prompt: run_config.initial_prompt.clone(),
+                config: core_run_config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph.clone()),
+                graph_hash,
+            }),
+        ])
+    }
+
+    async fn collect_startup_artifact_events(
+        &self,
+        artifact_store: &surge_persistence::artifacts::ArtifactStore,
+        run_id: RunId,
+        worktree_path: &Path,
+        run_config: &EngineRunConfig,
+    ) -> Result<Vec<VersionedEventPayload>, EngineError> {
+        let mut events = Vec::new();
+        if let Some(parent_run_id) = run_config.bootstrap_parent {
+            events.extend(
+                self.bootstrap_parent_artifact_events(artifact_store, run_id, parent_run_id)
+                    .await?,
+            );
+        }
+        if let Some(event) =
+            project_context_artifact_event(artifact_store, run_id, run_config).await?
+        {
+            events.push(event);
+        }
+        events.extend(run_seed_artifact_events(run_id, worktree_path, run_config).await?);
+        if let Some(event) =
+            initial_prompt_artifact_event(run_id, worktree_path, run_config).await?
+        {
+            events.push(event);
+        }
+        Ok(events)
     }
 
     async fn bootstrap_parent_artifact_events(
@@ -525,11 +511,13 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
 
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
+            roadmap_amendments: roadmap_amendment_tx,
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -571,8 +559,10 @@ impl Engine {
             resume_memory: Some(replayed.memory),
             resume_frames: None,
             resume_root_traversal_counts: None,
+            resume_applied_graph_revision_seq: Some(replayed.applied_graph_revision_seq),
             gate_resolutions,
             tool_resolutions,
+            roadmap_amendments: roadmap_amendment_rx,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
@@ -590,6 +580,47 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    /// Submit an approved roadmap amendment to an active run.
+    pub async fn submit_roadmap_amendment(
+        &self,
+        run_id: RunId,
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_result: RoadmapPatchApplyResult,
+    ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
+        if let RoadmapPatchTarget::RunRoadmap {
+            run_id: target_run_id,
+            ..
+        } = target
+            && target_run_id != run_id
+        {
+            return Err(EngineError::Internal(format!(
+                "roadmap amendment target run {target_run_id} does not match active run {run_id}"
+            )));
+        }
+
+        let sender = {
+            let runs = self.runs.read().await;
+            runs.get(&run_id)
+                .map(|active| active.roadmap_amendments.clone())
+                .ok_or(EngineError::RunNotFound(run_id))?
+        };
+        let (reply, result) = tokio::sync::oneshot::channel();
+        sender
+            .send(crate::engine::run_task::RoadmapAmendmentCommand {
+                patch_id,
+                target,
+                patch_result,
+                reply,
+            })
+            .await
+            .map_err(|_| EngineError::Internal("roadmap amendment receiver dropped".into()))?;
+        result
+            .await
+            .map_err(|_| EngineError::Internal("roadmap amendment reply dropped".into()))?
+            .map_err(|error| EngineError::Internal(format!("active roadmap amendment: {error}")))
     }
 
     /// Provide answer to a paused run waiting on human input.
@@ -695,6 +726,120 @@ fn _engine_config_used(e: &Engine) {
     let _ = &e.config;
 }
 
+async fn project_context_artifact_event(
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    let Some(seed) = &run_config.project_context else {
+        return Ok(None);
+    };
+    let project_context_artifact = artifact_store
+        .put(
+            run_id,
+            PROJECT_CONTEXT_ARTIFACT_NAME,
+            seed.content.as_bytes(),
+        )
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+        .map_err(|e| EngineError::Internal(format!("project context producer key: {e}")))?;
+    tracing::debug!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        bytes = seed.content.len(),
+        hash = %project_context_artifact.hash,
+        "seeded project_context artifact"
+    );
+    tracing::info!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        hash = %project_context_artifact.hash,
+        "project context captured for run"
+    );
+    Ok(Some(artifact_produced_event(
+        producer,
+        project_context_artifact.hash,
+        project_context_artifact.path,
+        PROJECT_CONTEXT_ARTIFACT_NAME,
+    )))
+}
+
+async fn run_seed_artifact_events(
+    run_id: RunId,
+    worktree_path: &Path,
+    run_config: &EngineRunConfig,
+) -> Result<Vec<VersionedEventPayload>, EngineError> {
+    let mut events = Vec::with_capacity(run_config.seed_artifacts.len());
+    for seed in &run_config.seed_artifacts {
+        let seeded_artifact = synthesise_run_seed_artifact(worktree_path, seed)
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("seed artifact {} synthesis failed: {e}", seed.name))
+            })?;
+        tracing::debug!(
+            target: "engine::startup",
+            run_id = %run_id,
+            name = seed.name.as_str(),
+            path = %seed.relative_path.display(),
+            bytes = seed.content.len(),
+            hash = %seeded_artifact.hash,
+            "seeded run artifact"
+        );
+        events.push(artifact_produced_event(
+            seeded_artifact.producer,
+            seeded_artifact.hash,
+            seeded_artifact.relative_path,
+            &seed.name,
+        ));
+    }
+    Ok(events)
+}
+
+async fn initial_prompt_artifact_event(
+    run_id: RunId,
+    worktree_path: &Path,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    if run_config.initial_prompt.is_empty() {
+        return Ok(None);
+    }
+    let prompt_artifact =
+        synthesise_initial_prompt_artifact(worktree_path, run_config.initial_prompt.as_bytes())
+            .await
+            .map_err(|e| {
+                EngineError::Internal(format!("initial-prompt artifact synthesis failed: {e}"))
+            })?;
+    tracing::debug!(
+        target: "engine::startup",
+        run_id = %run_id,
+        prompt_len = run_config.initial_prompt.len(),
+        "seeded user_prompt artifact",
+    );
+    Ok(Some(artifact_produced_event(
+        prompt_artifact.producer,
+        prompt_artifact.hash,
+        prompt_artifact.relative_path,
+        INITIAL_PROMPT_ARTIFACT_NAME,
+    )))
+}
+
+fn artifact_produced_event(
+    node: surge_core::keys::NodeKey,
+    artifact: surge_core::content_hash::ContentHash,
+    path: PathBuf,
+    name: &str,
+) -> VersionedEventPayload {
+    VersionedEventPayload::new(EventPayload::ArtifactProduced {
+        node,
+        artifact,
+        path,
+        name: name.to_owned(),
+    })
+}
+
 /// Canonical artifact name under which the run's free-form initial prompt is
 /// surfaced to agent stages. Bootstrap profiles bind to this name (either via
 /// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
@@ -753,5 +898,41 @@ pub(crate) async fn synthesise_initial_prompt_artifact(
         hash,
         relative_path,
         producer,
+    })
+}
+
+pub(crate) async fn synthesise_run_seed_artifact(
+    worktree_path: &std::path::Path,
+    seed: &crate::engine::config::RunSeedArtifact,
+) -> std::io::Result<InitialPromptArtifact> {
+    use std::path::Component;
+
+    if seed.relative_path.is_absolute()
+        || seed.relative_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        })
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "seed artifact path must stay inside the worktree: {}",
+                seed.relative_path.display()
+            ),
+        ));
+    }
+
+    let absolute_path = worktree_path.join(&seed.relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&absolute_path, seed.content.as_bytes()).await?;
+    let hash = surge_core::ContentHash::compute(seed.content.as_bytes());
+    Ok(InitialPromptArtifact {
+        hash,
+        relative_path: seed.relative_path.clone(),
+        producer: seed.producer.clone(),
     })
 }

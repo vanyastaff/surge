@@ -230,8 +230,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
     // Build the effective sandbox config (needed both for session creation and
     // for the MCP sandbox heuristic below).
-    let sandbox_cfg: surge_core::sandbox::SandboxConfig =
-        p.agent_config.sandbox_override.clone().unwrap_or_default();
+    let sandbox_cfg: surge_core::sandbox::SandboxConfig = p
+        .agent_config
+        .sandbox_override
+        .clone()
+        .or_else(|| {
+            resolved_profile
+                .as_ref()
+                .map(|resolved| resolved.profile.sandbox.clone())
+        })
+        .unwrap_or_default();
 
     // Build the session-scoped tool dispatcher. When an MCP registry is
     // configured, wrap the engine dispatcher with RoutingToolDispatcher so the

@@ -223,7 +223,7 @@ async fn subscribe_to_queued_run_streams_after_admission() {
         run_id: run1,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req1)
         .await
@@ -246,7 +246,7 @@ async fn subscribe_to_queued_run_streams_after_admission() {
         run_id: run2,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req2)
         .await
@@ -301,17 +301,18 @@ async fn subscribe_to_queued_run_streams_after_admission() {
         )
         .await;
         match next_frame {
-            Ok(Ok(Some(InboundServerFrame::Event(DaemonEvent::PerRun { run_id, event }))))
-                if run_id == run2 =>
-            {
-                saw_run2_event = true;
-                // We expect the Terminal event from the
-                // delayed-finish path of the stub for run 2.
-                assert!(
-                    matches!(event, EngineRunEvent::Terminal { .. }),
-                    "first per-run event for run2 should be Terminal; got {event:?}"
-                );
-                break;
+            Ok(Ok(Some(InboundServerFrame::Event(frame)))) => match *frame {
+                DaemonEvent::PerRun { run_id, event } if run_id == run2 => {
+                    saw_run2_event = true;
+                    // We expect the Terminal event from the
+                    // delayed-finish path of the stub for run 2.
+                    assert!(
+                        matches!(*event, EngineRunEvent::Terminal { .. }),
+                        "first per-run event for run2 should be Terminal; got {event:?}"
+                    );
+                    break;
+                },
+                _ => continue,
             },
             Ok(Ok(Some(_))) => continue, // unrelated frame; keep reading
             Ok(Ok(None)) => break,       // EOF — daemon closed
@@ -387,7 +388,7 @@ async fn subscribe_to_queued_then_stop_does_not_leak_waiter() {
         run_id: run1,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req1)
         .await
@@ -409,7 +410,7 @@ async fn subscribe_to_queued_then_stop_does_not_leak_waiter() {
         run_id: run2,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req2)
         .await
@@ -486,10 +487,11 @@ async fn subscribe_to_queued_then_stop_does_not_leak_waiter() {
     )
     .await;
     match stray {
-        Ok(Ok(Some(InboundServerFrame::Event(DaemonEvent::PerRun { run_id, event })))) => {
-            if run_id == run2 {
+        Ok(Ok(Some(InboundServerFrame::Event(frame)))) => match *frame {
+            DaemonEvent::PerRun { run_id, event } if run_id == run2 => {
                 panic!("queued-then-stopped run2 emitted a PerRun frame post-StopRun: {event:?}");
-            }
+            },
+            _ => {},
         },
         Ok(Ok(Some(_))) | Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
             // Timeout (expected) or unrelated frame — both fine.

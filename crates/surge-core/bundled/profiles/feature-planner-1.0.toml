@@ -19,13 +19,17 @@ default_max_tokens = 64000
 agent_id = "claude-code"
 
 [sandbox]
-mode = "read-only"
+mode = "workspace-write"
 
 [[outcomes]]
 id = "patched"
 description = "RoadmapPatch drafted with a clear insertion point and dependencies."
 edge_kind_hint = "forward"
 required_artifacts = ["roadmap-patch.toml"]
+
+[[outcomes.produced_artifacts]]
+path = "roadmap-patch.toml"
+contract = { kind = "roadmap-patch", schema_version = 1 }
 
 [[outcomes]]
 id = "out_of_scope"
@@ -40,19 +44,34 @@ source = { source = "any" }
 name = "roadmap"
 source = { source = "any" }
 
+[[hooks.entries]]
+id = "validate-roadmap-patch"
+trigger = "on_outcome"
+matcher = { outcome = "patched" }
+command = "{surge} artifact validate --kind roadmap-patch roadmap-patch.toml"
+on_failure = "reject"
+timeout_seconds = 30
+
 [prompt]
 system = """\
 You are the Feature Planner. Read `{{request}}` and the current `{{roadmap}}` and produce a
 `roadmap-patch.toml` in the project's RoadmapPatch schema.
 
 Required fields:
-- `insertion_point`: which milestone this attaches to and where (`before`/`after`/`replace`).
-- `items`: the new milestone(s) and/or task(s).
-- `dependencies`: explicit edges from new items to existing milestones, when needed.
+- `schema_version = 1`.
+- `id`: stable patch id, preferably `rpatch-<short-content-name>`.
+- `[target]`: the supplied roadmap target.
+- `[[operations]]`: add milestone, add task, or replace draft-only item operations.
+- Each add operation must include an `insertion` table.
+- `dependencies`: explicit edges from new items to existing milestones or tasks, when needed.
 - `rationale`: why this patch is justified now (1-3 sentences referencing concrete project state).
 
 Rules:
 - A patch always lands as an *append* relative to the current head. Never modify completed work.
 - If the request belongs in a follow-up project rather than the current roadmap, report `out_of_scope`.
 - The patch is content-hashed: re-applying the same patch must be a no-op.
+
+When finished:
+1. Write `roadmap-patch.toml`.
+2. Call `report_stage_outcome` with outcome `patched` and `artifacts_produced = ["roadmap-patch.toml"]`.
 """

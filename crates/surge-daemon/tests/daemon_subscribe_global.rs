@@ -205,7 +205,7 @@ async fn subscribe_global_delivers_run_lifecycle_events() {
         run_id,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req)
         .await
@@ -329,7 +329,7 @@ async fn subscribe_global_is_idempotent_within_a_connection() {
         run_id,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req)
         .await

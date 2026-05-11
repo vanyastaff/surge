@@ -17,6 +17,7 @@ surge spec ...          manage legacy specs
 surge run ...           execute the legacy spec pipeline
 surge bootstrap ...     generate an adaptive flow from a free-form prompt
 surge engine ...        execute flow.toml graphs
+surge feature ...       draft, approve, list, show, or reject roadmap amendments
 surge artifact ...      validate generated artifacts against Surge contracts
 surge daemon ...        manage the long-running local engine host
 surge clean             clean up orphaned worktrees and merged branches
@@ -50,7 +51,7 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 | Describe or refresh project context | `surge project describe`, optionally with `--dry-run`, `--refresh`, `--output <path>`, or `--author-mode <auto\|agent\|deterministic>` | `auto` uses Project Context Author through ACP when its runtime is installed, otherwise falls back to deterministic local context. |
 | Create a focused feature/task run | `surge bootstrap "..."` or `surge engine run --template single-task --watch` | Bootstrap is now available; richer daemon/Telegram approval UX is still target behavior. |
 | Run a full roadmap/flow | `surge bootstrap "..."` or manually create `flow.toml`, then `surge engine run <flow.toml> --watch` | Bootstrap generates roadmap and flow; tracker intake and richer approval channels are still target UX. |
-| Amend an existing roadmap with a new feature | Create another spec with `surge spec create ...` or edit roadmap/flow files manually | No `surge feature` command yet that inserts work into a roadmap and wakes the runner. |
+| Amend an existing roadmap with a new feature | `surge feature describe "..." --project` or `surge feature describe "..." --run <run_id>` | Active-run pickup is stored through amendment events; Telegram rich cards are still target UX. |
 | Run AFK through a daemon | `surge daemon start` and `surge engine run <flow.toml> --daemon --watch` | Daemon exists; the full Telegram approval bot and tracker intake loop are still target UX. |
 | Start from GitHub Issues or Linear | No direct CLI equivalent | GitHub / Linear issue intake should normalize tracker payloads into the same bootstrap path; not a user-facing command yet. |
 
@@ -80,6 +81,23 @@ used by bundled profile `on_outcome` hooks for description, roadmap, and spec
 artifacts. See [Artifact Conventions](conventions/README.md) for every
 canonical path and minimal example.
 
+## Roadmap Amendments
+
+`surge feature` is the current roadmap-amendment surface. It asks the bundled Feature Planner profile for a `roadmap-patch.toml`, stores the draft in the run artifact store, records lifecycle events, and mirrors patch metadata into the registry index for quick lookup.
+
+```text
+surge feature describe "add CSV export" --project
+surge feature describe "add CSV export" --run <run_id> --approval prompt
+surge feature describe "add CSV export" --run <run_id> --approval approve --conflict-choice create-follow-up-run
+surge feature list --status pending-approval
+surge feature show rpatch-...
+surge feature reject rpatch-... --reason "out of scope"
+```
+
+Approval modes are `prompt`, `approve`, `reject`, and `store`. When a patch conflicts with already-running or terminal roadmap history, choose one conflict resolution: `defer-to-next-milestone`, `abort-current-run`, `create-follow-up-run`, or `reject-patch`. The selected choice is persisted in `RoadmapPatchApprovalDecided` and in the registry row so `feature show` can report it later.
+
+For debugging, set `RUST_LOG=feature_cli=debug,roadmap_amendment=debug,roadmap_patch_index=debug`. Conflict detection logs stable conflict codes at WARN level; approval, apply, follow-up, and registry transitions log at INFO.
+
 ## Project Initialization And Context
 
 `surge init --default` is the non-interactive setup path. It writes a complete validated `surge.toml`, chooses the best detected ACP registry agent when possible, and keeps an existing config unchanged. `surge init` without flags enters the wizard and can update onboarding sections in an existing config while preserving unrelated TOML content.
@@ -104,7 +122,6 @@ From the product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), command nam
 
 ```text
 surge task ...          create a focused task run
-surge feature ...       amend roadmap with a new feature
 ```
 
 ## See Also

@@ -11,6 +11,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use surge_core::RunId;
 use tokio::runtime::{Handle, RuntimeFlavor};
 
+use crate::roadmap_patches::RoadmapPatchStore;
 use crate::runs::clock::{Clock, SystemClock};
 use crate::runs::config::{StorageConfig, load_or_default};
 use crate::runs::error::OpenError;
@@ -80,6 +81,11 @@ impl Storage {
     /// Registry database path.
     pub fn registry_db_path(&self) -> PathBuf {
         self.home.join("db").join("registry.sqlite")
+    }
+
+    /// Registry-level roadmap patch metadata store.
+    pub fn roadmap_patch_store(&self) -> RoadmapPatchStore {
+        RoadmapPatchStore::new(self.registry_pool.clone())
     }
 
     /// Acquire a registry-pool connection. Used by inbox subsystems that

@@ -1,6 +1,11 @@
 /target/
 **/*.rs.bk
 
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+
 # Surge runtime
 .surge/
 *.pid

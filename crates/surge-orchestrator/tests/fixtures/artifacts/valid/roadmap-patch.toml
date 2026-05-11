@@ -1,0 +1,22 @@
+schema_version = 1
+id = "rpatch-valid"
+rationale = "Add follow-up work requested after the roadmap was approved."
+status = "drafted"
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+
+[[operations]]
+op = "add_milestone"
+
+[operations.milestone]
+id = "m2"
+title = "Follow-up feature"
+
+[[operations.milestone.tasks]]
+id = "m2-t1"
+title = "Implement the follow-up feature"
+
+[operations.insertion]
+kind = "append_to_roadmap"

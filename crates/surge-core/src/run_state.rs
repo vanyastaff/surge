@@ -5,6 +5,10 @@ use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
+use crate::roadmap_patch::{
+    ActivePickupPolicy, RoadmapPatchApprovalDecision, RoadmapPatchId, RoadmapPatchStatus,
+    RoadmapPatchTarget,
+};
 use crate::run_event::{BootstrapDecision, BootstrapStage, EventPayload, RunEvent};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,8 +38,9 @@ pub enum RunState {
         substate: BootstrapSubstate,
     },
     Pipeline {
-        /// `Arc<Graph>` because the graph is frozen post-PipelineMaterialized.
-        /// Each fold step shares the same graph; cloning is one atomic increment.
+        /// `Arc<Graph>` because each fold step shares the current graph by
+        /// reference-count. `PipelineMaterialized` establishes revision 0;
+        /// `GraphRevisionAccepted` may replace it with an amended graph.
         graph: Arc<Graph>,
         cursor: Cursor,
         memory: RunMemory,
@@ -99,6 +104,36 @@ pub struct RunMemory {
     /// to expose the most recent operator feedback to the re-entered agent
     /// stage. Empty for non-bootstrap runs.
     pub last_edit_feedback_by_stage: BTreeMap<BootstrapStage, String>,
+    /// Latest roadmap patch lifecycle state derived from roadmap amendment
+    /// events. This intentionally stores artifact refs only; full patch
+    /// bodies stay in the artifact store.
+    pub roadmap_patches: BTreeMap<RoadmapPatchId, RoadmapPatchMemory>,
+    /// Latest accepted graph revision metadata, if an active amendment
+    /// changed the executable graph after `PipelineMaterialized`.
+    pub latest_graph_revision: Option<GraphRevisionMemory>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoadmapPatchMemory {
+    pub target: RoadmapPatchTarget,
+    pub status: RoadmapPatchStatus,
+    pub patch_artifact: Option<ContentHash>,
+    pub patch_path: Option<PathBuf>,
+    pub roadmap_artifact: Option<ContentHash>,
+    pub roadmap_path: Option<PathBuf>,
+    pub flow_artifact: Option<ContentHash>,
+    pub flow_path: Option<PathBuf>,
+    pub updated_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphRevisionMemory {
+    pub patch_id: RoadmapPatchId,
+    pub target: RoadmapPatchTarget,
+    pub previous_graph_hash: ContentHash,
+    pub graph_hash: ContentHash,
+    pub active_pickup: ActivePickupPolicy,
+    pub updated_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -437,6 +472,59 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::RoadmapPatchDrafted { .. }
+            | EventPayload::RoadmapPatchApprovalRequested { .. }
+            | EventPayload::RoadmapPatchApprovalDecided { .. }
+            | EventPayload::RoadmapPatchApplied { .. }
+            | EventPayload::RoadmapUpdated { .. },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                memory.apply_event(event);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::GraphRevisionAccepted { graph: revised, .. },
+        ) => {
+            if let RunState::Pipeline {
+                cursor,
+                mut memory,
+                pending_human_input,
+                ..
+            } = state
+            {
+                if !revised.nodes.contains_key(&cursor.node) {
+                    return Err(FoldError::UnknownNode {
+                        node: cursor.node.clone(),
+                    });
+                }
+                memory.apply_event(event);
+                Ok(RunState::Pipeline {
+                    graph: Arc::new(revised.as_ref().clone()),
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
         // Many (state, event) pairs are pass-through — events like ToolCalled,
         // EdgeTraversed, SandboxElevation*, ApprovalRequested/Decided,
         // BootstrapStageStarted etc. are recorded for replay but do not drive
@@ -547,9 +635,185 @@ impl RunMemory {
             } => {
                 *self.node_visits.entry(to.clone()).or_insert(0) += 1;
             },
+            EventPayload::RoadmapPatchDrafted {
+                patch_id,
+                target,
+                patch_artifact,
+                patch_path,
+            } => {
+                self.roadmap_patches.insert(
+                    patch_id.clone(),
+                    RoadmapPatchMemory {
+                        target: target.clone(),
+                        status: RoadmapPatchStatus::Drafted,
+                        patch_artifact: Some(*patch_artifact),
+                        patch_path: Some(patch_path.clone()),
+                        roadmap_artifact: None,
+                        roadmap_path: None,
+                        flow_artifact: None,
+                        flow_path: None,
+                        updated_seq: event.seq,
+                    },
+                );
+            },
+            EventPayload::RoadmapPatchApprovalRequested {
+                patch_id, target, ..
+            } => {
+                self.upsert_roadmap_patch_status(
+                    patch_id,
+                    target,
+                    RoadmapPatchStatus::PendingApproval,
+                    event.seq,
+                );
+            },
+            EventPayload::RoadmapPatchApprovalDecided {
+                patch_id, decision, ..
+            } => {
+                self.update_roadmap_patch_decision(patch_id, *decision, event.seq);
+            },
+            EventPayload::RoadmapPatchApplied {
+                patch_id,
+                target,
+                amended_roadmap_artifact,
+                amended_roadmap_path,
+                amended_flow_artifact,
+                amended_flow_path,
+            } => {
+                self.upsert_roadmap_patch_artifacts(
+                    patch_id,
+                    target,
+                    RoadmapPatchArtifactUpdate {
+                        roadmap_artifact: *amended_roadmap_artifact,
+                        roadmap_path: amended_roadmap_path.clone(),
+                        flow_artifact: *amended_flow_artifact,
+                        flow_path: amended_flow_path.clone(),
+                        seq: event.seq,
+                    },
+                );
+            },
+            EventPayload::RoadmapUpdated {
+                patch_id,
+                target,
+                roadmap_artifact,
+                roadmap_path,
+                flow_artifact,
+                flow_path,
+                ..
+            } => {
+                self.upsert_roadmap_patch_artifacts(
+                    patch_id,
+                    target,
+                    RoadmapPatchArtifactUpdate {
+                        roadmap_artifact: *roadmap_artifact,
+                        roadmap_path: roadmap_path.clone(),
+                        flow_artifact: *flow_artifact,
+                        flow_path: flow_path.clone(),
+                        seq: event.seq,
+                    },
+                );
+            },
+            EventPayload::GraphRevisionAccepted {
+                patch_id,
+                target,
+                previous_graph_hash,
+                graph_hash,
+                active_pickup,
+                ..
+            } => {
+                self.latest_graph_revision = Some(GraphRevisionMemory {
+                    patch_id: patch_id.clone(),
+                    target: target.clone(),
+                    previous_graph_hash: *previous_graph_hash,
+                    graph_hash: *graph_hash,
+                    active_pickup: *active_pickup,
+                    updated_seq: event.seq,
+                });
+            },
             _ => {},
         }
     }
+
+    fn upsert_roadmap_patch_status(
+        &mut self,
+        patch_id: &RoadmapPatchId,
+        target: &RoadmapPatchTarget,
+        status: RoadmapPatchStatus,
+        seq: u64,
+    ) {
+        self.roadmap_patches
+            .entry(patch_id.clone())
+            .and_modify(|record| {
+                record.target = target.clone();
+                record.status = status;
+                record.updated_seq = seq;
+            })
+            .or_insert_with(|| RoadmapPatchMemory {
+                target: target.clone(),
+                status,
+                patch_artifact: None,
+                patch_path: None,
+                roadmap_artifact: None,
+                roadmap_path: None,
+                flow_artifact: None,
+                flow_path: None,
+                updated_seq: seq,
+            });
+    }
+
+    fn update_roadmap_patch_decision(
+        &mut self,
+        patch_id: &RoadmapPatchId,
+        decision: RoadmapPatchApprovalDecision,
+        seq: u64,
+    ) {
+        let status = match decision {
+            RoadmapPatchApprovalDecision::Approve => RoadmapPatchStatus::Approved,
+            RoadmapPatchApprovalDecision::Edit => RoadmapPatchStatus::Drafted,
+            RoadmapPatchApprovalDecision::Reject => RoadmapPatchStatus::Rejected,
+        };
+        if let Some(record) = self.roadmap_patches.get_mut(patch_id) {
+            record.status = status;
+            record.updated_seq = seq;
+        }
+    }
+
+    fn upsert_roadmap_patch_artifacts(
+        &mut self,
+        patch_id: &RoadmapPatchId,
+        target: &RoadmapPatchTarget,
+        update: RoadmapPatchArtifactUpdate,
+    ) {
+        self.roadmap_patches
+            .entry(patch_id.clone())
+            .and_modify(|record| {
+                record.target = target.clone();
+                record.status = RoadmapPatchStatus::Applied;
+                record.roadmap_artifact = Some(update.roadmap_artifact);
+                record.roadmap_path = Some(update.roadmap_path.clone());
+                record.flow_artifact = update.flow_artifact;
+                record.flow_path = update.flow_path.clone();
+                record.updated_seq = update.seq;
+            })
+            .or_insert_with(|| RoadmapPatchMemory {
+                target: target.clone(),
+                status: RoadmapPatchStatus::Applied,
+                patch_artifact: None,
+                patch_path: None,
+                roadmap_artifact: Some(update.roadmap_artifact),
+                roadmap_path: Some(update.roadmap_path),
+                flow_artifact: update.flow_artifact,
+                flow_path: update.flow_path,
+                updated_seq: update.seq,
+            });
+    }
+}
+
+struct RoadmapPatchArtifactUpdate {
+    roadmap_artifact: ContentHash,
+    roadmap_path: PathBuf,
+    flow_artifact: Option<ContentHash>,
+    flow_path: Option<PathBuf>,
+    seq: u64,
 }
 
 #[cfg(test)]
@@ -568,6 +832,45 @@ mod tests {
             seq,
             timestamp: Utc::now(),
             payload,
+        }
+    }
+
+    fn graph_with_terminal(name: &str, start: &str) -> Graph {
+        use crate::graph::{GraphMetadata, SCHEMA_VERSION};
+        use std::collections::BTreeMap;
+
+        let start = NodeKey::try_from(start).unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(start.clone(), terminal_node(start.clone()));
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: name.into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    fn terminal_node(key: NodeKey) -> crate::node::Node {
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+
+        Node {
+            id: key,
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
         }
     }
 
@@ -896,6 +1199,196 @@ mod tests {
                 assert_eq!(cursor.attempt, 1);
             },
             other => panic!("expected Pipeline state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn roadmap_patch_events_update_run_memory_without_mutating_graph() {
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let end = NodeKey::try_from("end").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            end.clone(),
+            Node {
+                id: end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "roadmap-patch-memory".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: end.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+        let patch_id = RoadmapPatchId::new("rpatch-memory").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let roadmap_hash = ContentHash::compute(b"roadmap");
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "test".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"graph"),
+                },
+            ),
+            make_event(
+                3,
+                EventPayload::RoadmapPatchDrafted {
+                    patch_id: patch_id.clone(),
+                    target: target.clone(),
+                    patch_artifact: ContentHash::compute(b"patch"),
+                    patch_path: PathBuf::from("roadmap-patch.toml"),
+                },
+            ),
+            make_event(
+                4,
+                EventPayload::RoadmapPatchApprovalDecided {
+                    patch_id: patch_id.clone(),
+                    decision: RoadmapPatchApprovalDecision::Approve,
+                    channel_used: crate::approvals::ApprovalChannelKind::Desktop,
+                    comment: None,
+                    conflict_choice: None,
+                },
+            ),
+            make_event(
+                5,
+                EventPayload::RoadmapUpdated {
+                    patch_id: patch_id.clone(),
+                    target,
+                    roadmap_artifact: roadmap_hash,
+                    roadmap_path: PathBuf::from("roadmap.toml"),
+                    flow_artifact: None,
+                    flow_path: None,
+                    active_pickup: crate::roadmap_patch::ActivePickupPolicy::Allowed,
+                },
+            ),
+        ];
+
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                ..
+            } => {
+                assert_eq!(cursor.node, end);
+                assert_eq!(graph.start, end, "roadmap events must not mutate graph");
+                let patch = &memory.roadmap_patches[&patch_id];
+                assert_eq!(patch.status, RoadmapPatchStatus::Applied);
+                assert_eq!(patch.roadmap_artifact, Some(roadmap_hash));
+                assert_eq!(patch.updated_seq, 5);
+            },
+            other => panic!("expected Pipeline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_revision_event_updates_pipeline_graph_and_revision_memory() {
+        let base_graph = graph_with_terminal("base", "end");
+        let mut amended_graph = graph_with_terminal("amended", "amend_001");
+        let old_cursor_node = NodeKey::try_from("end").unwrap();
+        amended_graph.nodes.insert(
+            old_cursor_node.clone(),
+            terminal_node(old_cursor_node.clone()),
+        );
+        let patch_id = RoadmapPatchId::new("rpatch-graph").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let previous_graph_hash = ContentHash::compute(b"base-flow");
+        let graph_hash = ContentHash::compute(b"amended-flow");
+
+        let events = vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "test".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(base_graph),
+                    graph_hash: previous_graph_hash,
+                },
+            ),
+            make_event(
+                3,
+                EventPayload::GraphRevisionAccepted {
+                    patch_id: patch_id.clone(),
+                    target: target.clone(),
+                    previous_graph_hash,
+                    graph: Box::new(amended_graph),
+                    graph_hash,
+                    active_pickup: ActivePickupPolicy::Allowed,
+                },
+            ),
+        ];
+
+        let state = fold(&events).unwrap();
+        match state {
+            RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                ..
+            } => {
+                assert_eq!(graph.start, NodeKey::try_from("amend_001").unwrap());
+                assert_eq!(cursor.node, old_cursor_node);
+                let revision = memory
+                    .latest_graph_revision
+                    .expect("graph revision metadata recorded");
+                assert_eq!(revision.patch_id, patch_id);
+                assert_eq!(revision.target, target);
+                assert_eq!(revision.previous_graph_hash, previous_graph_hash);
+                assert_eq!(revision.graph_hash, graph_hash);
+                assert_eq!(revision.updated_seq, 3);
+            },
+            other => panic!("expected Pipeline, got {other:?}"),
         }
     }
 

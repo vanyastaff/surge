@@ -15,6 +15,7 @@ use crate::engine::ipc::{
     DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, InboundServerFrame,
     RequestId, read_inbound_server_frame, write_frame,
 };
+use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use async_trait::async_trait;
 use interprocess::local_socket::tokio::prelude::*;
 use std::collections::HashMap;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, broadcast, oneshot};
 
@@ -83,9 +85,10 @@ impl DaemonClient {
                             let _ = tx.send(resp);
                         }
                     },
-                    Ok(Some(InboundServerFrame::Event(ev))) => match ev {
+                    Ok(Some(InboundServerFrame::Event(ev))) => match *ev {
                         DaemonEvent::PerRun { run_id, event } => {
-                            let is_terminal = matches!(event, EngineRunEvent::Terminal { .. });
+                            let event = *event;
+                            let is_terminal = matches!(&event, EngineRunEvent::Terminal { .. });
                             if is_terminal {
                                 if let EngineRunEvent::Terminal { outcome } = &event {
                                     if let Some(tx) =
@@ -229,7 +232,7 @@ impl EngineFacade for DaemonEngineFacade {
                 run_id,
                 graph: Box::new(graph),
                 worktree_path,
-                run_config,
+                run_config: Box::new(run_config),
             })
             .await?;
         match resp {
@@ -362,6 +365,30 @@ impl EngineFacade for DaemonEngineFacade {
             .await?
         {
             DaemonResponse::StopRunOk { .. } => Ok(()),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn submit_roadmap_amendment(
+        &self,
+        run_id: RunId,
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_result: RoadmapPatchApplyResult,
+    ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::SubmitRoadmapAmendment {
+                request_id,
+                run_id,
+                patch_id,
+                target,
+                patch_result: Box::new(patch_result),
+            })
+            .await?
+        {
+            DaemonResponse::SubmitRoadmapAmendmentOk { outcome, .. } => Ok(*outcome),
             DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
             other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
         }

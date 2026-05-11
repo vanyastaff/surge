@@ -7,12 +7,15 @@ use std::str::FromStr;
 
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
-use surge_core::{ContentHash, NodeKey};
+use rusqlite::{Row, params};
+use serde::de::DeserializeOwned;
+use surge_core::{ContentHash, NodeKey, RoadmapPatchId};
 
 use crate::runs::error::StorageError;
 use crate::runs::seq::EventSeq;
-use crate::runs::types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
+use crate::runs::types::{
+    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution,
+};
 
 /// Read all rows of the `stage_executions` view ordered by `started_seq`.
 pub fn stage_executions(
@@ -132,6 +135,45 @@ pub fn cost_summary(
     Ok(summary)
 }
 
+/// Read all roadmap patch lifecycle rows ordered by latest update.
+pub fn roadmap_patches(
+    conn: &PooledConnection<SqliteConnectionManager>,
+) -> Result<Vec<RoadmapPatchRecord>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT patch_id, target_json, status, patch_artifact, patch_path,
+                summary_hash, decision, decision_comment, conflict_choice,
+                amended_roadmap_artifact, amended_roadmap_path,
+                amended_flow_artifact, amended_flow_path,
+                roadmap_artifact, roadmap_path, flow_artifact, flow_path,
+                active_pickup, created_seq, updated_seq, created_at, updated_at
+         FROM roadmap_patches ORDER BY updated_seq DESC, patch_id",
+    )?;
+    let iter = stmt.query_map([], row_to_roadmap_patch)?;
+    iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Read one roadmap patch lifecycle row by ID.
+pub fn roadmap_patch(
+    conn: &PooledConnection<SqliteConnectionManager>,
+    patch_id: &RoadmapPatchId,
+) -> Result<Option<RoadmapPatchRecord>, StorageError> {
+    match conn.query_row(
+        "SELECT patch_id, target_json, status, patch_artifact, patch_path,
+                summary_hash, decision, decision_comment, conflict_choice,
+                amended_roadmap_artifact, amended_roadmap_path,
+                amended_flow_artifact, amended_flow_path,
+                roadmap_artifact, roadmap_path, flow_artifact, flow_path,
+                active_pickup, created_seq, updated_seq, created_at, updated_at
+         FROM roadmap_patches WHERE patch_id = ?",
+        params![patch_id.as_str()],
+        row_to_roadmap_patch,
+    ) {
+        Ok(record) => Ok(Some(record)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// List the seqs of all written graph snapshots.
 pub fn list_snapshots(
     conn: &PooledConnection<SqliteConnectionManager>,
@@ -139,6 +181,97 @@ pub fn list_snapshots(
     let mut stmt = conn.prepare("SELECT at_seq FROM graph_snapshots ORDER BY at_seq")?;
     let iter = stmt.query_map([], |row| Ok(EventSeq(row.get::<_, i64>(0)? as u64)))?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+fn row_to_roadmap_patch(row: &Row<'_>) -> rusqlite::Result<RoadmapPatchRecord> {
+    let patch_id = parse_patch_id(row.get(0)?, 0)?;
+    let target = parse_json(row.get(1)?, 1)?;
+    let status = parse_json_string(row.get(2)?, 2)?;
+
+    Ok(RoadmapPatchRecord {
+        patch_id,
+        target,
+        status,
+        patch_artifact: parse_optional_hash(row.get(3)?, 3)?,
+        patch_path: optional_path(row.get(4)?),
+        summary_hash: parse_optional_hash(row.get(5)?, 5)?,
+        decision: parse_optional_json_string(row.get(6)?, 6)?,
+        decision_comment: row.get(7)?,
+        conflict_choice: parse_optional_json_string(row.get(8)?, 8)?,
+        amended_roadmap_artifact: parse_optional_hash(row.get(9)?, 9)?,
+        amended_roadmap_path: optional_path(row.get(10)?),
+        amended_flow_artifact: parse_optional_hash(row.get(11)?, 11)?,
+        amended_flow_path: optional_path(row.get(12)?),
+        roadmap_artifact: parse_optional_hash(row.get(13)?, 13)?,
+        roadmap_path: optional_path(row.get(14)?),
+        flow_artifact: parse_optional_hash(row.get(15)?, 15)?,
+        flow_path: optional_path(row.get(16)?),
+        active_pickup: parse_optional_json_string(row.get(17)?, 17)?,
+        created_seq: EventSeq(row.get::<_, i64>(18)? as u64),
+        updated_seq: EventSeq(row.get::<_, i64>(19)? as u64),
+        created_at_ms: row.get(20)?,
+        updated_at_ms: row.get(21)?,
+    })
+}
+
+fn parse_patch_id(value: String, column: usize) -> rusqlite::Result<RoadmapPatchId> {
+    RoadmapPatchId::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+fn parse_json<T: DeserializeOwned>(value: String, column: usize) -> rusqlite::Result<T> {
+    serde_json::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+fn parse_json_string<T: DeserializeOwned>(value: String, column: usize) -> rusqlite::Result<T> {
+    serde_json::from_value(serde_json::Value::String(value)).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+fn parse_optional_json_string<T: DeserializeOwned>(
+    value: Option<String>,
+    column: usize,
+) -> rusqlite::Result<Option<T>> {
+    value
+        .map(|inner| parse_json_string(inner, column))
+        .transpose()
+}
+
+fn parse_optional_hash(
+    value: Option<String>,
+    column: usize,
+) -> rusqlite::Result<Option<ContentHash>> {
+    value
+        .map(|inner| {
+            ContentHash::from_str(&inner).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    column,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn optional_path(value: Option<String>) -> Option<PathBuf> {
+    value.map(PathBuf::from)
 }
 
 /// Find the most recent snapshot at or before `seq`, returning the seq and raw blob.

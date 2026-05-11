@@ -214,7 +214,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         run_id: run1,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req1)
         .await
@@ -239,7 +239,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         run_id: run2,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req2)
         .await
@@ -269,7 +269,7 @@ async fn third_start_run_at_saturation_returns_queue_full() {
         run_id: run3,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req3)
         .await

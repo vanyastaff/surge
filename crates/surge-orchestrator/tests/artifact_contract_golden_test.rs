@@ -45,6 +45,7 @@ fn valid_fixtures_pass_all_artifact_contracts() {
         (ArtifactKind::Requirements, "valid/requirements.md"),
         (ArtifactKind::Roadmap, "valid/roadmap.toml"),
         (ArtifactKind::Roadmap, "valid/roadmap.md"),
+        (ArtifactKind::RoadmapPatch, "valid/roadmap-patch.toml"),
         (ArtifactKind::Spec, "valid/spec.toml"),
         (ArtifactKind::Spec, "valid/spec.md"),
         (
@@ -91,6 +92,11 @@ fn invalid_fixtures_emit_stable_diagnostic_codes() {
             ArtifactKind::Roadmap,
             "invalid/roadmap.toml",
             &[ArtifactDiagnosticCode::UnsupportedSchemaVersion],
+        ),
+        (
+            ArtifactKind::RoadmapPatch,
+            "invalid/roadmap-patch.toml",
+            &[ArtifactDiagnosticCode::MissingInsertionPoint],
         ),
         (
             ArtifactKind::Spec,

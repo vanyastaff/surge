@@ -39,6 +39,13 @@ pub enum EngineError {
     #[error("run not found: {0}")]
     RunNotFound(RunId),
 
+    /// The selected engine facade does not support the requested operation.
+    #[error("engine operation is not supported by this facade: {operation}")]
+    OperationNotSupported {
+        /// Stable operation name.
+        operation: &'static str,
+    },
+
     /// The daemon has no per-run channel registered for this `RunId`.
     /// Returned by daemon paths like `Subscribe`. This does NOT
     /// distinguish "the run terminated already" from "the run was

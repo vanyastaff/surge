@@ -5,10 +5,12 @@
 
 use crate::engine::config::EngineRunConfig;
 use crate::engine::handle::{EngineRunEvent, RunOutcome, RunSummary};
+use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 
 /// Monotonically-increasing client-side request identifier. Echoed
 /// in the matching [`DaemonResponse`] so the client can multiplex
@@ -76,7 +78,7 @@ pub enum DaemonRequest {
         /// Path to the isolated git worktree the engine will operate in.
         worktree_path: PathBuf,
         /// Per-run engine configuration knobs.
-        run_config: EngineRunConfig,
+        run_config: Box<EngineRunConfig>,
     },
     /// Resume an existing run from its latest snapshot.
     ResumeRun {
@@ -95,6 +97,19 @@ pub enum DaemonRequest {
         run_id: RunId,
         /// Human-readable reason for the cancellation.
         reason: String,
+    },
+    /// Submit an approved roadmap amendment to a live run.
+    SubmitRoadmapAmendment {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run that should accept the amendment.
+        run_id: RunId,
+        /// Patch that caused the amendment.
+        patch_id: RoadmapPatchId,
+        /// Target being amended.
+        target: RoadmapPatchTarget,
+        /// Validated roadmap patch application result.
+        patch_result: Box<RoadmapPatchApplyResult>,
     },
     /// Provide an answer to a paused run waiting on human input.
     ResolveHumanInput {
@@ -159,6 +174,7 @@ impl DaemonRequest {
             | Self::StartRun { request_id, .. }
             | Self::ResumeRun { request_id, .. }
             | Self::StopRun { request_id, .. }
+            | Self::SubmitRoadmapAmendment { request_id, .. }
             | Self::ResolveHumanInput { request_id, .. }
             | Self::ListRuns { request_id }
             | Self::Subscribe { request_id, .. }
@@ -208,6 +224,13 @@ pub enum DaemonResponse {
     StopRunOk {
         /// Echoed `request_id` from the originating [`DaemonRequest::StopRun`].
         request_id: RequestId,
+    },
+    /// [`DaemonRequest::SubmitRoadmapAmendment`] accepted by the active run.
+    SubmitRoadmapAmendmentOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Durable amendment outcome reported by the engine task.
+        outcome: Box<ActiveRunAmendmentOutcome>,
     },
     /// [`DaemonRequest::ResolveHumanInput`] accepted; the run will resume.
     ResolveHumanInputOk {
@@ -268,6 +291,7 @@ impl DaemonResponse {
             | Self::StartRunQueued { request_id, .. }
             | Self::ResumeRunOk { request_id }
             | Self::StopRunOk { request_id }
+            | Self::SubmitRoadmapAmendmentOk { request_id, .. }
             | Self::ResolveHumanInputOk { request_id }
             | Self::ListRunsOk { request_id, .. }
             | Self::SubscribeOk { request_id }
@@ -291,7 +315,7 @@ pub enum DaemonEvent {
         /// Identifier of the run this event belongs to.
         run_id: RunId,
         /// The engine event payload.
-        event: EngineRunEvent,
+        event: Box<EngineRunEvent>,
     },
     /// Daemon-level event delivered to all connected clients.
     Global(GlobalDaemonEvent),
@@ -487,7 +511,7 @@ pub enum InboundServerFrame {
     /// A response to an earlier client request, identified by `request_id`.
     Response(DaemonResponse),
     /// A daemon-pushed notification (no `request_id`).
-    Event(DaemonEvent),
+    Event(Box<DaemonEvent>),
 }
 
 /// Read one server-bound frame and discriminate. Tries
@@ -508,7 +532,7 @@ where
                 return Ok(Some(InboundServerFrame::Response(r)));
             }
             let ev: DaemonEvent = serde_json::from_slice(trimmed)?;
-            Ok(Some(InboundServerFrame::Event(ev)))
+            Ok(Some(InboundServerFrame::Event(Box::new(ev))))
         },
     }
 }

@@ -141,6 +141,7 @@ fn parse(raw: &str, expected_name: &str) -> Profile {
 mod tests {
     use super::*;
     use crate::artifact_contract::ArtifactKind;
+    use crate::sandbox::SandboxMode;
 
     #[test]
     fn all_returns_expected_count() {
@@ -210,6 +211,25 @@ mod tests {
             assert_eq!(declaration.path, path);
             assert_eq!(declaration.contract.schema_version, 1);
         }
+    }
+
+    #[test]
+    fn feature_planner_declares_patch_artifact_and_write_sandbox() {
+        let profile = BundledRegistry::by_name_latest("feature-planner").expect("bundled profile");
+        let patched = profile
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.id.as_ref() == "patched")
+            .expect("patched outcome");
+        let declaration = patched
+            .produced_artifacts
+            .iter()
+            .find(|artifact| artifact.contract.kind == ArtifactKind::RoadmapPatch)
+            .expect("roadmap patch artifact declaration");
+
+        assert_eq!(declaration.path, "roadmap-patch.toml");
+        assert_eq!(declaration.contract.schema_version, 1);
+        assert_eq!(profile.sandbox.mode, SandboxMode::WorkspaceWrite);
     }
 
     #[test]

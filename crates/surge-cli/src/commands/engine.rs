@@ -463,7 +463,7 @@ fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {
             let prefix = format!("[{seq}]")
                 .if_supports_color(Stream::Stderr, |s| s.dimmed())
                 .to_string();
-            match payload {
+            match payload.as_ref() {
                 EventPayload::StageEntered { node, attempt } => {
                     eprintln!(
                         "{prefix} [{}] StageEntered (attempt {})",
@@ -514,7 +514,7 @@ fn print_event(event: &surge_orchestrator::engine::handle::EngineRunEvent) {
 
 /// If `--daemon` is requested but no daemon is running, auto-spawn
 /// one. Idempotent if a daemon is already alive.
-async fn ensure_daemon_running() -> Result<()> {
+pub(crate) async fn ensure_daemon_running() -> Result<()> {
     use surge_daemon::pidfile;
     if let Some(p) = pidfile::read_pid(&pidfile::pid_path()?)? {
         if pidfile::is_alive(p) {

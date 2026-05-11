@@ -26,6 +26,7 @@ pub mod config;
 pub mod event;
 pub mod id;
 pub mod roadmap;
+pub mod roadmap_patch;
 pub mod spec;
 pub mod state;
 
@@ -69,6 +70,15 @@ pub use roadmap::{
     Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapMilestone, RoadmapRisk,
     RoadmapStatus, RoadmapTask, Timeline, TimelineBatch,
 };
+pub use roadmap_patch::{
+    ActivePickupPolicy, InsertionPoint, OperatorConflictChoice, ROADMAP_PATCH_SCHEMA_VERSION,
+    RoadmapItemRef, RoadmapPatch, RoadmapPatchApplyConflict, RoadmapPatchApplyError,
+    RoadmapPatchApplyResult, RoadmapPatchApprovalDecision, RoadmapPatchConflict,
+    RoadmapPatchConflictCode, RoadmapPatchDependency, RoadmapPatchHashError, RoadmapPatchId,
+    RoadmapPatchIdError, RoadmapPatchItem, RoadmapPatchOperation, RoadmapPatchStatus,
+    RoadmapPatchTarget, RoadmapPatchValidationCode, RoadmapPatchValidationIssue,
+    apply_roadmap_patch, conflict_choices_for_code,
+};
 pub use spec::{
     AcceptanceCriteria, Complexity, Spec, SpecArtifact, Subtask, SubtaskExecution, SubtaskState,
 };
@@ -81,6 +91,7 @@ pub use artifact_contract::{
     ArtifactDiagnosticSeverity, ArtifactFormat, ArtifactKind, ArtifactValidationDiagnostic,
     ArtifactValidationError, ArtifactValidationReport, SchemaVersionOwner, all_contracts,
     contract_for, validate_artifact, validate_artifact_path, validate_artifact_text,
+    validate_roadmap_patch_text_with_context,
 };
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;

@@ -72,5 +72,5 @@ pub use run_writer::RunWriter;
 pub use seq::EventSeq;
 pub use storage::{ActiveRunRow, Storage};
 pub use subscribe::SUBSCRIBE_BATCH_MAX;
-pub use types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
+pub use types::{ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution};
 pub use writer::{DEFAULT_CHANNEL_CAPACITY, WriterCommand, WriterConfig};

@@ -288,8 +288,9 @@ async fn dispatch(
             run_id,
             graph,
             worktree_path,
-            mut run_config,
+            run_config,
         } => {
+            let mut run_config = *run_config;
             let config = SurgeConfig::discover_from(&worktree_path).unwrap_or_else(|e| {
                 tracing::debug!(
                     path = %worktree_path.display(),
@@ -597,6 +598,27 @@ async fn dispatch(
                     message: format!("{e}"),
                 }),
             }
+        },
+
+        DaemonRequest::SubmitRoadmapAmendment {
+            request_id,
+            run_id,
+            patch_id,
+            target,
+            patch_result,
+        } => match facade
+            .submit_roadmap_amendment(run_id, patch_id, target, *patch_result)
+            .await
+        {
+            Ok(outcome) => Some(DaemonResponse::SubmitRoadmapAmendmentOk {
+                request_id,
+                outcome: Box::new(outcome),
+            }),
+            Err(e) => Some(DaemonResponse::Error {
+                request_id,
+                code: ErrorCode::EngineError,
+                message: format!("{e}"),
+            }),
         },
 
         DaemonRequest::ResolveHumanInput {
@@ -953,7 +975,10 @@ async fn forward_per_run_to_client(
     loop {
         match rx.recv().await {
             Ok(event) => {
-                let frame = DaemonEvent::PerRun { run_id, event };
+                let frame = DaemonEvent::PerRun {
+                    run_id,
+                    event: Box::new(event),
+                };
                 let mut w = writer.lock().await;
                 if let Err(e) = write_frame(&mut *w, &frame).await {
                     tracing::debug!(
@@ -1084,9 +1109,12 @@ mod tests {
             .expect("lag response frame");
 
         match frame {
-            surge_orchestrator::engine::ipc::InboundServerFrame::Event(DaemonEvent::Global(
-                GlobalDaemonEvent::SubscriberLagged { dropped },
-            )) => assert!(dropped > 0, "lagged event should report dropped count"),
+            surge_orchestrator::engine::ipc::InboundServerFrame::Event(event) => match *event {
+                DaemonEvent::Global(GlobalDaemonEvent::SubscriberLagged { dropped }) => {
+                    assert!(dropped > 0, "lagged event should report dropped count");
+                },
+                other => panic!("expected SubscriberLagged global event, got {other:?}"),
+            },
             other => panic!("expected SubscriberLagged global event, got {other:?}"),
         }
     }

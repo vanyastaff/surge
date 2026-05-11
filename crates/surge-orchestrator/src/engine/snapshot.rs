@@ -7,6 +7,10 @@ use surge_core::run_state::Cursor;
 
 /// Opaque blob persisted at every stage boundary so a crashed run can be
 /// resumed without replaying the entire event log.
+///
+/// The executable graph is intentionally not stored here. Replay reconstructs
+/// it from `PipelineMaterialized` and any later `GraphRevisionAccepted` events,
+/// so snapshots stay small and graph history remains append-only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EngineSnapshot {
     /// Layout version; bump on any breaking schema change.
@@ -24,6 +28,10 @@ pub struct EngineSnapshot {
     pub at_seq: u64,
     /// Sequence number of the last completed stage boundary.
     pub stage_boundary_seq: u64,
+    /// Latest `GraphRevisionAccepted` seq that had actually been applied to
+    /// the active graph when this snapshot was written.
+    #[serde(default)]
+    pub applied_graph_revision_seq: u64,
     /// Non-`None` when the run was paused waiting for human input.
     pub pending_human_input: Option<PendingHumanInputSnapshot>,
 }
@@ -385,6 +393,7 @@ impl EngineSnapshot {
             root_traversal_counts: HashMap::new(),
             at_seq,
             stage_boundary_seq,
+            applied_graph_revision_seq: 0,
             pending_human_input: None,
         }
     }
@@ -417,6 +426,7 @@ impl EngineSnapshot {
                     root_traversal_counts: HashMap::new(),
                     at_seq: v1.at_seq,
                     stage_boundary_seq: v1.stage_boundary_seq,
+                    applied_graph_revision_seq: 0,
                     pending_human_input: v1.pending_human_input,
                 })
             },

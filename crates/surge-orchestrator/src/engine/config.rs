@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use surge_core::content_hash::ContentHash;
 use surge_core::id::RunId;
+use surge_core::keys::{KeyParseError, NodeKey};
 use surge_core::mcp_config::McpServerRef;
 
 use crate::profile_loader::ProfileRegistry;
@@ -77,6 +78,11 @@ pub struct EngineRunConfig {
     /// Optional stable project context captured at run start.
     #[serde(default)]
     pub project_context: Option<ProjectContextSeed>,
+    /// Additional first-class artifacts copied into a run before its first
+    /// stage executes. Used by follow-up amendment runs to seed the appended
+    /// roadmap slice without relying on mutable project files.
+    #[serde(default)]
+    pub seed_artifacts: Vec<RunSeedArtifact>,
     /// Bootstrap-flow knobs. Default values are tuned for the bundled
     /// bootstrap graph; non-bootstrap runs ignore the section entirely.
     #[serde(default)]
@@ -104,6 +110,44 @@ impl ProjectContextSeed {
             content,
             hash,
         }
+    }
+}
+
+/// Caller-supplied artifact copied into the run worktree at start.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RunSeedArtifact {
+    /// Artifact name visible through `ArtifactSource::RunArtifact`.
+    pub name: String,
+    /// Portable relative path inside the run worktree.
+    pub relative_path: std::path::PathBuf,
+    /// Captured artifact body.
+    pub content: String,
+    /// Synthetic or real producer node recorded in `ArtifactProduced`.
+    pub producer: NodeKey,
+    /// Hash of `content`, computed before the run starts.
+    pub hash: ContentHash,
+}
+
+impl RunSeedArtifact {
+    /// Build a seed artifact and compute its content hash.
+    ///
+    /// # Errors
+    /// Returns [`KeyParseError`] when `producer` is not a valid node key.
+    pub fn new(
+        name: impl Into<String>,
+        relative_path: impl Into<std::path::PathBuf>,
+        content: impl Into<String>,
+        producer: &str,
+    ) -> Result<Self, KeyParseError> {
+        let content = content.into();
+        let hash = ContentHash::compute(content.as_bytes());
+        Ok(Self {
+            name: name.into(),
+            relative_path: relative_path.into(),
+            content,
+            producer: NodeKey::try_from(producer)?,
+            hash,
+        })
     }
 }
 
@@ -141,6 +185,7 @@ impl Default for EngineRunConfig {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
         }
     }
@@ -192,6 +237,7 @@ mod tests {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -221,6 +267,7 @@ mod tests {
             initial_prompt: "fix the broken cart-total bug".into(),
             bootstrap_parent: None,
             project_context: None,
+            seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -264,10 +311,25 @@ mod tests {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.bootstrap.edit_loop_cap, 5);
+    }
+
+    #[test]
+    fn run_seed_artifact_computes_hash_and_validates_producer() {
+        let seed = RunSeedArtifact::new(
+            "roadmap_amendment",
+            ".surge/roadmap_amendment.md",
+            "## New work",
+            "roadmap_seed",
+        )
+        .unwrap();
+        assert_eq!(seed.name, "roadmap_amendment");
+        assert_eq!(seed.producer.as_ref(), "roadmap_seed");
+        assert_eq!(seed.hash, ContentHash::compute(b"## New work"));
     }
 }

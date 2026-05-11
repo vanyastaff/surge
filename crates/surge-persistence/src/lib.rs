@@ -65,6 +65,9 @@ pub mod memory;
 /// Pricing models for AI providers
 pub mod pricing;
 
+/// Registry-level roadmap patch lookup metadata.
+pub mod roadmap_patches;
+
 /// SQLite-based storage implementation
 pub mod store;
 
