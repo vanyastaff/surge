@@ -16,10 +16,13 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
 use surge_core::agent_config::AgentConfig;
+use surge_core::artifact_contract::{ArtifactDiagnosticSeverity, validate_artifact};
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::OutcomeDecl;
+use surge_core::profile::registry::ResolvedProfile;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
+use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
 
@@ -410,46 +413,47 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     reason, hook_id, ..
                 } = &outcome_chain
                 {
-                    p.writer
-                        .append_event(VersionedEventPayload::new(
-                            EventPayload::OutcomeRejectedByHook {
-                                node: p.node.clone(),
-                                outcome: outcome.clone(),
-                                hook_id: hook_id.clone(),
-                            },
-                        ))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    record_outcome_rejection(
+                        RejectionRecordParams {
+                            writer: p.writer,
+                            bridge: p.bridge,
+                            node: p.node,
+                            session_id,
+                            outcome: &outcome,
+                            hook_id,
+                            reason,
+                            source: "on_outcome hook",
+                            max_rejections: max_outcome_rejections,
+                        },
+                        &mut outcome_rejection_attempts,
+                    )
+                    .await?;
+                    continue;
+                }
 
-                    outcome_rejection_attempts += 1;
-                    tracing::info!(
-                        target: "engine::stage::agent",
-                        node = %p.node,
-                        outcome = %outcome,
-                        hook_id = %hook_id,
-                        attempt = outcome_rejection_attempts,
-                        max = max_outcome_rejections,
-                        reason = %reason,
-                        "on_outcome hook rejected outcome; awaiting agent retry"
-                    );
-
-                    if outcome_rejection_attempts > max_outcome_rejections {
-                        let exhausted_reason = format!(
-                            "on_outcome rejection budget exhausted (last reject from '{hook_id}')"
-                        );
-                        p.writer
-                            .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
-                                node: p.node.clone(),
-                                reason: exhausted_reason.clone(),
-                                retry_available: false,
-                            }))
-                            .await
-                            .map_err(|e| StageError::Storage(e.to_string()))?;
-                        // Close the session before bailing — the agent isn't
-                        // going to recover at this point.
-                        let _ = p.bridge.close_session(session_id).await;
-                        return Err(StageError::AgentCrashed(exhausted_reason));
-                    }
+                if let Some(rejection) = validate_profile_artifact_contracts(
+                    resolved_profile.as_ref(),
+                    &outcome,
+                    &artifacts_produced,
+                    p.worktree_path,
+                )
+                .await?
+                {
+                    record_outcome_rejection(
+                        RejectionRecordParams {
+                            writer: p.writer,
+                            bridge: p.bridge,
+                            node: p.node,
+                            session_id,
+                            outcome: &outcome,
+                            hook_id: &rejection.hook_id,
+                            reason: &rejection.reason,
+                            source: "profile artifact contract",
+                            max_rejections: max_outcome_rejections,
+                        },
+                        &mut outcome_rejection_attempts,
+                    )
+                    .await?;
                     continue;
                 }
 
@@ -462,6 +466,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
+                    let stem_counts = artifact_stem_counts(&artifacts_produced);
                     let mut emitted_names = BTreeSet::new();
                     for declared_path in &artifacts_produced {
                         let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
@@ -510,10 +515,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                 continue;
                             },
                         };
-                        let name = relative_path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .map_or_else(|| declared_path.clone(), str::to_owned);
+                        let name =
+                            logical_artifact_name(&relative_path, declared_path, &stem_counts);
                         if !emitted_names.insert(name.clone()) {
                             return Err(StageError::Internal(format!(
                                 "duplicate artifact logical name '{name}' from declared path '{declared_path}'"
@@ -846,6 +849,309 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
     Ok(outcome)
+}
+
+struct RejectionRecordParams<'a> {
+    writer: &'a RunWriter,
+    bridge: &'a Arc<dyn BridgeFacade>,
+    node: &'a NodeKey,
+    session_id: surge_core::id::SessionId,
+    outcome: &'a OutcomeKey,
+    hook_id: &'a str,
+    reason: &'a str,
+    source: &'a str,
+    max_rejections: u32,
+}
+
+async fn record_outcome_rejection(
+    params: RejectionRecordParams<'_>,
+    attempts: &mut u32,
+) -> Result<(), StageError> {
+    params
+        .writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::OutcomeRejectedByHook {
+                node: params.node.clone(),
+                outcome: params.outcome.clone(),
+                hook_id: params.hook_id.to_owned(),
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    *attempts += 1;
+    tracing::info!(
+        target: "engine::stage::agent",
+        node = %params.node,
+        outcome = %params.outcome,
+        hook_id = %params.hook_id,
+        attempt = *attempts,
+        max = params.max_rejections,
+        reason = %params.reason,
+        source = %params.source,
+        "outcome rejected; awaiting agent retry"
+    );
+
+    if *attempts > params.max_rejections {
+        let exhausted_reason = format!(
+            "on_outcome rejection budget exhausted (last reject from '{}')",
+            params.hook_id
+        );
+        params
+            .writer
+            .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
+                node: params.node.clone(),
+                reason: exhausted_reason.clone(),
+                retry_available: false,
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        // Close the session before bailing — the agent isn't going to recover
+        // at this point.
+        let _ = params.bridge.close_session(params.session_id).await;
+        return Err(StageError::AgentCrashed(exhausted_reason));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ArtifactContractRejection {
+    hook_id: String,
+    reason: String,
+}
+
+async fn validate_profile_artifact_contracts(
+    resolved_profile: Option<&ResolvedProfile>,
+    outcome: &OutcomeKey,
+    artifacts_produced: &[String],
+    worktree_path: &Path,
+) -> Result<Option<ArtifactContractRejection>, StageError> {
+    let Some(profile) = resolved_profile else {
+        return Ok(None);
+    };
+    let Some(profile_outcome) = profile
+        .profile
+        .outcomes
+        .iter()
+        .find(|candidate| candidate.id == *outcome)
+    else {
+        return Ok(None);
+    };
+    if profile_outcome.produced_artifacts.is_empty() {
+        return Ok(None);
+    }
+
+    let canonical_worktree = tokio::fs::canonicalize(worktree_path)
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    let produced_paths: Vec<PathBuf> = artifacts_produced
+        .iter()
+        .filter_map(|declared_path| safe_declared_artifact_path(declared_path))
+        .collect();
+
+    for declaration in &profile_outcome.produced_artifacts {
+        let matching_paths: Vec<&PathBuf> = produced_paths
+            .iter()
+            .filter(|path| artifact_declaration_matches_path(declaration, path))
+            .collect();
+        if matching_paths.is_empty() {
+            return Ok(Some(artifact_contract_rejection(
+                declaration.contract.kind,
+                format!(
+                    "outcome '{outcome}' must produce artifact '{}'",
+                    declaration.path
+                ),
+            )));
+        }
+
+        for relative_path in matching_paths {
+            let Some(validation_input) =
+                read_produced_artifact(worktree_path, &canonical_worktree, relative_path).await?
+            else {
+                return Ok(Some(artifact_contract_rejection(
+                    declaration.contract.kind,
+                    format!(
+                        "artifact '{}' was reported but could not be read from the worktree",
+                        normalize_artifact_path(relative_path)
+                    ),
+                )));
+            };
+            let content = String::from_utf8_lossy(&validation_input.bytes);
+            let report = validate_artifact(
+                declaration.contract.kind,
+                Some(validation_input.relative_path.as_path()),
+                &content,
+            );
+            if report.is_valid() {
+                continue;
+            }
+            return Ok(Some(artifact_contract_rejection(
+                declaration.contract.kind,
+                format_artifact_validation_reason(
+                    declaration.contract.kind,
+                    validation_input.relative_path.as_path(),
+                    &report.diagnostics,
+                ),
+            )));
+        }
+    }
+
+    Ok(None)
+}
+
+struct ProducedArtifactInput {
+    relative_path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+async fn read_produced_artifact(
+    worktree_path: &Path,
+    canonical_worktree: &Path,
+    relative_path: &Path,
+) -> Result<Option<ProducedArtifactInput>, StageError> {
+    let absolute = worktree_path.join(relative_path);
+    let Ok(canonical_path) = tokio::fs::canonicalize(&absolute).await else {
+        return Ok(None);
+    };
+    if !canonical_path.starts_with(canonical_worktree) {
+        return Ok(None);
+    }
+    let Ok(bytes) = tokio::fs::read(&canonical_path).await else {
+        return Ok(None);
+    };
+    Ok(Some(ProducedArtifactInput {
+        relative_path: relative_path.to_path_buf(),
+        bytes,
+    }))
+}
+
+fn artifact_contract_rejection(kind: ArtifactKind, reason: String) -> ArtifactContractRejection {
+    ArtifactContractRejection {
+        hook_id: format!("profile-artifact-contract:{kind}"),
+        reason,
+    }
+}
+
+fn format_artifact_validation_reason(
+    kind: ArtifactKind,
+    path: &Path,
+    diagnostics: &[surge_core::ArtifactValidationDiagnostic],
+) -> String {
+    let errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == ArtifactDiagnosticSeverity::Error)
+        .take(3)
+        .map(|diagnostic| {
+            let location = diagnostic
+                .location
+                .as_ref()
+                .map(|location| format!(" at {location}"))
+                .unwrap_or_default();
+            format!("{}{}: {}", diagnostic.code, location, diagnostic.message)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "{kind} artifact '{}' failed contract validation: {errors}",
+        normalize_artifact_path(path)
+    )
+}
+
+fn artifact_declaration_matches_path(
+    declaration: &ProfileArtifactDeclaration,
+    relative_path: &Path,
+) -> bool {
+    let declared = normalize_profile_declared_path(&declaration.path);
+    let actual = normalize_artifact_path(relative_path);
+    if declared == actual {
+        return true;
+    }
+
+    match declaration.contract.kind {
+        ArtifactKind::Adr | ArtifactKind::Story => {
+            declared == declaration.contract.kind.contract().canonical_path
+                && declaration
+                    .contract
+                    .kind
+                    .contract()
+                    .accepts_path(relative_path)
+        },
+        _ => false,
+    }
+}
+
+fn artifact_stem_counts(paths: &[String]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for declared_path in paths {
+        let Some(relative_path) = safe_declared_artifact_path(declared_path) else {
+            continue;
+        };
+        let Some(stem) = artifact_stem(&relative_path) else {
+            continue;
+        };
+        *counts.entry(stem).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn logical_artifact_name(
+    relative_path: &Path,
+    declared_path: &str,
+    stem_counts: &BTreeMap<String, usize>,
+) -> String {
+    let Some(stem) = artifact_stem(relative_path) else {
+        return sanitize_artifact_name(declared_path);
+    };
+    if stem_counts.get(&stem).copied().unwrap_or_default() <= 1 {
+        return stem;
+    }
+    path_based_artifact_name(relative_path).unwrap_or(stem)
+}
+
+fn artifact_stem(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn path_based_artifact_name(path: &Path) -> Option<String> {
+    let normalized = normalize_artifact_path(path);
+    let name = sanitize_artifact_name(&normalized);
+    (!name.is_empty()).then_some(name)
+}
+
+fn sanitize_artifact_name(input: &str) -> String {
+    let mut name = String::with_capacity(input.len());
+    let mut last_was_separator = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            name.push(ch);
+            last_was_separator = false;
+        } else if !last_was_separator {
+            name.push('_');
+            last_was_separator = true;
+        }
+    }
+    name.trim_matches('_').to_string()
+}
+
+fn normalize_profile_declared_path(path: &str) -> String {
+    safe_declared_artifact_path(path).map_or_else(
+        || path.replace('\\', "/"),
+        |path| normalize_artifact_path(&path),
+    )
+}
+
+fn normalize_artifact_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {

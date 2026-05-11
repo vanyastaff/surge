@@ -20,11 +20,11 @@ use surge_core::id::SessionId;
 use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
 use surge_core::run_event::EventPayload;
 use surge_orchestrator::engine::hooks::HookExecutor;
-use surge_orchestrator::engine::stage::StageError;
 use surge_orchestrator::engine::stage::agent::{AgentStageParams, execute_agent_stage};
 use surge_orchestrator::engine::tools::{
     ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
 };
+use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
 use surge_persistence::runs::{EventSeq, Storage};
 
 struct UnusedDispatcher;
@@ -39,8 +39,12 @@ impl ToolDispatcher for UnusedDispatcher {
 }
 
 fn agent_cfg() -> AgentConfig {
+    agent_cfg_with_profile("implementer@1.0")
+}
+
+fn agent_cfg_with_profile(profile: &str) -> AgentConfig {
     AgentConfig {
-        profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+        profile: ProfileKey::try_from(profile).unwrap(),
         prompt_overrides: None,
         tool_overrides: None,
         sandbox_override: None,
@@ -284,18 +288,30 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn duplicate_artifact_logical_names_fail_before_overwrite() {
+async fn compatible_artifacts_with_the_same_stem_get_distinct_names() {
     let dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(
+        dir.path().join("spec.toml"),
+        br#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["first check passes"] },
+]
+"#,
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(
+        dir.path().join("spec.md"),
+        b"# Spec\n\n## Goal\nShip it.\n\n## Subtasks\n- one\n\n## Acceptance Criteria\n- [ ] passes\n",
+    )
+    .await
+    .unwrap();
     tokio::fs::create_dir_all(dir.path().join("docs"))
         .await
         .unwrap();
-    tokio::fs::create_dir_all(dir.path().join("src"))
-        .await
-        .unwrap();
     tokio::fs::write(dir.path().join("docs").join("spec.md"), b"docs spec")
-        .await
-        .unwrap();
-    tokio::fs::write(dir.path().join("src").join("spec.md"), b"src spec")
         .await
         .unwrap();
 
@@ -313,7 +329,7 @@ async fn duplicate_artifact_logical_names_fail_before_overwrite() {
         session: session_id,
         outcome: OutcomeKey::from_str("done").unwrap(),
         summary: "colliding artifacts".into(),
-        artifacts_produced: vec!["docs/spec.md".into(), "src/spec.md".into()],
+        artifacts_produced: vec!["spec.toml".into(), "spec.md".into(), "docs/spec.md".into()],
     })
     .await;
 
@@ -348,12 +364,33 @@ async fn duplicate_artifact_logical_names_fail_before_overwrite() {
         profile_registry: None,
         hook_executor: &hook_executor,
     })
-    .await;
+    .await
+    .unwrap();
     pump.await.unwrap();
 
-    assert!(
-        matches!(result, Err(StageError::Internal(message)) if message.contains("duplicate artifact logical name")),
-        "duplicate file stems must fail instead of overwriting the per-run artifact index",
+    assert_eq!(result.as_ref(), "done");
+
+    let reader = storage.open_run_reader(run_id).await.expect("reader");
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(64))
+        .await
+        .expect("read_events");
+    let artifact_names: Vec<String> = events
+        .iter()
+        .filter_map(|ev| match &ev.payload.payload {
+            EventPayload::ArtifactProduced { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        artifact_names,
+        vec![
+            "spec_toml".to_string(),
+            "spec_md".to_string(),
+            "docs_spec_md".to_string()
+        ],
+        "colliding stems should be disambiguated without dropping valid artifacts",
     );
 }
 
@@ -458,5 +495,126 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
     assert!(
         saw_outcome,
         "OutcomeReported must still be appended when unsafe artifact paths are skipped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::create_dir_all(dir.path().join("docs").join("adr"))
+        .await
+        .unwrap();
+    tokio::fs::write(
+        dir.path()
+            .join("docs")
+            .join("adr")
+            .join("0001-contracts.md"),
+        b"# ADR 0001\n\n## Status\nDrafted without the required frontmatter.\n",
+    )
+    .await
+    .unwrap();
+
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let run_id = surge_core::id::RunId::new();
+    let writer = storage.create_run(run_id, dir.path(), None).await.unwrap();
+    let artifact_store = surge_persistence::artifacts::ArtifactStore::new(dir.path().join("runs"));
+    let registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::from_str("drafted").unwrap(),
+        summary: "invalid adr".into(),
+        artifacts_produced: vec!["docs/adr/0001-contracts.md".into()],
+    })
+    .await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::from_str("no_decision_needed").unwrap(),
+        summary: "fallback".into(),
+        artifacts_produced: vec![],
+    })
+    .await;
+
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        mock_for_pump.pump_scripted_events().await;
+    });
+
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+    let memory = surge_core::run_state::RunMemory::default();
+    let cfg = agent_cfg_with_profile("architect@1.0");
+    let node = NodeKey::try_from("architect").unwrap();
+    let tool_resolutions =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let hook_executor = HookExecutor::new();
+    let result = execute_agent_stage(AgentStageParams {
+        node: &node,
+        agent_config: &cfg,
+        declared_outcomes: &[],
+        bridge: &bridge,
+        writer: &writer,
+        artifact_store: &artifact_store,
+        worktree_path: dir.path(),
+        tool_dispatcher: &dispatcher,
+        run_memory: &memory,
+        run_id,
+        tool_resolutions: &tool_resolutions,
+        human_input_timeout: Duration::from_secs(5),
+        mcp_registry: None,
+        mcp_servers: Vec::new(),
+        profile_registry: Some(registry),
+        hook_executor: &hook_executor,
+    })
+    .await
+    .expect("stage should retry after invalid ADR contract rejection");
+    pump.await.unwrap();
+    assert_eq!(result.as_ref(), "no_decision_needed");
+
+    let reader = storage.open_run_reader(run_id).await.expect("reader");
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(64))
+        .await
+        .expect("read_events");
+
+    let mut saw_contract_rejection = false;
+    let mut outcome_names = Vec::new();
+    let artifact_count = events
+        .iter()
+        .filter(|ev| matches!(ev.payload.payload, EventPayload::ArtifactProduced { .. }))
+        .count();
+    for ev in events {
+        match ev.payload.payload {
+            EventPayload::OutcomeRejectedByHook {
+                outcome, hook_id, ..
+            } => {
+                assert_eq!(outcome.as_ref(), "drafted");
+                assert_eq!(hook_id, "profile-artifact-contract:adr");
+                saw_contract_rejection = true;
+            },
+            EventPayload::OutcomeReported { outcome, .. } => {
+                outcome_names.push(outcome.to_string());
+            },
+            _ => {},
+        }
+    }
+
+    assert!(
+        saw_contract_rejection,
+        "invalid ADR should be rejected by the profile artifact contract"
+    );
+    assert_eq!(
+        outcome_names,
+        vec!["no_decision_needed".to_string()],
+        "the rejected drafted outcome must not be persisted"
+    );
+    assert_eq!(
+        artifact_count, 0,
+        "invalid artifacts must not be emitted before contract validation passes"
     );
 }

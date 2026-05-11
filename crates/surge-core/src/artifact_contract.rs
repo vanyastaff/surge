@@ -564,8 +564,8 @@ fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, content:
     report.push(ArtifactValidationDiagnostic::error(
         report.kind,
         ArtifactDiagnosticCode::MissingAcceptanceCriteria,
-        Some("spec.acceptance_criteria".to_string()),
-        "spec artifact must include machine-readable acceptance criteria",
+        Some("spec.subtasks.acceptance_criteria".to_string()),
+        "every spec subtask must include machine-readable acceptance criteria",
     ));
 }
 
@@ -635,17 +635,15 @@ fn toml_field<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value>
 }
 
 fn spec_toml_has_acceptance_criteria(value: &toml::Value) -> bool {
-    if toml_array_is_non_empty(value, "acceptance_criteria") {
-        return true;
-    }
     let spec = value.get("spec").unwrap_or(value);
     let Some(subtasks) = spec.get("subtasks").and_then(toml::Value::as_array) else {
         return false;
     };
 
-    subtasks
-        .iter()
-        .any(|subtask| toml_array_is_non_empty(subtask, "acceptance_criteria"))
+    !subtasks.is_empty()
+        && subtasks
+            .iter()
+            .all(|subtask| toml_array_is_non_empty(subtask, "acceptance_criteria"))
 }
 
 fn toml_array_is_non_empty(value: &toml::Value, field: &str) -> bool {
@@ -1051,6 +1049,47 @@ Build a validator.
         );
 
         assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn validates_spec_toml_when_every_subtask_has_acceptance_criteria() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["first check passes"] },
+  { id = "two", acceptance_criteria = ["second check passes"] },
+]
+"#,
+        );
+
+        assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn rejects_spec_toml_when_any_subtask_lacks_acceptance_criteria() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+acceptance_criteria = ["global criteria must not mask per-subtask gaps"]
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["first check passes"] },
+  { id = "two" },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::MissingAcceptanceCriteria
+                && diagnostic.location.as_deref() == Some("spec.subtasks.acceptance_criteria")
+        }));
     }
 
     #[test]
