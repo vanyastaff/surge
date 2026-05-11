@@ -146,7 +146,7 @@ pub fn roadmap_patches(
                 amended_flow_artifact, amended_flow_path,
                 roadmap_artifact, roadmap_path, flow_artifact, flow_path,
                 active_pickup, created_seq, updated_seq, created_at, updated_at
-         FROM roadmap_patches ORDER BY updated_seq, patch_id",
+         FROM roadmap_patches ORDER BY updated_seq DESC, patch_id",
     )?;
     let iter = stmt.query_map([], row_to_roadmap_patch)?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)

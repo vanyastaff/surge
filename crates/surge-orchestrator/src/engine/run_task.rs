@@ -61,6 +61,9 @@ pub(crate) struct RunTaskParams {
     /// Resume from existing root traversal counts; if None, start fresh.
     pub resume_root_traversal_counts:
         Option<std::collections::HashMap<surge_core::keys::EdgeKey, u32>>,
+    /// Latest accepted graph revision sequence that was durably applied to
+    /// the active graph at a stage boundary.
+    pub resume_applied_graph_revision_seq: Option<u64>,
     /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
     /// Engine's `resolve_human_input` finds the sender and fires it.
     pub gate_resolutions: std::sync::Arc<
@@ -124,11 +127,19 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             .resume_root_traversal_counts
             .clone()
             .unwrap_or_default();
-    let mut applied_graph_revision_seq = memory
-        .latest_graph_revision
-        .as_ref()
-        .map_or(0, |revision| revision.updated_seq);
-    let mut pending_graph_revisions = Vec::new();
+    let mut applied_graph_revision_seq = params.resume_applied_graph_revision_seq.unwrap_or(0);
+    let mut processed_graph_revision_seq = applied_graph_revision_seq;
+    let mut pending_graph_revisions = match load_pending_graph_revisions_after(
+        &params.writer,
+        applied_graph_revision_seq,
+    )
+    .await
+    {
+        Ok(revisions) => revisions,
+        Err(e) => {
+            return failed(&params, format!("load pending graph revisions: {e}")).await;
+        },
+    };
 
     loop {
         if frames.is_empty() {
@@ -144,6 +155,7 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
                     &cursor,
                     &mut memory,
                     &mut pending_graph_revisions,
+                    &mut processed_graph_revision_seq,
                     &mut applied_graph_revision_seq,
                 )
                 .await
@@ -156,6 +168,7 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             &cursor,
             &frames,
             &mut pending_graph_revisions,
+            &mut processed_graph_revision_seq,
             &mut applied_graph_revision_seq,
         );
 
@@ -593,6 +606,7 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             &cursor,
             &frames,
             &mut pending_graph_revisions,
+            &mut processed_graph_revision_seq,
             &mut applied_graph_revision_seq,
         );
         let stage_events_applied_seq = match params.writer.current_seq().await {
@@ -713,11 +727,12 @@ pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
             Ok(s) => s,
             Err(e) => return failed(&params, format!("current_seq: {e}")).await,
         };
-        let snapshot = crate::engine::snapshot::EngineSnapshot::new(
+        let mut snapshot = crate::engine::snapshot::EngineSnapshot::new(
             &next_cursor,
             current_seq.as_u64(),
             current_seq.as_u64(),
         );
+        snapshot.applied_graph_revision_seq = applied_graph_revision_seq;
         let blob = match serde_json::to_vec(&snapshot) {
             Ok(b) => b,
             Err(e) => return failed(&params, format!("snapshot serialize: {e}")).await,
@@ -906,6 +921,19 @@ async fn apply_memory_events_after(
     Ok(apply_read_events(run_id, &events, memory))
 }
 
+async fn load_pending_graph_revisions_after(
+    writer: &surge_persistence::runs::run_writer::RunWriter,
+    applied_seq: u64,
+) -> Result<Vec<ObservedGraphRevision>, surge_persistence::runs::StorageError> {
+    let current = writer.current_seq().await?;
+    let after = surge_persistence::runs::EventSeq(applied_seq);
+    if current <= after {
+        return Ok(Vec::new());
+    }
+    let events = writer.read_events(after.next()..current.next()).await?;
+    Ok(graph_revisions_from_events(&events))
+}
+
 struct RoadmapAmendmentQueue<'a> {
     writer: &'a surge_persistence::runs::run_writer::RunWriter,
     artifact_store: &'a surge_persistence::artifacts::ArtifactStore,
@@ -920,6 +948,7 @@ impl RoadmapAmendmentQueue<'_> {
         cursor: &Cursor,
         memory: &mut RunMemory,
         pending_graph_revisions: &mut Vec<ObservedGraphRevision>,
+        processed_graph_revision_seq: &mut u64,
         applied_graph_revision_seq: &mut u64,
     ) -> Result<(), surge_persistence::runs::StorageError> {
         while let Ok(command) = self.receiver.try_recv() {
@@ -944,6 +973,7 @@ impl RoadmapAmendmentQueue<'_> {
                         cursor,
                         &[],
                         pending_graph_revisions,
+                        processed_graph_revision_seq,
                         applied_graph_revision_seq,
                     );
                     let _ = command.reply.send(Ok(outcome));
@@ -970,29 +1000,12 @@ fn apply_read_events(
     events: &[surge_persistence::runs::ReadEvent],
     memory: &mut RunMemory,
 ) -> AppliedEventBatch {
-    let mut batch = AppliedEventBatch::default();
+    let batch = AppliedEventBatch {
+        graph_revisions: graph_revisions_from_events(events),
+    };
     for event in events {
         let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.timestamp_ms)
             .unwrap_or_else(chrono::Utc::now);
-        if let EventPayload::GraphRevisionAccepted {
-            patch_id,
-            target,
-            previous_graph_hash,
-            graph,
-            graph_hash,
-            active_pickup,
-        } = &event.payload.payload
-        {
-            batch.graph_revisions.push(ObservedGraphRevision {
-                seq: event.seq.as_u64(),
-                patch_id: patch_id.clone(),
-                target: target.clone(),
-                previous_graph_hash: *previous_graph_hash,
-                graph: graph.as_ref().clone(),
-                graph_hash: *graph_hash,
-                active_pickup: *active_pickup,
-            });
-        }
         memory.apply_event(&RunEvent {
             run_id,
             seq: event.seq.as_u64(),
@@ -1003,14 +1016,46 @@ fn apply_read_events(
     batch
 }
 
+fn graph_revisions_from_events(
+    events: &[surge_persistence::runs::ReadEvent],
+) -> Vec<ObservedGraphRevision> {
+    events
+        .iter()
+        .filter_map(|event| {
+            if let EventPayload::GraphRevisionAccepted {
+                patch_id,
+                target,
+                previous_graph_hash,
+                graph,
+                graph_hash,
+                active_pickup,
+            } = &event.payload.payload
+            {
+                Some(ObservedGraphRevision {
+                    seq: event.seq.as_u64(),
+                    patch_id: patch_id.clone(),
+                    target: target.clone(),
+                    previous_graph_hash: *previous_graph_hash,
+                    graph: graph.as_ref().clone(),
+                    graph_hash: *graph_hash,
+                    active_pickup: *active_pickup,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn maybe_apply_pending_graph_revision(
     active_graph: &mut Graph,
     cursor: &Cursor,
     frames: &[crate::engine::frames::Frame],
     pending: &mut Vec<ObservedGraphRevision>,
+    processed_seq: &mut u64,
     applied_seq: &mut u64,
 ) {
-    pending.retain(|revision| revision.seq > *applied_seq);
+    pending.retain(|revision| revision.seq > *processed_seq);
     let Some(revision) = pending.last().cloned() else {
         return;
     };
@@ -1024,7 +1069,7 @@ fn maybe_apply_pending_graph_revision(
                 graph_hash = %revision.graph_hash,
                 "graph_revision_requires_follow_up_run"
             );
-            *applied_seq = revision.seq;
+            *processed_seq = revision.seq;
             pending.clear();
             return;
         },
@@ -1035,7 +1080,7 @@ fn maybe_apply_pending_graph_revision(
                 graph_hash = %revision.graph_hash,
                 "graph_revision_pickup_disabled"
             );
-            *applied_seq = revision.seq;
+            *processed_seq = revision.seq;
             pending.clear();
             return;
         },
@@ -1060,7 +1105,7 @@ fn maybe_apply_pending_graph_revision(
             cursor = %cursor.node,
             "graph_revision_cannot_preserve_cursor"
         );
-        *applied_seq = revision.seq;
+        *processed_seq = revision.seq;
         pending.clear();
         return;
     }
@@ -1075,6 +1120,7 @@ fn maybe_apply_pending_graph_revision(
         "graph_revision_picked_up"
     );
     *active_graph = revision.graph;
+    *processed_seq = revision.seq;
     *applied_seq = revision.seq;
     pending.clear();
 }
@@ -1237,6 +1283,7 @@ mod tests {
             revised_graph.clone(),
             ActivePickupPolicy::Allowed,
         )];
+        let mut processed_seq = 0;
         let mut applied_seq = 0;
 
         maybe_apply_pending_graph_revision(
@@ -1244,10 +1291,12 @@ mod tests {
             &cursor,
             &frames,
             &mut pending,
+            &mut processed_seq,
             &mut applied_seq,
         );
         assert_eq!(active_graph, original_graph);
         assert_eq!(pending.len(), 1);
+        assert_eq!(processed_seq, 0);
         assert_eq!(applied_seq, 0);
 
         frames.clear();
@@ -1256,10 +1305,12 @@ mod tests {
             &cursor,
             &frames,
             &mut pending,
+            &mut processed_seq,
             &mut applied_seq,
         );
         assert_eq!(active_graph, revised_graph);
         assert!(pending.is_empty());
+        assert_eq!(processed_seq, 7);
         assert_eq!(applied_seq, 7);
     }
 
@@ -1277,6 +1328,7 @@ mod tests {
             revised_graph,
             ActivePickupPolicy::Allowed,
         )];
+        let mut processed_seq = 0;
         let mut applied_seq = 0;
 
         maybe_apply_pending_graph_revision(
@@ -1284,12 +1336,14 @@ mod tests {
             &cursor,
             &frames,
             &mut pending,
+            &mut processed_seq,
             &mut applied_seq,
         );
 
         assert_eq!(active_graph, original_graph);
         assert!(pending.is_empty());
-        assert_eq!(applied_seq, 7);
+        assert_eq!(processed_seq, 7);
+        assert_eq!(applied_seq, 0);
     }
 
     #[tokio::test]

@@ -376,6 +376,7 @@ impl Engine {
             resume_memory: None,
             resume_frames: None,
             resume_root_traversal_counts: None,
+            resume_applied_graph_revision_seq: None,
             gate_resolutions,
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
@@ -606,6 +607,7 @@ impl Engine {
             resume_memory: Some(replayed.memory),
             resume_frames: None,
             resume_root_traversal_counts: None,
+            resume_applied_graph_revision_seq: Some(replayed.applied_graph_revision_seq),
             gate_resolutions,
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
@@ -861,8 +863,9 @@ pub(crate) async fn synthesise_run_seed_artifact(
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(&absolute_path, seed.content.as_bytes()).await?;
+    let hash = surge_core::ContentHash::compute(seed.content.as_bytes());
     Ok(InitialPromptArtifact {
-        hash: seed.hash,
+        hash,
         relative_path: seed.relative_path.clone(),
         producer: seed.producer.clone(),
     })

@@ -49,8 +49,10 @@ pub trait EngineFacade: Send + Sync {
         target: RoadmapPatchTarget,
         patch_result: RoadmapPatchApplyResult,
     ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
-        let _ = (patch_id, target, patch_result);
-        Err(EngineError::RunNotFound(run_id))
+        let _ = (run_id, patch_id, target, patch_result);
+        Err(EngineError::OperationNotSupported {
+            operation: "submit_roadmap_amendment",
+        })
     }
 
     /// Provide an answer to a paused run waiting on human input.

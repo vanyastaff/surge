@@ -16,6 +16,9 @@ pub struct ReplayedState {
     /// Latest graph extracted from `PipelineMaterialized` plus any accepted
     /// graph revision events.
     pub graph: surge_core::graph::Graph,
+    /// Latest graph revision sequence known to have been applied to the
+    /// active graph at a persisted stage boundary.
+    pub applied_graph_revision_seq: u64,
     /// Set when the event log already contains a terminal event
     /// (`RunCompleted`, `RunFailed`, or `RunAborted`). When `Some`, the
     /// caller should return this outcome immediately without re-executing.
@@ -35,16 +38,23 @@ pub struct ReplayedState {
 pub async fn replay(
     reader: &surge_persistence::runs::reader::RunReader,
 ) -> Result<ReplayedState, EngineError> {
-    // Load latest snapshot (if any).
-    let snap = reader
-        .latest_snapshot_at_or_before(EventSeq(u64::MAX))
+    let max_seq = reader
+        .current_seq()
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
+    // Load latest snapshot (if any).
+    let snap = reader
+        .latest_snapshot_at_or_before(max_seq)
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+
+    let mut applied_graph_revision_seq = 0;
     let snap_cursor: Option<Cursor> = match snap {
         Some((_seq, blob)) => {
             let snapshot = EngineSnapshot::deserialize(&blob)
                 .map_err(|e| EngineError::Internal(format!("snapshot deserialize: {e}")))?;
+            applied_graph_revision_seq = snapshot.applied_graph_revision_seq;
             let cursor = snapshot
                 .cursor
                 .into_cursor()
@@ -56,18 +66,13 @@ pub async fn replay(
 
     // Read all events from seq 1 onwards. We need ALL events for memory
     // reconstruction (artifacts, outcomes, costs).
-    let max_seq = reader
-        .current_seq()
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
-
     let all_events = reader
         .read_events(EventSeq(1)..EventSeq(max_seq.as_u64().saturating_add(1)))
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
     // Find the latest graph from PipelineMaterialized plus graph revisions.
-    let graph = latest_graph_from_events(&all_events)?;
+    let graph = latest_graph_from_events(&all_events, applied_graph_revision_seq)?;
 
     // Extract the persisted RunConfig from RunStarted (if any).
     let persisted_run_config = all_events.iter().find_map(|e| match &e.payload.payload {
@@ -116,6 +121,7 @@ pub async fn replay(
         cursor,
         memory,
         graph,
+        applied_graph_revision_seq,
         already_terminal,
         run_config: persisted_run_config,
     })
@@ -123,6 +129,7 @@ pub async fn replay(
 
 fn latest_graph_from_events(
     events: &[surge_persistence::runs::reader::ReadEvent],
+    applied_graph_revision_seq: u64,
 ) -> Result<surge_core::graph::Graph, EngineError> {
     let mut selected = None;
     for event in events {
@@ -138,7 +145,7 @@ fn latest_graph_from_events(
             },
             EventPayload::GraphRevisionAccepted {
                 graph, graph_hash, ..
-            } => {
+            } if event.seq.as_u64() <= applied_graph_revision_seq => {
                 tracing::debug!(
                     target: "engine_replay",
                     seq = event.seq.as_u64(),
@@ -150,9 +157,12 @@ fn latest_graph_from_events(
             _ => {},
         }
     }
-    selected
-        .map(|(_, graph)| graph)
-        .ok_or_else(|| EngineError::Internal("no PipelineMaterialized event in log".into()))
+    selected.map(|(_, graph)| graph).ok_or_else(|| {
+        EngineError::Internal(
+            "no graph-bearing event (PipelineMaterialized or applied GraphRevisionAccepted) in log"
+                .into(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -173,7 +183,6 @@ mod tests {
     use surge_core::sandbox::SandboxMode;
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::Storage;
-    use surge_persistence::runs::seq::EventSeq;
 
     fn minimal_graph() -> Graph {
         minimal_graph_with_start("end")
@@ -363,7 +372,7 @@ mod tests {
             mcp_servers: vec![],
         };
 
-        writer
+        let seqs = writer
             .append_events(vec![
                 VersionedEventPayload::new(EventPayload::RunStarted {
                     pipeline_template: None,
@@ -388,16 +397,33 @@ mod tests {
             ])
             .await
             .expect("append_events");
+        let graph_revision_seq = seqs[2];
 
         let snapshot_cursor = Cursor {
             node: NodeKey::try_from("amend_001").unwrap(),
             attempt: 1,
         };
-        let snapshot = EngineSnapshot::new(&snapshot_cursor, 3, 3);
+        let mut snapshot = EngineSnapshot::new(
+            &snapshot_cursor,
+            graph_revision_seq.as_u64(),
+            graph_revision_seq.as_u64(),
+        );
+        snapshot.applied_graph_revision_seq = graph_revision_seq.as_u64();
         writer
-            .write_graph_snapshot(EventSeq(3), serde_json::to_vec(&snapshot).unwrap())
+            .write_graph_snapshot(graph_revision_seq, serde_json::to_vec(&snapshot).unwrap())
             .await
             .expect("write snapshot");
+        let (_, snapshot_blob) = writer
+            .latest_snapshot_at_or_before(graph_revision_seq)
+            .await
+            .expect("read snapshot")
+            .expect("snapshot row");
+        let stored_snapshot =
+            EngineSnapshot::deserialize(&snapshot_blob).expect("deserialize stored snapshot");
+        assert_eq!(
+            stored_snapshot.applied_graph_revision_seq,
+            graph_revision_seq.as_u64()
+        );
 
         let reader = storage
             .open_run_reader(run_id)

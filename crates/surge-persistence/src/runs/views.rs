@@ -163,6 +163,19 @@ pub fn maintain(
                     status = excluded.status,
                     patch_artifact = excluded.patch_artifact,
                     patch_path = excluded.patch_path,
+                    summary_hash = NULL,
+                    decision = NULL,
+                    decision_comment = NULL,
+                    conflict_choice = NULL,
+                    amended_roadmap_artifact = NULL,
+                    amended_roadmap_path = NULL,
+                    amended_flow_artifact = NULL,
+                    amended_flow_path = NULL,
+                    roadmap_artifact = NULL,
+                    roadmap_path = NULL,
+                    flow_artifact = NULL,
+                    flow_path = NULL,
+                    active_pickup = NULL,
                     updated_seq = excluded.updated_seq,
                     updated_at = excluded.updated_at",
                 rusqlite::params![
@@ -190,6 +203,18 @@ pub fn maintain(
                  SET target_json = ?,
                      status = ?,
                      summary_hash = ?,
+                     decision = NULL,
+                     decision_comment = NULL,
+                     conflict_choice = NULL,
+                     amended_roadmap_artifact = NULL,
+                     amended_roadmap_path = NULL,
+                     amended_flow_artifact = NULL,
+                     amended_flow_path = NULL,
+                     roadmap_artifact = NULL,
+                     roadmap_path = NULL,
+                     flow_artifact = NULL,
+                     flow_path = NULL,
+                     active_pickup = NULL,
                      updated_seq = ?,
                      updated_at = ?
                  WHERE patch_id = ?",
@@ -1015,6 +1040,129 @@ mod tests {
         assert_eq!(roadmap_artifact, roadmap_hash.to_string());
         assert_eq!(flow_artifact, flow_hash.to_string());
         assert_eq!(updated_seq, 4);
+    }
+
+    #[test]
+    fn roadmap_patch_draft_and_pending_clear_stale_lifecycle_fields() {
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        let patch_id = RoadmapPatchId::new("rpatch-clear").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let patch_hash = ContentHash::compute(b"patch");
+        let next_patch_hash = ContentHash::compute(b"patch-next");
+
+        maintain(
+            &tx,
+            EventSeq(1),
+            1_700_000_000_001,
+            &EventPayload::RoadmapPatchDrafted {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                patch_artifact: patch_hash,
+                patch_path: PathBuf::from("roadmap-patch.toml"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            1_700_000_000_002,
+            &EventPayload::RoadmapPatchApprovalRequested {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                channel: ApprovalChannel::Desktop {
+                    duration: ApprovalDuration::Transient,
+                },
+                summary_hash: ContentHash::compute(b"summary"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(3),
+            1_700_000_000_003,
+            &EventPayload::RoadmapPatchApprovalDecided {
+                patch_id: patch_id.clone(),
+                decision: RoadmapPatchApprovalDecision::Approve,
+                channel_used: ApprovalChannelKind::Desktop,
+                comment: Some("ok".into()),
+                conflict_choice: Some(OperatorConflictChoice::CreateFollowUpRun),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(4),
+            1_700_000_000_004,
+            &EventPayload::RoadmapUpdated {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                roadmap_artifact: ContentHash::compute(b"roadmap"),
+                roadmap_path: PathBuf::from("roadmap.toml"),
+                flow_artifact: Some(ContentHash::compute(b"flow")),
+                flow_path: Some(PathBuf::from("flow.toml")),
+                active_pickup: ActivePickupPolicy::Allowed,
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(5),
+            1_700_000_000_005,
+            &EventPayload::RoadmapPatchDrafted {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                patch_artifact: next_patch_hash,
+                patch_path: PathBuf::from("roadmap-patch-next.toml"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(6),
+            1_700_000_000_006,
+            &EventPayload::RoadmapPatchApprovalRequested {
+                patch_id: patch_id.clone(),
+                target,
+                channel: ApprovalChannel::Desktop {
+                    duration: ApprovalDuration::Transient,
+                },
+                summary_hash: ContentHash::compute(b"summary-next"),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let (status, decision, conflict_choice, roadmap_artifact, flow_artifact): (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT status, decision, conflict_choice, roadmap_artifact, flow_artifact
+                 FROM roadmap_patches WHERE patch_id = ?",
+                rusqlite::params![patch_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(status, "pending_approval");
+        assert_eq!(decision, None);
+        assert_eq!(conflict_choice, None);
+        assert_eq!(roadmap_artifact, None);
+        assert_eq!(flow_artifact, None);
     }
 
     #[test]

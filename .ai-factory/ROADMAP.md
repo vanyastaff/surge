@@ -265,3 +265,4 @@
 | Bootstrap & adaptive flow generation | 2026-05-09 |
 | Project initialization & stable context | 2026-05-10 |
 | Artifact format & convention library | 2026-05-11 |
+| Roadmap amendments via `surge feature` | 2026-05-11 |

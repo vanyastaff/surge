@@ -95,6 +95,34 @@ async fn explicit_project_target_reads_project_roadmap() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn absolute_project_roadmap_outside_project_root_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let outside = tmp.path().join("outside").join("ROADMAP.md");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    std::fs::write(&outside, "# Roadmap\n").unwrap();
+    let storage = Storage::open(tmp.path().join("home")).await.unwrap();
+
+    let resolver = RoadmapTargetResolver::new(storage, &project, &outside);
+    let err = resolver
+        .resolve(RoadmapTargetSelector::ProjectFile)
+        .await
+        .unwrap_err();
+
+    match err {
+        RoadmapTargetError::ProjectRoadmapOutsideProject {
+            project_path,
+            roadmap_path,
+        } => {
+            assert_eq!(project_path, project);
+            assert_eq!(roadmap_path, outside);
+        },
+        other => panic!("expected outside-project error, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_run_target_returns_artifacts_and_active_pickup() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");

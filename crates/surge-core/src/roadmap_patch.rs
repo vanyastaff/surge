@@ -30,6 +30,7 @@ impl RoadmapPatchId {
     /// unsupported characters.
     pub fn new(value: impl Into<String>) -> Result<Self, RoadmapPatchIdError> {
         let value = value.into();
+        let value = value.trim().to_owned();
         validate_patch_id(&value)?;
         Ok(Self(value))
     }
@@ -1427,6 +1428,13 @@ mod tests {
                 .collect(),
             other => panic!("expected conflicts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn patch_id_new_stores_trimmed_value() {
+        let patch_id = RoadmapPatchId::new("  rpatch-trimmed  ").unwrap();
+
+        assert_eq!(patch_id.as_str(), "rpatch-trimmed");
     }
 
     #[test]

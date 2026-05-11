@@ -277,6 +277,7 @@ impl std::fmt::Display for RoadmapStatus {
 const fn markdown_checkbox(status: RoadmapStatus) -> &'static str {
     match status {
         RoadmapStatus::Completed => "x",
+        RoadmapStatus::Running => "~",
         _ => " ",
     }
 }
@@ -542,5 +543,19 @@ mod tests {
         let item = timeline.find_item_mut(spec_id).unwrap();
         item.status = RoadmapStatus::Running;
         assert_eq!(timeline.batches[0].items[0].status, RoadmapStatus::Running);
+    }
+
+    #[test]
+    fn to_markdown_preserves_running_checkbox_marker() {
+        let mut milestone = RoadmapMilestone::new("m1", "Active");
+        milestone
+            .tasks
+            .push(RoadmapTask::new("m1-t1", "Currently running"));
+        milestone.tasks[0].status = RoadmapStatus::Running;
+        let roadmap = RoadmapArtifact::new(vec![milestone]);
+
+        let markdown = roadmap.to_markdown();
+
+        assert!(markdown.contains("- [~] m1-t1: Currently running (running)"));
     }
 }

@@ -100,6 +100,14 @@ pub enum RoadmapTargetError {
     /// Requested run has no roadmap artifact in its materialized view.
     #[error("run {0} has no roadmap artifact")]
     RunRoadmapMissing(RunId),
+    /// Project roadmap path is absolute but not inside the project root.
+    #[error("project roadmap path {roadmap_path} is outside project root {project_path}")]
+    ProjectRoadmapOutsideProject {
+        /// Configured project root.
+        project_path: PathBuf,
+        /// Configured roadmap path.
+        roadmap_path: PathBuf,
+    },
     /// Auto-selection found no viable candidates.
     #[error("no roadmap amendment target found")]
     NoTarget,
@@ -234,7 +242,7 @@ impl RoadmapTargetResolver {
         Ok(Some(RoadmapTargetCandidate {
             selector: RoadmapTargetSelector::ProjectFile,
             target: RoadmapPatchTarget::ProjectRoadmap {
-                roadmap_path: self.project_roadmap_target_path(),
+                roadmap_path: self.project_roadmap_target_path()?,
             },
             project_path: self.project_path.clone(),
             roadmap_hash: Some(hash),
@@ -309,15 +317,18 @@ impl RoadmapTargetResolver {
         }
     }
 
-    fn project_roadmap_target_path(&self) -> String {
+    fn project_roadmap_target_path(&self) -> Result<String, RoadmapTargetError> {
         let path = if self.project_roadmap_path.is_absolute() {
             self.project_roadmap_path
                 .strip_prefix(&self.project_path)
-                .unwrap_or(&self.project_roadmap_path)
+                .map_err(|_| RoadmapTargetError::ProjectRoadmapOutsideProject {
+                    project_path: self.project_path.clone(),
+                    roadmap_path: self.project_roadmap_path.clone(),
+                })?
         } else {
             &self.project_roadmap_path
         };
-        path.to_string_lossy().replace('\\', "/")
+        Ok(path.to_string_lossy().replace('\\', "/"))
     }
 }
 

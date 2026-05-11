@@ -711,23 +711,38 @@ fn introduced_refs(patch: &RoadmapPatch) -> Vec<RoadmapItemRef> {
                 milestone_id: milestone_id.clone(),
                 task_id: task.id.clone(),
             }),
-            RoadmapPatchOperation::ReplaceDraftItem { replacement, .. } => {
-                push_replacement_ref(&mut refs, replacement);
+            RoadmapPatchOperation::ReplaceDraftItem {
+                target,
+                replacement,
+                ..
+            } => {
+                push_replacement_ref(&mut refs, target, replacement);
             },
         }
     }
     refs
 }
 
-fn push_replacement_ref(refs: &mut Vec<RoadmapItemRef>, replacement: &RoadmapPatchItem) {
-    match replacement {
-        RoadmapPatchItem::Milestone { milestone } => refs.push(RoadmapItemRef::Milestone {
+fn push_replacement_ref(
+    refs: &mut Vec<RoadmapItemRef>,
+    target: &RoadmapItemRef,
+    replacement: &RoadmapPatchItem,
+) {
+    match (target, replacement) {
+        (_, RoadmapPatchItem::Milestone { milestone }) => refs.push(RoadmapItemRef::Milestone {
             milestone_id: milestone.id.clone(),
         }),
-        RoadmapPatchItem::Task { task } => refs.push(RoadmapItemRef::Task {
-            milestone_id: String::new(),
+        (
+            RoadmapItemRef::Task {
+                milestone_id,
+                task_id: _,
+            },
+            RoadmapPatchItem::Task { task },
+        ) => refs.push(RoadmapItemRef::Task {
+            milestone_id: milestone_id.clone(),
             task_id: task.id.clone(),
         }),
+        _ => {},
     }
 }
 
@@ -1487,6 +1502,56 @@ milestone_id = "missing"
                 .iter()
                 .any(|diagnostic| { diagnostic.code == ArtifactDiagnosticCode::InvalidReference })
         );
+    }
+
+    #[test]
+    fn replacement_task_introduces_ref_with_target_milestone_context() {
+        let mut milestone = crate::roadmap::RoadmapMilestone::new("m1", "Existing");
+        milestone
+            .tasks
+            .push(crate::roadmap::RoadmapTask::new("m1-t1", "Old task"));
+        let roadmap = RoadmapArtifact::new(vec![milestone]);
+
+        let report = validate_roadmap_patch_text_with_context(
+            r#"schema_version = 1
+id = "rpatch-replace-ref"
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+
+[[operations]]
+op = "replace_draft_item"
+reason = "rename draft task"
+
+[operations.target]
+kind = "task"
+milestone_id = "m1"
+task_id = "m1-t1"
+
+[operations.replacement]
+kind = "task"
+
+[operations.replacement.task]
+id = "m1-t2"
+title = "New task"
+
+[[dependencies]]
+reason = "new task depends on old milestone"
+
+[dependencies.from]
+kind = "task"
+milestone_id = "m1"
+task_id = "m1-t2"
+
+[dependencies.to]
+kind = "milestone"
+milestone_id = "m1"
+"#,
+            &roadmap,
+        );
+
+        assert!(report.is_valid(), "{report:#?}");
     }
 
     #[test]

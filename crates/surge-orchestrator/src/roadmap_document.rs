@@ -45,6 +45,14 @@ pub enum RoadmapDocumentError {
         "markdown roadmap replacements require explicit stable IDs; apply this patch as a follow-up run instead"
     )]
     UnsupportedMarkdownReplacement,
+    /// Markdown insertion rendering cannot preserve a non-append placement.
+    #[error(
+        "markdown roadmap cannot preserve insertion order for {item}; apply this patch as a follow-up run instead"
+    )]
+    UnsupportedMarkdownInsertionOrder {
+        /// Item whose structured placement cannot be rendered safely.
+        item: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +334,7 @@ fn render_markdown_amendment(
     if !patch_result.replaced_items.is_empty() {
         return Err(RoadmapDocumentError::UnsupportedMarkdownReplacement);
     }
+    validate_markdown_append_only_insertions(parsed, patch_result)?;
 
     let Some(markdown) = parsed.markdown.as_ref() else {
         return Ok(patch_result.markdown.clone());
@@ -394,6 +403,77 @@ fn render_markdown_amendment(
         rendered.push('\n');
     }
     Ok(rendered)
+}
+
+fn validate_markdown_append_only_insertions(
+    parsed: &ParsedRoadmapDocument,
+    patch_result: &RoadmapPatchApplyResult,
+) -> Result<(), RoadmapDocumentError> {
+    let inserted_milestones: BTreeSet<&str> = patch_result
+        .inserted_milestones
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let inserted_tasks: BTreeSet<(&str, &str)> = patch_result
+        .inserted_tasks
+        .iter()
+        .filter_map(|item| match item {
+            RoadmapItemRef::Task {
+                milestone_id,
+                task_id,
+            } => Some((milestone_id.as_str(), task_id.as_str())),
+            RoadmapItemRef::Milestone { .. } => None,
+        })
+        .collect();
+
+    reject_non_append_milestones(&patch_result.roadmap, &inserted_milestones)?;
+    reject_non_append_tasks(&parsed.roadmap, &patch_result.roadmap, &inserted_tasks)
+}
+
+fn reject_non_append_milestones(
+    roadmap: &RoadmapArtifact,
+    inserted_milestones: &BTreeSet<&str>,
+) -> Result<(), RoadmapDocumentError> {
+    let mut saw_inserted = false;
+    for milestone in &roadmap.milestones {
+        if inserted_milestones.contains(milestone.id.as_str()) {
+            saw_inserted = true;
+            continue;
+        }
+        if saw_inserted {
+            return Err(RoadmapDocumentError::UnsupportedMarkdownInsertionOrder {
+                item: format!("milestone {}", milestone.id),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn reject_non_append_tasks(
+    original: &RoadmapArtifact,
+    amended: &RoadmapArtifact,
+    inserted_tasks: &BTreeSet<(&str, &str)>,
+) -> Result<(), RoadmapDocumentError> {
+    for original_milestone in &original.milestones {
+        let Some(amended_milestone) = find_milestone(amended, &original_milestone.id) else {
+            continue;
+        };
+        let mut saw_inserted = false;
+        for task in &amended_milestone.tasks {
+            let is_inserted =
+                inserted_tasks.contains(&(original_milestone.id.as_str(), task.id.as_str()));
+            if is_inserted {
+                saw_inserted = true;
+                continue;
+            }
+            if saw_inserted {
+                return Err(RoadmapDocumentError::UnsupportedMarkdownInsertionOrder {
+                    item: format!("task {}/{}", original_milestone.id, task.id),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn render_milestone_block(milestone: &RoadmapMilestone) -> Vec<String> {
@@ -538,5 +618,88 @@ mod tests {
         assert!(rendered.contains("  - [ ] **Send approval request**"));
         assert!(rendered.contains("## Completed"));
         assert!(rendered.find("Telegram approvals") < rendered.find("## Completed"));
+    }
+
+    #[test]
+    fn rejects_markdown_milestone_insertion_that_would_reorder_output() {
+        let markdown = r#"# Roadmap
+
+## Milestones
+
+- [ ] **Core graph executor**
+
+## Completed
+"#;
+        let parsed = parse_roadmap_document(Path::new(".ai-factory/ROADMAP.md"), markdown)
+            .expect("markdown roadmap should parse");
+        let mut roadmap = parsed.roadmap.clone();
+        roadmap
+            .milestones
+            .insert(0, RoadmapMilestone::new("telegram", "Telegram approvals"));
+        let patch_result = RoadmapPatchApplyResult {
+            roadmap,
+            markdown: String::new(),
+            inserted_milestones: vec!["telegram".into()],
+            inserted_tasks: Vec::new(),
+            replaced_items: Vec::new(),
+            dependencies_added: Vec::new(),
+        };
+
+        let err = render_amended_roadmap_document(
+            Path::new(".ai-factory/ROADMAP.md"),
+            markdown,
+            &parsed,
+            &patch_result,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            RoadmapDocumentError::UnsupportedMarkdownInsertionOrder { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_markdown_task_insertion_that_would_reorder_output() {
+        let markdown = r#"# Roadmap
+
+## Milestones
+
+- [ ] **Core graph executor**
+  - [ ] **Validate graph**
+
+## Completed
+"#;
+        let parsed = parse_roadmap_document(Path::new(".ai-factory/ROADMAP.md"), markdown)
+            .expect("markdown roadmap should parse");
+        let mut roadmap = parsed.roadmap.clone();
+        roadmap.milestones[0].tasks.insert(
+            0,
+            RoadmapTask::new("core-graph-executor-task-new", "New task"),
+        );
+        let patch_result = RoadmapPatchApplyResult {
+            roadmap,
+            markdown: String::new(),
+            inserted_milestones: Vec::new(),
+            inserted_tasks: vec![RoadmapItemRef::Task {
+                milestone_id: "core-graph-executor".into(),
+                task_id: "core-graph-executor-task-new".into(),
+            }],
+            replaced_items: Vec::new(),
+            dependencies_added: Vec::new(),
+        };
+
+        let err = render_amended_roadmap_document(
+            Path::new(".ai-factory/ROADMAP.md"),
+            markdown,
+            &parsed,
+            &patch_result,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            RoadmapDocumentError::UnsupportedMarkdownInsertionOrder { .. }
+        ));
     }
 }

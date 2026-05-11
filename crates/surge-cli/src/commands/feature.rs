@@ -32,7 +32,7 @@ use surge_orchestrator::feature_driver::{
 };
 use surge_orchestrator::roadmap_amendment::{
     RoadmapPatchApprovalLoop, RoadmapPatchApprovalResolution, record_roadmap_updated,
-    start_follow_up_run, store_applied_artifacts, store_patch_draft,
+    request_patch_approval, start_follow_up_run, store_applied_artifacts, store_patch_draft,
 };
 use surge_orchestrator::roadmap_document::{
     parse_roadmap_document, render_amended_roadmap_document, roadmap_identifiers_prompt,
@@ -267,6 +267,29 @@ async fn reject_command(args: FeatureRejectArgs) -> Result<()> {
         .await
         .context("open storage")?;
     let patch_id = parse_patch_id(&args.patch_id)?;
+    let Some(existing) = storage.roadmap_patch_store().get(&patch_id)? else {
+        return Err(anyhow!("roadmap patch not found: {patch_id}"));
+    };
+    if existing.status != RoadmapPatchStatus::Applied {
+        let owner_run_id = existing
+            .run_id
+            .ok_or_else(|| anyhow!("roadmap patch {patch_id} has no owning run event log"))?;
+        let writer = storage
+            .open_run_writer(owner_run_id)
+            .await
+            .with_context(|| format!("open owning run writer {owner_run_id}"))?;
+        append_reject_decision_event(
+            &writer,
+            &patch_id,
+            args.reason.clone(),
+            args.conflict_choice.map(Into::into),
+        )
+        .await?;
+        writer
+            .close()
+            .await
+            .context("close owning run writer after patch rejection")?;
+    }
     let Some(record) = storage.roadmap_patch_store().reject(
         &patch_id,
         args.reason.as_deref(),
@@ -289,6 +312,32 @@ async fn reject_command(args: FeatureRejectArgs) -> Result<()> {
             println!("conflict_choice={}", conflict_choice_label(choice));
         }
     }
+    Ok(())
+}
+
+async fn append_reject_decision_event(
+    writer: &surge_persistence::runs::RunWriter,
+    patch_id: &RoadmapPatchId,
+    comment: Option<String>,
+    conflict_choice: Option<OperatorConflictChoice>,
+) -> Result<()> {
+    tracing::info!(
+        target: "feature_cli",
+        patch_id = %patch_id,
+        conflict_choice = conflict_choice.map(conflict_choice_label),
+        "roadmap_patch_reject_decision_event"
+    );
+    writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::RoadmapPatchApprovalDecided {
+                patch_id: patch_id.clone(),
+                decision: RoadmapPatchApprovalDecision::Reject,
+                channel_used: ApprovalChannelKind::Desktop,
+                comment,
+                conflict_choice,
+            },
+        ))
+        .await?;
     Ok(())
 }
 
@@ -404,7 +453,12 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
         FeaturePlannerResult::Patched { patch, patch_path } => {
             let mut patch = *patch;
             normalize_patch_target(&mut patch, &flow.target);
-            attach_apply_conflicts(&mut patch, &flow.roadmap_text, flow.args.json);
+            attach_apply_conflicts(
+                &mut patch,
+                &flow.target.roadmap_path,
+                &flow.roadmap_text,
+                flow.args.json,
+            );
             let patch_toml = toml::to_string_pretty(&patch).context("serialize roadmap patch")?;
             tokio::fs::write(&patch_path, patch_toml.as_bytes())
                 .await
@@ -422,6 +476,7 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
                 &flow.storage,
                 &flow.target,
                 &patch,
+                flow.planner_run_id,
                 PatchIndexUpdate {
                     content_hash: patch_hash,
                     status: RoadmapPatchStatus::Drafted,
@@ -444,17 +499,18 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
             let mut follow_up_run_id = None;
             let mut selected_conflict_choice = decision.conflict_choice();
             let status = match decision {
-                PatchDecision::Store => {
+                PatchDecision::Store { summary_hash } => {
                     record = upsert_patch_index(
                         &flow.storage,
                         &flow.target,
                         &patch,
+                        flow.planner_run_id,
                         PatchIndexUpdate {
                             content_hash: patch_hash,
                             status: RoadmapPatchStatus::PendingApproval,
                             patch_artifact: record.patch_artifact,
                             patch_path: record.patch_path.clone(),
-                            summary_hash: None,
+                            summary_hash: Some(summary_hash),
                             decision: None,
                             decision_comment: None,
                             conflict_choice: None,
@@ -471,6 +527,7 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
                         &flow.storage,
                         &flow.target,
                         &patch,
+                        flow.planner_run_id,
                         PatchIndexUpdate {
                             content_hash: patch_hash,
                             status: RoadmapPatchStatus::Rejected,
@@ -504,6 +561,7 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
                         &flow.storage,
                         &flow.target,
                         &patch,
+                        flow.planner_run_id,
                         PatchIndexUpdate {
                             content_hash: patch_hash,
                             status: apply.status,
@@ -790,7 +848,9 @@ async fn daemon_engine_facade() -> Result<DaemonEngineFacade> {
 }
 
 enum PatchDecision {
-    Store,
+    Store {
+        summary_hash: ContentHash,
+    },
     Approve {
         conflict_choice: Option<OperatorConflictChoice>,
     },
@@ -803,7 +863,7 @@ enum PatchDecision {
 impl PatchDecision {
     fn conflict_choice(&self) -> Option<OperatorConflictChoice> {
         match self {
-            Self::Store => None,
+            Self::Store { .. } => None,
             Self::Approve { conflict_choice }
             | Self::Reject {
                 conflict_choice, ..
@@ -820,7 +880,10 @@ async fn decide_patch(
 ) -> Result<PatchDecision> {
     validate_requested_conflict_choice(patch, conflict_choice)?;
     match mode {
-        FeatureApprovalMode::Store => Ok(PatchDecision::Store),
+        FeatureApprovalMode::Store => {
+            let summary_hash = record_cli_approval_request(writer, patch).await?;
+            Ok(PatchDecision::Store { summary_hash })
+        },
         FeatureApprovalMode::Approve => {
             require_conflict_choice_for_approval(patch, conflict_choice)?;
             if conflict_choice == Some(OperatorConflictChoice::RejectPatch) {
@@ -944,7 +1007,10 @@ async fn prompt_for_patch_decision(
                 conflict_choice,
             })
         },
-        "s" | "store" | "pending" => Ok(PatchDecision::Store),
+        "s" | "store" | "pending" => {
+            let summary_hash = record_cli_approval_request(writer, patch).await?;
+            Ok(PatchDecision::Store { summary_hash })
+        },
         other => Err(anyhow!("unknown approval choice: {other}")),
     }
 }
@@ -973,6 +1039,14 @@ async fn record_cli_decision(
         )
         .await?;
     Ok(())
+}
+
+async fn record_cli_approval_request(
+    writer: &surge_persistence::runs::RunWriter,
+    patch: &RoadmapPatch,
+) -> Result<ContentHash> {
+    let prompt = request_patch_approval(writer, patch, local_approval_channel()).await?;
+    Ok(prompt.summary_hash)
 }
 
 fn prompt_for_conflict_choice(patch: &RoadmapPatch) -> Result<Option<OperatorConflictChoice>> {
@@ -1083,6 +1157,7 @@ fn upsert_patch_index(
     storage: &Arc<Storage>,
     target: &RoadmapTargetCandidate,
     patch: &RoadmapPatch,
+    owner_run_id: RunId,
     update: PatchIndexUpdate,
 ) -> Result<surge_persistence::roadmap_patches::RoadmapPatchIndexRecord> {
     storage
@@ -1090,7 +1165,7 @@ fn upsert_patch_index(
         .upsert(&RoadmapPatchIndexUpsert {
             patch_id: patch.id.clone(),
             content_hash: update.content_hash,
-            run_id: target.run_id,
+            run_id: Some(owner_run_id),
             project_path: target.project_path.clone(),
             target: target.target.clone(),
             status: update.status,
@@ -1129,11 +1204,17 @@ fn normalize_patch_target(patch: &mut RoadmapPatch, target: &RoadmapTargetCandid
     }
 }
 
-fn attach_apply_conflicts(patch: &mut RoadmapPatch, roadmap_text: &str, json: bool) {
-    let Ok(roadmap) = toml::from_str::<RoadmapArtifact>(roadmap_text) else {
+fn attach_apply_conflicts(patch: &mut RoadmapPatch, path: &Path, roadmap_text: &str, json: bool) {
+    let Ok(parsed) = parse_roadmap_document(path, roadmap_text) else {
+        tracing::warn!(
+            target: "feature_cli",
+            patch_id = %patch.id,
+            roadmap_path = %path.display(),
+            "roadmap_patch_conflict_detection_parse_failed"
+        );
         return;
     };
-    match patch.apply_to_roadmap(&roadmap) {
+    match patch.apply_to_roadmap(&parsed.roadmap) {
         Ok(_) => {},
         Err(RoadmapPatchApplyError::InvalidShape { issues }) => {
             tracing::warn!(

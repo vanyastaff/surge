@@ -383,6 +383,9 @@ pub async fn apply_active_run_patch(
         Some(amendment.flow_toml.as_bytes()),
     )
     .await?;
+    let Some(flow_artifact) = artifacts.flow.as_ref().map(|artifact| artifact.hash) else {
+        return Err(RoadmapAmendmentError::MissingActiveFlowArtifact);
+    };
     record_roadmap_updated(
         writer,
         patch_id,
@@ -401,10 +404,6 @@ pub async fn apply_active_run_patch(
         ActivePickupPolicy::Allowed,
     )
     .await?;
-
-    let Some(flow_artifact) = artifacts.flow.as_ref().map(|artifact| artifact.hash) else {
-        return Err(RoadmapAmendmentError::MissingActiveFlowArtifact);
-    };
 
     tracing::info!(
         target: "roadmap_amendment",
