@@ -41,6 +41,11 @@ target = "user_prompt"
 source = { type = "initial_prompt" }
 
 [[nodes.description_author.config.bindings]]
+target = "project_context"
+source = { type = "run_artifact", name = "project_context" }
+optional = true
+
+[[nodes.description_author.config.bindings]]
 target = "edit_feedback"
 source = { type = "edit_feedback", from_node = "description_author" }
 
@@ -120,6 +125,11 @@ profile = "roadmap-planner@1.0"
 [[nodes.roadmap_planner.config.bindings]]
 target = "user_prompt"
 source = { type = "initial_prompt" }
+
+[[nodes.roadmap_planner.config.bindings]]
+target = "project_context"
+source = { type = "run_artifact", name = "project_context" }
+optional = true
 
 [[nodes.roadmap_planner.config.bindings]]
 target = "description_artifact"
@@ -205,6 +215,11 @@ profile = "flow-generator@1.0"
 [[nodes.flow_generator.config.bindings]]
 target = "user_prompt"
 source = { type = "initial_prompt" }
+
+[[nodes.flow_generator.config.bindings]]
+target = "project_context"
+source = { type = "run_artifact", name = "project_context" }
+optional = true
 
 [[nodes.flow_generator.config.bindings]]
 target = "description_artifact"

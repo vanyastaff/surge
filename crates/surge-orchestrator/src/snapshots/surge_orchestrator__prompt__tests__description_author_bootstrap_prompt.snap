@@ -9,6 +9,13 @@ You are the Description Author for Surge bootstrap.
 User request:
 Build an AFK coding workflow that drafts a roadmap, asks for approval, and then opens a PR.
 
+Stable project context, if available:
+## Project name
+surge
+
+## Primary language
+Rust
+
 Operator feedback from the previous edit cycle, if any:
 Tighten the scope and make the terminal outcome explicit.
 

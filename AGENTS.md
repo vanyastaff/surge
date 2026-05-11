@@ -26,6 +26,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 ├── justfile                         # Build automation: `just <recipe>` (cargo wrappers, mirrors CI)
 ├── surge.toml                       # User-facing runtime config
 ├── surge.example.toml               # Documented example of surge.toml schema
+├── project.md                       # Generated stable project context for run seeding (when present)
 ├── README.md                        # Project landing page
 ├── CLAUDE.md                        # Top-level instructions for Claude Code
 ├── LICENSE-MIT
@@ -74,12 +75,16 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | File | Purpose |
 |---|---|
 | `Cargo.toml` | Workspace root — lists 12 crate members and pins all dependency versions in `[workspace.dependencies]`. Member crates use `{ workspace = true }`. |
-| `crates/surge-cli/src/main.rs` | `surge` CLI binary entrypoint — clap-derived command tree (agents, specs, worktrees, engine, daemon, registry). |
-| `crates/surge-cli/src/commands/` | Per-subcommand modules. |
+| `crates/surge-cli/src/main.rs` | `surge` CLI binary entrypoint — clap-derived command tree (init, project, agents, specs, worktrees, engine, daemon, registry). |
+| `crates/surge-cli/src/commands/init.rs` | `surge init` wizard and `--default` project onboarding. |
+| `crates/surge-cli/src/commands/project.rs` | `surge project describe` stable project-context command. |
+| `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
 | `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
+| `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |
 | `surge.toml` / `surge.example.toml` | User-facing runtime configuration. The `.example` file documents every field. |
+| `project.md` | Generated stable project summary captured into new runs as `project_context` when present. |
 | `examples/flow_*.toml` | Reference `flow.toml` graphs the engine can execute as sanity checks. |
 | `clippy.toml` | Strict clippy profile (test-mode relaxations enabled). |
 | `rustfmt.toml` | Stable rustfmt configuration (do not introduce nightly-only options). |
@@ -108,6 +113,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | `.ai-factory/DESCRIPTION.md` | Project specification synthesized for AI context: overview, features, full Rust stack, NFR. |
 | `.ai-factory/ARCHITECTURE.md` | AI-agent architecture context (pattern, folder structure, dependency rules). Distinct from `docs/ARCHITECTURE.md` — keep them aligned. |
 | `.ai-factory/rules/base.md` | Detected coding conventions: naming, error handling, logging, testing, complexity caps. |
+| `project.md` | Generated run-seeding context from `surge project describe`; refresh after meaningful project changes. |
 | `CLAUDE.md` | Top-level instructions for Claude Code: project summary, commands, key design decisions, coding standards. |
 
 ## Agent Rules

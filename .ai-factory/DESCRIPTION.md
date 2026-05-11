@@ -14,6 +14,7 @@ Surge is **agent-agnostic** (speaks ACP to Claude Code, Codex, Gemini, or any co
 - **Declarative `flow.toml` graphs** with a closed `NodeKind` enum: `Agent`, `HumanGate`, `Branch`, `Loop`, `Subgraph`, `Notify`, `Terminal`. Routing is graph data, not LLM judgment.
 - **Event sourcing** — current state is the fold of an append-only event log. Replay, fork-from-here, and crash recovery are folds, not extra subsystems.
 - **Adaptive flow generation** — three-stage bootstrap (Description Author → Roadmap Planner → Flow Generator) picks structure per run; the user reviews and approves.
+- **Project initialization and stable context** — `surge init` writes safe onboarding defaults, and `surge project describe` generates `project.md` for run-level `project_context` seeding.
 - **Reusable profiles** for agent nodes — system prompt, launch config, sandbox intent, allowed tools, declared outcomes, hooks, approval policy.
 - **Sandbox delegation** — agent nodes carry a sandbox intent (`read-only`, `workspace-write`, `workspace+network`, `full-access`); the bridge maps to the runtime's native flags.
 - **Injected tools** — `report_stage_outcome` (dynamic per-node enum) and `request_human_input` are exposed to every session.
@@ -74,12 +75,12 @@ See `.ai-factory/ARCHITECTURE.md` for the AI-context architecture guidelines (pa
 | `surge-core` | Graph, profile, event, sandbox, approval, validation types. No I/O. |
 | `surge-spec` | Legacy structured-spec format and validation (kept while the new flow path stabilizes). |
 | `surge-acp` | ACP bridge, agent pool, agent registry, discovery, health, mock agent. |
-| `surge-orchestrator` | Engine: legacy spec pipeline + the graph executor. |
+| `surge-orchestrator` | Engine: legacy spec pipeline, graph executor, bootstrap driver, and stable project-context generation/seeding. |
 | `surge-persistence` | SQLite stores, event log, materialized views, memory, analytics. |
 | `surge-git` | Worktree and branch lifecycle. |
 | `surge-intake` | Issue-tracker sources (`TaskSource` trait + Linear / GitHub Issues impls). |
 | `surge-daemon` | Long-running local engine host over Unix sockets / Windows named pipes. |
-| `surge-cli` | `surge` binary: agents, specs, worktrees, engine, daemon, registry, memory, analytics. |
+| `surge-cli` | `surge` binary: init, project context, agents, specs, worktrees, engine, daemon, registry, memory, analytics. |
 | `surge-notify` | Notification delivery: desktop, webhook, Slack, email, Telegram. |
 | `surge-mcp` | stdio MCP server lifecycle and tool delegation. |
 | `surge-ui` | GPUI desktop shell. |

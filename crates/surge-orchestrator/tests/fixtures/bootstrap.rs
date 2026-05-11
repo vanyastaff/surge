@@ -65,7 +65,7 @@ impl BootstrapHarness {
         let run_id = self.run_id;
         let worktree = self.dir.path().to_path_buf();
         tokio::spawn(async move {
-            run_bootstrap_in_worktree(engine.as_ref(), prompt, run_id, worktree).await
+            run_bootstrap_in_worktree(engine.as_ref(), prompt, run_id, worktree, None).await
         })
     }
 

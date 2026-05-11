@@ -35,6 +35,9 @@ pub struct AgentConfig {
 pub struct Binding {
     pub source: ArtifactSource,
     pub target: TemplateVar,
+    /// Resolve missing artifacts as an empty string instead of failing the stage.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -182,6 +185,7 @@ mod tests {
                 artifact: "spec.md".into(),
             },
             target: TemplateVar("spec".into()),
+            optional: false,
         };
         let toml_s = toml::to_string(&b).unwrap();
         let parsed: Binding = toml::from_str(&toml_s).unwrap();
@@ -195,6 +199,7 @@ mod tests {
                 from_node: NodeKey::try_from("description_author").unwrap(),
             },
             target: TemplateVar("edit_feedback".into()),
+            optional: false,
         };
         let toml_s = toml::to_string(&b).unwrap();
         let parsed: Binding = toml::from_str(&toml_s).unwrap();
@@ -206,6 +211,7 @@ mod tests {
         let b = Binding {
             source: ArtifactSource::InitialPrompt,
             target: TemplateVar("user_prompt".into()),
+            optional: false,
         };
         let toml_s = toml::to_string(&b).unwrap();
         let parsed: Binding = toml::from_str(&toml_s).unwrap();
@@ -234,6 +240,7 @@ mod tests {
                     name: "description.md".into(),
                 },
                 target: TemplateVar("description".into()),
+                optional: false,
             }],
             rules_overrides: Some(RulesOverride {
                 disable_inherited: false,

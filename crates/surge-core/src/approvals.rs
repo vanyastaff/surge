@@ -35,10 +35,11 @@ impl Default for ApprovalConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalPolicy {
     Untrusted,
+    #[default]
     OnRequest,
     Never,
 }

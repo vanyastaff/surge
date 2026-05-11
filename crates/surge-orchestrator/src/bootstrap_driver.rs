@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::engine::config::ProjectContextSeed;
 use crate::engine::handle::RunOutcome;
 use crate::engine::{Engine, EngineError, EngineRunConfig};
 use surge_core::BundledFlows;
@@ -73,6 +74,7 @@ pub async fn run_bootstrap_in_worktree(
     prompt: String,
     run_id: RunId,
     worktree_path: PathBuf,
+    project_context: Option<ProjectContextSeed>,
 ) -> Result<MaterializedRun, BootstrapError> {
     let bundled = BundledFlows::by_name_latest(BOOTSTRAP_FLOW_NAME)
         .ok_or(BootstrapError::BundledFlowMissing)?;
@@ -85,6 +87,7 @@ pub async fn run_bootstrap_in_worktree(
 
     let run_config = EngineRunConfig {
         initial_prompt: prompt,
+        project_context,
         ..EngineRunConfig::default()
     };
     let handle = engine

@@ -16,8 +16,9 @@ mod commands;
 
 use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,
-    config::ConfigCommands, insights::InsightsCommands, memory::MemoryCommands,
-    registry::RegistryCommands, spec::SpecCommands, tracker::TrackerCommand,
+    config::ConfigCommands, init::InitArgs, insights::InsightsCommands, memory::MemoryCommands,
+    project::ProjectCommands, registry::RegistryCommands, spec::SpecCommands,
+    tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -165,7 +166,7 @@ enum Commands {
     },
 
     /// Initialize surge.toml in current directory
-    Init,
+    Init(InitArgs),
 
     /// Browse and add agents from the built-in registry
     Registry {
@@ -216,6 +217,12 @@ enum Commands {
     Profile {
         #[command(subcommand)]
         command: commands::profile::ProfileCommands,
+    },
+
+    /// Manage project-level context artifacts.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
     },
 }
 
@@ -336,7 +343,7 @@ async fn main() -> Result<()> {
     // Check for orphaned worktrees at startup (skip for certain commands)
     let should_check_orphans = !matches!(
         cli.command,
-        Commands::Init
+        Commands::Init(_)
             | Commands::Clean { .. }
             | Commands::Config { .. }
             | Commands::Bootstrap(_)
@@ -344,6 +351,7 @@ async fn main() -> Result<()> {
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
             | Commands::Profile { .. }
+            | Commands::Project { .. }
     );
 
     if should_check_orphans {
@@ -560,37 +568,12 @@ async fn run_command(command: Commands) -> Result<()> {
             commands::profile::run(command).await?;
         },
 
-        Commands::Init => {
-            let config_path = std::env::current_dir()?.join("surge.toml");
+        Commands::Project { command } => {
+            commands::project::run(command).await?;
+        },
 
-            if config_path.exists() {
-                anyhow::bail!("surge.toml already exists in current directory");
-            }
-
-            let default_toml = r#"# Surge configuration
-# See: https://github.com/vanyastaff/surge
-
-default_agent = "claude"
-
-[agents.claude]
-command = "claude"
-args = ["--print", "--output-format", "stream-json"]
-transport = "stdio"
-
-[pipeline]
-max_qa_iterations = 10
-max_parallel = 3
-
-[pipeline.gates]
-after_spec = true
-after_plan = true
-after_each_subtask = false
-after_qa = true
-"#;
-
-            std::fs::write(&config_path, default_toml)?;
-            println!("⚡ Created surge.toml");
-            println!("   Edit agents section to configure your coding agents.");
+        Commands::Init(args) => {
+            commands::init::run(args)?;
         },
     }
 

@@ -3,6 +3,7 @@
 use clap::Parser;
 use std::collections::HashMap;
 use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use surge_acp::bridge::AcpBridge;
@@ -707,6 +708,7 @@ async fn spawn_inbox_subsystems(
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
     }
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Consumer.
     let consumer = InboxActionConsumer {
@@ -715,6 +717,8 @@ async fn spawn_inbox_subsystems(
         engine: Arc::clone(&engine),
         sources: Arc::clone(&sources),
         worktrees_root,
+        project_root,
+        config: config.clone(),
         poll_interval: std::time::Duration::from_millis(500),
     };
     let shutdown_for_consumer = shutdown.clone();

@@ -230,6 +230,40 @@ impl Engine {
             events.extend(inherited);
         }
 
+        if let Some(seed) = &run_config.project_context {
+            let project_context_artifact = artifact_store
+                .put(
+                    run_id,
+                    PROJECT_CONTEXT_ARTIFACT_NAME,
+                    seed.content.as_bytes(),
+                )
+                .await
+                .map_err(|e| EngineError::Storage(e.to_string()))?;
+            let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+                .map_err(|e| EngineError::Internal(format!("project context producer key: {e}")))?;
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %run_id,
+                path = %seed.path.display(),
+                bytes = seed.content.len(),
+                hash = %project_context_artifact.hash,
+                "seeded project_context artifact"
+            );
+            tracing::info!(
+                target: "engine::startup",
+                run_id = %run_id,
+                path = %seed.path.display(),
+                hash = %project_context_artifact.hash,
+                "project context captured for run"
+            );
+            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: producer,
+                artifact: project_context_artifact.hash,
+                path: project_context_artifact.path,
+                name: PROJECT_CONTEXT_ARTIFACT_NAME.to_string(),
+            }));
+        }
+
         // Surface the operator's free-form prompt as a first-class artifact so
         // bootstrap (or any) agent stage can pull it via the standard binding
         // path through `ArtifactSource::InitialPrompt` (and equivalently via
@@ -665,6 +699,12 @@ fn _engine_config_used(e: &Engine) {
 /// surfaced to agent stages. Bootstrap profiles bind to this name (either via
 /// `ArtifactSource::InitialPrompt` or `ArtifactSource::RunArtifact { name }`).
 pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
+
+/// Canonical artifact name for the stable project context captured at run start.
+pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
+
+/// Synthetic producer node for the run-level project context seed.
+const PROJECT_CONTEXT_PRODUCER_NODE: &str = "project_context_seed";
 
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";

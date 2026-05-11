@@ -5,6 +5,7 @@ use clap::Subcommand;
 use owo_colors::{OwoColorize, Stream};
 use std::path::PathBuf;
 use std::sync::Arc;
+use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
 use surge_persistence::runs::Storage;
@@ -202,8 +203,16 @@ async fn run_command(
     let run_id = RunId::new();
     println!("{run_id}");
 
+    let app_config =
+        SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
+    let run_config = surge_orchestrator::project_context::with_project_context_seed(
+        EngineRunConfig::default(),
+        &worktree_path,
+        &app_config,
+    );
+
     let handle = facade
-        .start_run(run_id, graph, worktree_path, EngineRunConfig::default())
+        .start_run(run_id, graph, worktree_path, run_config)
         .await?;
 
     if watch {

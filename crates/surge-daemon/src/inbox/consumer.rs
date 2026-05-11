@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use surge_core::SurgeConfig;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
 use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
@@ -28,6 +29,10 @@ pub struct InboxActionConsumer {
     pub sources: Arc<HashMap<String, Arc<dyn TaskSource>>>,
     /// Root directory under which per-run worktrees are created.
     pub worktrees_root: PathBuf,
+    /// Project root used for config and project-context seeding.
+    pub project_root: PathBuf,
+    /// Config captured from the daemon's project root.
+    pub config: SurgeConfig,
     /// How often the queue is polled.
     pub poll_interval: Duration,
 }
@@ -145,9 +150,14 @@ impl InboxActionConsumer {
             .map_err(|e| format!("bootstrap.build: {e}"))?;
 
         // Start the run.
+        let run_config = surge_orchestrator::project_context::with_project_context_seed(
+            EngineRunConfig::default(),
+            &self.project_root,
+            &self.config,
+        );
         let handle = self
             .engine
-            .start_run(run_id, graph, worktree, EngineRunConfig::default())
+            .start_run(run_id, graph, worktree, run_config)
             .await
             .map_err(|e| format!("engine.start_run: {e}"))?;
 

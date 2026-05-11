@@ -46,6 +46,11 @@ name = "edit_feedback"
 source = { source = "any" }
 optional = true
 
+[[bindings.expected]]
+name = "project_context"
+source = { source = "run_artifact" }
+optional = true
+
 [prompt]
 system = """\
 You are the Description Author for Surge bootstrap.
@@ -54,6 +59,9 @@ You are the Description Author for Surge bootstrap.
 
 User request:
 {{user_prompt}}
+
+Stable project context, if available:
+{{project_context}}
 
 Operator feedback from the previous edit cycle, if any:
 {{edit_feedback}}

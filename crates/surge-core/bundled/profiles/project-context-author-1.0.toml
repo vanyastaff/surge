@@ -36,9 +36,17 @@ edge_kind_hint = "forward"
 name = "worktree_root"
 source = { source = "any" }
 
+[[bindings.expected]]
+name = "scan_context"
+source = { source = "any" }
+
 [prompt]
 system = """\
 You are the Project Context Author. Read `{{worktree_root}}` and produce `project.md`.
+Use this deterministic scan context as the source of truth before reading any
+additional files:
+
+{{scan_context}}
 
 Output schema (Markdown sections):
 - `## Project name`

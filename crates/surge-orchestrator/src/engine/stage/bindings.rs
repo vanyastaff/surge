@@ -44,32 +44,35 @@ pub async fn resolve_bindings(
 ) -> Result<Vec<(TemplateVar, String)>, BindingError> {
     let mut out = Vec::with_capacity(bindings.len());
     for b in bindings {
-        let value = match &b.source {
+        let resolved: Result<String, BindingError> = match &b.source {
             ArtifactSource::RunArtifact { name } => {
-                let aref = memory
-                    .artifacts
-                    .get(name)
-                    .ok_or_else(|| BindingError::UnknownArtifact(name.clone()))?;
-                read_artifact_text(&aref.path, worktree_root, &aref.name).await?
+                if let Some(aref) = memory.artifacts.get(name) {
+                    read_artifact_text(&aref.path, worktree_root, &aref.name).await
+                } else {
+                    Err(BindingError::UnknownArtifact(name.clone()))
+                }
             },
             ArtifactSource::NodeOutput { node, artifact } => {
-                let arefs = memory
-                    .artifacts_by_node
-                    .get(node)
-                    .ok_or_else(|| BindingError::NoArtifactsForNode(node.to_string()))?;
-                let aref = arefs
-                    .iter()
-                    .find(|a| &a.name == artifact)
-                    .ok_or_else(|| BindingError::UnknownArtifact(artifact.clone()))?;
-                read_artifact_text(&aref.path, worktree_root, &aref.name).await?
+                if let Some(arefs) = memory.artifacts_by_node.get(node) {
+                    if let Some(aref) = arefs.iter().find(|a| &a.name == artifact) {
+                        read_artifact_text(&aref.path, worktree_root, &aref.name).await
+                    } else {
+                        Err(BindingError::UnknownArtifact(artifact.clone()))
+                    }
+                } else {
+                    Err(BindingError::NoArtifactsForNode(node.to_string()))
+                }
             },
-            ArtifactSource::Static { content } => content.clone(),
-            ArtifactSource::GlobPattern { .. } => return Err(BindingError::GlobUnsupported),
+            ArtifactSource::Static { content } => Ok(content.clone()),
+            ArtifactSource::GlobPattern { .. } => Err(BindingError::GlobUnsupported),
             ArtifactSource::InitialPrompt => {
-                let aref = memory.artifacts.get("user_prompt").ok_or_else(|| {
-                    BindingError::UnknownArtifact("user_prompt (InitialPrompt)".into())
-                })?;
-                read_artifact_text(&aref.path, worktree_root, &aref.name).await?
+                if let Some(aref) = memory.artifacts.get("user_prompt") {
+                    read_artifact_text(&aref.path, worktree_root, &aref.name).await
+                } else {
+                    Err(BindingError::UnknownArtifact(
+                        "user_prompt (InitialPrompt)".into(),
+                    ))
+                }
             },
             // Bootstrap-only binding source. Maps the originating agent node
             // to its bootstrap stage and returns the most recent operator
@@ -84,15 +87,43 @@ pub async fn resolve_bindings(
                     stage = ?stage,
                     "EditFeedback resolved"
                 );
-                stage
+                Ok(stage
                     .and_then(|s| memory.last_edit_feedback_by_stage.get(&s))
                     .cloned()
-                    .unwrap_or_default()
+                    .unwrap_or_default())
+            },
+        };
+        let value = match resolved {
+            Ok(value) => value,
+            Err(e) if b.optional && is_missing_optional_binding(&e) => {
+                tracing::debug!(
+                    target: "engine::stage::bindings",
+                    target = %b.target.0,
+                    error = %e,
+                    "optional binding missing; resolving as empty string"
+                );
+                String::new()
+            },
+            Err(e) => {
+                tracing::warn!(
+                    target: "engine::stage::bindings",
+                    target = %b.target.0,
+                    error = %e,
+                    "required binding failed to resolve"
+                );
+                return Err(e);
             },
         };
         out.push((b.target.clone(), value));
     }
     Ok(out)
+}
+
+fn is_missing_optional_binding(error: &BindingError) -> bool {
+    matches!(
+        error,
+        BindingError::UnknownArtifact(_) | BindingError::NoArtifactsForNode(_)
+    )
 }
 
 async fn read_artifact_text(
@@ -165,6 +196,7 @@ mod tests {
                 content: "hello".into(),
             },
             target: TemplateVar("greeting".into()),
+            optional: false,
         }];
         let mem = RunMemory::default();
         let dir = tempfile::tempdir().unwrap();
@@ -197,6 +229,7 @@ mod tests {
                 pattern: "*.md".into(),
             },
             target: TemplateVar("v".into()),
+            optional: false,
         }];
         let mem = RunMemory::default();
         let dir = tempfile::tempdir().unwrap();
@@ -242,6 +275,7 @@ mod tests {
         let bindings = vec![Binding {
             source: ArtifactSource::InitialPrompt,
             target: TemplateVar("user_prompt".into()),
+            optional: false,
         }];
         let resolved = resolve_bindings(&bindings, &mem, dir.path())
             .await
@@ -267,6 +301,7 @@ mod tests {
                 from_node: NodeKey::try_from("roadmap_planner").unwrap(),
             },
             target: TemplateVar("edit_feedback".into()),
+            optional: false,
         }];
         let dir = tempfile::tempdir().unwrap();
         let resolved = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap();
@@ -285,6 +320,7 @@ mod tests {
                 from_node: NodeKey::try_from("description_author").unwrap(),
             },
             target: TemplateVar("edit_feedback".into()),
+            optional: false,
         }];
         let dir = tempfile::tempdir().unwrap();
         let resolved = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap();
@@ -305,6 +341,7 @@ mod tests {
                 from_node: NodeKey::try_from("not_a_bootstrap_node").unwrap(),
             },
             target: TemplateVar("edit_feedback".into()),
+            optional: false,
         }];
         let dir = tempfile::tempdir().unwrap();
         let resolved = resolve_bindings(&bindings, &mem, dir.path()).await.unwrap();
@@ -347,6 +384,7 @@ mod tests {
         let bindings = vec![Binding {
             source: ArtifactSource::InitialPrompt,
             target: TemplateVar("user_prompt".into()),
+            optional: false,
         }];
         let mem = RunMemory::default();
         let dir = tempfile::tempdir().unwrap();
