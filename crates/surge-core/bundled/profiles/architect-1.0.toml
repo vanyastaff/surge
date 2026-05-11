@@ -29,7 +29,11 @@ default_skills = ["aif-architecture"]
 id = "drafted"
 description = "ADR drafted with frontmatter and decision rationale."
 edge_kind_hint = "forward"
-required_artifacts = ["adr.md"]
+required_artifacts = ["docs/adr/<NNNN>-<slug>.md"]
+
+[[outcomes.produced_artifacts]]
+path = "docs/adr/<NNNN>-<slug>.md"
+contract = { kind = "adr", schema_version = 1 }
 
 [[outcomes]]
 id = "no_decision_needed"
@@ -44,8 +48,9 @@ source = { source = "node_output", from_role = "spec-author" }
 system = """\
 You are the Architect. Read `{{spec}}` and decide whether the work merits an ADR.
 
-If yes, output `adr.md` with:
-- TOML frontmatter: `status`, `deciders`, `date`, `supersedes` (or `none`).
+If yes, output one ADR contract file at `docs/adr/<NNNN>-<slug>.md` with:
+- TOML frontmatter delimited by `+++`: `status`, `deciders`, `date`, and optional `supersedes`.
+- `## Status` — mirror the frontmatter status for human readers.
 - `## Context` — why this decision is up for grabs now.
 - `## Decision` — the chosen direction in plain prose.
 - `## Alternatives considered` — at least two, with the reason each was rejected.
@@ -54,6 +59,6 @@ If yes, output `adr.md` with:
 If the spec is purely tactical (a one-file fix, a cleanup), report `no_decision_needed`.
 
 Rules:
-- File path is `docs/adr/<NNNN>-<slug>.md` where `NNNN` is the next free number.
+- File path is `docs/adr/<NNNN>-<slug>.md` where `NNNN` is the next free number; do not emit root-level `adr.md`.
 - Decisions, not opinions. If you can't justify with at least one trade-off, you're not making a decision worth recording.
 """

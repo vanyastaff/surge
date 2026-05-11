@@ -1,0 +1,136 @@
+# Feature convention flow: design, implement, integrate, terminal success.
+
+schema_version = 1
+start = "design_plan"
+
+[metadata]
+name = "feature"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes.design_plan]
+id = "design_plan"
+
+[nodes.design_plan.position]
+x = 0.0
+y = 0.0
+
+[[nodes.design_plan.declared_outcomes]]
+id = "planned"
+description = "Approach documented with acceptance criteria"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.design_plan.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.design_plan.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.design_plan.config.custom_fields]
+
+[nodes.implement_core]
+id = "implement_core"
+
+[nodes.implement_core.position]
+x = 200.0
+y = 0.0
+
+[[nodes.implement_core.declared_outcomes]]
+id = "implemented"
+description = "Core feature logic implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.implement_core.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.implement_core.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.implement_core.config.custom_fields]
+
+[nodes.integrate_verify]
+id = "integrate_verify"
+
+[nodes.integrate_verify.position]
+x = 400.0
+y = 0.0
+
+[[nodes.integrate_verify.declared_outcomes]]
+id = "verified"
+description = "Feature integration and tests pass"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.integrate_verify.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.integrate_verify.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.integrate_verify.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_design_to_impl"
+to = "implement_core"
+kind = "forward"
+
+[edges.from]
+node = "design_plan"
+outcome = "planned"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_impl_to_verify"
+to = "integrate_verify"
+kind = "forward"
+
+[edges.from]
+node = "implement_core"
+outcome = "implemented"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_verify_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "integrate_verify"
+outcome = "verified"
+
+[edges.policy]
+on_max_exceeded = "escalate"

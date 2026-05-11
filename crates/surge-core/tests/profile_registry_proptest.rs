@@ -45,6 +45,7 @@ fn make_profile(name: &str) -> Profile {
             description: "Success".into(),
             edge_kind_hint: EdgeKind::Forward,
             required_artifacts: vec![],
+            produced_artifacts: vec![],
         }],
         bindings: ProfileBindings::default(),
         hooks: ProfileHooks::default(),

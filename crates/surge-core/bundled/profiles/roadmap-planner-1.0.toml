@@ -1,7 +1,7 @@
 # Roadmap Planner — bootstrap stage 2.
 #
-# Consumes description.md and emits a roadmap.md with milestones,
-# tasks, and dependency edges, ready for the Flow Generator.
+# Consumes description.md and emits roadmap.toml plus a human roadmap.md
+# compatibility view, ready for the Flow Generator.
 
 schema_version = 1
 
@@ -10,7 +10,7 @@ id = "roadmap-planner"
 version = "1.0.0"
 display_name = "Roadmap Planner"
 category = "_bootstrap"
-description = "Turns description.md into a milestoned, dependency-aware roadmap.md."
+description = "Turns description.md into a milestoned, dependency-aware roadmap.toml plus roadmap.md."
 when_to_use = "Second bootstrap stage — after Description Author and before Flow Generator."
 
 [runtime]
@@ -27,9 +27,17 @@ default_skills = ["aif-architecture"]
 
 [[outcomes]]
 id = "drafted"
-description = "Roadmap.md drafted with milestones and dependencies."
+description = "Roadmap artifacts drafted with milestones and dependencies."
 edge_kind_hint = "forward"
-required_artifacts = ["roadmap.md"]
+required_artifacts = ["roadmap.toml", "roadmap.md"]
+
+[[outcomes.produced_artifacts]]
+path = "roadmap.toml"
+contract = { kind = "roadmap", schema_version = 1 }
+
+[[outcomes.produced_artifacts]]
+path = "roadmap.md"
+contract = { kind = "roadmap", schema_version = 1 }
 
 [[outcomes]]
 id = "needs_clarification"
@@ -49,6 +57,22 @@ name = "edit_feedback"
 source = { source = "any" }
 optional = true
 
+[[hooks.entries]]
+id = "validate-roadmap-toml"
+trigger = "on_outcome"
+matcher = { outcome = "drafted" }
+command = "{surge} artifact validate --kind roadmap roadmap.toml"
+on_failure = "reject"
+timeout_seconds = 30
+
+[[hooks.entries]]
+id = "validate-roadmap-md"
+trigger = "on_outcome"
+matcher = { outcome = "drafted" }
+command = "{surge} artifact validate --kind roadmap roadmap.md"
+on_failure = "reject"
+timeout_seconds = 30
+
 [prompt]
 system = """\
 You are the Roadmap Planner for Surge bootstrap.
@@ -66,11 +90,18 @@ Operator feedback from the previous edit cycle, if any:
 
 # Mission
 
-Turn `description.md` into one artifact: `roadmap.md`. The roadmap must be
-milestoned, dependency-aware, and specific enough for the Flow Generator to
-compile into a `flow.toml` graph without inventing scope.
+Turn `description.md` into Roadmap contract artifacts:
+- Primary machine-readable artifact: `roadmap.toml` with `schema_version = 1`.
+- Human compatibility artifact: `roadmap.md`.
 
-Output schema:
+`roadmap.toml` schema:
+- Top-level `schema_version = 1`.
+- `[[milestones]]` with `id`, `title`, and nested `[[milestones.tasks]]`.
+- Each task has `id`, `title`, optional `description`, and optional `acceptance_criteria = [...]`.
+- `[[dependencies]]` uses `from`, `to`, and optional `reason`.
+- `[[risks]]` uses `description` and optional `mitigation`.
+
+`roadmap.md` compatibility sections:
 - `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
 - `## Dependencies` — explicit edges between milestones when one must finish before another can start.
 - `## Risks` — short bulleted list of what could break the plan.
@@ -80,9 +111,9 @@ Rules:
 - Milestones are deliverable-focused, not phase-focused (no "Planning" / "Implementation" / "Testing" milestones).
 - Calibrate task sizes against the existing project: a "2-day" task is roughly 8 plan-tasks.
 - If the description is missing requirements you need to plan, report `needs_clarification` with the gaps.
-- No code in this artifact. Roadmap describes what ships, not how.
+- No code in these artifacts. Roadmap describes what ships, not how.
 
 When finished:
-1. Write the markdown artifact to `roadmap.md`.
-2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["roadmap.md"]`.
+1. Write `roadmap.toml` and `roadmap.md`.
+2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["roadmap.toml", "roadmap.md"]`.
 """

@@ -83,32 +83,44 @@ impl ArchetypeRegistry {
     /// Returns [`SurgeError::NotFound`] when no matching disk or bundled
     /// template exists.
     pub fn resolve(&self, name: &str) -> Result<ResolvedArchetype, SurgeError> {
-        if let Some(template) = self
+        let canonical_name = BundledFlows::canonical_name(name);
+        let template = self
             .disk
             .iter()
             .find(|template| template.graph.metadata.name == name || template.file_stem == name)
-        {
+            .or_else(|| {
+                self.disk.iter().find(|template| {
+                    template.graph.metadata.name == canonical_name
+                        || template.file_stem == canonical_name
+                })
+            });
+        if let Some(template) = template {
             tracing::debug!(
                 target: "archetype::registry",
-                name,
+                requested_name = name,
+                canonical_name = %canonical_name,
+                provenance = "user",
                 path = %template.path.display(),
                 "resolved disk archetype template"
             );
             return Ok(ResolvedArchetype {
-                name: name.to_owned(),
+                name: canonical_name.clone(),
                 graph: template.graph.clone(),
                 provenance: ArchetypeProvenance::User(template.path.clone()),
             });
         }
 
-        if let Some(BundledFlow { graph, .. }) = BundledFlows::by_name_latest(name) {
+        if let Some(BundledFlow { graph, version, .. }) = BundledFlows::by_name_latest(name) {
             tracing::debug!(
                 target: "archetype::registry",
-                name,
+                requested_name = name,
+                canonical_name = %graph.metadata.name,
+                version = %version,
+                provenance = "bundled",
                 "resolved bundled archetype template"
             );
             return Ok(ResolvedArchetype {
-                name: name.to_owned(),
+                name: graph.metadata.name.clone(),
                 graph,
                 provenance: ArchetypeProvenance::Bundled,
             });
@@ -187,11 +199,16 @@ mod tests {
     fn bundled_archetype_templates_validate() {
         let registry = ArchetypeRegistry::from_dir(Path::new("definitely-missing")).unwrap();
         for name in [
+            "feature",
             "linear-3",
             "linear-with-review",
             "multi-milestone",
             "bug-fix",
             "refactor",
+            "performance",
+            "security",
+            "docs",
+            "migration",
             "spike",
             "single-task",
         ] {
@@ -214,5 +231,58 @@ mod tests {
 
         assert_eq!(resolved.graph.metadata.name, "custom-linear");
         assert!(matches!(resolved.provenance, ArchetypeProvenance::User(_)));
+    }
+
+    #[test]
+    fn disk_exact_name_beats_alias_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut alias_target = BundledFlows::by_name_latest("bug-fix").unwrap().graph;
+        alias_target.metadata.name = "bug-fix".into();
+        std::fs::write(
+            tmp.path().join("bug-fix.toml"),
+            toml::to_string(&alias_target).unwrap(),
+        )
+        .unwrap();
+
+        let mut exact = BundledFlows::by_name_latest("bug-fix").unwrap().graph;
+        exact.metadata.name = "bugfix".into();
+        std::fs::write(
+            tmp.path().join("bugfix.toml"),
+            toml::to_string(&exact).unwrap(),
+        )
+        .unwrap();
+
+        let registry = ArchetypeRegistry::from_dir(tmp.path()).unwrap();
+        let resolved = registry.resolve("bugfix").unwrap();
+
+        assert_eq!(resolved.graph.metadata.name, "bugfix");
+        match resolved.provenance {
+            ArchetypeProvenance::User(path) => {
+                assert_eq!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some("bugfix.toml")
+                );
+            },
+            ArchetypeProvenance::Bundled => panic!("expected user template"),
+        }
+    }
+
+    #[test]
+    fn legacy_template_aliases_resolve_to_bundled_flows() {
+        let registry = ArchetypeRegistry::from_dir(Path::new("definitely-missing")).unwrap();
+        for (alias, canonical) in [
+            ("bugfix", "bug-fix"),
+            ("fix", "bug-fix"),
+            ("perf", "performance"),
+            ("sec", "security"),
+            ("doc", "docs"),
+            ("migrate", "migration"),
+        ] {
+            let resolved = registry.resolve(alias).unwrap();
+            assert_eq!(resolved.name, canonical);
+            assert_eq!(resolved.graph.metadata.name, canonical);
+            assert_eq!(resolved.provenance, ArchetypeProvenance::Bundled);
+        }
     }
 }

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod analytics;
+pub mod artifact;
 pub mod bootstrap;
 pub mod config;
 pub mod daemon;

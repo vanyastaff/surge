@@ -9,6 +9,24 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn unique_test_dir(test_name: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "surge-ui-test-{}-{}-{nonce}-{seq}",
+        std::process::id(),
+        test_name
+    ));
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    temp_dir
+}
 
 /// Test helper to simulate UI gate decision writing.
 ///
@@ -94,10 +112,7 @@ fn verify_ui_decision_file(
 
 #[test]
 fn test_ui_gate_decision_approval_write() {
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = unique_test_dir("approval");
 
     // Simulate UI approval decision
     let task_id = "test-task-001";
@@ -112,10 +127,7 @@ fn test_ui_gate_decision_approval_write() {
 
 #[test]
 fn test_ui_gate_decision_rejection_write() {
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = unique_test_dir("rejection");
 
     // Simulate UI rejection decision
     let task_id = "test-task-002";
@@ -130,10 +142,7 @@ fn test_ui_gate_decision_rejection_write() {
 
 #[test]
 fn test_ui_gate_decision_file_format() {
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = unique_test_dir("file-format");
 
     // Write decision
     let task_id = "test-task-003";
@@ -169,10 +178,7 @@ fn test_ui_gate_decision_file_format() {
 
 #[test]
 fn test_ui_rejection_feedback_file() {
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = unique_test_dir("feedback");
 
     // Simulate writing HUMAN_INPUT.md (as done by gate_approval.rs)
     let task_id = "test-task-004";
@@ -213,9 +219,8 @@ fn test_ui_rejection_feedback_file() {
 
 #[test]
 fn test_ui_gate_decision_directory_creation() {
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
+    let temp_dir = unique_test_dir("directory-creation");
+    fs::remove_dir_all(&temp_dir).expect("Failed to remove temp dir before directory test");
     // Note: Don't create temp_dir initially - test should create it
 
     // Write decision to non-existent directory
@@ -244,10 +249,7 @@ fn test_ui_gate_decision_directory_creation() {
 fn test_ui_decision_orchestrator_compatibility() {
     use serde_json;
 
-    // Create temp directory for test
-    let temp_dir = std::env::temp_dir().join(format!("surge-ui-test-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    let temp_dir = unique_test_dir("orchestrator-compatibility");
 
     // Write UI decision
     let task_id = "test-task-006";

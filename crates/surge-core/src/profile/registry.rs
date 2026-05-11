@@ -415,6 +415,7 @@ mod tests {
                 description: "Success".into(),
                 edge_kind_hint: EdgeKind::Forward,
                 required_artifacts: vec![],
+                produced_artifacts: vec![],
             }],
             bindings: ProfileBindings::default(),
             hooks: ProfileHooks::default(),
@@ -486,6 +487,7 @@ mod tests {
             description: "Rejected".into(),
             edge_kind_hint: EdgeKind::Backtrack,
             required_artifacts: vec![],
+            produced_artifacts: vec![],
         }];
         let merged = merge_pair(&parent, &child);
         assert_eq!(merged.outcomes.len(), 1);

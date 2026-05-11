@@ -1,0 +1,136 @@
+# Performance convention flow: baseline, optimize, benchmark, terminal success.
+
+schema_version = 1
+start = "profile_baseline"
+
+[metadata]
+name = "performance"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes.profile_baseline]
+id = "profile_baseline"
+
+[nodes.profile_baseline.position]
+x = 0.0
+y = 0.0
+
+[[nodes.profile_baseline.declared_outcomes]]
+id = "profiled"
+description = "Benchmark baseline and bottlenecks documented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.profile_baseline.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.profile_baseline.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.profile_baseline.config.custom_fields]
+
+[nodes.optimize_hot_paths]
+id = "optimize_hot_paths"
+
+[nodes.optimize_hot_paths.position]
+x = 200.0
+y = 0.0
+
+[[nodes.optimize_hot_paths.declared_outcomes]]
+id = "optimized"
+description = "Targeted optimizations implemented"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.optimize_hot_paths.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.optimize_hot_paths.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.optimize_hot_paths.config.custom_fields]
+
+[nodes.benchmark_validate]
+id = "benchmark_validate"
+
+[nodes.benchmark_validate.position]
+x = 400.0
+y = 0.0
+
+[[nodes.benchmark_validate.declared_outcomes]]
+id = "validated"
+description = "Benchmarks confirm improvement without correctness regressions"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.benchmark_validate.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.benchmark_validate.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.benchmark_validate.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_profile_to_optimize"
+to = "optimize_hot_paths"
+kind = "forward"
+
+[edges.from]
+node = "profile_baseline"
+outcome = "profiled"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_optimize_to_benchmark"
+to = "benchmark_validate"
+kind = "forward"
+
+[edges.from]
+node = "optimize_hot_paths"
+outcome = "optimized"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_benchmark_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "benchmark_validate"
+outcome = "validated"
+
+[edges.policy]
+on_max_exceeded = "escalate"

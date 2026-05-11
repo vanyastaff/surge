@@ -1,6 +1,7 @@
 //! Profile (role) configuration.
 
 use crate::approvals::ApprovalConfig;
+use crate::artifact_contract::ArtifactContractRef;
 use crate::edge::EdgeKind;
 use crate::hooks::{Hook, HookTrigger};
 use crate::keys::{OutcomeKey, ProfileKey};
@@ -119,6 +120,14 @@ pub struct ProfileOutcome {
     pub edge_kind_hint: EdgeKind,
     #[serde(default)]
     pub required_artifacts: Vec<String>,
+    #[serde(default)]
+    pub produced_artifacts: Vec<ProfileArtifactDeclaration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProfileArtifactDeclaration {
+    pub path: String,
+    pub contract: ArtifactContractRef,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -193,6 +202,7 @@ pub enum InspectorFieldKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifact_contract::{ARTIFACT_SCHEMA_VERSION, ArtifactKind};
 
     #[test]
     fn minimal_profile_roundtrips() {
@@ -223,6 +233,7 @@ mod tests {
                 description: "Success".into(),
                 edge_kind_hint: EdgeKind::Forward,
                 required_artifacts: vec![],
+                produced_artifacts: vec![],
             }],
             bindings: ProfileBindings::default(),
             hooks: ProfileHooks::default(),
@@ -234,6 +245,55 @@ mod tests {
         let toml_s = toml::to_string(&p).unwrap();
         let parsed: Profile = toml::from_str(&toml_s).unwrap();
         assert_eq!(p, parsed);
+    }
+
+    #[test]
+    fn outcome_artifact_declarations_roundtrip() {
+        let text = r#"
+            schema_version = 1
+
+            [role]
+            id = "description-author"
+            version = "1.0.0"
+            display_name = "Description Author"
+            category = "_bootstrap"
+            description = "Drafts description artifacts"
+            when_to_use = "Bootstrap"
+
+            [runtime]
+            recommended_model = "claude-opus-4-7"
+
+            [[outcomes]]
+            id = "drafted"
+            description = "Drafted"
+            edge_kind_hint = "forward"
+            required_artifacts = ["description.md"]
+
+            [[outcomes.produced_artifacts]]
+            path = "description.md"
+            contract = { kind = "description", schema_version = 1 }
+
+            [prompt]
+            system = "Draft description.md"
+        "#;
+
+        let parsed: Profile = toml::from_str(text).unwrap();
+
+        assert_eq!(parsed.outcomes[0].produced_artifacts.len(), 1);
+        assert_eq!(
+            parsed.outcomes[0].produced_artifacts[0].path,
+            "description.md"
+        );
+        assert_eq!(
+            parsed.outcomes[0].produced_artifacts[0].contract.kind,
+            ArtifactKind::Description
+        );
+        assert_eq!(
+            parsed.outcomes[0].produced_artifacts[0]
+                .contract
+                .schema_version,
+            ARTIFACT_SCHEMA_VERSION
+        );
     }
 
     #[test]

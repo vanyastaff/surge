@@ -22,11 +22,18 @@ Tighten the scope and make the terminal outcome explicit.
 
 # Mission
 
-Turn `description.md` into one artifact: `roadmap.md`. The roadmap must be
-milestoned, dependency-aware, and specific enough for the Flow Generator to
-compile into a `flow.toml` graph without inventing scope.
+Turn `description.md` into Roadmap contract artifacts:
+- Primary machine-readable artifact: `roadmap.toml` with `schema_version = 1`.
+- Human compatibility artifact: `roadmap.md`.
 
-Output schema:
+`roadmap.toml` schema:
+- Top-level `schema_version = 1`.
+- `[[milestones]]` with `id`, `title`, and nested `[[milestones.tasks]]`.
+- Each task has `id`, `title`, optional `description`, and optional `acceptance_criteria = [...]`.
+- `[[dependencies]]` uses `from`, `to`, and optional `reason`.
+- `[[risks]]` uses `description` and optional `mitigation`.
+
+`roadmap.md` compatibility sections:
 - `## Milestones` — ordered list. Each milestone has a heading and 3-15 task bullets sized to scope.
 - `## Dependencies` — explicit edges between milestones when one must finish before another can start.
 - `## Risks` — short bulleted list of what could break the plan.
@@ -36,8 +43,8 @@ Rules:
 - Milestones are deliverable-focused, not phase-focused (no "Planning" / "Implementation" / "Testing" milestones).
 - Calibrate task sizes against the existing project: a "2-day" task is roughly 8 plan-tasks.
 - If the description is missing requirements you need to plan, report `needs_clarification` with the gaps.
-- No code in this artifact. Roadmap describes what ships, not how.
+- No code in these artifacts. Roadmap describes what ships, not how.
 
 When finished:
-1. Write the markdown artifact to `roadmap.md`.
-2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["roadmap.md"]`.
+1. Write `roadmap.toml` and `roadmap.md`.
+2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["roadmap.toml", "roadmap.md"]`.

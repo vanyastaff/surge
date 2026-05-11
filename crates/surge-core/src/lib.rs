@@ -33,6 +33,7 @@ pub mod state;
 pub mod agent_config;
 pub mod approvals;
 pub mod archetype;
+pub mod artifact_contract;
 pub mod branch_config;
 pub mod bundled_flows;
 pub mod content_hash;
@@ -64,12 +65,23 @@ pub use event::{
     ToolLocation, VersionedEvent,
 };
 pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
-pub use roadmap::{Priority, RoadmapItem, RoadmapStatus, Timeline, TimelineBatch};
-pub use spec::{AcceptanceCriteria, Complexity, Spec, Subtask, SubtaskExecution, SubtaskState};
+pub use roadmap::{
+    Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapMilestone, RoadmapRisk,
+    RoadmapStatus, RoadmapTask, Timeline, TimelineBatch,
+};
+pub use spec::{
+    AcceptanceCriteria, Complexity, Spec, SpecArtifact, Subtask, SubtaskExecution, SubtaskState,
+};
 pub use state::TaskState;
 
 // ── New re-exports (Surge data model) ──
 pub use archetype::{ArchetypeMetadata, ArchetypeName};
+pub use artifact_contract::{
+    ARTIFACT_SCHEMA_VERSION, ArtifactContract, ArtifactContractRef, ArtifactDiagnosticCode,
+    ArtifactDiagnosticSeverity, ArtifactFormat, ArtifactKind, ArtifactValidationDiagnostic,
+    ArtifactValidationError, ArtifactValidationReport, SchemaVersionOwner, all_contracts,
+    contract_for, validate_artifact, validate_artifact_path, validate_artifact_text,
+};
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
@@ -84,7 +96,9 @@ pub use profile::keyref::{KeyRefParseError, ProfileKeyRef, parse_key_ref};
 pub use profile::registry::{
     MAX_EXTENDS_DEPTH, Provenance, ResolvedProfile, collect_chain, merge_chain, merge_pair,
 };
-pub use profile::{Profile, Role, RoleCategory, RuntimeCfg};
+pub use profile::{
+    Profile, ProfileArtifactDeclaration, ProfileOutcome, Role, RoleCategory, RuntimeCfg,
+};
 pub use run_event::{
     BootstrapDecision, BootstrapStage, ElevationDecision, EventPayload, RunConfig, RunEvent,
     SessionDisposition, VersionedEventPayload,

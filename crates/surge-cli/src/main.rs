@@ -63,6 +63,12 @@ enum Commands {
         command: SpecCommands,
     },
 
+    /// Validate and inspect Surge artifacts.
+    Artifact {
+        #[command(subcommand)]
+        command: commands::artifact::ArtifactCommands,
+    },
+
     /// Run a spec through the full pipeline
     Run {
         /// Spec ID or filename
@@ -348,6 +354,7 @@ async fn main() -> Result<()> {
             | Commands::Config { .. }
             | Commands::Bootstrap(_)
             | Commands::Engine { .. }
+            | Commands::Artifact { .. }
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
             | Commands::Profile { .. }
@@ -468,6 +475,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Spec { command } => {
             commands::spec::run(command)?;
+        },
+
+        Commands::Artifact { command } => {
+            commands::artifact::run(command)?;
         },
 
         Commands::Run {

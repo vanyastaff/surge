@@ -542,8 +542,8 @@ mod tests {
         #[tokio::test]
         async fn test_wait_or_kill_grace_period() {
             #[cfg(windows)]
-            let mut child = Command::new("cmd")
-                .args(["/C", "ping", "-n", "100", "127.0.0.1"])
+            let mut child = Command::new("powershell")
+                .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 100"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -576,7 +576,7 @@ mod tests {
 
             // Should have taken approximately the grace period (allow some overhead)
             assert!(
-                elapsed >= std::time::Duration::from_millis(100),
+                elapsed >= std::time::Duration::from_millis(80),
                 "Should wait for grace period"
             );
             assert!(

@@ -44,7 +44,9 @@ optional = true
 
 [prompt]
 system = """\
-You are the PR Composer. Draft `pr.md` with two sections separated by `---`:
+You are the PR Composer. Draft `pr.md` from the diff plus upstream artifacts:
+Spec contract (`spec.toml` or `spec.md`) and ADR contract (`docs/adr/<NNNN>-<slug>.md`) when present.
+Use two sections separated by `---`:
 
 1. Title (single line, < 70 characters, conventional-commit prefix where it fits: `feat(area): ...`).
 2. Body, in this exact order:

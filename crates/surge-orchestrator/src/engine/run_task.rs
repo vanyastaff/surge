@@ -5,7 +5,7 @@ use crate::engine::config::EngineRunConfig;
 use crate::engine::handle::{EngineRunEvent, RunOutcome};
 use crate::engine::hooks::{HookContext, HookExecutor, HookOutcome};
 use crate::engine::stage::StageError;
-use crate::engine::stage::agent::{AgentStageParams, execute_agent_stage};
+use crate::engine::stage::agent::{AgentStageParams, effective_agent_hooks, execute_agent_stage};
 use crate::engine::stage::branch::{BranchStageParams, execute_branch_stage};
 use crate::engine::stage::human_gate::{HumanGateStageParams, execute_human_gate_stage};
 use crate::engine::stage::notify::{NotifyStageParams, execute_notify_stage};
@@ -470,8 +470,15 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
 
                 // on_error hooks may suppress the failure into an outcome the
                 // node already declares.
-                let on_error_resolution =
-                    run_on_error_hooks(&hook_executor, &node, &cursor.node, &raw_reason).await;
+                let on_error_resolution = run_on_error_hooks(
+                    &hook_executor,
+                    &node,
+                    &cursor.node,
+                    &raw_reason,
+                    &params.worktree_path,
+                    params.profile_registry.as_deref(),
+                )
+                .await;
                 // Persist a HookExecuted event for every hook invoked on
                 // the on_error chain so the audit trail matches the
                 // pre/post_tool_use and on_outcome paths.
@@ -708,6 +715,8 @@ pub(crate) async fn run_on_error_hooks(
     node: &surge_core::node::Node,
     cursor_node: &surge_core::keys::NodeKey,
     raw_reason: &str,
+    worktree_path: &std::path::Path,
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
 ) -> OnErrorResolution {
     let NodeConfig::Agent(agent_cfg) = &node.config else {
         return OnErrorResolution {
@@ -715,16 +724,20 @@ pub(crate) async fn run_on_error_hooks(
             records: Vec::new(),
         };
     };
-    if agent_cfg.hooks.is_empty() {
+    let resolved_profile = resolve_profile_for_hooks(agent_cfg, profile_registry);
+    let effective_hooks = effective_agent_hooks(agent_cfg, resolved_profile.as_ref());
+    if effective_hooks.is_empty() {
         return OnErrorResolution {
             outcome: None,
             records: Vec::new(),
         };
     }
 
-    let ctx = HookContext::for_node(cursor_node).with_error(raw_reason);
+    let ctx = HookContext::for_node(cursor_node)
+        .with_worktree_path(worktree_path)
+        .with_error(raw_reason);
     let hook_outcome = executor
-        .run_hooks(&agent_cfg.hooks, HookTrigger::OnError, &ctx)
+        .run_hooks(&effective_hooks, HookTrigger::OnError, &ctx)
         .await;
     let records = hook_outcome.executed().to_vec();
     let outcome = match hook_outcome {
@@ -746,6 +759,39 @@ pub(crate) async fn run_on_error_hooks(
         HookOutcome::Reject { .. } | HookOutcome::Proceed { .. } => None,
     };
     OnErrorResolution { outcome, records }
+}
+
+fn resolve_profile_for_hooks(
+    agent_cfg: &surge_core::agent_config::AgentConfig,
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+) -> Option<surge_core::profile::registry::ResolvedProfile> {
+    let registry = profile_registry?;
+    let profile_str = agent_cfg.profile.as_ref();
+    let key_ref = match surge_core::profile::keyref::parse_key_ref(profile_str) {
+        Ok(key_ref) => key_ref,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::error",
+                profile = profile_str,
+                err = %error,
+                "invalid profile reference while resolving on_error hooks; using node hooks only"
+            );
+            return None;
+        },
+    };
+
+    match registry.resolve(&key_ref) {
+        Ok(profile) => Some(profile),
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::error",
+                profile = profile_str,
+                err = %error,
+                "profile resolution failed while resolving on_error hooks; using node hooks only"
+            );
+            None
+        },
+    }
 }
 
 async fn load_existing_memory(
@@ -872,7 +918,15 @@ mod tests {
             vec!["done", "retry_later"],
         );
         let cursor = node.id.clone();
-        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        let resolution = run_on_error_hooks(
+            &executor,
+            &node,
+            &cursor,
+            "boom",
+            std::path::Path::new("."),
+            None,
+        )
+        .await;
         // Audit trail invariant: on every hook invocation the resolution
         // must carry a corresponding HookExecutionRecord. The shell may
         // mangle the JSON on some Windows configurations, but the hook
@@ -898,7 +952,15 @@ mod tests {
             vec!["done"],
         );
         let cursor = node.id.clone();
-        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        let resolution = run_on_error_hooks(
+            &executor,
+            &node,
+            &cursor,
+            "boom",
+            std::path::Path::new("."),
+            None,
+        )
+        .await;
         assert!(
             resolution.outcome.is_none(),
             "undeclared outcome must not suppress"
@@ -916,7 +978,15 @@ mod tests {
         let executor = HookExecutor::new();
         let node = agent_node(vec![], vec!["done"]);
         let cursor = node.id.clone();
-        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        let resolution = run_on_error_hooks(
+            &executor,
+            &node,
+            &cursor,
+            "boom",
+            std::path::Path::new("."),
+            None,
+        )
+        .await;
         assert!(resolution.outcome.is_none());
         assert!(
             resolution.records.is_empty(),
@@ -938,7 +1008,15 @@ mod tests {
         };
         let executor = HookExecutor::new();
         let cursor = node.id.clone();
-        let resolution = run_on_error_hooks(&executor, &node, &cursor, "boom").await;
+        let resolution = run_on_error_hooks(
+            &executor,
+            &node,
+            &cursor,
+            "boom",
+            std::path::Path::new("."),
+            None,
+        )
+        .await;
         assert!(resolution.outcome.is_none());
         assert!(
             resolution.records.is_empty(),

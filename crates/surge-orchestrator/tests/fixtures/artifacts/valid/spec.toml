@@ -1,0 +1,17 @@
+schema_version = 1
+
+[spec]
+id = "artifact-validation"
+title = "Artifact validation"
+description = "Define and enforce generated artifact contracts."
+complexity = "medium"
+
+[[spec.subtasks]]
+id = "core-contracts"
+title = "Core contracts"
+description = "Add pure contract metadata and diagnostics."
+complexity = "small"
+files = ["crates/surge-core/src/artifact_contract.rs"]
+
+[[spec.subtasks.acceptance_criteria]]
+description = "Valid minimal artifacts pass validation."

@@ -1,0 +1,20 @@
+schema_version = 1
+
+[[milestones]]
+id = "artifact-validation"
+title = "Artifact validation"
+
+[[milestones.tasks]]
+id = "validators"
+title = "Add validators"
+description = "Validate canonical generated artifacts."
+acceptance_criteria = ["Invalid schema versions fail", "Valid fixtures pass"]
+
+[[dependencies]]
+from = "artifact-validation"
+to = "hook-enforcement"
+reason = "Hooks need validators to call."
+
+[[risks]]
+description = "Validators drift from prompts."
+mitigation = "Keep profile prompts linked to conventions."

@@ -32,6 +32,10 @@ description = "flow.toml drafted and passes graph validation."
 edge_kind_hint = "forward"
 required_artifacts = ["flow.toml"]
 
+[[outcomes.produced_artifacts]]
+path = "flow.toml"
+contract = { kind = "flow", schema_version = 1 }
+
 [[outcomes]]
 id = "validation_failed"
 description = "Generated flow.toml failed graph validation; re-emit with the validator's errors fed back."
@@ -66,7 +70,7 @@ Original user request:
 Approved or edited `description.md`:
 {{description_artifact}}
 
-Approved or edited `roadmap.md`:
+Approved or edited Roadmap contract artifact (`roadmap.toml`, with `roadmap.md` as compatibility context when present):
 {{roadmap_artifact}}
 
 Validator or operator feedback from the previous edit cycle, if any:
@@ -74,15 +78,21 @@ Validator or operator feedback from the previous edit cycle, if any:
 
 # Mission
 
-Emit one valid `flow.toml` graph. Use typed nodes, declared outcomes, and profile
+Emit one valid Flow contract artifact: `flow.toml` with `schema_version = 1`.
+Use typed nodes, declared outcomes, and profile
 references; do not write free-form execution instructions into graph nodes.
 
 Pick exactly one archetype and include it in `[metadata.archetype]`:
+- `feature` — design/plan -> implement core -> integration/tests for standard feature work.
 - `linear-3` — single small task: Spec Author -> Implementer -> Verifier -> Terminal.
 - `linear-with-review` — one milestone with 5-7 tasks and an explicit Review node.
 - `multi-milestone` — outer Loop over `roadmap.milestones` wrapping per-milestone task Loops.
 - `bug-fix` — starts with reproduction / failing-case characterization before implementation.
 - `refactor` — starts with behavior characterization before implementation.
+- `performance` — baseline/profile -> optimize -> benchmark/validate.
+- `security` — security audit -> fixes -> security regression tests.
+- `docs` — outline -> write -> review/publish documentation.
+- `migration` — migration plan -> implementation -> rollback validation.
 - `spike` — bounded research/prototype path; may skip Architect and Reviewer when appropriate.
 - `single-task` — one focused Agent node plus Terminal for tiny, low-risk work.
 

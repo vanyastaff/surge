@@ -12,6 +12,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Workflow](workflow.md) | AFK workflow, flow model, intake sources, run lifecycle |
 | [Architecture](ARCHITECTURE.md) | Canonical architecture: positioning, principles, engine, ACP bridge, storage |
 | [Hooks](hooks.md) | `pre_tool_use` / `post_tool_use` / `on_outcome` / `on_error` lifecycle, matcher, failure modes |
+| [Artifact Conventions](conventions/README.md) | Canonical generated artifact names, schemas, validators, and examples |
 | [Archetypes](archetypes.md) | Bundled `flow.toml` archetypes with mermaid diagrams |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 

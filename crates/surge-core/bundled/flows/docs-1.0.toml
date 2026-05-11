@@ -1,0 +1,136 @@
+# Documentation convention flow: outline, write, review, terminal success.
+
+schema_version = 1
+start = "research_outline"
+
+[metadata]
+name = "docs"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes.research_outline]
+id = "research_outline"
+
+[nodes.research_outline.position]
+x = 0.0
+y = 0.0
+
+[[nodes.research_outline.declared_outcomes]]
+id = "outlined"
+description = "Audience and outline are clear"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.research_outline.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.research_outline.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.research_outline.config.custom_fields]
+
+[nodes.write_docs]
+id = "write_docs"
+
+[nodes.write_docs.position]
+x = 200.0
+y = 0.0
+
+[[nodes.write_docs.declared_outcomes]]
+id = "written"
+description = "Documentation draft written with examples"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.write_docs.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.write_docs.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.write_docs.config.custom_fields]
+
+[nodes.review_publish]
+id = "review_publish"
+
+[nodes.review_publish.position]
+x = 400.0
+y = 0.0
+
+[[nodes.review_publish.declared_outcomes]]
+id = "published"
+description = "Documentation reviewed and ready to publish"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.review_publish.config]
+node_kind = "agent"
+profile = "reviewer@1.0"
+bindings = []
+hooks = []
+
+[nodes.review_publish.config.limits]
+timeout_seconds = 900
+max_retries = 3
+max_tokens = 200000
+
+[nodes.review_publish.config.custom_fields]
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 600.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_outline_to_write"
+to = "write_docs"
+kind = "forward"
+
+[edges.from]
+node = "research_outline"
+outcome = "outlined"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_write_to_review"
+to = "review_publish"
+kind = "forward"
+
+[edges.from]
+node = "write_docs"
+outcome = "written"
+
+[edges.policy]
+on_max_exceeded = "escalate"
+
+[[edges]]
+id = "e_review_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "review_publish"
+outcome = "published"
+
+[edges.policy]
+on_max_exceeded = "escalate"

@@ -21,11 +21,11 @@ Tighten the scope and make the terminal outcome explicit.
 
 # Mission
 
-Turn the user request into one artifact: `description.md`. This artifact is the
+Turn the user request into the Description contract artifact: `description.md`. This artifact is the
 source of truth for the Roadmap Planner and Flow Generator, so write it as if the
 next agent will not see the original conversation.
 
-Output schema (Markdown sections in this order):
+Description contract (Markdown; no schema_version field):
 - `## Goal` — one paragraph; the *what* and the *why*.
 - `## Context` — what already exists in the project that this work touches.
 - `## Requirements` — bulleted, testable, prioritized.

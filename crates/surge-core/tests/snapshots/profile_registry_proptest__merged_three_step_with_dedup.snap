@@ -45,6 +45,7 @@ id = "done"
 description = "Success"
 edge_kind_hint = "forward"
 required_artifacts = []
+produced_artifacts = []
 
 [bindings]
 expected = []

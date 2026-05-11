@@ -2,8 +2,124 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
 use crate::id::SpecId;
 use crate::spec::Complexity;
+
+/// Machine-readable `roadmap.toml` artifact.
+///
+/// This is the planning artifact that agents exchange before a concrete
+/// `flow.toml` is generated. The older [`Timeline`] scheduling model remains
+/// available for runtime planning; this wrapper captures the authored roadmap
+/// shape and schema version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapArtifact {
+    /// Artifact contract schema version.
+    #[serde(default = "default_artifact_schema_version")]
+    pub schema_version: u32,
+    /// Deliverable-focused milestones in execution order.
+    #[serde(default)]
+    pub milestones: Vec<RoadmapMilestone>,
+    /// Cross-milestone dependencies.
+    #[serde(default)]
+    pub dependencies: Vec<RoadmapDependency>,
+    /// Known delivery risks.
+    #[serde(default)]
+    pub risks: Vec<RoadmapRisk>,
+}
+
+impl RoadmapArtifact {
+    /// Create a roadmap artifact with the current schema version.
+    #[must_use]
+    pub fn new(milestones: Vec<RoadmapMilestone>) -> Self {
+        Self {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            milestones,
+            dependencies: Vec::new(),
+            risks: Vec::new(),
+        }
+    }
+}
+
+impl Default for RoadmapArtifact {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+/// One deliverable-focused roadmap milestone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapMilestone {
+    /// Stable human-authored identifier, for example `m1`.
+    pub id: String,
+    /// Human-readable milestone title.
+    pub title: String,
+    /// Ordered tasks within this milestone.
+    #[serde(default)]
+    pub tasks: Vec<RoadmapTask>,
+}
+
+impl RoadmapMilestone {
+    /// Create an empty milestone.
+    #[must_use]
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            tasks: Vec::new(),
+        }
+    }
+}
+
+/// One task within a roadmap milestone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapTask {
+    /// Stable human-authored identifier, for example `m1-t1`.
+    pub id: String,
+    /// Human-readable task title.
+    pub title: String,
+    /// Optional short description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Acceptance criteria that downstream spec/story authors can refine.
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+}
+
+impl RoadmapTask {
+    /// Create a task with no optional description or criteria.
+    #[must_use]
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: None,
+            acceptance_criteria: Vec::new(),
+        }
+    }
+}
+
+/// Directed dependency between roadmap milestones.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapDependency {
+    /// Milestone that must finish first.
+    pub from: String,
+    /// Milestone that depends on `from`.
+    pub to: String,
+    /// Human-readable reason for the dependency.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+/// Risk tracked by the roadmap artifact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapRisk {
+    /// Risk description.
+    pub description: String,
+    /// Optional mitigation plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mitigation: Option<String>,
+}
 
 /// A single item in a project roadmap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +210,10 @@ pub struct TimelineBatch {
     /// Why this batch is ordered this way.
     #[serde(default)]
     pub reason: String,
+}
+
+fn default_artifact_schema_version() -> u32 {
+    ARTIFACT_SCHEMA_VERSION
 }
 
 impl Timeline {
@@ -276,6 +396,38 @@ mod tests {
         assert_eq!(deserialized.title, "Test item");
         assert_eq!(deserialized.status, RoadmapStatus::Pending);
         assert_eq!(deserialized.priority, Priority::Medium);
+    }
+
+    #[test]
+    fn test_roadmap_artifact_toml_roundtrip() {
+        let mut milestone = RoadmapMilestone::new("m1", "Artifact contracts");
+        let mut task = RoadmapTask::new("m1-t1", "Define schema");
+        task.acceptance_criteria
+            .push("schema_version is present".to_string());
+        milestone.tasks.push(task);
+
+        let mut artifact = RoadmapArtifact::new(vec![milestone]);
+        artifact.dependencies.push(RoadmapDependency {
+            from: "m1".to_string(),
+            to: "m2".to_string(),
+            reason: "contracts unblock validators".to_string(),
+        });
+        artifact.risks.push(RoadmapRisk {
+            description: "legacy markdown drift".to_string(),
+            mitigation: Some("keep compatibility docs".to_string()),
+        });
+
+        let toml_str = toml::to_string(&artifact).unwrap();
+        let deserialized: RoadmapArtifact = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(deserialized.schema_version, ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(deserialized.milestones[0].id, "m1");
+        assert_eq!(deserialized.milestones[0].tasks[0].id, "m1-t1");
+        assert_eq!(deserialized.dependencies[0].to, "m2");
+        assert_eq!(
+            deserialized.risks[0].mitigation.as_deref(),
+            Some("keep compatibility docs")
+        );
     }
 
     #[test]
