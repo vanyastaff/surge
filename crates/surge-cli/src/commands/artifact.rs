@@ -63,7 +63,7 @@ fn validate_loaded_artifact(
     content: &str,
 ) -> ArtifactValidationReport {
     let mut report = validate_artifact(kind, Some(path), content);
-    if kind == ArtifactKind::Flow && report.is_valid() {
+    if kind == ArtifactKind::Flow {
         validate_flow_graph(content, &mut report);
     }
     report
@@ -83,7 +83,7 @@ fn validate_flow_graph(content: &str, report: &mut ArtifactValidationReport) {
         },
         Err(error) => report.push(ArtifactValidationDiagnostic::error(
             ArtifactKind::Flow,
-            ArtifactDiagnosticCode::GraphValidationFailed,
+            ArtifactDiagnosticCode::GraphParseFailed,
             None,
             format!("flow graph parse failed: {error}"),
         )),
@@ -151,6 +151,60 @@ created_at = "2026-05-11T00:00:00Z"
 "#,
         );
 
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == ArtifactDiagnosticCode::GraphValidationFailed)
+        );
+    }
+
+    #[test]
+    fn validates_flow_reports_parse_errors_separately() {
+        let report = validate_loaded_artifact(
+            ArtifactKind::Flow,
+            Path::new("flow.toml"),
+            "schema_version = 1\nstart = [",
+        );
+
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == ArtifactDiagnosticCode::InvalidToml)
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == ArtifactDiagnosticCode::GraphParseFailed)
+        );
+    }
+
+    #[test]
+    fn validates_flow_reports_graph_errors_with_contract_errors() {
+        let report = validate_loaded_artifact(
+            ArtifactKind::Flow,
+            Path::new("flow.toml"),
+            r#"schema_version = 2
+start = "missing"
+edges = []
+
+[metadata]
+name = "broken"
+created_at = "2026-05-11T00:00:00Z"
+
+[nodes]
+"#,
+        );
+
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code
+                    == ArtifactDiagnosticCode::UnsupportedSchemaVersion)
+        );
         assert!(
             report
                 .diagnostics

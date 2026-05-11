@@ -84,12 +84,17 @@ impl ArchetypeRegistry {
     /// template exists.
     pub fn resolve(&self, name: &str) -> Result<ResolvedArchetype, SurgeError> {
         let canonical_name = BundledFlows::canonical_name(name);
-        if let Some(template) = self.disk.iter().find(|template| {
-            template.graph.metadata.name == name
-                || template.file_stem == name
-                || template.graph.metadata.name == canonical_name
-                || template.file_stem == canonical_name
-        }) {
+        let template = self
+            .disk
+            .iter()
+            .find(|template| template.graph.metadata.name == name || template.file_stem == name)
+            .or_else(|| {
+                self.disk.iter().find(|template| {
+                    template.graph.metadata.name == canonical_name
+                        || template.file_stem == canonical_name
+                })
+            });
+        if let Some(template) = template {
             tracing::debug!(
                 target: "archetype::registry",
                 requested_name = name,
@@ -226,6 +231,41 @@ mod tests {
 
         assert_eq!(resolved.graph.metadata.name, "custom-linear");
         assert!(matches!(resolved.provenance, ArchetypeProvenance::User(_)));
+    }
+
+    #[test]
+    fn disk_exact_name_beats_alias_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut alias_target = BundledFlows::by_name_latest("bug-fix").unwrap().graph;
+        alias_target.metadata.name = "bug-fix".into();
+        std::fs::write(
+            tmp.path().join("bug-fix.toml"),
+            toml::to_string(&alias_target).unwrap(),
+        )
+        .unwrap();
+
+        let mut exact = BundledFlows::by_name_latest("bug-fix").unwrap().graph;
+        exact.metadata.name = "bugfix".into();
+        std::fs::write(
+            tmp.path().join("bugfix.toml"),
+            toml::to_string(&exact).unwrap(),
+        )
+        .unwrap();
+
+        let registry = ArchetypeRegistry::from_dir(tmp.path()).unwrap();
+        let resolved = registry.resolve("bugfix").unwrap();
+
+        assert_eq!(resolved.graph.metadata.name, "bugfix");
+        match resolved.provenance {
+            ArchetypeProvenance::User(path) => {
+                assert_eq!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some("bugfix.toml")
+                );
+            },
+            ArchetypeProvenance::Bundled => panic!("expected user template"),
+        }
     }
 
     #[test]

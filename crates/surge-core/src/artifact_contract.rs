@@ -130,7 +130,7 @@ impl ArtifactContractRef {
     pub const fn current(kind: ArtifactKind) -> Self {
         Self {
             kind,
-            schema_version: ARTIFACT_SCHEMA_VERSION,
+            schema_version: schema_version_for_kind(kind),
         }
     }
 }
@@ -169,6 +169,8 @@ pub enum ArtifactDiagnosticCode {
     UnsupportedArtifactKind,
     /// Flow graph parsed as TOML but failed engine-level graph validation.
     GraphValidationFailed,
+    /// Flow graph failed to deserialize into the engine graph model.
+    GraphParseFailed,
 }
 
 impl ArtifactDiagnosticCode {
@@ -186,6 +188,7 @@ impl ArtifactDiagnosticCode {
             Self::MissingAcceptanceCriteria => "missing_acceptance_criteria",
             Self::UnsupportedArtifactKind => "unsupported_artifact_kind",
             Self::GraphValidationFailed => "graph_validation_failed",
+            Self::GraphParseFailed => "graph_parse_failed",
         }
     }
 }
@@ -481,7 +484,7 @@ fn validate_roadmap(report: &mut ArtifactValidationReport, path: Option<&Path>, 
     if is_markdown_artifact(path, content) {
         require_markdown_sections(report, content, &["Milestones", "Dependencies", "Risks"]);
     } else {
-        validate_toml_artifact(report, content, &["milestones"]);
+        let _ = validate_toml_artifact(report, content, &["milestones"]);
     }
 }
 
@@ -494,8 +497,9 @@ fn validate_spec(report: &mut ArtifactValidationReport, path: Option<&Path>, con
         );
         require_acceptance_criteria(report, content);
     } else {
-        validate_toml_artifact(report, content, &["spec"]);
-        validate_spec_toml_acceptance(report, content);
+        if let Some(value) = validate_toml_artifact(report, content, &["spec"]) {
+            validate_spec_toml_acceptance(report, &value);
+        }
     }
 }
 
@@ -546,19 +550,15 @@ fn validate_toml_artifact(
     report: &mut ArtifactValidationReport,
     content: &str,
     required_fields: &[&str],
-) {
-    let Some(value) = parse_toml_value(report, content) else {
-        return;
-    };
+) -> Option<toml::Value> {
+    let value = parse_toml_value(report, content)?;
     validate_schema_version(report, &value, ARTIFACT_SCHEMA_VERSION);
     require_toml_fields(report, &value, required_fields);
+    Some(value)
 }
 
-fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, content: &str) {
-    let Some(value) = content.parse::<toml::Value>().ok() else {
-        return;
-    };
-    if spec_toml_has_acceptance_criteria(&value) {
+fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, value: &toml::Value) {
+    if spec_toml_has_acceptance_criteria(value) {
         return;
     }
     report.push(ArtifactValidationDiagnostic::error(
@@ -740,9 +740,24 @@ fn strip_trailing_heading_marker(heading: &str) -> &str {
 }
 
 fn is_markdown_artifact(path: Option<&Path>, content: &str) -> bool {
-    path.is_some_and(|path| path.extension().is_some_and(|ext| ext == "md"))
-        || content.trim_start().starts_with('#')
-        || content.trim_start().starts_with("+++")
+    if let Some(extension) = path
+        .and_then(Path::extension)
+        .and_then(|extension| extension.to_str())
+    {
+        return extension.eq_ignore_ascii_case("md");
+    }
+
+    let trimmed = content.trim_start();
+    trimmed.starts_with('#') || trimmed.starts_with("+++")
+}
+
+const fn schema_version_for_kind(kind: ArtifactKind) -> u32 {
+    match contract_for(kind).schema_version_owner {
+        SchemaVersionOwner::Graph => crate::graph::SCHEMA_VERSION,
+        SchemaVersionOwner::ArtifactContract | SchemaVersionOwner::HumanReadable => {
+            ARTIFACT_SCHEMA_VERSION
+        },
+    }
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -918,6 +933,22 @@ mod tests {
     }
 
     #[test]
+    fn artifact_contract_refs_follow_schema_version_owner() {
+        assert_eq!(
+            ArtifactContractRef::current(ArtifactKind::Flow).schema_version,
+            crate::graph::SCHEMA_VERSION
+        );
+        assert_eq!(
+            contract_for(ArtifactKind::Flow).reference().schema_version,
+            crate::graph::SCHEMA_VERSION
+        );
+        assert_eq!(
+            ArtifactContractRef::current(ArtifactKind::Spec).schema_version,
+            ARTIFACT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
     fn validation_report_counts_errors_and_warnings() {
         let mut report = ArtifactValidationReport::new(ArtifactKind::Description);
         report.push(ArtifactValidationDiagnostic::warning(
@@ -1067,6 +1098,36 @@ subtasks = [
         );
 
         assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn toml_paths_with_leading_comments_are_not_markdown() {
+        let roadmap = validate_artifact(
+            ArtifactKind::Roadmap,
+            Some(Path::new("roadmap.toml")),
+            r#"# Roadmap comment
+schema_version = 1
+
+[[milestones]]
+id = "m1"
+title = "Ship contract validation"
+"#,
+        );
+        assert!(roadmap.is_valid(), "{roadmap:#?}");
+
+        let spec = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"# Spec comment
+schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["first check passes"] },
+]
+"#,
+        );
+        assert!(spec.is_valid(), "{spec:#?}");
     }
 
     #[test]

@@ -94,6 +94,8 @@ fn bundled_template_names_and_legacy_aliases_start_runs() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
+    let surge_home = home.join(".surge");
+    std::fs::create_dir_all(&surge_home).unwrap();
     let worktree = temp.path().join("worktree");
     std::fs::create_dir_all(&worktree).unwrap();
 
@@ -118,6 +120,7 @@ fn bundled_template_names_and_legacy_aliases_start_runs() {
             .current_dir(&worktree)
             .env("HOME", &home)
             .env("USERPROFILE", &home)
+            .env("SURGE_HOME", &surge_home)
             .assert()
             .success()
             .stdout(contains("run-"));

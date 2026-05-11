@@ -9,14 +9,18 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn unique_test_dir(test_name: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let temp_dir = std::env::temp_dir().join(format!(
-        "surge-ui-test-{}-{}-{nonce}",
+        "surge-ui-test-{}-{}-{nonce}-{seq}",
         std::process::id(),
         test_name
     ));

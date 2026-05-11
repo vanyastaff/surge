@@ -958,10 +958,7 @@ async fn validate_profile_artifact_contracts(
         if matching_paths.is_empty() {
             return Ok(Some(artifact_contract_rejection(
                 declaration.contract.kind,
-                format!(
-                    "outcome '{outcome}' must produce artifact '{}'",
-                    declaration.path
-                ),
+                missing_declared_artifact_reason(outcome, declaration),
             )));
         }
 
@@ -1011,19 +1008,66 @@ async fn read_produced_artifact(
     relative_path: &Path,
 ) -> Result<Option<ProducedArtifactInput>, StageError> {
     let absolute = worktree_path.join(relative_path);
-    let Ok(canonical_path) = tokio::fs::canonicalize(&absolute).await else {
-        return Ok(None);
+    let canonical_path = match tokio::fs::canonicalize(&absolute).await {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                relative_path = %normalize_artifact_path(relative_path),
+                absolute_path = %absolute.display(),
+                err = %error,
+                "reported artifact could not be canonicalized"
+            );
+            return Ok(None);
+        },
     };
     if !canonical_path.starts_with(canonical_worktree) {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            relative_path = %normalize_artifact_path(relative_path),
+            canonical_path = %canonical_path.display(),
+            canonical_worktree = %canonical_worktree.display(),
+            "reported artifact canonical path escaped the worktree"
+        );
         return Ok(None);
     }
-    let Ok(bytes) = tokio::fs::read(&canonical_path).await else {
-        return Ok(None);
+    let bytes = match tokio::fs::read(&canonical_path).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                relative_path = %normalize_artifact_path(relative_path),
+                canonical_path = %canonical_path.display(),
+                err = %error,
+                "reported artifact could not be read"
+            );
+            return Ok(None);
+        },
     };
     Ok(Some(ProducedArtifactInput {
         relative_path: relative_path.to_path_buf(),
         bytes,
     }))
+}
+
+fn missing_declared_artifact_reason(
+    outcome: &OutcomeKey,
+    declaration: &ProfileArtifactDeclaration,
+) -> String {
+    let kind = declaration.contract.kind;
+    match kind {
+        ArtifactKind::Adr | ArtifactKind::Story => {
+            let contract = kind.contract();
+            format!(
+                "outcome '{outcome}' must produce a {kind} artifact matching declared path '{}' (contract pattern '{}')",
+                declaration.path, contract.canonical_path
+            )
+        },
+        _ => format!(
+            "outcome '{outcome}' must produce artifact '{}'",
+            declaration.path
+        ),
+    }
 }
 
 fn artifact_contract_rejection(kind: ArtifactKind, reason: String) -> ArtifactContractRejection {
