@@ -1,0 +1,13 @@
+schema_version = 1
+id = "rpatch-invalid"
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+
+[[operations]]
+op = "add_milestone"
+
+[operations.milestone]
+id = "m2"
+title = "Follow-up feature"

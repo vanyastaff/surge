@@ -59,6 +59,8 @@ pub mod conflict;
 pub mod context;
 pub mod engine;
 pub mod executor;
+pub mod feature_driver;
+pub mod flow_amendment;
 pub mod gates;
 pub mod parallel;
 pub mod phases;
@@ -70,6 +72,9 @@ pub mod project_context;
 pub mod prompt;
 pub mod qa;
 pub mod retry;
+pub mod roadmap_amendment;
+pub mod roadmap_document;
+pub mod roadmap_target;
 pub mod schedule;
 pub mod triage;
 

@@ -7,12 +7,14 @@ use crate::engine::error::EngineError;
 use crate::engine::handle::RunHandle;
 use crate::engine::tools::ToolDispatcher;
 use crate::profile_loader::ProfileRegistry;
+use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
 /// Central orchestration engine. Drives one or more concurrent runs, each
@@ -47,6 +49,8 @@ pub(crate) struct ActiveRun {
     >,
     pub tool_resolutions:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub roadmap_amendments:
+        tokio::sync::mpsc::Sender<crate::engine::run_task::RoadmapAmendmentCommand>,
 }
 
 impl Engine {
@@ -264,6 +268,32 @@ impl Engine {
             }));
         }
 
+        for seed in &run_config.seed_artifacts {
+            let seeded_artifact = synthesise_run_seed_artifact(&worktree_path, seed)
+                .await
+                .map_err(|e| {
+                    EngineError::Internal(format!(
+                        "seed artifact {} synthesis failed: {e}",
+                        seed.name
+                    ))
+                })?;
+            tracing::debug!(
+                target: "engine::startup",
+                run_id = %run_id,
+                name = seed.name.as_str(),
+                path = %seed.relative_path.display(),
+                bytes = seed.content.len(),
+                hash = %seeded_artifact.hash,
+                "seeded run artifact"
+            );
+            events.push(VersionedEventPayload::new(EventPayload::ArtifactProduced {
+                node: seeded_artifact.producer,
+                artifact: seeded_artifact.hash,
+                path: seeded_artifact.relative_path,
+                name: seed.name.clone(),
+            }));
+        }
+
         // Surface the operator's free-form prompt as a first-class artifact so
         // bootstrap (or any) agent stage can pull it via the standard binding
         // path through `ArtifactSource::InitialPrompt` (and equivalently via
@@ -321,10 +351,12 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
+            roadmap_amendments: roadmap_amendment_tx,
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -346,6 +378,7 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
+            roadmap_amendments: roadmap_amendment_rx,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
@@ -525,11 +558,13 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
 
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
+            roadmap_amendments: roadmap_amendment_tx,
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -573,6 +608,7 @@ impl Engine {
             resume_root_traversal_counts: None,
             gate_resolutions,
             tool_resolutions,
+            roadmap_amendments: roadmap_amendment_rx,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
@@ -590,6 +626,47 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    /// Submit an approved roadmap amendment to an active run.
+    pub async fn submit_roadmap_amendment(
+        &self,
+        run_id: RunId,
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_result: RoadmapPatchApplyResult,
+    ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
+        if let RoadmapPatchTarget::RunRoadmap {
+            run_id: target_run_id,
+            ..
+        } = target
+            && target_run_id != run_id
+        {
+            return Err(EngineError::Internal(format!(
+                "roadmap amendment target run {target_run_id} does not match active run {run_id}"
+            )));
+        }
+
+        let sender = {
+            let runs = self.runs.read().await;
+            runs.get(&run_id)
+                .map(|active| active.roadmap_amendments.clone())
+                .ok_or(EngineError::RunNotFound(run_id))?
+        };
+        let (reply, result) = tokio::sync::oneshot::channel();
+        sender
+            .send(crate::engine::run_task::RoadmapAmendmentCommand {
+                patch_id,
+                target,
+                patch_result,
+                reply,
+            })
+            .await
+            .map_err(|_| EngineError::Internal("roadmap amendment receiver dropped".into()))?;
+        result
+            .await
+            .map_err(|_| EngineError::Internal("roadmap amendment reply dropped".into()))?
+            .map_err(|error| EngineError::Internal(format!("active roadmap amendment: {error}")))
     }
 
     /// Provide answer to a paused run waiting on human input.
@@ -753,5 +830,40 @@ pub(crate) async fn synthesise_initial_prompt_artifact(
         hash,
         relative_path,
         producer,
+    })
+}
+
+pub(crate) async fn synthesise_run_seed_artifact(
+    worktree_path: &std::path::Path,
+    seed: &crate::engine::config::RunSeedArtifact,
+) -> std::io::Result<InitialPromptArtifact> {
+    use std::path::Component;
+
+    if seed.relative_path.is_absolute()
+        || seed.relative_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        })
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "seed artifact path must stay inside the worktree: {}",
+                seed.relative_path.display()
+            ),
+        ));
+    }
+
+    let absolute_path = worktree_path.join(&seed.relative_path);
+    if let Some(parent) = absolute_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&absolute_path, seed.content.as_bytes()).await?;
+    Ok(InitialPromptArtifact {
+        hash: seed.hash,
+        relative_path: seed.relative_path.clone(),
+        producer: seed.producer.clone(),
     })
 }

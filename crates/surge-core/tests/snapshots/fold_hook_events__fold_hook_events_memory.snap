@@ -29,4 +29,6 @@ RunMemory {
     bootstrap_edit_counts: {},
     node_visits: {},
     last_edit_feedback_by_stage: {},
+    roadmap_patches: {},
+    latest_graph_revision: None,
 }

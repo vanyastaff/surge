@@ -3,7 +3,10 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use surge_core::{ContentHash, NodeKey};
+use surge_core::{
+    ActivePickupPolicy, ContentHash, NodeKey, OperatorConflictChoice, RoadmapPatchApprovalDecision,
+    RoadmapPatchId, RoadmapPatchStatus, RoadmapPatchTarget,
+};
 
 use crate::runs::seq::EventSeq;
 
@@ -68,6 +71,55 @@ pub struct PendingApproval {
     pub delivered: bool,
     /// External message id assigned by the channel after delivery, NULL otherwise.
     pub message_id: Option<i64>,
+}
+
+/// One row of the `roadmap_patches` materialized view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadmapPatchRecord {
+    /// Stable patch identifier.
+    pub patch_id: RoadmapPatchId,
+    /// Target roadmap or run.
+    pub target: RoadmapPatchTarget,
+    /// Latest lifecycle status derived from events.
+    pub status: RoadmapPatchStatus,
+    /// Stored patch artifact hash.
+    pub patch_artifact: Option<ContentHash>,
+    /// Stored patch path.
+    pub patch_path: Option<PathBuf>,
+    /// Approval summary hash, when approval was requested.
+    pub summary_hash: Option<ContentHash>,
+    /// Operator approval decision, when known.
+    pub decision: Option<RoadmapPatchApprovalDecision>,
+    /// Operator comment, when present.
+    pub decision_comment: Option<String>,
+    /// Conflict choice selected by the operator, when present.
+    pub conflict_choice: Option<OperatorConflictChoice>,
+    /// Amended roadmap artifact from the apply step.
+    pub amended_roadmap_artifact: Option<ContentHash>,
+    /// Amended roadmap path from the apply step.
+    pub amended_roadmap_path: Option<PathBuf>,
+    /// Amended flow artifact from the apply step.
+    pub amended_flow_artifact: Option<ContentHash>,
+    /// Amended flow path from the apply step.
+    pub amended_flow_path: Option<PathBuf>,
+    /// Latest roadmap artifact accepted by the runner/read model.
+    pub roadmap_artifact: Option<ContentHash>,
+    /// Latest roadmap path accepted by the runner/read model.
+    pub roadmap_path: Option<PathBuf>,
+    /// Latest flow artifact accepted by the runner/read model.
+    pub flow_artifact: Option<ContentHash>,
+    /// Latest flow path accepted by the runner/read model.
+    pub flow_path: Option<PathBuf>,
+    /// Active pickup policy captured with `RoadmapUpdated`.
+    pub active_pickup: Option<ActivePickupPolicy>,
+    /// Event seq that first created the record.
+    pub created_seq: EventSeq,
+    /// Event seq that last updated the record.
+    pub updated_seq: EventSeq,
+    /// Unix epoch ms when record was created.
+    pub created_at_ms: i64,
+    /// Unix epoch ms when record was updated.
+    pub updated_at_ms: i64,
 }
 
 /// Summary of cost-related metrics from the `cost_summary` view.

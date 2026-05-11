@@ -7,12 +7,14 @@ use std::sync::Arc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use surge_core::{ContentHash, RunId, VersionedEventPayload, migrate_payload};
+use surge_core::{ContentHash, RoadmapPatchId, RunId, VersionedEventPayload, migrate_payload};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader_views as views;
 use crate::runs::seq::EventSeq;
-use crate::runs::types::{ArtifactRecord, CostSummary, PendingApproval, StageExecution};
+use crate::runs::types::{
+    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution,
+};
 
 /// Read-only handle on a per-run database.
 ///
@@ -193,6 +195,32 @@ impl RunReader {
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
             views::cost_summary(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read all roadmap patch lifecycle records.
+    pub async fn roadmap_patches(&self) -> Result<Vec<RoadmapPatchRecord>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::roadmap_patches(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read one roadmap patch lifecycle record by ID.
+    pub async fn roadmap_patch(
+        &self,
+        patch_id: &RoadmapPatchId,
+    ) -> Result<Option<RoadmapPatchRecord>, StorageError> {
+        let pool = self.pool.clone();
+        let patch_id = patch_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::roadmap_patch(&conn, &patch_id)
         })
         .await
         .map_err(|e| StorageError::Pool(e.to_string()))?

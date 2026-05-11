@@ -7,6 +7,10 @@ use surge_core::run_state::Cursor;
 
 /// Opaque blob persisted at every stage boundary so a crashed run can be
 /// resumed without replaying the entire event log.
+///
+/// The executable graph is intentionally not stored here. Replay reconstructs
+/// it from `PipelineMaterialized` and any later `GraphRevisionAccepted` events,
+/// so snapshots stay small and graph history remains append-only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EngineSnapshot {
     /// Layout version; bump on any breaking schema change.

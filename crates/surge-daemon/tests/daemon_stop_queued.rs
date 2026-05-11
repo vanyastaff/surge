@@ -242,7 +242,7 @@ async fn stop_run_cancels_queued_run() {
         run_id: run1,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req1)
         .await
@@ -267,7 +267,7 @@ async fn stop_run_cancels_queued_run() {
         run_id: run2,
         graph: Box::new(make_minimal_graph()),
         worktree_path: temp.path().to_path_buf(),
-        run_config: EngineRunConfig::default(),
+        run_config: Box::new(EngineRunConfig::default()),
     };
     write_frame(&mut write_half, &req2)
         .await

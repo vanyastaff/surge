@@ -9,6 +9,10 @@ use crate::hooks::HookFailureMode;
 use crate::id::{RunId, SessionId};
 use crate::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey, TemplateKey};
 use crate::notify_config::NotifyChannelKind;
+use crate::roadmap_patch::{
+    ActivePickupPolicy, OperatorConflictChoice, RoadmapPatchApprovalDecision, RoadmapPatchId,
+    RoadmapPatchTarget,
+};
 use crate::sandbox::SandboxMode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -114,6 +118,55 @@ pub enum EventPayload {
     PipelineMaterialized {
         graph: Box<Graph>,
         graph_hash: ContentHash,
+    },
+
+    // Roadmap amendment lifecycle
+    RoadmapPatchDrafted {
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_artifact: ContentHash,
+        patch_path: PathBuf,
+    },
+    RoadmapPatchApprovalRequested {
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        channel: ApprovalChannel,
+        summary_hash: ContentHash,
+    },
+    RoadmapPatchApprovalDecided {
+        patch_id: RoadmapPatchId,
+        decision: RoadmapPatchApprovalDecision,
+        channel_used: ApprovalChannelKind,
+        comment: Option<String>,
+        conflict_choice: Option<OperatorConflictChoice>,
+    },
+    RoadmapPatchApplied {
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        amended_roadmap_artifact: ContentHash,
+        amended_roadmap_path: PathBuf,
+        amended_flow_artifact: Option<ContentHash>,
+        amended_flow_path: Option<PathBuf>,
+    },
+    RoadmapUpdated {
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        roadmap_artifact: ContentHash,
+        roadmap_path: PathBuf,
+        flow_artifact: Option<ContentHash>,
+        flow_path: Option<PathBuf>,
+        active_pickup: ActivePickupPolicy,
+    },
+    /// Accepted graph revision for an active roadmap amendment. The full
+    /// graph is embedded so replay can reconstruct the active topology
+    /// without reading mutable artifact paths.
+    GraphRevisionAccepted {
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        previous_graph_hash: ContentHash,
+        graph: Box<Graph>,
+        graph_hash: ContentHash,
+        active_pickup: ActivePickupPolicy,
     },
 
     // Stage execution
@@ -345,6 +398,12 @@ impl EventPayload {
             Self::BootstrapEditRequested { .. } => "BootstrapEditRequested",
             Self::BootstrapTelemetry { .. } => "BootstrapTelemetry",
             Self::PipelineMaterialized { .. } => "PipelineMaterialized",
+            Self::RoadmapPatchDrafted { .. } => "RoadmapPatchDrafted",
+            Self::RoadmapPatchApprovalRequested { .. } => "RoadmapPatchApprovalRequested",
+            Self::RoadmapPatchApprovalDecided { .. } => "RoadmapPatchApprovalDecided",
+            Self::RoadmapPatchApplied { .. } => "RoadmapPatchApplied",
+            Self::RoadmapUpdated { .. } => "RoadmapUpdated",
+            Self::GraphRevisionAccepted { .. } => "GraphRevisionAccepted",
             Self::StageEntered { .. } => "StageEntered",
             Self::StageInputsResolved { .. } => "StageInputsResolved",
             Self::SessionOpened { .. } => "SessionOpened",
@@ -427,6 +486,42 @@ pub struct RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn minimal_graph_for_event(start: &str) -> Graph {
+        use crate::graph::{GraphMetadata, SCHEMA_VERSION};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+
+        let start = NodeKey::try_from(start).unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            start.clone(),
+            Node {
+                id: start.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "minimal".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn run_started_bincode_roundtrip() {
@@ -564,6 +659,100 @@ mod tests {
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn roadmap_patch_lifecycle_events_roundtrip() {
+        let patch_id = RoadmapPatchId::new("rpatch-demo").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let patch_hash = ContentHash::compute(b"roadmap-patch");
+        let roadmap_hash = ContentHash::compute(b"roadmap");
+        let flow_hash = ContentHash::compute(b"flow");
+
+        let events = vec![
+            EventPayload::RoadmapPatchDrafted {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                patch_artifact: patch_hash,
+                patch_path: PathBuf::from("roadmap-patch.toml"),
+            },
+            EventPayload::RoadmapPatchApprovalRequested {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                channel: ApprovalChannel::Desktop {
+                    duration: crate::approvals::ApprovalDuration::Transient,
+                },
+                summary_hash: ContentHash::compute(b"summary"),
+            },
+            EventPayload::RoadmapPatchApprovalDecided {
+                patch_id: patch_id.clone(),
+                decision: RoadmapPatchApprovalDecision::Approve,
+                channel_used: ApprovalChannelKind::Desktop,
+                comment: Some("ship it".into()),
+                conflict_choice: None,
+            },
+            EventPayload::RoadmapPatchApplied {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                amended_roadmap_artifact: roadmap_hash,
+                amended_roadmap_path: PathBuf::from("roadmap.toml"),
+                amended_flow_artifact: Some(flow_hash),
+                amended_flow_path: Some(PathBuf::from("flow.toml")),
+            },
+            EventPayload::RoadmapUpdated {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                roadmap_artifact: roadmap_hash,
+                roadmap_path: PathBuf::from("roadmap.toml"),
+                flow_artifact: Some(flow_hash),
+                flow_path: Some(PathBuf::from("flow.toml")),
+                active_pickup: ActivePickupPolicy::Allowed,
+            },
+            EventPayload::GraphRevisionAccepted {
+                patch_id,
+                target,
+                previous_graph_hash: ContentHash::compute(b"old-flow"),
+                graph: Box::new(minimal_graph_for_event("end")),
+                graph_hash: flow_hash,
+                active_pickup: ActivePickupPolicy::Allowed,
+            },
+        ];
+
+        for payload in events {
+            let bytes = payload.to_bincode().unwrap();
+            let parsed = EventPayload::from_bincode(&bytes).unwrap();
+            assert_eq!(payload, parsed);
+        }
+    }
+
+    #[test]
+    fn roadmap_patch_discriminants_are_stable() {
+        let patch_id = RoadmapPatchId::new("rpatch-demo").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let payload = EventPayload::RoadmapPatchDrafted {
+            patch_id,
+            target,
+            patch_artifact: ContentHash::compute(b"patch"),
+            patch_path: PathBuf::from("roadmap-patch.toml"),
+        };
+
+        assert_eq!(payload.discriminant_str(), "RoadmapPatchDrafted");
+
+        let payload = EventPayload::GraphRevisionAccepted {
+            patch_id: RoadmapPatchId::new("rpatch-graph").unwrap(),
+            target: RoadmapPatchTarget::ProjectRoadmap {
+                roadmap_path: ".ai-factory/ROADMAP.md".into(),
+            },
+            previous_graph_hash: ContentHash::compute(b"old-flow"),
+            graph: Box::new(minimal_graph_for_event("end")),
+            graph_hash: ContentHash::compute(b"new-flow"),
+            active_pickup: ActivePickupPolicy::Allowed,
+        };
+        assert_eq!(payload.discriminant_str(), "GraphRevisionAccepted");
     }
 
     // Stage execution + routing variants

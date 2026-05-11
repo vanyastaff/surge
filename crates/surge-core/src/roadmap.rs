@@ -12,7 +12,7 @@ use crate::spec::Complexity;
 /// `flow.toml` is generated. The older [`Timeline`] scheduling model remains
 /// available for runtime planning; this wrapper captures the authored roadmap
 /// shape and schema version.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoadmapArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]
@@ -39,6 +39,63 @@ impl RoadmapArtifact {
             risks: Vec::new(),
         }
     }
+
+    /// Render a deterministic `roadmap.md` representation.
+    #[must_use]
+    pub fn to_markdown(&self) -> String {
+        let mut out = String::from("# Roadmap\n\n");
+        for milestone in &self.milestones {
+            out.push_str(&format!("## {}: {}\n", milestone.id, milestone.title));
+            if milestone.status != RoadmapStatus::Pending {
+                out.push_str(&format!("Status: {}\n", milestone.status));
+            }
+            if milestone.tasks.is_empty() {
+                out.push('\n');
+                continue;
+            }
+            for task in &milestone.tasks {
+                out.push_str(&format!(
+                    "- [{}] {}: {}",
+                    markdown_checkbox(task.status),
+                    task.id,
+                    task.title
+                ));
+                if task.status != RoadmapStatus::Pending {
+                    out.push_str(&format!(" ({})", task.status));
+                }
+                out.push('\n');
+                if let Some(description) = &task.description {
+                    out.push_str(&format!("  - {}\n", description));
+                }
+                for criterion in &task.acceptance_criteria {
+                    out.push_str(&format!("  - AC: {criterion}\n"));
+                }
+            }
+            out.push('\n');
+        }
+        if !self.dependencies.is_empty() {
+            out.push_str("## Dependencies\n");
+            for dependency in &self.dependencies {
+                out.push_str(&format!("- {} -> {}", dependency.from, dependency.to));
+                if !dependency.reason.trim().is_empty() {
+                    out.push_str(&format!(": {}", dependency.reason));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        if !self.risks.is_empty() {
+            out.push_str("## Risks\n");
+            for risk in &self.risks {
+                out.push_str(&format!("- {}", risk.description));
+                if let Some(mitigation) = &risk.mitigation {
+                    out.push_str(&format!(" (mitigation: {mitigation})"));
+                }
+                out.push('\n');
+            }
+        }
+        out
+    }
 }
 
 impl Default for RoadmapArtifact {
@@ -48,12 +105,15 @@ impl Default for RoadmapArtifact {
 }
 
 /// One deliverable-focused roadmap milestone.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoadmapMilestone {
     /// Stable human-authored identifier, for example `m1`.
     pub id: String,
     /// Human-readable milestone title.
     pub title: String,
+    /// Current execution status for amendment safety checks.
+    #[serde(default, skip_serializing_if = "RoadmapStatus::is_pending")]
+    pub status: RoadmapStatus,
     /// Ordered tasks within this milestone.
     #[serde(default)]
     pub tasks: Vec<RoadmapTask>,
@@ -66,18 +126,22 @@ impl RoadmapMilestone {
         Self {
             id: id.into(),
             title: title.into(),
+            status: RoadmapStatus::Pending,
             tasks: Vec::new(),
         }
     }
 }
 
 /// One task within a roadmap milestone.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoadmapTask {
     /// Stable human-authored identifier, for example `m1-t1`.
     pub id: String,
     /// Human-readable task title.
     pub title: String,
+    /// Current execution status for amendment safety checks.
+    #[serde(default, skip_serializing_if = "RoadmapStatus::is_pending")]
+    pub status: RoadmapStatus,
     /// Optional short description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -93,6 +157,7 @@ impl RoadmapTask {
         Self {
             id: id.into(),
             title: title.into(),
+            status: RoadmapStatus::Pending,
             description: None,
             acceptance_criteria: Vec::new(),
         }
@@ -100,7 +165,7 @@ impl RoadmapTask {
 }
 
 /// Directed dependency between roadmap milestones.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoadmapDependency {
     /// Milestone that must finish first.
     pub from: String,
@@ -112,7 +177,7 @@ pub struct RoadmapDependency {
 }
 
 /// Risk tracked by the roadmap artifact.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoadmapRisk {
     /// Risk description.
     pub description: String,
@@ -183,10 +248,36 @@ pub enum RoadmapStatus {
 }
 
 impl RoadmapStatus {
+    /// Returns `true` when the item has not started.
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
     /// Returns `true` if no further execution will happen.
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Skipped)
+    }
+}
+
+impl std::fmt::Display for RoadmapStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        })
+    }
+}
+
+const fn markdown_checkbox(status: RoadmapStatus) -> &'static str {
+    match status {
+        RoadmapStatus::Completed => "x",
+        _ => " ",
     }
 }
 

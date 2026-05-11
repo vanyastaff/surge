@@ -263,37 +263,55 @@ future runs, not replay or resume of the current run.
 
 ## Roadmap Amendments
 
-Roadmaps are not frozen documents. After roadmap approval, the user can add a feature through a target `surge feature` flow. The feature planner proposes a patch: where to insert the feature and how to expand it into milestone / tasks.
+Roadmaps are not frozen documents. After roadmap approval, the user can add a feature through `surge feature describe`. The Feature Planner proposes a typed `roadmap-patch.toml`: target, rationale, operations, dependencies, detected conflicts, and lifecycle status. Surge stores the patch as a run artifact, appends amendment lifecycle events, and mirrors patch metadata into the registry so `surge feature list/show/reject` does not have to scan every run log.
 
 ```mermaid
 flowchart TD
     User[surge feature<br/>describe new feature]
-    Chat[Interactive chat<br/>clarify scope]
     FeatureAgent[Feature planner agent]
     Patch[Roadmap patch<br/>placement + task breakdown]
+    Conflict{Conflict?}
+    Choice{Operator choice}
     Decision{Approve patch?}
     RoadmapUpdate[roadmap.md vNext]
-    FlowUpdate[Update flow<br/>new milestone/task nodes]
-    RunnerState{Roadmap runner active?}
-    ActiveRunner[Runner picks up<br/>new pending work]
-    FollowUp[Create follow-up run]
+    Events[RoadmapUpdated<br/>GraphRevisionAccepted]
+    ActiveRunner[Runner picks up<br/>safe boundary]
+    FollowUp[Create follow-up run<br/>seed amendment artifact]
+    Registry[Patch index<br/>list/show/reject]
     Daemon[surge-daemon queues or starts run]
 
-    User --> Chat
-    Chat --> FeatureAgent
+    User --> FeatureAgent
     FeatureAgent --> Patch
-    Patch --> Decision
-    Decision -->|edit| Chat
-    Decision -->|reject| User
+    Patch --> Registry
+    Patch --> Conflict
+    Conflict -->|no| Decision
+    Conflict -->|yes| Choice
+    Choice -->|defer to next milestone| Decision
+    Choice -->|abort current run| Registry
+    Choice -->|create follow-up run| FollowUp
+    Choice -->|reject patch| Registry
     Decision -->|approve| RoadmapUpdate
-    RoadmapUpdate --> FlowUpdate
-    FlowUpdate --> RunnerState
-    RunnerState -->|yes| ActiveRunner
-    RunnerState -->|no| FollowUp
+    Decision -->|reject/store| Registry
+    RoadmapUpdate --> Events
+    Events --> ActiveRunner
     FollowUp --> Daemon
 ```
 
-If a roadmap runner is active, the daemon can emit a roadmap-updated event and the runner sees the new pending milestone / tasks. If the roadmap is already terminal, or roadmap-flow execution is disabled, Surge appends the feature and creates a follow-up run instead of mutating completed execution history.
+Amendments are replay-safe. The event log records `RoadmapPatchDrafted`, `RoadmapPatchApprovalRequested`, `RoadmapPatchApprovalDecided`, `RoadmapPatchApplied`, `RoadmapUpdated`, and `GraphRevisionAccepted`. `GraphRevisionAccepted` embeds the full revised graph so replay does not depend on mutable files. `RoadmapUpdated` records the amended roadmap/flow artifact hashes and the active-pickup policy used by the runner.
+
+Conflict handling is explicit. A patch that touches an already-running or paused milestone surfaces stable conflict code `running_milestone` and the operator choices `defer-to-next-milestone`, `abort-current-run`, `create-follow-up-run`, and `reject-patch`. Terminal history uses `completed_history` and can be resolved through a follow-up run or rejection. The selected choice is persisted and reflected in the apply path: defer recalculates the target to pending work, follow-up creates a new run seed, reject marks the patch terminal, and abort records that current execution must stop before a later apply.
+
+Current CLI examples:
+
+```text
+surge feature describe "add CSV export" --project --approval prompt
+surge feature describe "add CSV export" --run <run_id> --approval approve --conflict-choice create-follow-up-run
+surge feature list --status pending-approval
+surge feature show rpatch-...
+surge feature reject rpatch-... --reason "superseded"
+```
+
+For lifecycle debugging, use `RUST_LOG=feature_cli=debug,roadmap_amendment=debug,roadmap_patch_index=debug`. Conflict detection logs WARN entries with stable conflict codes; approval, artifact storage, apply, and follow-up creation log INFO entries.
 
 ## Runtime Architecture
 

@@ -3,6 +3,7 @@
 //! method). Default state: all channels return `ChannelNotConfigured`.
 
 use crate::deliverer::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
+use crate::messages::NotifyMessage;
 use async_trait::async_trait;
 use std::sync::Arc;
 use surge_core::notify_config::NotifyChannel;
@@ -57,6 +58,17 @@ impl MultiplexingNotifier {
     pub fn with_telegram(mut self, d: Arc<dyn NotifyDeliverer>) -> Self {
         self.telegram = Some(d);
         self
+    }
+
+    /// Render a structured [`NotifyMessage`] and deliver it to one channel.
+    pub async fn deliver_message(
+        &self,
+        ctx: &NotifyDeliveryContext<'_>,
+        channel: &NotifyChannel,
+        message: &NotifyMessage,
+    ) -> Result<(), NotifyError> {
+        let rendered = message.render();
+        self.deliver(ctx, channel, &rendered).await
     }
 }
 
@@ -142,6 +154,33 @@ mod tests {
             node: &node,
         };
         mux.deliver(&ctx, &NotifyChannel::Desktop, &rendered())
+            .await
+            .unwrap();
+        assert_eq!(*rec.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn delivers_structured_message_after_rendering() {
+        let rec = Arc::new(Recorder {
+            calls: Mutex::new(0),
+        });
+        let mux = MultiplexingNotifier::new().with_desktop(rec.clone());
+        let node = NodeKey::try_from("n").unwrap();
+        let ctx = NotifyDeliveryContext {
+            run_id: RunId::new(),
+            node: &node,
+        };
+        let message = NotifyMessage::InboxCard(crate::messages::InboxCardPayload {
+            task_id: surge_intake::types::TaskId::try_new("github_issues:o/r#1").unwrap(),
+            source_id: "github_issues:o/r".into(),
+            provider: "github_issues".into(),
+            title: "Fix parser".into(),
+            summary: "Parser fails on nesting".into(),
+            priority: surge_intake::types::Priority::High,
+            task_url: "https://example.com".into(),
+            callback_token: "token".into(),
+        });
+        mux.deliver_message(&ctx, &NotifyChannel::Desktop, &message)
             .await
             .unwrap();
         assert_eq!(*rec.calls.lock().unwrap(), 1);

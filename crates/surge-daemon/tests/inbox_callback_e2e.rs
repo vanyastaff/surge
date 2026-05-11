@@ -155,7 +155,7 @@ impl EngineFacade for MockEngineFacade {
                     let node = NodeKey::try_new("bootstrap_agent").unwrap();
                     let _ = tx_for_task.send(EngineRunEvent::Persisted {
                         seq: 0,
-                        payload: EventPayload::StageEntered { node, attempt: 0 },
+                        payload: Box::new(EventPayload::StageEntered { node, attempt: 0 }),
                     });
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     let outcome = RunOutcome::Completed {

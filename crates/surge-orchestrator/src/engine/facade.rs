@@ -7,11 +7,13 @@ use crate::engine::config::EngineRunConfig;
 use crate::engine::engine::Engine;
 use crate::engine::error::EngineError;
 use crate::engine::handle::{RunHandle, RunSummary};
+use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 
 /// Engine-facing surface used by CLI commands and tests. All futures
 /// are `Send`. Implementations: [`LocalEngineFacade`] (in-process,
@@ -37,6 +39,19 @@ pub trait EngineFacade: Send + Sync {
 
     /// Cancel an in-flight run.
     async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError>;
+
+    /// Submit an approved roadmap amendment to a live run. Implementations
+    /// must route this to the run task that owns the target run writer.
+    async fn submit_roadmap_amendment(
+        &self,
+        run_id: RunId,
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_result: RoadmapPatchApplyResult,
+    ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
+        let _ = (patch_id, target, patch_result);
+        Err(EngineError::RunNotFound(run_id))
+    }
 
     /// Provide an answer to a paused run waiting on human input.
     async fn resolve_human_input(
@@ -90,6 +105,18 @@ impl EngineFacade for LocalEngineFacade {
 
     async fn stop_run(&self, run_id: RunId, reason: String) -> Result<(), EngineError> {
         self.engine.stop_run(run_id, reason).await
+    }
+
+    async fn submit_roadmap_amendment(
+        &self,
+        run_id: RunId,
+        patch_id: RoadmapPatchId,
+        target: RoadmapPatchTarget,
+        patch_result: RoadmapPatchApplyResult,
+    ) -> Result<ActiveRunAmendmentOutcome, EngineError> {
+        self.engine
+            .submit_roadmap_amendment(run_id, patch_id, target, patch_result)
+            .await
     }
 
     async fn resolve_human_input(

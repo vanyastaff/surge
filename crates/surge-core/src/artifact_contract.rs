@@ -10,6 +10,12 @@ use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
+use crate::roadmap::RoadmapArtifact;
+use crate::roadmap_patch::{
+    InsertionPoint, RoadmapItemRef, RoadmapPatch, RoadmapPatchItem, RoadmapPatchOperation,
+    RoadmapPatchValidationCode, RoadmapPatchValidationIssue,
+};
+
 /// Current schema version used by Surge-owned artifact contracts.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 
@@ -23,6 +29,8 @@ pub enum ArtifactKind {
     Requirements,
     /// Roadmap Planner artifact.
     Roadmap,
+    /// Roadmap amendment patch artifact.
+    RoadmapPatch,
     /// Spec Author artifact.
     Spec,
     /// Architect decision artifact.
@@ -43,6 +51,7 @@ impl ArtifactKind {
             Self::Description => "description",
             Self::Requirements => "requirements",
             Self::Roadmap => "roadmap",
+            Self::RoadmapPatch => "roadmap-patch",
             Self::Spec => "spec",
             Self::Adr => "adr",
             Self::Story => "story",
@@ -79,6 +88,7 @@ impl FromStr for ArtifactKind {
             "description" | "description-md" => Ok(Self::Description),
             "requirements" | "requirements-md" => Ok(Self::Requirements),
             "roadmap" | "roadmap-md" | "roadmap-toml" => Ok(Self::Roadmap),
+            "roadmap-patch" | "roadmap_patch" | "roadmap-patch-toml" => Ok(Self::RoadmapPatch),
             "spec" | "spec-md" | "spec-toml" => Ok(Self::Spec),
             "adr" | "architecture-decision-record" => Ok(Self::Adr),
             "story" | "story-file" => Ok(Self::Story),
@@ -171,6 +181,12 @@ pub enum ArtifactDiagnosticCode {
     GraphValidationFailed,
     /// Flow graph failed to deserialize into the engine graph model.
     GraphParseFailed,
+    /// Roadmap patch has no operations.
+    MissingOperation,
+    /// Roadmap patch add operation is missing an insertion point.
+    MissingInsertionPoint,
+    /// Roadmap patch references a missing roadmap item.
+    InvalidReference,
 }
 
 impl ArtifactDiagnosticCode {
@@ -189,6 +205,9 @@ impl ArtifactDiagnosticCode {
             Self::UnsupportedArtifactKind => "unsupported_artifact_kind",
             Self::GraphValidationFailed => "graph_validation_failed",
             Self::GraphParseFailed => "graph_parse_failed",
+            Self::MissingOperation => "missing_operation",
+            Self::MissingInsertionPoint => "missing_insertion_point",
+            Self::InvalidReference => "invalid_reference",
         }
     }
 }
@@ -385,6 +404,7 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
         ArtifactKind::Description => DESCRIPTION_CONTRACT,
         ArtifactKind::Requirements => REQUIREMENTS_CONTRACT,
         ArtifactKind::Roadmap => ROADMAP_CONTRACT,
+        ArtifactKind::RoadmapPatch => ROADMAP_PATCH_CONTRACT,
         ArtifactKind::Spec => SPEC_CONTRACT,
         ArtifactKind::Adr => ADR_CONTRACT,
         ArtifactKind::Story => STORY_CONTRACT,
@@ -424,6 +444,22 @@ pub fn validate_artifact_text(kind: ArtifactKind, content: &str) -> ArtifactVali
     report
 }
 
+/// Validate a roadmap patch and resolve references against a roadmap context.
+#[must_use]
+pub fn validate_roadmap_patch_text_with_context(
+    content: &str,
+    roadmap: &RoadmapArtifact,
+) -> ArtifactValidationReport {
+    let mut report = validate_artifact_text(ArtifactKind::RoadmapPatch, content);
+    let Some(patch) = parse_roadmap_patch_for_context(&mut report, content) else {
+        return report;
+    };
+    if report.is_valid() {
+        validate_roadmap_patch_context(&mut report, &patch, roadmap);
+    }
+    report
+}
+
 fn validate_artifact_path_into(report: &mut ArtifactValidationReport, path: &Path) {
     let contract = contract_for(report.kind);
     if contract.accepts_path(path) {
@@ -450,6 +486,7 @@ fn validate_artifact_text_into(
         ArtifactKind::Description => validate_description_markdown(report, content),
         ArtifactKind::Requirements => validate_requirements_markdown(report, content),
         ArtifactKind::Roadmap => validate_roadmap(report, path, content),
+        ArtifactKind::RoadmapPatch => validate_roadmap_patch(report, content),
         ArtifactKind::Spec => validate_spec(report, path, content),
         ArtifactKind::Adr => validate_adr_markdown(report, content),
         ArtifactKind::Story => validate_story_markdown(report, content),
@@ -485,6 +522,19 @@ fn validate_roadmap(report: &mut ArtifactValidationReport, path: Option<&Path>, 
         require_markdown_sections(report, content, &["Milestones", "Dependencies", "Risks"]);
     } else {
         let _ = validate_toml_artifact(report, content, &["milestones"]);
+    }
+}
+
+fn validate_roadmap_patch(report: &mut ArtifactValidationReport, content: &str) {
+    if validate_toml_artifact(report, content, &["id", "target", "operations"]).is_none() {
+        return;
+    }
+
+    let Some(patch) = parse_roadmap_patch(report, content) else {
+        return;
+    };
+    for issue in patch.validate_shape() {
+        report.push(roadmap_patch_issue_to_diagnostic(issue));
     }
 }
 
@@ -555,6 +605,236 @@ fn validate_toml_artifact(
     validate_schema_version(report, &value, ARTIFACT_SCHEMA_VERSION);
     require_toml_fields(report, &value, required_fields);
     Some(value)
+}
+
+fn parse_roadmap_patch(
+    report: &mut ArtifactValidationReport,
+    content: &str,
+) -> Option<RoadmapPatch> {
+    match toml::from_str::<RoadmapPatch>(content) {
+        Ok(patch) => Some(patch),
+        Err(error) => {
+            report.push(ArtifactValidationDiagnostic::error(
+                ArtifactKind::RoadmapPatch,
+                ArtifactDiagnosticCode::InvalidToml,
+                None,
+                format!("roadmap patch failed to parse: {error}"),
+            ));
+            None
+        },
+    }
+}
+
+fn parse_roadmap_patch_for_context(
+    report: &mut ArtifactValidationReport,
+    content: &str,
+) -> Option<RoadmapPatch> {
+    if report.is_valid() {
+        parse_roadmap_patch(report, content)
+    } else {
+        None
+    }
+}
+
+fn roadmap_patch_issue_to_diagnostic(
+    issue: RoadmapPatchValidationIssue,
+) -> ArtifactValidationDiagnostic {
+    ArtifactValidationDiagnostic::error(
+        ArtifactKind::RoadmapPatch,
+        roadmap_patch_code_to_artifact_code(issue.code),
+        Some(issue.location),
+        issue.message,
+    )
+}
+
+const fn roadmap_patch_code_to_artifact_code(
+    code: RoadmapPatchValidationCode,
+) -> ArtifactDiagnosticCode {
+    match code {
+        RoadmapPatchValidationCode::UnsupportedSchemaVersion => {
+            ArtifactDiagnosticCode::UnsupportedSchemaVersion
+        },
+        RoadmapPatchValidationCode::MissingOperation => ArtifactDiagnosticCode::MissingOperation,
+        RoadmapPatchValidationCode::MissingInsertionPoint => {
+            ArtifactDiagnosticCode::MissingInsertionPoint
+        },
+        RoadmapPatchValidationCode::MissingTargetReference
+        | RoadmapPatchValidationCode::MissingTitle
+        | RoadmapPatchValidationCode::MissingConflictMessage
+        | RoadmapPatchValidationCode::MissingConflictChoice => ArtifactDiagnosticCode::MissingField,
+    }
+}
+
+fn validate_roadmap_patch_context(
+    report: &mut ArtifactValidationReport,
+    patch: &RoadmapPatch,
+    roadmap: &RoadmapArtifact,
+) {
+    let introduced = introduced_refs(patch);
+    for (index, operation) in patch.operations.iter().enumerate() {
+        validate_operation_references(report, roadmap, &introduced, index, operation);
+    }
+    for (index, dependency) in patch.dependencies.iter().enumerate() {
+        validate_context_ref(
+            report,
+            roadmap,
+            &introduced,
+            &dependency.from,
+            format!("dependencies[{index}].from"),
+        );
+        validate_context_ref(
+            report,
+            roadmap,
+            &introduced,
+            &dependency.to,
+            format!("dependencies[{index}].to"),
+        );
+    }
+}
+
+fn introduced_refs(patch: &RoadmapPatch) -> Vec<RoadmapItemRef> {
+    let mut refs = Vec::new();
+    for operation in &patch.operations {
+        match operation {
+            RoadmapPatchOperation::AddMilestone { milestone, .. } => {
+                refs.push(RoadmapItemRef::Milestone {
+                    milestone_id: milestone.id.clone(),
+                });
+                refs.extend(milestone.tasks.iter().map(|task| RoadmapItemRef::Task {
+                    milestone_id: milestone.id.clone(),
+                    task_id: task.id.clone(),
+                }));
+            },
+            RoadmapPatchOperation::AddTask {
+                milestone_id, task, ..
+            } => refs.push(RoadmapItemRef::Task {
+                milestone_id: milestone_id.clone(),
+                task_id: task.id.clone(),
+            }),
+            RoadmapPatchOperation::ReplaceDraftItem { replacement, .. } => {
+                push_replacement_ref(&mut refs, replacement);
+            },
+        }
+    }
+    refs
+}
+
+fn push_replacement_ref(refs: &mut Vec<RoadmapItemRef>, replacement: &RoadmapPatchItem) {
+    match replacement {
+        RoadmapPatchItem::Milestone { milestone } => refs.push(RoadmapItemRef::Milestone {
+            milestone_id: milestone.id.clone(),
+        }),
+        RoadmapPatchItem::Task { task } => refs.push(RoadmapItemRef::Task {
+            milestone_id: String::new(),
+            task_id: task.id.clone(),
+        }),
+    }
+}
+
+fn validate_operation_references(
+    report: &mut ArtifactValidationReport,
+    roadmap: &RoadmapArtifact,
+    introduced: &[RoadmapItemRef],
+    index: usize,
+    operation: &RoadmapPatchOperation,
+) {
+    match operation {
+        RoadmapPatchOperation::AddMilestone { insertion, .. }
+        | RoadmapPatchOperation::AddTask { insertion, .. } => {
+            if let Some(insertion) = insertion {
+                validate_insertion_context(report, roadmap, introduced, index, insertion);
+            }
+        },
+        RoadmapPatchOperation::ReplaceDraftItem { target, .. } => {
+            validate_context_ref(
+                report,
+                roadmap,
+                introduced,
+                target,
+                format!("operations[{index}].target"),
+            );
+        },
+    }
+}
+
+fn validate_insertion_context(
+    report: &mut ArtifactValidationReport,
+    roadmap: &RoadmapArtifact,
+    introduced: &[RoadmapItemRef],
+    index: usize,
+    insertion: &InsertionPoint,
+) {
+    match insertion {
+        InsertionPoint::AppendToRoadmap => {},
+        InsertionPoint::BeforeMilestone { milestone_id }
+        | InsertionPoint::AfterMilestone { milestone_id }
+        | InsertionPoint::AppendToMilestone { milestone_id } => {
+            let reference = RoadmapItemRef::Milestone {
+                milestone_id: milestone_id.clone(),
+            };
+            validate_context_ref(
+                report,
+                roadmap,
+                introduced,
+                &reference,
+                format!("operations[{index}].insertion"),
+            );
+        },
+        InsertionPoint::BeforeTask {
+            milestone_id,
+            task_id,
+        }
+        | InsertionPoint::AfterTask {
+            milestone_id,
+            task_id,
+        } => {
+            let reference = RoadmapItemRef::Task {
+                milestone_id: milestone_id.clone(),
+                task_id: task_id.clone(),
+            };
+            validate_context_ref(
+                report,
+                roadmap,
+                introduced,
+                &reference,
+                format!("operations[{index}].insertion"),
+            );
+        },
+    }
+}
+
+fn validate_context_ref(
+    report: &mut ArtifactValidationReport,
+    roadmap: &RoadmapArtifact,
+    introduced: &[RoadmapItemRef],
+    reference: &RoadmapItemRef,
+    location: String,
+) {
+    if roadmap_contains_ref(roadmap, reference) || introduced.contains(reference) {
+        return;
+    }
+
+    report.push(ArtifactValidationDiagnostic::error(
+        ArtifactKind::RoadmapPatch,
+        ArtifactDiagnosticCode::InvalidReference,
+        Some(location),
+        "roadmap patch references an item not present in the supplied roadmap context",
+    ));
+}
+
+fn roadmap_contains_ref(roadmap: &RoadmapArtifact, reference: &RoadmapItemRef) -> bool {
+    match reference {
+        RoadmapItemRef::Milestone { milestone_id } => roadmap
+            .milestones
+            .iter()
+            .any(|milestone| milestone.id == *milestone_id),
+        RoadmapItemRef::Task {
+            milestone_id,
+            task_id,
+        } => roadmap.milestones.iter().any(|milestone| {
+            milestone.id == *milestone_id && milestone.tasks.iter().any(|task| task.id == *task_id)
+        }),
+    }
 }
 
 fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, value: &toml::Value) {
@@ -797,6 +1077,7 @@ fn is_story_path(path: &str) -> bool {
 const DESCRIPTION_ALIASES: &[&str] = &[];
 const REQUIREMENTS_ALIASES: &[&str] = &["requirements.md"];
 const ROADMAP_ALIASES: &[&str] = &["roadmap.md"];
+const ROADMAP_PATCH_ALIASES: &[&str] = &["roadmap_patch.toml"];
 const SPEC_ALIASES: &[&str] = &["spec.md"];
 const ADR_ALIASES: &[&str] = &["adr.md"];
 const STORY_ALIASES: &[&str] = &[];
@@ -831,6 +1112,16 @@ const ROADMAP_CONTRACT: ArtifactContract = ArtifactContract {
     schema_version_owner: SchemaVersionOwner::ArtifactContract,
     validator_kind: "roadmap",
     aliases: ROADMAP_ALIASES,
+};
+
+const ROADMAP_PATCH_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::RoadmapPatch,
+    canonical_path: "roadmap-patch.toml",
+    primary_format: ArtifactFormat::Toml,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::ArtifactContract,
+    validator_kind: "roadmap-patch",
+    aliases: ROADMAP_PATCH_ALIASES,
 };
 
 const SPEC_CONTRACT: ArtifactContract = ArtifactContract {
@@ -883,10 +1174,11 @@ const FLOW_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: FLOW_ALIASES,
 };
 
-const CONTRACTS: [ArtifactContract; 8] = [
+const CONTRACTS: [ArtifactContract; 9] = [
     DESCRIPTION_CONTRACT,
     REQUIREMENTS_CONTRACT,
     ROADMAP_CONTRACT,
+    ROADMAP_PATCH_CONTRACT,
     SPEC_CONTRACT,
     ADR_CONTRACT,
     STORY_CONTRACT,
@@ -910,6 +1202,7 @@ mod tests {
                 ArtifactKind::Description,
                 ArtifactKind::Requirements,
                 ArtifactKind::Roadmap,
+                ArtifactKind::RoadmapPatch,
                 ArtifactKind::Spec,
                 ArtifactKind::Adr,
                 ArtifactKind::Story,
@@ -929,6 +1222,10 @@ mod tests {
             "spec-md".parse::<ArtifactKind>().unwrap(),
             ArtifactKind::Spec
         );
+        assert_eq!(
+            "roadmap-patch-toml".parse::<ArtifactKind>().unwrap(),
+            ArtifactKind::RoadmapPatch
+        );
         assert!("unknown".parse::<ArtifactKind>().is_err());
     }
 
@@ -944,6 +1241,10 @@ mod tests {
         );
         assert_eq!(
             ArtifactContractRef::current(ArtifactKind::Spec).schema_version,
+            ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            ArtifactContractRef::current(ArtifactKind::RoadmapPatch).schema_version,
             ARTIFACT_SCHEMA_VERSION
         );
     }
@@ -1098,6 +1399,94 @@ subtasks = [
         );
 
         assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn validates_roadmap_patch_toml_shape() {
+        let report = validate_artifact(
+            ArtifactKind::RoadmapPatch,
+            Some(Path::new("roadmap-patch.toml")),
+            r#"schema_version = 1
+id = "rpatch-demo"
+rationale = "Add follow-up feature work."
+status = "drafted"
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+
+[[operations]]
+op = "add_milestone"
+
+[operations.milestone]
+id = "m2"
+title = "Follow-up feature"
+
+[operations.insertion]
+kind = "append_to_roadmap"
+"#,
+        );
+
+        assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn rejects_roadmap_patch_without_operations() {
+        let report = validate_artifact(
+            ArtifactKind::RoadmapPatch,
+            Some(Path::new("roadmap-patch.toml")),
+            r#"schema_version = 1
+id = "rpatch-empty"
+operations = []
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+"#,
+        );
+
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == ArtifactDiagnosticCode::MissingOperation })
+        );
+    }
+
+    #[test]
+    fn validates_roadmap_patch_references_against_context() {
+        let roadmap = RoadmapArtifact::new(vec![crate::roadmap::RoadmapMilestone::new(
+            "m1", "Existing",
+        )]);
+        let report = validate_roadmap_patch_text_with_context(
+            r#"schema_version = 1
+id = "rpatch-context"
+
+[target]
+kind = "project_roadmap"
+roadmap_path = ".ai-factory/ROADMAP.md"
+
+[[operations]]
+op = "add_task"
+milestone_id = "missing"
+
+[operations.task]
+id = "m1-t2"
+title = "New task"
+
+[operations.insertion]
+kind = "append_to_milestone"
+milestone_id = "missing"
+"#,
+            &roadmap,
+        );
+
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == ArtifactDiagnosticCode::InvalidReference })
+        );
     }
 
     #[test]

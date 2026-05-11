@@ -162,11 +162,11 @@ async fn drive_run_handle(
                 print_bootstrap_event(seq, &payload);
                 if let EventPayload::HumanInputRequested {
                     call_id, prompt, ..
-                } = payload
+                } = payload.as_ref()
                 {
-                    let response = prompt_for_gate_decision(None, &prompt)?;
+                    let response = prompt_for_gate_decision(None, prompt)?;
                     engine
-                        .resolve_human_input(run_id, call_id, response)
+                        .resolve_human_input(run_id, call_id.clone(), response)
                         .await?;
                 }
             },

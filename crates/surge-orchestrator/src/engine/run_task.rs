@@ -13,20 +13,32 @@ use crate::engine::stage::terminal::{
     TerminalOutcome, TerminalStageParams, execute_terminal_stage,
 };
 use crate::engine::tools::ToolDispatcher;
+use crate::roadmap_amendment::{ActiveRunAmendmentOutcome, apply_active_run_patch};
 use std::path::PathBuf;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
+use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::hooks::HookTrigger;
 use surge_core::id::RunId;
 use surge_core::keys::OutcomeKey;
 use surge_core::node::NodeConfig;
+use surge_core::roadmap_patch::{
+    ActivePickupPolicy, RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget,
+};
 use surge_core::run_event::{EventPayload, RunEvent, VersionedEventPayload};
 use surge_core::run_state::{Cursor, RunMemory};
 use surge_notify::NotifyDeliverer;
 use surge_persistence::runs::run_writer::RunWriter;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+pub(crate) struct RoadmapAmendmentCommand {
+    pub patch_id: RoadmapPatchId,
+    pub target: RoadmapPatchTarget,
+    pub patch_result: RoadmapPatchApplyResult,
+    pub reply: oneshot::Sender<Result<ActiveRunAmendmentOutcome, String>>,
+}
 
 pub(crate) struct RunTaskParams {
     pub run_id: RunId,
@@ -67,6 +79,10 @@ pub(crate) struct RunTaskParams {
             std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>,
         >,
     >,
+    /// Approved roadmap amendments submitted to the active run. The run task
+    /// owns the writer, so amendments enter through this queue and are appended
+    /// at safe graph boundaries.
+    pub roadmap_amendments: mpsc::Receiver<RoadmapAmendmentCommand>,
     /// Optional MCP registry. When `Some`, agent stages wrap the
     /// engine dispatcher with `RoutingToolDispatcher` to expose
     /// configured MCP tools alongside engine built-ins.
@@ -85,9 +101,10 @@ pub(crate) struct RunTaskParams {
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
+pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
+    let mut active_graph = params.graph.clone();
     let mut cursor = params.resume_cursor.clone().unwrap_or_else(|| Cursor {
-        node: params.graph.start.clone(),
+        node: active_graph.start.clone(),
         attempt: 1,
     });
     // One executor per run task: stateless aside from its spawner, so a
@@ -107,8 +124,41 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             .resume_root_traversal_counts
             .clone()
             .unwrap_or_default();
+    let mut applied_graph_revision_seq = memory
+        .latest_graph_revision
+        .as_ref()
+        .map_or(0, |revision| revision.updated_seq);
+    let mut pending_graph_revisions = Vec::new();
 
     loop {
+        if frames.is_empty() {
+            let mut roadmap_queue = RoadmapAmendmentQueue {
+                writer: &params.writer,
+                artifact_store: &params.artifact_store,
+                run_id: params.run_id,
+                receiver: &mut params.roadmap_amendments,
+            };
+            if let Err(error) = roadmap_queue
+                .drain(
+                    &mut active_graph,
+                    &cursor,
+                    &mut memory,
+                    &mut pending_graph_revisions,
+                    &mut applied_graph_revision_seq,
+                )
+                .await
+            {
+                return failed(&params, format!("apply queued roadmap amendments: {error}")).await;
+            }
+        }
+        maybe_apply_pending_graph_revision(
+            &mut active_graph,
+            &cursor,
+            &frames,
+            &mut pending_graph_revisions,
+            &mut applied_graph_revision_seq,
+        );
+
         if params.cancel.is_cancelled() {
             let reason = "stop_run requested".to_string();
             let _ = params
@@ -124,7 +174,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             return outcome;
         }
 
-        let node = if let Some(n) = lookup_in_active_frame(&params.graph, &cursor.node, &frames) {
+        let node = if let Some(n) = lookup_in_active_frame(&active_graph, &cursor.node, &frames) {
             n.clone()
         } else {
             let err = format!("cursor at unknown node {}", cursor.node);
@@ -276,7 +326,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
 
                         if let Err(e) = crate::engine::stage::loop_stage::on_loop_iteration_done(
                             &just_completed,
-                            &params.graph,
+                            &active_graph,
                             &mut frames,
                             &mut cursor,
                             &params.writer,
@@ -292,7 +342,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                         // outer node referenced by the top frame.
                         let outputs = match frames.last() {
                             Some(crate::engine::frames::Frame::Subgraph(sf)) => {
-                                match params.graph.nodes.get(&sf.outer_node).map(|n| &n.config) {
+                                match active_graph.nodes.get(&sf.outer_node).map(|n| &n.config) {
                                     Some(surge_core::node::NodeConfig::Subgraph(cfg)) => {
                                         cfg.outputs.clone()
                                     },
@@ -360,7 +410,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 };
                 let return_to =
                     match crate::engine::routing::edge_target_after_outcome_in_active_graph(
-                        &params.graph,
+                        &active_graph,
                         &cursor.node,
                         &completed_outcome,
                         &frames,
@@ -373,7 +423,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     crate::engine::stage::loop_stage::LoopStageParams {
                         node: &cursor.node,
                         loop_config: cfg,
-                        graph: &params.graph,
+                        graph: &active_graph,
                         run_memory: &memory,
                         writer: &params.writer,
                         frames: &mut frames,
@@ -404,7 +454,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 };
                 let return_to =
                     match crate::engine::routing::edge_target_after_outcome_in_active_graph(
-                        &params.graph,
+                        &active_graph,
                         &cursor.node,
                         &completed_outcome,
                         &frames,
@@ -417,7 +467,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                     crate::engine::stage::subgraph_stage::SubgraphStageParams {
                         node: &cursor.node,
                         subgraph_config: cfg,
-                        graph: &params.graph,
+                        graph: &active_graph,
                         run_memory: &memory,
                         writer: &params.writer,
                         frames: &mut frames,
@@ -524,12 +574,27 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
             },
         };
 
-        if let Err(e) =
-            apply_memory_events_after(&params.writer, params.run_id, stage_start_seq, &mut memory)
-                .await
+        let applied_events = match apply_memory_events_after(
+            &params.writer,
+            params.run_id,
+            stage_start_seq,
+            &mut memory,
+        )
+        .await
         {
-            return failed(&params, format!("update run memory from event log: {e}")).await;
-        }
+            Ok(events) => events,
+            Err(e) => {
+                return failed(&params, format!("update run memory from event log: {e}")).await;
+            },
+        };
+        pending_graph_revisions.extend(applied_events.graph_revisions);
+        maybe_apply_pending_graph_revision(
+            &mut active_graph,
+            &cursor,
+            &frames,
+            &mut pending_graph_revisions,
+            &mut applied_graph_revision_seq,
+        );
         let stage_events_applied_seq = match params.writer.current_seq().await {
             Ok(seq) => seq,
             Err(e) => {
@@ -539,7 +604,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
 
         // Route to next node.
         let routed = match crate::engine::routing::next_node_after_with_counters(
-            &params.graph,
+            &active_graph,
             &cursor.node,
             &outcome,
             &mut frames,
@@ -566,7 +631,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                                 },
                             };
                         match crate::engine::routing::next_node_after_with_counters(
-                            &params.graph,
+                            &active_graph,
                             &cursor.node,
                             &synthetic,
                             &mut frames,
@@ -624,7 +689,7 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
                 outcome: outcome.clone(),
             }))
             .await;
-        if let Err(e) = apply_memory_events_after(
+        let applied_events = match apply_memory_events_after(
             &params.writer,
             params.run_id,
             stage_events_applied_seq,
@@ -632,8 +697,12 @@ pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
         )
         .await
         {
-            return failed(&params, format!("update run memory after routing: {e}")).await;
-        }
+            Ok(events) => events,
+            Err(e) => {
+                return failed(&params, format!("update run memory after routing: {e}")).await;
+            },
+        };
+        pending_graph_revisions.extend(applied_events.graph_revisions);
 
         // Snapshot at stage boundary (per spec §2.6, §12).
         let next_cursor = Cursor {
@@ -803,8 +872,24 @@ async fn load_existing_memory(
         .read_events(surge_persistence::runs::EventSeq(1)..current.next())
         .await?;
     let mut memory = RunMemory::default();
-    apply_read_events(run_id, &events, &mut memory);
+    let _ = apply_read_events(run_id, &events, &mut memory);
     Ok(memory)
+}
+
+#[derive(Debug, Clone, Default)]
+struct AppliedEventBatch {
+    graph_revisions: Vec<ObservedGraphRevision>,
+}
+
+#[derive(Debug, Clone)]
+struct ObservedGraphRevision {
+    seq: u64,
+    patch_id: RoadmapPatchId,
+    target: RoadmapPatchTarget,
+    previous_graph_hash: ContentHash,
+    graph: Graph,
+    graph_hash: ContentHash,
+    active_pickup: ActivePickupPolicy,
 }
 
 async fn apply_memory_events_after(
@@ -812,24 +897,102 @@ async fn apply_memory_events_after(
     run_id: RunId,
     after: surge_persistence::runs::EventSeq,
     memory: &mut RunMemory,
-) -> Result<(), surge_persistence::runs::StorageError> {
+) -> Result<AppliedEventBatch, surge_persistence::runs::StorageError> {
     let current = writer.current_seq().await?;
     if current <= after {
-        return Ok(());
+        return Ok(AppliedEventBatch::default());
     }
     let events = writer.read_events(after.next()..current.next()).await?;
-    apply_read_events(run_id, &events, memory);
-    Ok(())
+    Ok(apply_read_events(run_id, &events, memory))
+}
+
+struct RoadmapAmendmentQueue<'a> {
+    writer: &'a surge_persistence::runs::run_writer::RunWriter,
+    artifact_store: &'a surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    receiver: &'a mut mpsc::Receiver<RoadmapAmendmentCommand>,
+}
+
+impl RoadmapAmendmentQueue<'_> {
+    async fn drain(
+        &mut self,
+        active_graph: &mut Graph,
+        cursor: &Cursor,
+        memory: &mut RunMemory,
+        pending_graph_revisions: &mut Vec<ObservedGraphRevision>,
+        applied_graph_revision_seq: &mut u64,
+    ) -> Result<(), surge_persistence::runs::StorageError> {
+        while let Ok(command) = self.receiver.try_recv() {
+            let after = self.writer.current_seq().await?;
+            match apply_active_run_patch(
+                self.artifact_store,
+                self.writer,
+                self.run_id,
+                active_graph,
+                &command.patch_id,
+                &command.target,
+                &command.patch_result,
+            )
+            .await
+            {
+                Ok(outcome) => {
+                    let applied_events =
+                        apply_memory_events_after(self.writer, self.run_id, after, memory).await?;
+                    pending_graph_revisions.extend(applied_events.graph_revisions);
+                    maybe_apply_pending_graph_revision(
+                        active_graph,
+                        cursor,
+                        &[],
+                        pending_graph_revisions,
+                        applied_graph_revision_seq,
+                    );
+                    let _ = command.reply.send(Ok(outcome));
+                },
+                Err(error) => {
+                    tracing::warn!(
+                        target: "engine::roadmap_update",
+                        run_id = %self.run_id,
+                        patch_id = %command.patch_id,
+                        error = %error,
+                        "active_run_roadmap_patch_failed"
+                    );
+                    let _ = command.reply.send(Err(error.to_string()));
+                },
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn apply_read_events(
     run_id: RunId,
     events: &[surge_persistence::runs::ReadEvent],
     memory: &mut RunMemory,
-) {
+) -> AppliedEventBatch {
+    let mut batch = AppliedEventBatch::default();
     for event in events {
         let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.timestamp_ms)
             .unwrap_or_else(chrono::Utc::now);
+        if let EventPayload::GraphRevisionAccepted {
+            patch_id,
+            target,
+            previous_graph_hash,
+            graph,
+            graph_hash,
+            active_pickup,
+        } = &event.payload.payload
+        {
+            batch.graph_revisions.push(ObservedGraphRevision {
+                seq: event.seq.as_u64(),
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                previous_graph_hash: *previous_graph_hash,
+                graph: graph.as_ref().clone(),
+                graph_hash: *graph_hash,
+                active_pickup: *active_pickup,
+            });
+        }
         memory.apply_event(&RunEvent {
             run_id,
             seq: event.seq.as_u64(),
@@ -837,6 +1000,83 @@ fn apply_read_events(
             payload: event.payload.payload.clone(),
         });
     }
+    batch
+}
+
+fn maybe_apply_pending_graph_revision(
+    active_graph: &mut Graph,
+    cursor: &Cursor,
+    frames: &[crate::engine::frames::Frame],
+    pending: &mut Vec<ObservedGraphRevision>,
+    applied_seq: &mut u64,
+) {
+    pending.retain(|revision| revision.seq > *applied_seq);
+    let Some(revision) = pending.last().cloned() else {
+        return;
+    };
+
+    match revision.active_pickup {
+        ActivePickupPolicy::Allowed => {},
+        ActivePickupPolicy::FollowUpOnly => {
+            tracing::info!(
+                target: "engine::roadmap_update",
+                patch_id = %revision.patch_id,
+                graph_hash = %revision.graph_hash,
+                "graph_revision_requires_follow_up_run"
+            );
+            *applied_seq = revision.seq;
+            pending.clear();
+            return;
+        },
+        ActivePickupPolicy::Disabled => {
+            tracing::warn!(
+                target: "engine::roadmap_update",
+                patch_id = %revision.patch_id,
+                graph_hash = %revision.graph_hash,
+                "graph_revision_pickup_disabled"
+            );
+            *applied_seq = revision.seq;
+            pending.clear();
+            return;
+        },
+    }
+
+    if !frames.is_empty() {
+        tracing::info!(
+            target: "engine::roadmap_update",
+            patch_id = %revision.patch_id,
+            graph_hash = %revision.graph_hash,
+            frame_depth = frames.len(),
+            "graph_revision_deferred_until_outer_boundary"
+        );
+        return;
+    }
+
+    if !revision.graph.nodes.contains_key(&cursor.node) {
+        tracing::warn!(
+            target: "engine::roadmap_update",
+            patch_id = %revision.patch_id,
+            graph_hash = %revision.graph_hash,
+            cursor = %cursor.node,
+            "graph_revision_cannot_preserve_cursor"
+        );
+        *applied_seq = revision.seq;
+        pending.clear();
+        return;
+    }
+
+    tracing::info!(
+        target: "engine::roadmap_update",
+        patch_id = %revision.patch_id,
+        target = ?revision.target,
+        previous_graph_hash = %revision.previous_graph_hash,
+        graph_hash = %revision.graph_hash,
+        cursor = %cursor.node,
+        "graph_revision_picked_up"
+    );
+    *active_graph = revision.graph;
+    *applied_seq = revision.seq;
+    pending.clear();
 }
 
 async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
@@ -908,6 +1148,148 @@ mod tests {
             timeout_seconds: Some(5),
             inherit: HookInheritance::Extend,
         }
+    }
+
+    fn terminal_graph(name: &str, start: &str) -> Graph {
+        use surge_core::graph::{GraphMetadata, SCHEMA_VERSION};
+        use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+
+        let start = surge_core::keys::NodeKey::try_from(start).unwrap();
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            start.clone(),
+            Node {
+                id: start.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata::new(name, chrono::Utc::now()),
+            start,
+            nodes,
+            edges: vec![],
+            subgraphs: std::collections::BTreeMap::default(),
+        }
+    }
+
+    fn observed_revision(graph: Graph, policy: ActivePickupPolicy) -> ObservedGraphRevision {
+        ObservedGraphRevision {
+            seq: 7,
+            patch_id: RoadmapPatchId::new("rpatch-active").unwrap(),
+            target: RoadmapPatchTarget::ProjectRoadmap {
+                roadmap_path: ".ai-factory/ROADMAP.md".into(),
+            },
+            previous_graph_hash: ContentHash::compute(b"base"),
+            graph,
+            graph_hash: ContentHash::compute(b"revision"),
+            active_pickup: policy,
+        }
+    }
+
+    fn loop_frame() -> crate::engine::frames::Frame {
+        use crate::engine::frames::LoopFrame;
+        use surge_core::keys::SubgraphKey;
+        use surge_core::loop_config::{
+            ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+        };
+
+        crate::engine::frames::Frame::Loop(LoopFrame {
+            loop_node: surge_core::keys::NodeKey::try_from("milestones").unwrap(),
+            config: LoopConfig {
+                iterates_over: IterableSource::Static(vec![]),
+                body: SubgraphKey::try_from("body").unwrap(),
+                iteration_var_name: "item".into(),
+                exit_condition: ExitCondition::AllItems,
+                on_iteration_failure: FailurePolicy::Abort,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            },
+            items: vec![],
+            current_index: 0,
+            attempts_remaining: 0,
+            return_to: surge_core::keys::NodeKey::try_from("after").unwrap(),
+            traversal_counts: std::collections::HashMap::default(),
+        })
+    }
+
+    #[test]
+    fn graph_revision_waits_until_outer_boundary() {
+        let mut active_graph = terminal_graph("base", "end");
+        let original_graph = active_graph.clone();
+        let mut revised_graph = terminal_graph("revised", "amend_001");
+        let old_cursor_node = surge_core::keys::NodeKey::try_from("end").unwrap();
+        revised_graph.nodes.insert(
+            old_cursor_node.clone(),
+            original_graph.nodes[&old_cursor_node].clone(),
+        );
+        let cursor = Cursor {
+            node: old_cursor_node,
+            attempt: 1,
+        };
+        let mut frames = vec![loop_frame()];
+        let mut pending = vec![observed_revision(
+            revised_graph.clone(),
+            ActivePickupPolicy::Allowed,
+        )];
+        let mut applied_seq = 0;
+
+        maybe_apply_pending_graph_revision(
+            &mut active_graph,
+            &cursor,
+            &frames,
+            &mut pending,
+            &mut applied_seq,
+        );
+        assert_eq!(active_graph, original_graph);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(applied_seq, 0);
+
+        frames.clear();
+        maybe_apply_pending_graph_revision(
+            &mut active_graph,
+            &cursor,
+            &frames,
+            &mut pending,
+            &mut applied_seq,
+        );
+        assert_eq!(active_graph, revised_graph);
+        assert!(pending.is_empty());
+        assert_eq!(applied_seq, 7);
+    }
+
+    #[test]
+    fn graph_revision_without_cursor_preservation_is_consumed_without_mutation() {
+        let mut active_graph = terminal_graph("base", "end");
+        let original_graph = active_graph.clone();
+        let revised_graph = terminal_graph("revised", "amend_001");
+        let cursor = Cursor {
+            node: surge_core::keys::NodeKey::try_from("end").unwrap(),
+            attempt: 1,
+        };
+        let frames = Vec::new();
+        let mut pending = vec![observed_revision(
+            revised_graph,
+            ActivePickupPolicy::Allowed,
+        )];
+        let mut applied_seq = 0;
+
+        maybe_apply_pending_graph_revision(
+            &mut active_graph,
+            &cursor,
+            &frames,
+            &mut pending,
+            &mut applied_seq,
+        );
+
+        assert_eq!(active_graph, original_graph);
+        assert!(pending.is_empty());
+        assert_eq!(applied_seq, 7);
     }
 
     #[tokio::test]

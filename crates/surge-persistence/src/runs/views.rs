@@ -13,6 +13,10 @@
 //! All other event variants currently produce no view changes.
 
 use rusqlite::Transaction;
+use surge_core::roadmap_patch::{
+    ActivePickupPolicy, OperatorConflictChoice, RoadmapPatchApprovalDecision, RoadmapPatchStatus,
+    RoadmapPatchTarget,
+};
 use surge_core::run_event::EventPayload;
 
 use crate::runs::error::WriterError;
@@ -30,12 +34,13 @@ pub fn maintain(
     use EventPayload::{
         ApprovalDecided, ApprovalRequested, ArtifactProduced, BootstrapApprovalDecided,
         BootstrapApprovalRequested, BootstrapArtifactProduced, BootstrapEditRequested,
-        BootstrapStageStarted, EdgeTraversed, ForkCreated, HookExecuted, LoopCompleted,
-        LoopIterationCompleted, LoopIterationStarted, OutcomeRejectedByHook, OutcomeReported,
-        PipelineMaterialized, RunAborted, RunCompleted, RunFailed, RunStarted,
-        SandboxElevationDecided, SandboxElevationRequested, SessionClosed, SessionOpened,
-        StageCompleted, StageEntered, StageFailed, StageInputsResolved, TokensConsumed, ToolCalled,
-        ToolResultReceived,
+        BootstrapStageStarted, EdgeTraversed, ForkCreated, GraphRevisionAccepted, HookExecuted,
+        LoopCompleted, LoopIterationCompleted, LoopIterationStarted, OutcomeRejectedByHook,
+        OutcomeReported, PipelineMaterialized, RoadmapPatchApplied, RoadmapPatchApprovalDecided,
+        RoadmapPatchApprovalRequested, RoadmapPatchDrafted, RoadmapUpdated, RunAborted,
+        RunCompleted, RunFailed, RunStarted, SandboxElevationDecided, SandboxElevationRequested,
+        SessionClosed, SessionOpened, StageCompleted, StageEntered, StageFailed,
+        StageInputsResolved, TokensConsumed, ToolCalled, ToolResultReceived,
     };
     match payload {
         StageEntered { node, attempt } => {
@@ -141,6 +146,176 @@ pub fn maintain(
                 rusqlite::params![gate.as_str()],
             )?;
         },
+        RoadmapPatchDrafted {
+            patch_id,
+            target,
+            patch_artifact,
+            patch_path,
+        } => {
+            let target_json = target_json(target)?;
+            tx.execute(
+                "INSERT INTO roadmap_patches
+                    (patch_id, target_json, status, patch_artifact, patch_path,
+                     created_seq, updated_seq, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(patch_id) DO UPDATE SET
+                    target_json = excluded.target_json,
+                    status = excluded.status,
+                    patch_artifact = excluded.patch_artifact,
+                    patch_path = excluded.patch_path,
+                    updated_seq = excluded.updated_seq,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![
+                    patch_id.as_str(),
+                    target_json,
+                    status_label(RoadmapPatchStatus::Drafted),
+                    patch_artifact.to_string(),
+                    patch_path.to_string_lossy(),
+                    seq.0 as i64,
+                    seq.0 as i64,
+                    timestamp_ms,
+                    timestamp_ms,
+                ],
+            )?;
+        },
+        RoadmapPatchApprovalRequested {
+            patch_id,
+            target,
+            summary_hash,
+            ..
+        } => {
+            let target_json = target_json(target)?;
+            tx.execute(
+                "UPDATE roadmap_patches
+                 SET target_json = ?,
+                     status = ?,
+                     summary_hash = ?,
+                     updated_seq = ?,
+                     updated_at = ?
+                 WHERE patch_id = ?",
+                rusqlite::params![
+                    target_json,
+                    status_label(RoadmapPatchStatus::PendingApproval),
+                    summary_hash.to_string(),
+                    seq.0 as i64,
+                    timestamp_ms,
+                    patch_id.as_str(),
+                ],
+            )?;
+        },
+        RoadmapPatchApprovalDecided {
+            patch_id,
+            decision,
+            comment,
+            conflict_choice,
+            ..
+        } => {
+            tx.execute(
+                "UPDATE roadmap_patches
+                 SET status = ?,
+                     decision = ?,
+                     decision_comment = ?,
+                     conflict_choice = ?,
+                     updated_seq = ?,
+                     updated_at = ?
+                 WHERE patch_id = ?",
+                rusqlite::params![
+                    status_label(status_for_decision(*decision)),
+                    decision_label(*decision),
+                    comment,
+                    conflict_choice.map(choice_label),
+                    seq.0 as i64,
+                    timestamp_ms,
+                    patch_id.as_str(),
+                ],
+            )?;
+        },
+        RoadmapPatchApplied {
+            patch_id,
+            target,
+            amended_roadmap_artifact,
+            amended_roadmap_path,
+            amended_flow_artifact,
+            amended_flow_path,
+        } => {
+            let target_json = target_json(target)?;
+            tx.execute(
+                "INSERT INTO roadmap_patches
+                    (patch_id, target_json, status,
+                     amended_roadmap_artifact, amended_roadmap_path,
+                     amended_flow_artifact, amended_flow_path,
+                     created_seq, updated_seq, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(patch_id) DO UPDATE SET
+                    target_json = excluded.target_json,
+                    status = excluded.status,
+                    amended_roadmap_artifact = excluded.amended_roadmap_artifact,
+                    amended_roadmap_path = excluded.amended_roadmap_path,
+                    amended_flow_artifact = excluded.amended_flow_artifact,
+                    amended_flow_path = excluded.amended_flow_path,
+                    updated_seq = excluded.updated_seq,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![
+                    patch_id.as_str(),
+                    target_json,
+                    status_label(RoadmapPatchStatus::Applied),
+                    amended_roadmap_artifact.to_string(),
+                    amended_roadmap_path.to_string_lossy(),
+                    amended_flow_artifact.map(|hash| hash.to_string()),
+                    amended_flow_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().to_string()),
+                    seq.0 as i64,
+                    seq.0 as i64,
+                    timestamp_ms,
+                    timestamp_ms,
+                ],
+            )?;
+        },
+        RoadmapUpdated {
+            patch_id,
+            target,
+            roadmap_artifact,
+            roadmap_path,
+            flow_artifact,
+            flow_path,
+            active_pickup,
+        } => {
+            let target_json = target_json(target)?;
+            tx.execute(
+                "INSERT INTO roadmap_patches
+                    (patch_id, target_json, status,
+                     roadmap_artifact, roadmap_path, flow_artifact, flow_path,
+                     active_pickup, created_seq, updated_seq, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(patch_id) DO UPDATE SET
+                    target_json = excluded.target_json,
+                    status = excluded.status,
+                    roadmap_artifact = excluded.roadmap_artifact,
+                    roadmap_path = excluded.roadmap_path,
+                    flow_artifact = excluded.flow_artifact,
+                    flow_path = excluded.flow_path,
+                    active_pickup = excluded.active_pickup,
+                    updated_seq = excluded.updated_seq,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![
+                    patch_id.as_str(),
+                    target_json,
+                    status_label(RoadmapPatchStatus::Applied),
+                    roadmap_artifact.to_string(),
+                    roadmap_path.to_string_lossy(),
+                    flow_artifact.map(|hash| hash.to_string()),
+                    flow_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().to_string()),
+                    pickup_label(*active_pickup),
+                    seq.0 as i64,
+                    seq.0 as i64,
+                    timestamp_ms,
+                    timestamp_ms,
+                ],
+            )?;
+        },
         // All other variants currently produce no view changes.
         // Listed explicitly here so a future variant addition forces a
         // conscious decision rather than silently falling through.
@@ -154,6 +329,7 @@ pub fn maintain(
         | BootstrapApprovalDecided { .. }
         | BootstrapEditRequested { .. }
         | PipelineMaterialized { .. }
+        | GraphRevisionAccepted { .. }
         | StageInputsResolved { .. }
         | SessionOpened { .. }
         | ToolCalled { .. }
@@ -188,6 +364,54 @@ fn upsert_metric(tx: &Transaction<'_>, metric: &str, delta: f64, ts: i64) -> rus
     Ok(())
 }
 
+fn target_json(target: &RoadmapPatchTarget) -> Result<String, WriterError> {
+    serde_json::to_string(target).map_err(Into::into)
+}
+
+const fn status_for_decision(decision: RoadmapPatchApprovalDecision) -> RoadmapPatchStatus {
+    match decision {
+        RoadmapPatchApprovalDecision::Approve => RoadmapPatchStatus::Approved,
+        RoadmapPatchApprovalDecision::Edit => RoadmapPatchStatus::Drafted,
+        RoadmapPatchApprovalDecision::Reject => RoadmapPatchStatus::Rejected,
+    }
+}
+
+const fn status_label(status: RoadmapPatchStatus) -> &'static str {
+    match status {
+        RoadmapPatchStatus::Drafted => "drafted",
+        RoadmapPatchStatus::PendingApproval => "pending_approval",
+        RoadmapPatchStatus::Approved => "approved",
+        RoadmapPatchStatus::Applied => "applied",
+        RoadmapPatchStatus::Rejected => "rejected",
+        RoadmapPatchStatus::Superseded => "superseded",
+    }
+}
+
+const fn decision_label(decision: RoadmapPatchApprovalDecision) -> &'static str {
+    match decision {
+        RoadmapPatchApprovalDecision::Approve => "approve",
+        RoadmapPatchApprovalDecision::Edit => "edit",
+        RoadmapPatchApprovalDecision::Reject => "reject",
+    }
+}
+
+const fn choice_label(choice: OperatorConflictChoice) -> &'static str {
+    match choice {
+        OperatorConflictChoice::DeferToNextMilestone => "defer_to_next_milestone",
+        OperatorConflictChoice::AbortCurrentRun => "abort_current_run",
+        OperatorConflictChoice::CreateFollowUpRun => "create_follow_up_run",
+        OperatorConflictChoice::RejectPatch => "reject_patch",
+    }
+}
+
+const fn pickup_label(policy: ActivePickupPolicy) -> &'static str {
+    match policy {
+        ActivePickupPolicy::Allowed => "allowed",
+        ActivePickupPolicy::FollowUpOnly => "follow_up_only",
+        ActivePickupPolicy::Disabled => "disabled",
+    }
+}
+
 /// Truncate all materialized view tables. Called at the start of `RebuildViews`.
 pub fn rebuild(tx: &Transaction<'_>) -> Result<(), WriterError> {
     tx.execute_batch(
@@ -195,7 +419,8 @@ pub fn rebuild(tx: &Transaction<'_>) -> Result<(), WriterError> {
          DELETE FROM artifacts;
          DELETE FROM pending_approvals;
          DELETE FROM cost_summary;
-         DELETE FROM graph_snapshots;",
+         DELETE FROM graph_snapshots;
+         DELETE FROM roadmap_patches;",
     )?;
     Ok(())
 }
@@ -208,7 +433,10 @@ mod tests {
     use rusqlite::Connection;
     use std::path::PathBuf;
     use std::str::FromStr;
-    use surge_core::approvals::ApprovalChannel;
+    use surge_core::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalDuration};
+    use surge_core::roadmap_patch::{
+        ActivePickupPolicy, RoadmapPatchApprovalDecision, RoadmapPatchId, RoadmapPatchTarget,
+    };
     use surge_core::run_event::EventPayload;
     use surge_core::{ContentHash, NodeKey, OutcomeKey, SessionId};
 
@@ -652,8 +880,6 @@ mod tests {
 
     #[test]
     fn approval_requested_then_decided_clears_row() {
-        use surge_core::approvals::ApprovalChannelKind;
-
         let mut conn = fresh_db();
         let tx = conn.transaction().unwrap();
         maintain(
@@ -694,6 +920,104 @@ mod tests {
     }
 
     #[test]
+    fn roadmap_patch_lifecycle_updates_view() {
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        let patch_id = RoadmapPatchId::new("rpatch-view").unwrap();
+        let target = RoadmapPatchTarget::ProjectRoadmap {
+            roadmap_path: ".ai-factory/ROADMAP.md".into(),
+        };
+        let patch_hash = ContentHash::compute(b"patch");
+        let roadmap_hash = ContentHash::compute(b"roadmap");
+        let flow_hash = ContentHash::compute(b"flow");
+
+        maintain(
+            &tx,
+            EventSeq(1),
+            1_700_000_000_001,
+            &EventPayload::RoadmapPatchDrafted {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                patch_artifact: patch_hash,
+                patch_path: PathBuf::from("roadmap-patch.toml"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            1_700_000_000_002,
+            &EventPayload::RoadmapPatchApprovalRequested {
+                patch_id: patch_id.clone(),
+                target: target.clone(),
+                channel: ApprovalChannel::Desktop {
+                    duration: ApprovalDuration::Transient,
+                },
+                summary_hash: ContentHash::compute(b"summary"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(3),
+            1_700_000_000_003,
+            &EventPayload::RoadmapPatchApprovalDecided {
+                patch_id: patch_id.clone(),
+                decision: RoadmapPatchApprovalDecision::Approve,
+                channel_used: ApprovalChannelKind::Desktop,
+                comment: Some("ok".into()),
+                conflict_choice: None,
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(4),
+            1_700_000_000_004,
+            &EventPayload::RoadmapUpdated {
+                patch_id: patch_id.clone(),
+                target,
+                roadmap_artifact: roadmap_hash,
+                roadmap_path: PathBuf::from("roadmap.toml"),
+                flow_artifact: Some(flow_hash),
+                flow_path: Some(PathBuf::from("flow.toml")),
+                active_pickup: ActivePickupPolicy::Allowed,
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let (status, patch_artifact, roadmap_artifact, flow_artifact, updated_seq): (
+            String,
+            String,
+            String,
+            String,
+            i64,
+        ) = conn
+            .query_row(
+                "SELECT status, patch_artifact, roadmap_artifact, flow_artifact, updated_seq
+                 FROM roadmap_patches WHERE patch_id = ?",
+                rusqlite::params![patch_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(status, "applied");
+        assert_eq!(patch_artifact, patch_hash.to_string());
+        assert_eq!(roadmap_artifact, roadmap_hash.to_string());
+        assert_eq!(flow_artifact, flow_hash.to_string());
+        assert_eq!(updated_seq, 4);
+    }
+
+    #[test]
     fn no_op_variant_does_not_touch_views() {
         let mut conn = fresh_db();
         let tx = conn.transaction().unwrap();
@@ -714,6 +1038,7 @@ mod tests {
             "artifacts",
             "pending_approvals",
             "cost_summary",
+            "roadmap_patches",
         ] {
             let n: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))

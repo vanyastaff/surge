@@ -16,9 +16,9 @@ mod commands;
 
 use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,
-    config::ConfigCommands, init::InitArgs, insights::InsightsCommands, memory::MemoryCommands,
-    project::ProjectCommands, registry::RegistryCommands, spec::SpecCommands,
-    tracker::TrackerCommand,
+    config::ConfigCommands, feature::FeatureCommands, init::InitArgs, insights::InsightsCommands,
+    memory::MemoryCommands, project::ProjectCommands, registry::RegistryCommands,
+    spec::SpecCommands, tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -201,6 +201,12 @@ enum Commands {
     /// Bootstrap an adaptive flow from a free-form prompt.
     Bootstrap(BootstrapArgs),
 
+    /// Draft and apply roadmap amendments from follow-up feature requests.
+    Feature {
+        #[command(subcommand)]
+        command: FeatureCommands,
+    },
+
     /// New M6 engine commands — runs flow.toml graphs in-process.
     Engine {
         #[command(subcommand)]
@@ -353,6 +359,7 @@ async fn main() -> Result<()> {
             | Commands::Clean { .. }
             | Commands::Config { .. }
             | Commands::Bootstrap(_)
+            | Commands::Feature { .. }
             | Commands::Engine { .. }
             | Commands::Artifact { .. }
             | Commands::Tracker { .. }
@@ -560,6 +567,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Bootstrap(args) => {
             commands::bootstrap::run(args).await?;
+        },
+
+        Commands::Feature { command } => {
+            commands::feature::run(command).await?;
         },
 
         Commands::Engine { command } => {

@@ -11,7 +11,7 @@ use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::run_event::{EventPayload, RunEvent};
 use surge_core::run_state::RunMemory;
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::config::ProjectContextSeed;
+use surge_orchestrator::engine::config::{ProjectContextSeed, RunSeedArtifact};
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
@@ -114,4 +114,79 @@ async fn start_run_seeds_project_context_artifact() {
     let artifact = memory.artifacts.get("project_context").unwrap();
     assert_eq!(artifact.hash, seed.hash);
     assert_eq!(artifact.produced_by.as_ref(), "project_context_seed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_run_seeds_configured_run_artifacts() {
+    let storage_dir = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let storage = Storage::open(storage_dir.path()).await.unwrap();
+    let bridge = Arc::new(fixtures::mock_bridge::MockBridge::new()) as Arc<dyn BridgeFacade>;
+    let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
+        as Arc<dyn ToolDispatcher>;
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let seed = RunSeedArtifact::new(
+        "roadmap_amendment",
+        ".surge/roadmap_amendment.md",
+        "# Follow-up\n\n- m2/t1: Add runtime counters\n",
+        "roadmap_amendment_seed",
+    )
+    .unwrap();
+
+    let run_id = RunId::new();
+    let handle = engine
+        .start_run(
+            run_id,
+            terminal_graph(),
+            worktree.path().to_path_buf(),
+            EngineRunConfig {
+                seed_artifacts: vec![seed.clone()],
+                ..EngineRunConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _ = handle.await_completion().await.unwrap();
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let events = reader.read_events(EventSeq(1)..EventSeq(64)).await.unwrap();
+    let mut memory = RunMemory::default();
+    let mut saw_seed = false;
+
+    for event in &events {
+        let payload = event.payload.payload.clone();
+        if let EventPayload::ArtifactProduced {
+            node,
+            artifact,
+            path,
+            name,
+        } = &payload
+        {
+            if name == "roadmap_amendment" {
+                assert_eq!(node.as_ref(), "roadmap_amendment_seed");
+                assert_eq!(*artifact, seed.hash);
+                assert_eq!(path, &seed.relative_path);
+                assert_eq!(
+                    std::fs::read(worktree.path().join(path)).unwrap(),
+                    seed.content.as_bytes()
+                );
+                saw_seed = true;
+            }
+        }
+        memory.apply_event(&RunEvent {
+            run_id,
+            seq: event.seq.as_u64(),
+            timestamp: chrono::Utc::now(),
+            payload,
+        });
+    }
+
+    assert!(
+        saw_seed,
+        "roadmap_amendment ArtifactProduced event is missing"
+    );
+    let artifact = memory.artifacts.get("roadmap_amendment").unwrap();
+    assert_eq!(artifact.hash, seed.hash);
+    assert_eq!(artifact.produced_by.as_ref(), "roadmap_amendment_seed");
+    assert_eq!(artifact.path, seed.relative_path);
 }

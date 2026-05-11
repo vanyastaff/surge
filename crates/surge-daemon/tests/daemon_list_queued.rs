@@ -243,7 +243,7 @@ async fn list_runs_includes_queued_run_as_awaiting() {
             run_id: run1,
             graph: Box::new(make_minimal_graph()),
             worktree_path: temp.path().to_path_buf(),
-            run_config: EngineRunConfig::default(),
+            run_config: Box::new(EngineRunConfig::default()),
         },
     )
     .await
@@ -270,7 +270,7 @@ async fn list_runs_includes_queued_run_as_awaiting() {
             run_id: run2,
             graph: Box::new(make_minimal_graph()),
             worktree_path: temp.path().to_path_buf(),
-            run_config: EngineRunConfig::default(),
+            run_config: Box::new(EngineRunConfig::default()),
         },
     )
     .await
