@@ -58,15 +58,16 @@ expression: schema
     }
   },
   "required": [
+    "schema_version",
     "id",
     "target"
   ],
   "$defs": {
     "RoadmapPatchId": {
-      "description": "Stable roadmap patch identifier. ASCII alphanumeric plus `-`, `_`, `.`. Non-empty after trimming.",
+      "description": "Stable roadmap patch identifier. Canonical form: ASCII alphanumeric plus `-`, `_`, `.` (non-empty). Optional surrounding whitespace is accepted on parse and stripped; serialized output never carries whitespace.",
       "type": "string",
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9._-]+$"
+      "pattern": "^\\s*[A-Za-z0-9._-]+\\s*$"
     },
     "RoadmapPatchTarget": {
       "description": "Target amended by a roadmap patch.",

@@ -53,9 +53,14 @@ pub fn validate_key_chars(s: &str, max_len: usize, extras: &[u8]) -> Result<(), 
 /// Define a string-newtype key with character-set validation, custom
 /// serde, `Display`, `FromStr`, and `TryFrom<String>`/`TryFrom<&str>`.
 ///
-/// Usage: `define_key!(NodeKey, max_len = 32, extras = b"_");`
+/// Usage: `define_key!(NodeKey, max_len = 32, extras = b"_", pattern = r"^[A-Za-z][A-Za-z0-9_]*$");`
+///
+/// `pattern` MUST mirror the rules enforced by `validate_key_chars`:
+/// leading ASCII letter followed by ASCII alphanumeric plus the configured
+/// `extras`. The pattern is embedded into the exported JSON Schema so
+/// external validators reject the same identifiers Surge rejects.
 macro_rules! define_key {
-    ($name:ident, max_len = $max:expr, extras = $extras:expr $(,)?) => {
+    ($name:ident, max_len = $max:expr, extras = $extras:expr, pattern = $pattern:expr $(,)?) => {
         #[doc = concat!("Stable string identifier (max ", stringify!($max), " chars).")]
         #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
@@ -156,12 +161,13 @@ macro_rules! define_key {
                     "type": "string",
                     "description": concat!(
                         stringify!($name),
-                        ": validated identifier (ASCII alphanumeric plus configured extras, starts with a letter, max ",
+                        ": validated identifier (leading ASCII letter, followed by ASCII alphanumeric plus the configured extras; max ",
                         stringify!($max),
-                        " chars)."
+                        " chars). External validators MUST use the embedded `pattern` to reject identifiers the Surge parser would reject."
                     ),
                     "minLength": 1,
-                    "maxLength": $max
+                    "maxLength": $max,
+                    "pattern": $pattern
                 })
             }
         }
@@ -171,15 +177,47 @@ macro_rules! define_key {
 // ── Public key types ────────────────────────────────────────────────
 
 // Strict charset (alphanumeric + underscore, leading letter), max 32 chars.
-define_key!(NodeKey, max_len = 32, extras = b"_");
-define_key!(EdgeKey, max_len = 32, extras = b"_");
-define_key!(OutcomeKey, max_len = 32, extras = b"_");
-define_key!(SubgraphKey, max_len = 32, extras = b"_");
+define_key!(
+    NodeKey,
+    max_len = 32,
+    extras = b"_",
+    pattern = r"^[A-Za-z][A-Za-z0-9_]*$"
+);
+define_key!(
+    EdgeKey,
+    max_len = 32,
+    extras = b"_",
+    pattern = r"^[A-Za-z][A-Za-z0-9_]*$"
+);
+define_key!(
+    OutcomeKey,
+    max_len = 32,
+    extras = b"_",
+    pattern = r"^[A-Za-z][A-Za-z0-9_]*$"
+);
+define_key!(
+    SubgraphKey,
+    max_len = 32,
+    extras = b"_",
+    pattern = r"^[A-Za-z][A-Za-z0-9_]*$"
+);
 
 // Extended charset (alphanumeric + `_-.@`), max 64 chars. Allows
 // `"implementer@1.0"`, `"rust-crate-tdd@1.2.3"`.
-define_key!(ProfileKey, max_len = 64, extras = b"_-.@");
-define_key!(TemplateKey, max_len = 64, extras = b"_-.@");
+// The `-` is intentionally last inside the character class to avoid being
+// interpreted as a range.
+define_key!(
+    ProfileKey,
+    max_len = 64,
+    extras = b"_-.@",
+    pattern = r"^[A-Za-z][A-Za-z0-9_.@-]*$"
+);
+define_key!(
+    TemplateKey,
+    max_len = 64,
+    extras = b"_-.@",
+    pattern = r"^[A-Za-z][A-Za-z0-9_.@-]*$"
+);
 
 #[cfg(test)]
 mod tests {

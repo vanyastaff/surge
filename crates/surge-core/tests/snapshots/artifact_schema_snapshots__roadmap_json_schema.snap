@@ -186,6 +186,9 @@ expression: schema
       ]
     }
   },
+  "required": [
+    "schema_version"
+  ],
   "$id": "https://surge.dev/schema/v1/roadmap.json",
   "x-surge-schema-version": 1
 }

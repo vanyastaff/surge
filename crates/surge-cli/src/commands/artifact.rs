@@ -103,14 +103,21 @@ fn schema_command(
 }
 
 fn single_schema_value(kind: ArtifactKind) -> Result<serde_json::Value> {
-    match json_schema_for(kind) {
-        Some(schema) => Ok(schema),
-        None => bail!(
-            "no JSON schema for {kind}; primary format is {} and the contract is described by required markdown sections instead: {}",
-            describe_primary_format(kind),
-            describe_outline(kind)
-        ),
+    if let Some(schema) = json_schema_for(kind) {
+        return Ok(schema);
     }
+
+    if kind == ArtifactKind::Flow {
+        bail!(
+            "no JSON schema for {kind}: flow.toml schema export is pending — the contract is currently enforced by `surge_core::Graph` and engine-level validation. Use `surge artifact validate --kind flow <path>` to check a flow artifact."
+        );
+    }
+
+    bail!(
+        "no JSON schema for {kind}; primary format is {} and the contract is described by required markdown sections instead: {}",
+        describe_primary_format(kind),
+        describe_outline(kind)
+    )
 }
 
 fn all_schemas_value() -> serde_json::Value {
@@ -119,15 +126,28 @@ fn all_schemas_value() -> serde_json::Value {
         let key = contract.kind.as_str().to_string();
         let entry = match json_schema_for(contract.kind) {
             Some(schema) => schema,
-            None => serde_json::json!({
-                "x-surge-no-json-schema": true,
-                "primary_format": describe_primary_format(contract.kind),
-                "required_markdown_sections": markdown_outline(contract.kind),
-            }),
+            None => no_schema_placeholder(contract.kind),
         };
         map.insert(key, entry);
     }
     serde_json::Value::Object(map)
+}
+
+fn no_schema_placeholder(kind: ArtifactKind) -> serde_json::Value {
+    let primary_format = describe_primary_format(kind);
+    if kind == ArtifactKind::Flow {
+        return serde_json::json!({
+            "x-surge-no-json-schema": true,
+            "primary_format": primary_format,
+            "x-surge-schema-status": "pending",
+            "x-surge-schema-note": "flow.toml schema export is pending; the contract is currently enforced by surge_core::Graph and engine-level validation.",
+        });
+    }
+    serde_json::json!({
+        "x-surge-no-json-schema": true,
+        "primary_format": primary_format,
+        "required_markdown_sections": markdown_outline(kind),
+    })
 }
 
 fn describe_primary_format(kind: ArtifactKind) -> &'static str {
@@ -145,8 +165,7 @@ fn describe_outline(kind: ArtifactKind) -> String {
             .map(|section| format!("## {section}"))
             .collect::<Vec<_>>()
             .join(", "),
-        None => "(no markdown outline registered; this kind currently lacks a JSON schema export)"
-            .to_string(),
+        None => "(no markdown outline registered for this kind)".to_string(),
     }
 }
 

@@ -21,6 +21,7 @@ expression: schema
     }
   },
   "required": [
+    "schema_version",
     "spec"
   ],
   "$defs": {

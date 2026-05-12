@@ -87,11 +87,19 @@ impl schemars::JsonSchema for RoadmapPatchId {
     }
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // `RoadmapPatchId::new` trims surrounding whitespace before
+        // validating, so inputs such as `"  rpatch-abc  "` are accepted
+        // and normalized to `"rpatch-abc"`. The pattern below mirrors that
+        // exactly: optional leading/trailing whitespace, then a non-empty
+        // canonical core of ASCII alphanumeric plus `-`, `_`, `.`. The
+        // canonical/serialized form never carries whitespace, but external
+        // validators should still accept the same inputs Surge does on
+        // deserialization.
         schemars::json_schema!({
             "type": "string",
-            "description": "Stable roadmap patch identifier. ASCII alphanumeric plus `-`, `_`, `.`. Non-empty after trimming.",
+            "description": "Stable roadmap patch identifier. Canonical form: ASCII alphanumeric plus `-`, `_`, `.` (non-empty). Optional surrounding whitespace is accepted on parse and stripped; serialized output never carries whitespace.",
             "minLength": 1,
-            "pattern": r"^[A-Za-z0-9._-]+$"
+            "pattern": r"^\s*[A-Za-z0-9._-]+\s*$"
         })
     }
 }

@@ -1,6 +1,7 @@
 //! CLI smoke tests for `surge artifact schema`.
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use predicates::str::contains;
 
 #[test]
@@ -96,4 +97,22 @@ fn schema_plan_reports_markdown_only_error() {
         .stderr(contains("no JSON schema for plan"))
         .stderr(contains("## Settings"))
         .stderr(contains("## Tasks"));
+}
+
+#[test]
+fn schema_flow_reports_pending_message_not_markdown_sections() {
+    // flow.toml has no JSON schema today and no markdown outline either.
+    // The CLI must surface that explicitly as a pending-schema message
+    // rather than pretending the contract is described by markdown
+    // sections.
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args(["artifact", "schema", "flow"])
+        .assert()
+        .failure()
+        .stderr(contains("no JSON schema for flow"))
+        .stderr(contains("pending"))
+        // Sanity: the error must NOT promise markdown sections that don't
+        // exist for flow.
+        .stderr(predicates::str::contains("## ").not());
 }

@@ -1206,8 +1206,14 @@ const CONTRACTS: [ArtifactContract; 9] = [
 ///
 /// Returns `Some(&[...])` for kinds whose primary format is Markdown — the
 /// returned slice is the same set of `## <Section>` headings the validator
-/// requires. Returns `None` for TOML/FlowToml kinds where the contract is
-/// expressed by a JSON Schema instead (see [`json_schema_for`]).
+/// requires. Returns `None` for kinds whose canonical contract is *not*
+/// a markdown outline:
+///
+/// - `spec`, `roadmap`, `roadmap-patch`: the contract is captured by the
+///   JSON Schema returned from [`json_schema_for`].
+/// - `flow`: there is currently no exported JSON Schema; the contract is
+///   enforced by [`crate::graph::Graph`] in Rust plus engine-level
+///   validation. Schema export for flow is tracked separately.
 #[must_use]
 pub const fn markdown_outline(kind: ArtifactKind) -> Option<&'static [&'static str]> {
     match kind {
@@ -1273,6 +1279,7 @@ fn schema_value<T: schemars::JsonSchema>(filename: &str) -> serde_json::Value {
     let mut value = serde_json::to_value(&schema)
         .expect("schemars::Schema is JSON-serializable by construction");
     if let Some(object) = value.as_object_mut() {
+        ensure_schema_version_required(object);
         object.insert(
             "$id".to_string(),
             serde_json::Value::String(format!("{SCHEMA_ID_PREFIX}/{filename}")),
@@ -1283,6 +1290,37 @@ fn schema_value<T: schemars::JsonSchema>(filename: &str) -> serde_json::Value {
         );
     }
     value
+}
+
+/// Force `schema_version` into the root `required` array.
+///
+/// Surge-owned TOML artifacts (`spec`, `roadmap`, `roadmap-patch`) keep
+/// `#[serde(default = "...")]` on `schema_version` so that legacy in-memory
+/// constructors do not have to thread the constant — but the on-disk
+/// contract treats a missing `schema_version` as an error (see
+/// [`validate_schema_version`]). Without this post-processing step,
+/// schemars would mark the field optional and external validators would
+/// accept artifacts that the orchestrator later rejects.
+fn ensure_schema_version_required(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let has_property = object
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|properties| properties.contains_key("schema_version"));
+    if !has_property {
+        return;
+    }
+    let required = object
+        .entry("required".to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(array) = required.as_array_mut() else {
+        return;
+    };
+    let already_present = array
+        .iter()
+        .any(|value| value.as_str() == Some("schema_version"));
+    if !already_present {
+        array.insert(0, serde_json::Value::String("schema_version".to_string()));
+    }
 }
 
 fn adr_frontmatter_schema() -> serde_json::Value {
