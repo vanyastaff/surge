@@ -1092,11 +1092,7 @@ fn require_acceptance_criteria(report: &mut ArtifactValidationReport, content: &
     }
 
     for (index, bullet) in bullets.iter().enumerate() {
-        validate_acceptance_criterion_text(
-            report,
-            format!("Acceptance Criteria[{index}]"),
-            bullet,
-        );
+        validate_acceptance_criterion_text(report, format!("Acceptance Criteria[{index}]"), bullet);
     }
 }
 
@@ -1827,11 +1823,9 @@ Build a validator.
 
         assert!(!report.is_valid());
         assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code
-                    == ArtifactDiagnosticCode::EmptyAcceptanceCriteria)
+            report.diagnostics.iter().any(
+                |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+            )
         );
     }
 
@@ -1855,11 +1849,9 @@ Build a validator.
 
         assert!(!report.is_valid());
         assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code
-                    == ArtifactDiagnosticCode::EmptyAcceptanceCriteria)
+            report.diagnostics.iter().any(
+                |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+            )
         );
     }
 
@@ -1886,8 +1878,9 @@ Build a validator.
             report
                 .diagnostics
                 .iter()
-                .filter(|diagnostic| diagnostic.code
-                    == ArtifactDiagnosticCode::EmptyAcceptanceCriteria)
+                .filter(
+                    |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                )
                 .count(),
             1,
         );
@@ -1969,8 +1962,7 @@ subtasks = [
         assert!(!report.is_valid());
         assert!(report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
-                && diagnostic.location.as_deref()
-                    == Some("spec.subtasks[0].acceptance_criteria[0]")
+                && diagnostic.location.as_deref() == Some("spec.subtasks[0].acceptance_criteria[0]")
         }));
     }
 
@@ -2029,9 +2021,7 @@ subtasks = [
         let empty_count = report
             .diagnostics
             .iter()
-            .filter(|diagnostic| {
-                diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
-            })
+            .filter(|diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria)
             .count();
         assert_eq!(empty_count, 2);
     }
