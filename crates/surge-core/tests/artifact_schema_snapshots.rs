@@ -74,8 +74,9 @@ fn contract_summary_combines_schema_and_outline() {
     let plan = contract_summary(ArtifactKind::Plan);
     assert_eq!(plan.kind, ArtifactKind::Plan);
     assert!(plan.json_schema.is_none());
-    let sections =
-        plan.required_markdown_sections.expect("plan must expose markdown outline");
+    let sections = plan
+        .required_markdown_sections
+        .expect("plan must expose markdown outline");
     assert_eq!(sections, &["Settings", "Tasks"]);
 }
 

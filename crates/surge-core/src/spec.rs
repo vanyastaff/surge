@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 /// the artifact contract schema version around it so authored files can evolve
 /// independently from the in-memory spec fields.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(title = "SpecArtifact", description = "Surge `spec.toml` artifact: schema version envelope around the executable spec payload.")]
+#[schemars(
+    title = "SpecArtifact",
+    description = "Surge `spec.toml` artifact: schema version envelope around the executable spec payload."
+)]
 pub struct SpecArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]

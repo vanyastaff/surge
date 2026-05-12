@@ -112,7 +112,10 @@ pub enum RoadmapPatchIdError {
 
 /// Machine-readable roadmap amendment artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[schemars(title = "RoadmapPatch", description = "Surge `roadmap-patch.toml` artifact: an ordered sequence of operations amending an existing roadmap, plus dependencies, conflicts, and lifecycle status.")]
+#[schemars(
+    title = "RoadmapPatch",
+    description = "Surge `roadmap-patch.toml` artifact: an ordered sequence of operations amending an existing roadmap, plus dependencies, conflicts, and lifecycle status."
+)]
 pub struct RoadmapPatch {
     /// Artifact schema version.
     #[serde(default = "default_schema_version")]

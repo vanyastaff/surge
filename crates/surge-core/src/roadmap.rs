@@ -14,7 +14,10 @@ use crate::spec::Complexity;
 /// available for runtime planning; this wrapper captures the authored roadmap
 /// shape and schema version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[schemars(title = "RoadmapArtifact", description = "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks.")]
+#[schemars(
+    title = "RoadmapArtifact",
+    description = "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks."
+)]
 pub struct RoadmapArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]

@@ -95,8 +95,7 @@ fn schema_command(
     };
 
     if let Some(path) = output {
-        std::fs::write(path, &rendered)
-            .with_context(|| format!("write {}", path.display()))?;
+        std::fs::write(path, &rendered).with_context(|| format!("write {}", path.display()))?;
     } else {
         println!("{rendered}");
     }

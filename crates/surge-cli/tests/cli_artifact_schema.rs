@@ -36,9 +36,14 @@ fn schema_spec_emits_valid_json_with_expected_keys() {
             .is_some(),
         "spec schema must describe the schema_version envelope field"
     );
-    assert!(object.contains_key("$defs"), "spec schema must inline Spec/Subtask/etc.");
+    assert!(
+        object.contains_key("$defs"),
+        "spec schema must inline Spec/Subtask/etc."
+    );
     assert_eq!(
-        object.get("x-surge-schema-version").and_then(|v| v.as_u64()),
+        object
+            .get("x-surge-schema-version")
+            .and_then(|v| v.as_u64()),
         Some(u64::from(surge_core::ARTIFACT_SCHEMA_VERSION))
     );
 }
