@@ -141,6 +141,30 @@ macro_rules! define_key {
                 Self::try_new(s).map_err(::serde::de::Error::custom)
             }
         }
+
+        impl ::schemars::JsonSchema for $name {
+            fn schema_name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(stringify!($name))
+            }
+
+            fn schema_id() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(concat!("surge::keys::", stringify!($name)))
+            }
+
+            fn json_schema(_generator: &mut ::schemars::SchemaGenerator) -> ::schemars::Schema {
+                ::schemars::json_schema!({
+                    "type": "string",
+                    "description": concat!(
+                        stringify!($name),
+                        ": validated identifier (ASCII alphanumeric plus configured extras, starts with a letter, max ",
+                        stringify!($max),
+                        " chars)."
+                    ),
+                    "minLength": 1,
+                    "maxLength": $max
+                })
+            }
+        }
     };
 }
 

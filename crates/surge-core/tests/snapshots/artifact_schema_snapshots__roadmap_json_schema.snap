@@ -1,0 +1,191 @@
+---
+source: crates/surge-core/tests/artifact_schema_snapshots.rs
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoadmapArtifact",
+  "description": "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Artifact contract schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 1
+    },
+    "milestones": {
+      "description": "Deliverable-focused milestones in execution order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapMilestone"
+      },
+      "default": []
+    },
+    "dependencies": {
+      "description": "Cross-milestone dependencies.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapDependency"
+      },
+      "default": []
+    },
+    "risks": {
+      "description": "Known delivery risks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapRisk"
+      },
+      "default": []
+    }
+  },
+  "$defs": {
+    "RoadmapMilestone": {
+      "description": "One deliverable-focused roadmap milestone.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable human-authored identifier, for example `m1`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable milestone title.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current execution status for amendment safety checks.",
+          "$ref": "#/$defs/RoadmapStatus"
+        },
+        "tasks": {
+          "description": "Ordered tasks within this milestone.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoadmapTask"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "RoadmapStatus": {
+      "description": "Execution status of a roadmap item.",
+      "oneOf": [
+        {
+          "description": "Not yet started.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Currently being executed by the orchestrator.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Paused, waiting for human input or gate.",
+          "type": "string",
+          "const": "paused"
+        },
+        {
+          "description": "Completed successfully.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "Failed — may be retried.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Skipped (dependency failed or user cancelled).",
+          "type": "string",
+          "const": "skipped"
+        }
+      ]
+    },
+    "RoadmapTask": {
+      "description": "One task within a roadmap milestone.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable human-authored identifier, for example `m1-t1`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable task title.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current execution status for amendment safety checks.",
+          "$ref": "#/$defs/RoadmapStatus"
+        },
+        "description": {
+          "description": "Optional short description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptance_criteria": {
+          "description": "Acceptance criteria that downstream spec/story authors can refine.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "RoadmapDependency": {
+      "description": "Directed dependency between roadmap milestones.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "Milestone that must finish first.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Milestone that depends on `from`.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable reason for the dependency.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "RoadmapRisk": {
+      "description": "Risk tracked by the roadmap artifact.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Risk description.",
+          "type": "string"
+        },
+        "mitigation": {
+          "description": "Optional mitigation plan.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description"
+      ]
+    }
+  },
+  "$id": "https://surge.dev/schema/v1/roadmap.json",
+  "x-surge-schema-version": 1
+}

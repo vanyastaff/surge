@@ -2,6 +2,7 @@
 
 use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
 use crate::id::{SpecId, SubtaskId};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Machine-readable `spec.toml` artifact wrapper.
@@ -9,7 +10,8 @@ use serde::{Deserialize, Serialize};
 /// The existing [`Spec`] type remains the execution model. This wrapper adds
 /// the artifact contract schema version around it so authored files can evolve
 /// independently from the in-memory spec fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(title = "SpecArtifact", description = "Surge `spec.toml` artifact: schema version envelope around the executable spec payload.")]
 pub struct SpecArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]
@@ -48,7 +50,7 @@ impl From<SpecArtifact> for Spec {
 }
 
 /// Execution state of a single subtask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SubtaskState {
     #[default]
@@ -74,7 +76,7 @@ impl SubtaskState {
 }
 
 /// Execution metadata for a single subtask, persisted to spec.toml.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct SubtaskExecution {
     /// Current execution state.
     #[serde(default)]
@@ -91,7 +93,7 @@ pub struct SubtaskExecution {
 }
 
 /// Complexity level for a task or subtask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Complexity {
     Simple,
@@ -100,7 +102,7 @@ pub enum Complexity {
 }
 
 /// Acceptance criteria for a subtask.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AcceptanceCriteria {
     /// Human-readable description of what must be true.
     pub description: String,
@@ -110,7 +112,7 @@ pub struct AcceptanceCriteria {
 }
 
 /// A subtask within a spec.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Subtask {
     /// Unique identifier.
     pub id: SubtaskId,
@@ -142,7 +144,7 @@ pub struct Subtask {
 }
 
 /// A complete spec describing a unit of work.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Spec {
     /// Unique identifier.
     pub id: SpecId,
