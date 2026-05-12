@@ -10,6 +10,7 @@ mod diagnostic;
 mod kinds;
 mod parse;
 mod path;
+mod schema;
 
 use std::path::Path;
 
@@ -23,6 +24,7 @@ pub use diagnostic::{
     ArtifactDiagnosticCode, ArtifactDiagnosticSeverity, ArtifactValidationDiagnostic,
     ArtifactValidationError, ArtifactValidationReport,
 };
+pub use schema::{ContractSummary, contract_summary, json_schema_for, markdown_outline};
 
 use path::normalize_path;
 
