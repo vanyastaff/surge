@@ -1,0 +1,224 @@
+---
+source: crates/surge-core/tests/artifact_schema_snapshots.rs
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpecArtifact",
+  "description": "Surge `spec.toml` artifact: schema version envelope around the executable spec payload.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Artifact contract schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 1
+    },
+    "spec": {
+      "description": "Executable spec payload.",
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "required": [
+    "schema_version",
+    "spec"
+  ],
+  "$defs": {
+    "Spec": {
+      "description": "A complete spec describing a unit of work.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Unique identifier.",
+          "$ref": "#/$defs/SpecId"
+        },
+        "title": {
+          "description": "Short title.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Detailed description.",
+          "type": "string"
+        },
+        "complexity": {
+          "description": "Overall complexity.",
+          "$ref": "#/$defs/Complexity"
+        },
+        "subtasks": {
+          "description": "Ordered list of subtasks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subtask"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "complexity"
+      ]
+    },
+    "SpecId": {
+      "description": "ULID identifier (26-char Crockford base32). Serialized as a bare ULID; the prefixed form `spec-<ulid>` is accepted for FromStr but not produced during JSON serialization.",
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "Complexity": {
+      "description": "Complexity level for a task or subtask.",
+      "type": "string",
+      "enum": [
+        "simple",
+        "standard",
+        "complex"
+      ]
+    },
+    "Subtask": {
+      "description": "A subtask within a spec.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Unique identifier.",
+          "$ref": "#/$defs/SubtaskId"
+        },
+        "title": {
+          "description": "Short title.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Detailed description of work to do.",
+          "type": "string"
+        },
+        "complexity": {
+          "description": "Estimated complexity.",
+          "$ref": "#/$defs/Complexity"
+        },
+        "files": {
+          "description": "Files this subtask will touch.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "acceptance_criteria": {
+          "description": "Acceptance criteria that must pass.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcceptanceCriteria"
+          },
+          "default": []
+        },
+        "depends_on": {
+          "description": "Dependencies on other subtask IDs (must complete first).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubtaskId"
+          },
+          "default": []
+        },
+        "story_file": {
+          "description": "Relative path to the story file (e.g. `stories/story-001.md`).\nWhen set, the agent receives the story file content instead of field-assembled prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "description": "Which agent to use for this subtask (overrides routing config).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution": {
+          "description": "Execution state and timing. Persisted to spec.toml.",
+          "$ref": "#/$defs/SubtaskExecution",
+          "default": {
+            "state": "pending"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "complexity"
+      ]
+    },
+    "SubtaskId": {
+      "description": "ULID identifier (26-char Crockford base32). Serialized as a bare ULID; the prefixed form `sub-<ulid>` is accepted for FromStr but not produced during JSON serialization.",
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "AcceptanceCriteria": {
+      "description": "Acceptance criteria for a subtask.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description of what must be true.",
+          "type": "string"
+        },
+        "met": {
+          "description": "Whether this criterion is currently met.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "description"
+      ]
+    },
+    "SubtaskExecution": {
+      "description": "Execution metadata for a single subtask, persisted to spec.toml.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "description": "Current execution state.",
+          "$ref": "#/$defs/SubtaskState",
+          "default": "pending"
+        },
+        "started_at": {
+          "description": "When execution started (Unix timestamp ms). None if not yet started.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "finished_at": {
+          "description": "When execution finished (Unix timestamp ms). None if not yet finished.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Error message if state is Failed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SubtaskState": {
+      "description": "Execution state of a single subtask.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "skipped"
+      ]
+    }
+  },
+  "$id": "https://surge.dev/schema/v1/spec.json",
+  "x-surge-schema-version": 1
+}

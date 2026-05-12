@@ -1,5 +1,6 @@
 //! Roadmap types — project-level planning across multiple specs.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
@@ -12,7 +13,11 @@ use crate::spec::Complexity;
 /// `flow.toml` is generated. The older [`Timeline`] scheduling model remains
 /// available for runtime planning; this wrapper captures the authored roadmap
 /// shape and schema version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(
+    title = "RoadmapArtifact",
+    description = "Surge `roadmap.toml` artifact: ordered milestones, cross-milestone dependencies, and tracked risks."
+)]
 pub struct RoadmapArtifact {
     /// Artifact contract schema version.
     #[serde(default = "default_artifact_schema_version")]
@@ -105,7 +110,7 @@ impl Default for RoadmapArtifact {
 }
 
 /// One deliverable-focused roadmap milestone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapMilestone {
     /// Stable human-authored identifier, for example `m1`.
     pub id: String,
@@ -133,7 +138,7 @@ impl RoadmapMilestone {
 }
 
 /// One task within a roadmap milestone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapTask {
     /// Stable human-authored identifier, for example `m1-t1`.
     pub id: String,
@@ -165,7 +170,7 @@ impl RoadmapTask {
 }
 
 /// Directed dependency between roadmap milestones.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapDependency {
     /// Milestone that must finish first.
     pub from: String,
@@ -177,7 +182,7 @@ pub struct RoadmapDependency {
 }
 
 /// Risk tracked by the roadmap artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapRisk {
     /// Risk description.
     pub description: String,
@@ -229,7 +234,7 @@ impl std::fmt::Display for Priority {
 }
 
 /// Execution status of a roadmap item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RoadmapStatus {
     /// Not yet started.
