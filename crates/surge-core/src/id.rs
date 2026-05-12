@@ -1,6 +1,8 @@
 //! Type-safe identifiers for Surge entities.
 
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fmt;
 use ulid::Ulid;
 
@@ -62,6 +64,29 @@ macro_rules! define_id {
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 let ulid_str = s.strip_prefix(concat!($prefix, "-")).unwrap_or(s);
                 ulid_str.parse::<Ulid>().map(Self)
+            }
+        }
+
+        impl JsonSchema for $name {
+            fn schema_name() -> Cow<'static, str> {
+                Cow::Borrowed(stringify!($name))
+            }
+
+            fn schema_id() -> Cow<'static, str> {
+                Cow::Borrowed(concat!("surge::id::", stringify!($name)))
+            }
+
+            fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+                schemars::json_schema!({
+                    "type": "string",
+                    "description": concat!(
+                        "ULID identifier (26-char Crockford base32). Serialized as a bare ULID; ",
+                        "the prefixed form `",
+                        $prefix,
+                        "-<ulid>` is accepted for FromStr but not produced during JSON serialization."
+                    ),
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                })
             }
         }
     };

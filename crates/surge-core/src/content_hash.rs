@@ -82,6 +82,24 @@ impl<'de> serde::Deserialize<'de> for ContentHash {
     }
 }
 
+impl schemars::JsonSchema for ContentHash {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ContentHash")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("surge::content_hash::ContentHash")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Content hash in the canonical `sha256:<64 hex chars>` form. The bare 64-char hex form is also accepted on parse.",
+            "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

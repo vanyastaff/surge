@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Self-describing artifact contracts
+
+- **`surge artifact schema <kind>` CLI** — exports the JSON Schema (draft
+  2020-12) describing on-disk artifacts. Supports `--all` to dump every
+  kind in one object, `--format pretty|json`, and `--output <path>` to
+  write to disk. Markdown-only kinds exit with an explanatory error
+  listing required `## <Section>` headings instead of fabricating a
+  schema.
+- **`surge_core::json_schema_for` / `contract_summary` / `markdown_outline`**
+  — pure introspection API that agents and external tools can call without
+  shelling out. Every exported schema carries `$id`
+  (`https://surge.dev/schema/v1/<artifact>.json`) and
+  `x-surge-schema-version` for change tracking.
+- **`#[derive(JsonSchema)]` across TOML artifact types** — `SpecArtifact`,
+  `Spec`, `Subtask`, `AcceptanceCriteria`, `Complexity`, `SubtaskExecution`,
+  `SubtaskState`, `RoadmapArtifact`, `RoadmapMilestone`, `RoadmapTask`,
+  `RoadmapDependency`, `RoadmapRisk`, `RoadmapStatus`, `RoadmapPatch`,
+  `RoadmapPatchOperation`, `RoadmapPatchItem`, `InsertionPoint`,
+  `RoadmapItemRef`, and the rest of the roadmap-patch enum tree now derive
+  JSON Schema. Custom-serde newtypes (`SpecId`, `SubtaskId`, `RunId`,
+  `NodeKey` family, `ContentHash`, `RoadmapPatchId`) carry hand-written
+  `JsonSchema` impls describing them as strings with the appropriate
+  pattern/length constraints. On-disk serialization is unchanged.
+- **Snapshot tests for every exported schema** in
+  `crates/surge-core/tests/artifact_schema_snapshots.rs`. Breaking changes
+  to a contract now surface as a diff that prompt profiles, IDE plugins,
+  and external validators can track in lockstep.
+- **`docs/artifact-schemas.md`** — quick-start, coverage matrix, and
+  recommended consumption pattern for agents.
+
 ### Changed — Artifact contract acceptance-criteria validation
 
 - **Stricter acceptance-criteria checks** — Spec (Markdown and TOML) and Story

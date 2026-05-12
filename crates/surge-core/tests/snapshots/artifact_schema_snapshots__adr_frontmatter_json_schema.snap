@@ -1,0 +1,38 @@
+---
+source: crates/surge-core/tests/artifact_schema_snapshots.rs
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://surge.dev/schema/v1/adr-frontmatter.json",
+  "title": "AdrFrontmatter",
+  "description": "Required TOML frontmatter fields for an ADR markdown file. The full ADR body is markdown-only; see `markdown_outline(ArtifactKind::Adr)` for the required body sections.",
+  "type": "object",
+  "required": [
+    "status",
+    "deciders",
+    "date"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "description": "ADR lifecycle status, for example `proposed`, `accepted`, `superseded`."
+    },
+    "deciders": {
+      "type": "array",
+      "description": "Humans or teams who own this decision.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "date": {
+      "type": "string",
+      "description": "ISO-8601 calendar date the decision was recorded (`YYYY-MM-DD`).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    }
+  },
+  "additionalProperties": true,
+  "x-surge-schema-version": 1
+}

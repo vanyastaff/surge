@@ -1,0 +1,740 @@
+---
+source: crates/surge-core/tests/artifact_schema_snapshots.rs
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoadmapPatch",
+  "description": "Surge `roadmap-patch.toml` artifact: an ordered sequence of operations amending an existing roadmap, plus dependencies, conflicts, and lifecycle status.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Artifact schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 1
+    },
+    "id": {
+      "description": "Stable patch identifier.",
+      "$ref": "#/$defs/RoadmapPatchId"
+    },
+    "target": {
+      "description": "Roadmap or run this patch amends.",
+      "$ref": "#/$defs/RoadmapPatchTarget"
+    },
+    "rationale": {
+      "description": "Human-readable reason for the amendment.",
+      "type": "string"
+    },
+    "operations": {
+      "description": "Ordered patch operations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapPatchOperation"
+      },
+      "default": []
+    },
+    "dependencies": {
+      "description": "Cross-item dependencies introduced by this patch.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapPatchDependency"
+      },
+      "default": []
+    },
+    "conflicts": {
+      "description": "Conflicts detected while drafting or applying the patch.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoadmapPatchConflict"
+      },
+      "default": []
+    },
+    "status": {
+      "description": "Current lifecycle state.",
+      "$ref": "#/$defs/RoadmapPatchStatus",
+      "default": "drafted"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "target"
+  ],
+  "$defs": {
+    "RoadmapPatchId": {
+      "description": "Stable roadmap patch identifier. Canonical form: ASCII alphanumeric plus `-`, `_`, `.` (non-empty). Optional surrounding whitespace is accepted on parse and stripped; serialized output never carries whitespace.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\s*[A-Za-z0-9._-]+\\s*$"
+    },
+    "RoadmapPatchTarget": {
+      "description": "Target amended by a roadmap patch.",
+      "oneOf": [
+        {
+          "description": "Project-level roadmap file.",
+          "type": "object",
+          "properties": {
+            "roadmap_path": {
+              "description": "Portable path relative to the project root.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "project_roadmap"
+            }
+          },
+          "required": [
+            "kind",
+            "roadmap_path"
+          ]
+        },
+        {
+          "description": "Roadmap artifact belonging to a run.",
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "description": "Target run.",
+              "$ref": "#/$defs/RunId"
+            },
+            "roadmap_artifact": {
+              "description": "Stored roadmap artifact hash, when known.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContentHash"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "flow_artifact": {
+              "description": "Stored flow artifact hash, when known.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContentHash"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "active_pickup": {
+              "description": "Whether the active runner may pick up this amendment.",
+              "$ref": "#/$defs/ActivePickupPolicy",
+              "default": "allowed"
+            },
+            "kind": {
+              "type": "string",
+              "const": "run_roadmap"
+            }
+          },
+          "required": [
+            "kind",
+            "run_id"
+          ]
+        }
+      ]
+    },
+    "RunId": {
+      "description": "ULID identifier (26-char Crockford base32). Serialized as a bare ULID; the prefixed form `run-<ulid>` is accepted for FromStr but not produced during JSON serialization.",
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "ContentHash": {
+      "description": "Content hash in the canonical `sha256:<64 hex chars>` form. The bare 64-char hex form is also accepted on parse.",
+      "type": "string",
+      "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"
+    },
+    "ActivePickupPolicy": {
+      "description": "Active-run pickup policy for a patch target.",
+      "oneOf": [
+        {
+          "description": "Runner may pick up new work at a safe loop boundary.",
+          "type": "string",
+          "const": "allowed"
+        },
+        {
+          "description": "Always create a follow-up run rather than amending the active graph.",
+          "type": "string",
+          "const": "follow_up_only"
+        },
+        {
+          "description": "Keep the patch pending until an operator chooses a resolution.",
+          "type": "string",
+          "const": "disabled"
+        }
+      ]
+    },
+    "RoadmapPatchOperation": {
+      "description": "One operation inside a roadmap patch.",
+      "oneOf": [
+        {
+          "description": "Insert a new milestone.",
+          "type": "object",
+          "properties": {
+            "milestone": {
+              "description": "New milestone.",
+              "$ref": "#/$defs/RoadmapMilestone"
+            },
+            "insertion": {
+              "description": "Position for the new milestone.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InsertionPoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "add_milestone"
+            }
+          },
+          "required": [
+            "op",
+            "milestone"
+          ]
+        },
+        {
+          "description": "Insert a new task into an existing milestone.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "task": {
+              "description": "New task.",
+              "$ref": "#/$defs/RoadmapTask"
+            },
+            "insertion": {
+              "description": "Position for the new task.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InsertionPoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "add_task"
+            }
+          },
+          "required": [
+            "op",
+            "milestone_id",
+            "task"
+          ]
+        },
+        {
+          "description": "Replace an item that is still draft-only and not part of completed history.",
+          "type": "object",
+          "properties": {
+            "target": {
+              "description": "Existing draft item to replace.",
+              "$ref": "#/$defs/RoadmapItemRef"
+            },
+            "replacement": {
+              "description": "Replacement item.",
+              "$ref": "#/$defs/RoadmapPatchItem"
+            },
+            "reason": {
+              "description": "Human-readable replacement reason.",
+              "type": "string"
+            },
+            "op": {
+              "type": "string",
+              "const": "replace_draft_item"
+            }
+          },
+          "required": [
+            "op",
+            "target",
+            "replacement"
+          ]
+        }
+      ]
+    },
+    "RoadmapMilestone": {
+      "description": "One deliverable-focused roadmap milestone.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable human-authored identifier, for example `m1`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable milestone title.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current execution status for amendment safety checks.",
+          "$ref": "#/$defs/RoadmapStatus"
+        },
+        "tasks": {
+          "description": "Ordered tasks within this milestone.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoadmapTask"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "RoadmapStatus": {
+      "description": "Execution status of a roadmap item.",
+      "oneOf": [
+        {
+          "description": "Not yet started.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Currently being executed by the orchestrator.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Paused, waiting for human input or gate.",
+          "type": "string",
+          "const": "paused"
+        },
+        {
+          "description": "Completed successfully.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "Failed — may be retried.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Skipped (dependency failed or user cancelled).",
+          "type": "string",
+          "const": "skipped"
+        }
+      ]
+    },
+    "RoadmapTask": {
+      "description": "One task within a roadmap milestone.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable human-authored identifier, for example `m1-t1`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable task title.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Current execution status for amendment safety checks.",
+          "$ref": "#/$defs/RoadmapStatus"
+        },
+        "description": {
+          "description": "Optional short description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptance_criteria": {
+          "description": "Acceptance criteria that downstream spec/story authors can refine.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "InsertionPoint": {
+      "description": "Insertion point for append/insert operations.",
+      "oneOf": [
+        {
+          "description": "Append a milestone to the end of the roadmap.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "append_to_roadmap"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Insert before an existing milestone.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "before_milestone"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id"
+          ]
+        },
+        {
+          "description": "Insert after an existing milestone.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "after_milestone"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id"
+          ]
+        },
+        {
+          "description": "Append a task to an existing milestone.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "append_to_milestone"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id"
+          ]
+        },
+        {
+          "description": "Insert before an existing task.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "task_id": {
+              "description": "Existing task ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "before_task"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id",
+            "task_id"
+          ]
+        },
+        {
+          "description": "Insert after an existing task.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Existing milestone ID.",
+              "type": "string"
+            },
+            "task_id": {
+              "description": "Existing task ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "after_task"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id",
+            "task_id"
+          ]
+        }
+      ]
+    },
+    "RoadmapItemRef": {
+      "description": "Reference to a roadmap milestone or task.",
+      "oneOf": [
+        {
+          "description": "Milestone reference.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Milestone ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "milestone"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id"
+          ]
+        },
+        {
+          "description": "Task reference.",
+          "type": "object",
+          "properties": {
+            "milestone_id": {
+              "description": "Milestone ID containing the task.",
+              "type": "string"
+            },
+            "task_id": {
+              "description": "Task ID.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "task"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone_id",
+            "task_id"
+          ]
+        }
+      ]
+    },
+    "RoadmapPatchItem": {
+      "description": "Replacement item for a draft-only roadmap item.",
+      "oneOf": [
+        {
+          "description": "Replacement milestone.",
+          "type": "object",
+          "properties": {
+            "milestone": {
+              "description": "Milestone contents.",
+              "$ref": "#/$defs/RoadmapMilestone"
+            },
+            "kind": {
+              "type": "string",
+              "const": "milestone"
+            }
+          },
+          "required": [
+            "kind",
+            "milestone"
+          ]
+        },
+        {
+          "description": "Replacement task.",
+          "type": "object",
+          "properties": {
+            "task": {
+              "description": "Task contents.",
+              "$ref": "#/$defs/RoadmapTask"
+            },
+            "kind": {
+              "type": "string",
+              "const": "task"
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ]
+        }
+      ]
+    },
+    "RoadmapPatchDependency": {
+      "description": "Dependency edge introduced by a patch.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "Source item that must complete first.",
+          "$ref": "#/$defs/RoadmapItemRef"
+        },
+        "to": {
+          "description": "Dependent item.",
+          "$ref": "#/$defs/RoadmapItemRef"
+        },
+        "reason": {
+          "description": "Human-readable reason.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "RoadmapPatchConflict": {
+      "description": "Conflict metadata attached to a roadmap patch.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Stable conflict code.",
+          "$ref": "#/$defs/RoadmapPatchConflictCode"
+        },
+        "item": {
+          "description": "Roadmap item involved in the conflict, when known.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoadmapItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "description": "Operator-facing explanation.",
+          "type": "string"
+        },
+        "choices": {
+          "description": "Available operator choices.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OperatorConflictChoice"
+          },
+          "default": []
+        },
+        "selected_choice": {
+          "description": "Selected choice, once the operator has resolved the conflict.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorConflictChoice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "RoadmapPatchConflictCode": {
+      "description": "Stable conflict classes.",
+      "oneOf": [
+        {
+          "description": "Referenced item could not be found.",
+          "type": "string",
+          "const": "missing_target"
+        },
+        {
+          "description": "Patch references an item already running.",
+          "type": "string",
+          "const": "running_milestone"
+        },
+        {
+          "description": "Patch would mutate completed history.",
+          "type": "string",
+          "const": "completed_history"
+        },
+        {
+          "description": "Patch would duplicate an existing item ID.",
+          "type": "string",
+          "const": "duplicate_item"
+        },
+        {
+          "description": "Patch would introduce a dependency cycle.",
+          "type": "string",
+          "const": "dependency_cycle"
+        },
+        {
+          "description": "Operation cannot be represented safely.",
+          "type": "string",
+          "const": "unsupported_operation"
+        }
+      ]
+    },
+    "OperatorConflictChoice": {
+      "description": "Operator choice for resolving an amendment conflict.",
+      "oneOf": [
+        {
+          "description": "Defer the new work to the next safe milestone.",
+          "type": "string",
+          "const": "defer_to_next_milestone"
+        },
+        {
+          "description": "Abort the current run before applying the patch.",
+          "type": "string",
+          "const": "abort_current_run"
+        },
+        {
+          "description": "Create a follow-up run instead of amending the active run.",
+          "type": "string",
+          "const": "create_follow_up_run"
+        },
+        {
+          "description": "Reject the patch.",
+          "type": "string",
+          "const": "reject_patch"
+        }
+      ]
+    },
+    "RoadmapPatchStatus": {
+      "description": "Lifecycle state for a roadmap patch.",
+      "oneOf": [
+        {
+          "description": "Patch has been drafted by Feature Planner.",
+          "type": "string",
+          "const": "drafted"
+        },
+        {
+          "description": "Patch is waiting for operator approval.",
+          "type": "string",
+          "const": "pending_approval"
+        },
+        {
+          "description": "Operator approved the patch.",
+          "type": "string",
+          "const": "approved"
+        },
+        {
+          "description": "Patch was applied to a roadmap or follow-up run.",
+          "type": "string",
+          "const": "applied"
+        },
+        {
+          "description": "Operator rejected the patch.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "Patch was superseded by a later draft.",
+          "type": "string",
+          "const": "superseded"
+        }
+      ]
+    }
+  },
+  "$id": "https://surge.dev/schema/v1/roadmap-patch.json",
+  "x-surge-schema-version": 1
+}

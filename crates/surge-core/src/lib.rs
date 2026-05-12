@@ -89,8 +89,9 @@ pub use archetype::{ArchetypeMetadata, ArchetypeName};
 pub use artifact_contract::{
     ARTIFACT_SCHEMA_VERSION, ArtifactContract, ArtifactContractRef, ArtifactDiagnosticCode,
     ArtifactDiagnosticSeverity, ArtifactFormat, ArtifactKind, ArtifactValidationDiagnostic,
-    ArtifactValidationError, ArtifactValidationReport, SchemaVersionOwner, all_contracts,
-    contract_for, validate_artifact, validate_artifact_path, validate_artifact_text,
+    ArtifactValidationError, ArtifactValidationReport, ContractSummary, SchemaVersionOwner,
+    all_contracts, contract_for, contract_summary, json_schema_for, markdown_outline,
+    validate_artifact, validate_artifact_path, validate_artifact_text,
     validate_roadmap_patch_text_with_context,
 };
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
