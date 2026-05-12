@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A run is a `flow.toml` workflow graph executed by a long-running daemon, with ACP-based agent integration, event sourcing, and Telegram-first approvals. See `.ai-factory/DESCRIPTION.md` for the full summary and `docs/ARCHITECTURE.md` for the canonical architecture.
+Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A run is a `flow.toml` workflow graph executed by a long-running daemon, with ACP-based agent integration (see [ADR-0006](docs/adr/0006-acp-only-transport.md)), event sourcing, and Telegram-first approvals. See `.ai-factory/DESCRIPTION.md` for the full summary and `docs/ARCHITECTURE.md` for the canonical architecture.
 
 ## Tech Stack
 
@@ -104,6 +104,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Bootstrap | `docs/bootstrap.md` | Adaptive prompt → description → roadmap → flow generation, approvals, archetypes, template skip. |
 | Workflow | `docs/workflow.md` | AFK workflow, flow model, intake sources, run lifecycle. |
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
+| Decisions (ADRs) | `docs/adr/` | Architectural decision records with rationale, alternatives rejected, and revisit triggers. |
 | Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
