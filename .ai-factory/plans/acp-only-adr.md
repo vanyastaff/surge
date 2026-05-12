@@ -270,13 +270,13 @@ Do not touch line 13 (Agent protocol entry), line 38 (crate-tree comment), or li
 Final cross-reference sweep, then hand off to `/aif-docs`:
 
 1. **Grep — bare declaration is gone everywhere except RESEARCH.md.** Run:
-   ```
+   ```text
    Grep "ACP is the ONLY|ACP is the only|only way to communicate"
    ```
    Expected: only `.ai-factory/RESEARCH.md` hits (historical record). Zero hits in `CLAUDE.md`, `docs/`, `AGENTS.md`, `README.md`, `.ai-factory/{DESCRIPTION,ARCHITECTURE}.md`.
 
 2. **Grep — ADR is referenced from every primary surface.** Run:
-   ```
+   ```text
    Grep "0006-acp-only-transport"
    ```
    Expected: at least 6 hits — the ADR file itself, `CLAUDE.md`, `.ai-factory/DESCRIPTION.md`, `docs/ARCHITECTURE.md`, `README.md`, `AGENTS.md`.
@@ -293,7 +293,7 @@ Final cross-reference sweep, then hand off to `/aif-docs`:
 
 ## Task Graph
 
-```
+```text
    [1] Draft ADR-0006
         |
         +-- [2] Update CLAUDE.md            \
@@ -313,7 +313,7 @@ Tasks 2/3/4/6/7 are independent (disjoint files) and can run in parallel after T
 
 Single conventional commit at the end (7 tasks, but all changes are tightly coupled documentation around one ADR — splitting would just be noise).
 
-```
+```text
 docs: add ADR-0006 for ACP-only agent transport
 
 Replaces the bare "ACP is the ONLY way" declaration in CLAUDE.md with
@@ -341,12 +341,12 @@ After this plan is implemented and the docs gate is green:
 
 To start implementation:
 
-```
+```text
 /aif-implement
 ```
 
 To view tasks:
 
-```
+```text
 TaskList
 ```
