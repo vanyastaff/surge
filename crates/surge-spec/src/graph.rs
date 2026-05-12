@@ -131,37 +131,31 @@ impl DependencyGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::id::SpecId;
     use surge_core::spec::{Complexity, Subtask};
 
     fn make_subtask(title: &str, depends_on: Vec<SubtaskId>) -> Subtask {
-        Subtask {
-            id: SubtaskId::new(),
-            title: title.to_string(),
-            description: format!("Do {title}"),
-            complexity: Complexity::Simple,
-            files: vec![],
-            acceptance_criteria: vec![],
-            depends_on,
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        }
+        let mut subtask = Subtask::new(title, format!("Do {title}"), Complexity::Simple);
+        subtask.depends_on = depends_on;
+        subtask
+    }
+
+    fn make_spec(title: &str, complexity: Complexity, subtasks: Vec<Subtask>) -> Spec {
+        let mut spec = Spec::new(title, title, complexity);
+        spec.subtasks = subtasks;
+        spec
     }
 
     #[test]
     fn test_no_dependencies_single_batch() {
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Parallel".to_string(),
-            description: "All parallel".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![
+        let spec = make_spec(
+            "Parallel",
+            Complexity::Simple,
+            vec![
                 make_subtask("A", vec![]),
                 make_subtask("B", vec![]),
                 make_subtask("C", vec![]),
             ],
-        };
+        );
 
         let graph = DependencyGraph::from_spec(&spec).unwrap();
         let batches = graph.topological_batches().unwrap();
@@ -175,13 +169,7 @@ mod tests {
         let b = make_subtask("B", vec![a.id]);
         let c = make_subtask("C", vec![b.id]);
 
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Linear".to_string(),
-            description: "Linear chain".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![a, b, c],
-        };
+        let spec = make_spec("Linear", Complexity::Simple, vec![a, b, c]);
 
         let graph = DependencyGraph::from_spec(&spec).unwrap();
         let batches = graph.topological_batches().unwrap();
@@ -198,13 +186,7 @@ mod tests {
         let c = make_subtask("C", vec![a.id]);
         let d = make_subtask("D", vec![b.id, c.id]);
 
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Diamond".to_string(),
-            description: "Diamond".to_string(),
-            complexity: Complexity::Standard,
-            subtasks: vec![a, b, c, d],
-        };
+        let spec = make_spec("Diamond", Complexity::Standard, vec![a, b, c, d]);
 
         let graph = DependencyGraph::from_spec(&spec).unwrap();
         let batches = graph.topological_batches().unwrap();
@@ -222,13 +204,7 @@ mod tests {
         let a_id = a.id;
         let b_id = b.id;
 
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Order".to_string(),
-            description: "Order test".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![a, b],
-        };
+        let spec = make_spec("Order", Complexity::Simple, vec![a, b]);
 
         let graph = DependencyGraph::from_spec(&spec).unwrap();
         let order = graph.topological_order().unwrap();
@@ -242,13 +218,7 @@ mod tests {
         let a = make_subtask("Setup", vec![]);
         let b = make_subtask("Implement", vec![a.id]);
 
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Test".to_string(),
-            description: "Test".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![a, b],
-        };
+        let spec = make_spec("Test", Complexity::Simple, vec![a, b]);
 
         let graph = DependencyGraph::from_spec(&spec).unwrap();
         let ascii = graph.to_ascii(&spec);

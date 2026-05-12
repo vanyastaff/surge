@@ -143,37 +143,27 @@ pub fn build_qa_prompt(spec: &Spec, diff: &str, spec_dir: Option<&Path>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::id::{SpecId, SubtaskId};
     use surge_core::spec::{AcceptanceCriteria, Complexity};
 
     fn sample_spec() -> Spec {
-        Spec {
-            id: SpecId::new(),
-            title: "Add logging".to_string(),
-            description: "Add structured logging to the service".to_string(),
-            complexity: Complexity::Standard,
-            subtasks: vec![Subtask {
-                id: SubtaskId::new(),
-                title: "Add tracing crate".to_string(),
-                description: "Wire up the tracing crate with JSON output".to_string(),
-                complexity: Complexity::Simple,
-                files: vec!["src/main.rs".to_string(), "Cargo.toml".to_string()],
-                acceptance_criteria: vec![
-                    AcceptanceCriteria {
-                        description: "tracing subscriber is initialized".to_string(),
-                        met: false,
-                    },
-                    AcceptanceCriteria {
-                        description: "logs are output in JSON format".to_string(),
-                        met: false,
-                    },
-                ],
-                depends_on: vec![],
-                story_file: None,
-                agent: None,
-                execution: surge_core::spec::SubtaskExecution::default(),
-            }],
-        }
+        let mut subtask = Subtask::new(
+            "Add tracing crate",
+            "Wire up the tracing crate with JSON output",
+            Complexity::Simple,
+        );
+        subtask.files = vec!["src/main.rs".to_string(), "Cargo.toml".to_string()];
+        subtask.acceptance_criteria = vec![
+            AcceptanceCriteria::new("tracing subscriber is initialized"),
+            AcceptanceCriteria::new("logs are output in JSON format"),
+        ];
+
+        let mut spec = Spec::new(
+            "Add logging",
+            "Add structured logging to the service",
+            Complexity::Standard,
+        );
+        spec.subtasks = vec![subtask];
+        spec
     }
 
     #[test]

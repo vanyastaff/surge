@@ -22,6 +22,7 @@ pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 /// Role artifact families that Surge validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ArtifactKind {
     /// Bootstrap description artifact.
     Description,
@@ -104,6 +105,7 @@ impl FromStr for ArtifactKind {
 /// Primary serialization format for an artifact contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ArtifactFormat {
     /// Markdown with required headings and optional structured sections.
     Markdown,
@@ -116,6 +118,7 @@ pub enum ArtifactFormat {
 /// Component that owns the schema-version field for a contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SchemaVersionOwner {
     /// Generic artifact contract version from [`ARTIFACT_SCHEMA_VERSION`].
     ArtifactContract,
@@ -127,6 +130,7 @@ pub enum SchemaVersionOwner {
 
 /// Stable reference embedded in profiles and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactContractRef {
     /// Artifact family.
     pub kind: ArtifactKind,
@@ -148,6 +152,7 @@ impl ArtifactContractRef {
 /// Severity for artifact validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ArtifactDiagnosticSeverity {
     /// Validation cannot accept the artifact.
     Error,
@@ -158,6 +163,7 @@ pub enum ArtifactDiagnosticSeverity {
 /// Stable diagnostic code emitted by artifact validators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ArtifactDiagnosticCode {
     /// Artifact path/name does not match the selected contract.
     InvalidArtifactPath,
@@ -220,6 +226,7 @@ impl fmt::Display for ArtifactDiagnosticCode {
 
 /// One validation diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactValidationDiagnostic {
     /// Stable machine-readable code.
     pub code: ArtifactDiagnosticCode,
@@ -272,6 +279,7 @@ impl ArtifactValidationDiagnostic {
 
 /// Validation report for one artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactValidationReport {
     /// Artifact kind selected by the caller.
     pub kind: ArtifactKind,
@@ -347,6 +355,7 @@ pub struct ArtifactValidationError {
 
 /// Canonical metadata for one artifact family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ArtifactContract {
     /// Artifact family.
     pub kind: ArtifactKind,
