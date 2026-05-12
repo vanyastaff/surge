@@ -136,18 +136,142 @@ pub(super) fn require_markdown_sections(
     }
 }
 
+/// Minimum length (in characters) for an acceptance criterion body.
+const ACCEPTANCE_CRITERION_MIN_LENGTH: usize = 8;
+
+/// Lower-cased tokens treated as placeholder acceptance criteria.
+const ACCEPTANCE_CRITERION_PLACEHOLDERS: &[&str] = &[
+    "tbd",
+    "todo",
+    "?",
+    "??",
+    "???",
+    "n/a",
+    "-",
+    "tba",
+    "пока нет",
+    "wip",
+];
+
 pub(super) fn require_acceptance_criteria(report: &mut ArtifactValidationReport, content: &str) {
-    if has_markdown_heading(content, "Acceptance Criteria")
-        || content.to_ascii_lowercase().contains("acceptance criteria")
-    {
+    let bullets = extract_acceptance_criteria_bullets(content);
+    let Some(bullets) = bullets else {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("Acceptance Criteria".to_string()),
+            "artifact must include acceptance criteria",
+        ));
+        return;
+    };
+
+    if bullets.is_empty() {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("Acceptance Criteria".to_string()),
+            "acceptance criteria section has no bullets",
+        ));
         return;
     }
-    report.push(ArtifactValidationDiagnostic::error(
-        report.kind,
-        ArtifactDiagnosticCode::MissingAcceptanceCriteria,
-        Some("Acceptance Criteria".to_string()),
-        "artifact must include acceptance criteria",
-    ));
+
+    for (index, bullet) in bullets.iter().enumerate() {
+        validate_acceptance_criterion_text(report, format!("Acceptance Criteria[{index}]"), bullet);
+    }
+}
+
+fn extract_acceptance_criteria_bullets(content: &str) -> Option<Vec<&str>> {
+    let mut in_section = false;
+    let mut bullets = Vec::new();
+    for line in content.lines() {
+        let trimmed_start = line.trim_start();
+        if trimmed_start.starts_with('#') {
+            if in_section {
+                return Some(bullets);
+            }
+            let heading = trimmed_start.trim_start_matches('#').trim();
+            if strip_trailing_heading_marker(heading).eq_ignore_ascii_case("acceptance criteria") {
+                in_section = true;
+            }
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(bullet) = strip_bullet_marker(trimmed_start) {
+            bullets.push(bullet);
+        }
+    }
+    if in_section { Some(bullets) } else { None }
+}
+
+fn strip_bullet_marker(line: &str) -> Option<&str> {
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            return Some(rest);
+        }
+    }
+    if matches!(line, "-" | "*" | "+") {
+        return Some("");
+    }
+    let digit_end = line
+        .char_indices()
+        .find(|(_, ch)| !ch.is_ascii_digit())
+        .map_or(line.len(), |(index, _)| index);
+    if digit_end > 0 {
+        let tail = &line[digit_end..];
+        if let Some(rest) = tail.strip_prefix(". ") {
+            return Some(rest);
+        }
+        if tail == "." {
+            return Some("");
+        }
+    }
+    None
+}
+
+pub(super) fn validate_acceptance_criterion_text(
+    report: &mut ArtifactValidationReport,
+    location: String,
+    raw: &str,
+) {
+    let trimmed = raw.trim();
+    let body = strip_optional_checkbox(trimmed).trim();
+
+    if body.is_empty() || is_placeholder_criterion(body) {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
+            Some(location),
+            "acceptance criterion is empty or placeholder",
+        ));
+        return;
+    }
+
+    if body.chars().count() < ACCEPTANCE_CRITERION_MIN_LENGTH {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
+            Some(location),
+            "acceptance criterion is too short to be testable",
+        ));
+    }
+}
+
+fn strip_optional_checkbox(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    for marker in ["[ ]", "[x]", "[X]"] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            return rest;
+        }
+    }
+    trimmed
+}
+
+fn is_placeholder_criterion(text: &str) -> bool {
+    ACCEPTANCE_CRITERION_PLACEHOLDERS
+        .iter()
+        .any(|placeholder| text.eq_ignore_ascii_case(placeholder))
 }
 
 fn has_markdown_heading(content: &str, expected: &str) -> bool {

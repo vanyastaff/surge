@@ -35,6 +35,8 @@ pub enum ArtifactDiagnosticCode {
     InvalidFrontmatter,
     /// Acceptance criteria are missing.
     MissingAcceptanceCriteria,
+    /// An acceptance criterion is empty, a placeholder, or too short to be testable.
+    EmptyAcceptanceCriteria,
     /// Artifact kind is not supported by this validator.
     UnsupportedArtifactKind,
     /// Flow graph parsed as TOML but failed engine-level graph validation.
@@ -62,6 +64,7 @@ impl ArtifactDiagnosticCode {
             Self::InvalidToml => "invalid_toml",
             Self::InvalidFrontmatter => "invalid_frontmatter",
             Self::MissingAcceptanceCriteria => "missing_acceptance_criteria",
+            Self::EmptyAcceptanceCriteria => "empty_acceptance_criteria",
             Self::UnsupportedArtifactKind => "unsupported_artifact_kind",
             Self::GraphValidationFailed => "graph_validation_failed",
             Self::GraphParseFailed => "graph_parse_failed",
