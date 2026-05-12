@@ -501,6 +501,10 @@ fn sandbox_mode_value(mode: SandboxMode) -> &'static str {
         SandboxMode::WorkspaceNetwork => "workspace-network",
         SandboxMode::FullAccess => "full-access",
         SandboxMode::Custom => "custom",
+        // SandboxMode is `#[non_exhaustive]`; surface unknown variants as a
+        // safe default rather than panicking. New variants need an explicit
+        // arm before they can be written to surge.toml.
+        _ => "workspace-write",
     }
 }
 

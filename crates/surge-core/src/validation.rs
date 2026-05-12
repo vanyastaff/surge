@@ -108,6 +108,32 @@ pub enum ValidationErrorKind {
         node: NodeKey,
         agent_id: String,
     },
+    /// An `Agent` node's `sandbox_override` declared `mode = Custom` but every
+    /// allowlist was empty — there is no signal for what the sandbox should
+    /// permit.
+    SandboxCustomEmpty {
+        node: NodeKey,
+    },
+    /// An `Agent` node's `sandbox_override.writable_roots` contained a `..`
+    /// segment, which would let the runtime resolve outside the intended
+    /// root.
+    SandboxWritableRootEscape {
+        node: NodeKey,
+        path: String,
+    },
+    /// An `Agent` node's `sandbox_override.network_allowlist` contained an
+    /// entry that does not parse as a host or IP pattern.
+    SandboxNetworkPatternInvalid {
+        node: NodeKey,
+        entry: String,
+    },
+    /// An `Agent` node's `sandbox_override.shell_allowlist` contained shell
+    /// metacharacters that would let the agent chain commands past the
+    /// allowlist.
+    SandboxShellMetacharacters {
+        node: NodeKey,
+        entry: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,7 +186,11 @@ impl ValidationErrorKind {
             | Self::McpCommandPathUnsafe { .. }
             | Self::ProfileNotFound { .. }
             | Self::TemplateNotFound { .. }
-            | Self::NamedAgentNotFound { .. } => Severity::Error,
+            | Self::NamedAgentNotFound { .. }
+            | Self::SandboxCustomEmpty { .. }
+            | Self::SandboxWritableRootEscape { .. }
+            | Self::SandboxNetworkPatternInvalid { .. }
+            | Self::SandboxShellMetacharacters { .. } => Severity::Error,
         }
     }
 }
@@ -219,6 +249,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w2_orphan_subgraphs(graph, &mut findings);
     warning_w3_notify_outcomes(graph, &mut findings);
     validate_loop_static_cap(graph, &mut findings);
+    validate_sandbox_custom_on_agents(graph, &mut findings);
 
     let has_error = findings
         .iter()
@@ -1002,6 +1033,93 @@ fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
                     ),
                 });
             }
+        }
+    }
+}
+
+/// Walk every `Agent` node (root graph + subgraphs) and, when the node carries
+/// a `sandbox_override` in `Custom` mode, run [`crate::sandbox::validate_custom`].
+/// Each violation surfaces as a per-node [`ValidationError`].
+fn validate_sandbox_custom_on_agents(graph: &Graph, out: &mut Vec<ValidationError>) {
+    use crate::sandbox::{SandboxValidationError, validate_custom};
+
+    let push = |node: &crate::node::Node, errs: Vec<SandboxValidationError>, out: &mut Vec<ValidationError>| {
+        for e in errs {
+            let loc = ErrorLocation::Node {
+                id: node.id.clone(),
+            };
+            let (kind, message) = match e {
+                SandboxValidationError::CustomAllAllowlistsEmpty => (
+                    ValidationErrorKind::SandboxCustomEmpty {
+                        node: node.id.clone(),
+                    },
+                    format!(
+                        "agent node `{}` declared `sandbox.mode = custom` but every \
+                         allowlist (writable_roots, network_allowlist, shell_allowlist) is empty",
+                        node.id.as_str(),
+                    ),
+                ),
+                SandboxValidationError::WritableRootEscape { path } => (
+                    ValidationErrorKind::SandboxWritableRootEscape {
+                        node: node.id.clone(),
+                        path: path.clone(),
+                    },
+                    format!(
+                        "agent node `{}` writable_root `{}` contains `..` path segments",
+                        node.id.as_str(),
+                        path,
+                    ),
+                ),
+                SandboxValidationError::NetworkPatternInvalid { entry } => (
+                    ValidationErrorKind::SandboxNetworkPatternInvalid {
+                        node: node.id.clone(),
+                        entry: entry.clone(),
+                    },
+                    format!(
+                        "agent node `{}` network_allowlist entry `{}` is not a valid host/IP pattern",
+                        node.id.as_str(),
+                        entry,
+                    ),
+                ),
+                SandboxValidationError::ShellMetacharacters { entry } => (
+                    ValidationErrorKind::SandboxShellMetacharacters {
+                        node: node.id.clone(),
+                        entry: entry.clone(),
+                    },
+                    format!(
+                        "agent node `{}` shell_allowlist entry `{}` contains shell metacharacters",
+                        node.id.as_str(),
+                        entry,
+                    ),
+                ),
+            };
+            out.push(ValidationError {
+                kind,
+                location: loc,
+                message,
+            });
+        }
+    };
+
+    let walk_node = |node: &crate::node::Node, out: &mut Vec<ValidationError>| {
+        let NodeConfig::Agent(cfg) = &node.config else {
+            return;
+        };
+        let Some(sandbox) = cfg.sandbox_override.as_ref() else {
+            return;
+        };
+        let errs = validate_custom(sandbox);
+        if !errs.is_empty() {
+            push(node, errs, out);
+        }
+    };
+
+    for node in graph.nodes.values() {
+        walk_node(node, out);
+    }
+    for sg in graph.subgraphs.values() {
+        for node in sg.nodes.values() {
+            walk_node(node, out);
         }
     }
 }

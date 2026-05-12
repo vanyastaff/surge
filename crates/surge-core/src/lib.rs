@@ -48,12 +48,15 @@ pub mod mcp_config;
 pub mod migrations;
 pub mod node;
 pub mod notify_config;
+pub mod doctor;
 pub mod predicate;
 pub mod profile;
 pub mod run_event;
 pub mod run_state;
 pub mod run_status;
+pub mod runtime;
 pub mod sandbox;
+pub mod sandbox_matrix;
 pub mod subgraph_config;
 pub mod terminal_config;
 pub mod validation;
@@ -117,6 +120,12 @@ pub use run_event::{
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
 pub use run_status::{ParseRunStatusError, RunStatus};
+pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
+pub use runtime::{
+    RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy,
+};
+pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};
+pub use sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow, default_matrix};
 pub use validation::{
     NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind, validate,
     validate_with_resolver,

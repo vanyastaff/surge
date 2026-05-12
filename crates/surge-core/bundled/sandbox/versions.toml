@@ -1,0 +1,28 @@
+# Minimum runtime versions surge has tested against.
+#
+# Mismatch is **warn-only** at run start — surge does not refuse to launch a
+# stale binary; the engine emits a `RuntimeVersionWarning` event so the user
+# (or `surge doctor`) can decide whether to upgrade.
+#
+# Adding a new entry requires:
+#   - the runtime variant exists in `surge-core::runtime::RuntimeKind`
+#   - the note explains why this floor was chosen (typically an ACP-protocol
+#     bump, a sandbox-flag change, or an explicit upstream-tested matrix)
+#
+# Declared-unverified runtimes (Cursor / Copilot / OpenCode / Goose) omit a
+# policy entry until surge has tested at least one version against them.
+
+[[policies]]
+runtime = "claude-code"
+min_version = ">=2.0.0"
+note = "Claude Code 2.x is the first release with stable ACP + per-tool allow/deny flags."
+
+[[policies]]
+runtime = "codex"
+min_version = ">=0.5.0"
+note = "Codex 0.5.0 stabilized the --sandbox flag set (read-only / workspace-write / workspace+network / danger-full-access)."
+
+[[policies]]
+runtime = "gemini"
+min_version = ">=0.4.0"
+note = "Gemini CLI 0.4.0 exposes the docker-sandbox flag surge maps SandboxMode::FullAccess against."

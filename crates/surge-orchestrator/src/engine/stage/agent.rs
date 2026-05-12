@@ -1346,14 +1346,10 @@ fn sandbox_allows_mcp_tool(
     _tool: &str,
 ) -> bool {
     use surge_core::sandbox::SandboxMode;
-    match sandbox.mode {
-        SandboxMode::ReadOnly => false,
-        // All other modes allow MCP — refine in M4 when sandbox enforcement lands.
-        SandboxMode::WorkspaceWrite
-        | SandboxMode::WorkspaceNetwork
-        | SandboxMode::FullAccess
-        | SandboxMode::Custom => true,
-    }
+    // SandboxMode is `#[non_exhaustive]`; every variant except ReadOnly currently
+    // allows MCP. Default new variants to permissive — sandbox enforcement
+    // landing in later milestone tasks will tighten this.
+    !matches!(sandbox.mode, SandboxMode::ReadOnly)
 }
 
 #[cfg(test)]
