@@ -930,7 +930,7 @@ fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, value: &
                     report.kind,
                     ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
                     Some(location),
-                    "acceptance criterion is empty or placeholder",
+                    "acceptance criterion must be a string or a table with a `description` field",
                 ));
                 continue;
             };
@@ -2001,6 +2001,37 @@ subtasks = [
         );
 
         assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn rejects_spec_toml_criterion_of_wrong_shape_with_shape_message() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = [42] },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        let shape_diag = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                    && diagnostic.location.as_deref()
+                        == Some("spec.subtasks[0].acceptance_criteria[0]")
+            })
+            .expect("expected a shape diagnostic for the integer criterion");
+        assert!(
+            shape_diag.message.contains("string") && shape_diag.message.contains("description"),
+            "diagnostic message should explain the expected criterion shape, got: {:?}",
+            shape_diag.message,
+        );
     }
 
     #[test]
