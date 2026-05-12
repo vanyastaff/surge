@@ -10,6 +10,7 @@ use crate::id::RunId;
 use crate::roadmap::{
     RoadmapArtifact, RoadmapDependency, RoadmapMilestone, RoadmapStatus, RoadmapTask,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -76,6 +77,33 @@ impl<'de> Deserialize<'de> for RoadmapPatchId {
     }
 }
 
+impl schemars::JsonSchema for RoadmapPatchId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RoadmapPatchId")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("surge::roadmap_patch::RoadmapPatchId")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // `RoadmapPatchId::new` trims surrounding whitespace before
+        // validating, so inputs such as `"  rpatch-abc  "` are accepted
+        // and normalized to `"rpatch-abc"`. The pattern below mirrors that
+        // exactly: optional leading/trailing whitespace, then a non-empty
+        // canonical core of ASCII alphanumeric plus `-`, `_`, `.`. The
+        // canonical/serialized form never carries whitespace, but external
+        // validators should still accept the same inputs Surge does on
+        // deserialization.
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Stable roadmap patch identifier. Canonical form: ASCII alphanumeric plus `-`, `_`, `.` (non-empty). Optional surrounding whitespace is accepted on parse and stripped; serialized output never carries whitespace.",
+            "minLength": 1,
+            "pattern": r"^\s*[A-Za-z0-9._-]+\s*$"
+        })
+    }
+}
+
 /// Error returned when a roadmap patch ID is malformed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RoadmapPatchIdError {
@@ -91,7 +119,11 @@ pub enum RoadmapPatchIdError {
 }
 
 /// Machine-readable roadmap amendment artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(
+    title = "RoadmapPatch",
+    description = "Surge `roadmap-patch.toml` artifact: an ordered sequence of operations amending an existing roadmap, plus dependencies, conflicts, and lifecycle status."
+)]
 pub struct RoadmapPatch {
     /// Artifact schema version.
     #[serde(default = "default_schema_version")]
@@ -783,7 +815,7 @@ fn dependency_dfs_has_cycle<'a>(
 }
 
 /// Target amended by a roadmap patch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RoadmapPatchTarget {
     /// Project-level roadmap file.
@@ -808,7 +840,7 @@ pub enum RoadmapPatchTarget {
 }
 
 /// Active-run pickup policy for a patch target.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivePickupPolicy {
     /// Runner may pick up new work at a safe loop boundary.
@@ -821,7 +853,7 @@ pub enum ActivePickupPolicy {
 }
 
 /// Insertion point for append/insert operations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InsertionPoint {
     /// Append a milestone to the end of the roadmap.
@@ -877,7 +909,7 @@ impl InsertionPoint {
 }
 
 /// One operation inside a roadmap patch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum RoadmapPatchOperation {
     /// Insert a new milestone.
@@ -932,7 +964,7 @@ impl RoadmapPatchOperation {
 }
 
 /// Reference to a roadmap milestone or task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RoadmapItemRef {
     /// Milestone reference.
@@ -962,7 +994,7 @@ impl RoadmapItemRef {
 }
 
 /// Replacement item for a draft-only roadmap item.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RoadmapPatchItem {
     /// Replacement milestone.
@@ -978,7 +1010,7 @@ pub enum RoadmapPatchItem {
 }
 
 /// Dependency edge introduced by a patch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapPatchDependency {
     /// Source item that must complete first.
     pub from: RoadmapItemRef,
@@ -1023,7 +1055,7 @@ impl RoadmapPatchDependency {
 }
 
 /// Conflict metadata attached to a roadmap patch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapPatchConflict {
     /// Stable conflict code.
     pub code: RoadmapPatchConflictCode,
@@ -1060,7 +1092,7 @@ impl RoadmapPatchConflict {
 }
 
 /// Stable conflict classes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoadmapPatchConflictCode {
     /// Referenced item could not be found.
@@ -1078,7 +1110,7 @@ pub enum RoadmapPatchConflictCode {
 }
 
 /// Operator choice for resolving an amendment conflict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorConflictChoice {
     /// Defer the new work to the next safe milestone.
@@ -1115,7 +1147,7 @@ pub fn conflict_choices_for_code(code: RoadmapPatchConflictCode) -> Vec<Operator
 }
 
 /// Lifecycle state for a roadmap patch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoadmapPatchStatus {
     /// Patch has been drafted by Feature Planner.
