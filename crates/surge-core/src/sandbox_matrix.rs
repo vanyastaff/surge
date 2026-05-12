@@ -59,6 +59,52 @@ pub struct RuntimeSandboxRow {
     pub note: String,
 }
 
+impl RuntimeSandboxRow {
+    /// Constructor for tests and callers outside this crate.
+    ///
+    /// Struct-literal syntax does not compile across crate boundaries because
+    /// the type is `#[non_exhaustive]`; this builder fills the optional
+    /// fields with their defaults and lets the caller set the required ones
+    /// inline.
+    #[must_use]
+    pub fn new(runtime: RuntimeKind, mode: SandboxMode) -> Self {
+        Self {
+            runtime,
+            mode,
+            flags: Vec::new(),
+            env: BTreeMap::new(),
+            verified: false,
+            min_version: None,
+            note: String::new(),
+        }
+    }
+
+    /// Builder: replace `flags`.
+    #[must_use]
+    pub fn with_flags<I, S>(mut self, flags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.flags = flags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Builder: mark as verified.
+    #[must_use]
+    pub fn verified(mut self) -> Self {
+        self.verified = true;
+        self
+    }
+
+    /// Builder: attach an explanatory note.
+    #[must_use]
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = note.into();
+        self
+    }
+}
+
 /// In-memory representation of the runtime × mode sandbox table.
 ///
 /// Construct via [`default_matrix`] (loads the bundled TOML) or

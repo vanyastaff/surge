@@ -23,90 +23,105 @@
 [[rows]]
 runtime = "claude-code"
 mode = "read-only"
-flags = []
-verified = false
-note = "Pending Task 4 — Claude Code allow-tool / deny-tool flag mapping."
+flags = ["--allowedTools", "Read,Glob,Grep,LS", "--disallowedTools", "Write,Edit,Bash,WebFetch,WebSearch"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code read-only: filesystem read tools allowed, mutating tools and network denied."
 
 [[rows]]
 runtime = "claude-code"
 mode = "workspace-write"
-flags = []
-verified = false
-note = "Pending Task 4 — Claude Code allow-tool / deny-tool flag mapping (workspace-write is the surge default mode)."
+flags = ["--allowedTools", "Read,Write,Edit,Glob,Grep,LS", "--disallowedTools", "Bash,WebFetch,WebSearch"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code workspace-write (surge default): filesystem read+write, shell and network denied."
 
 [[rows]]
 runtime = "claude-code"
 mode = "workspace-network"
-flags = []
-verified = false
-note = "Pending Task 4 — Claude Code allow-tool / deny-tool flag mapping with network egress."
+flags = ["--allowedTools", "Read,Write,Edit,Glob,Grep,LS,WebFetch,WebSearch", "--disallowedTools", "Bash"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code workspace+network: filesystem write plus web fetch/search; shell still denied."
 
 [[rows]]
 runtime = "claude-code"
 mode = "full-access"
-flags = []
-verified = false
-note = "Pending Task 4 — Claude Code --dangerously-skip-permissions opt-in."
+flags = ["--dangerously-skip-permissions"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code full-access: skip all permission prompts. Surge logs `warn` whenever this row is resolved."
 
 # ── Codex CLI ────────────────────────────────────────────────────────────────
 
 [[rows]]
 runtime = "codex"
 mode = "read-only"
-flags = []
-verified = false
-note = "Pending Task 5 — Codex --sandbox=read-only mapping."
+flags = ["--sandbox=read-only"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI read-only sandbox: filesystem read access, no writes, no shell, no network."
 
 [[rows]]
 runtime = "codex"
 mode = "workspace-write"
-flags = []
-verified = false
-note = "Pending Task 5 — Codex --sandbox=workspace-write mapping."
+flags = ["--sandbox=workspace-write"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI workspace-write sandbox: writes within workspace, no network."
 
 [[rows]]
 runtime = "codex"
 mode = "workspace-network"
-flags = []
-verified = false
-note = "Pending Task 5 — Codex --sandbox=workspace+network mapping."
+flags = ["--sandbox=workspace+network"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI workspace+network sandbox: writes within workspace plus network egress."
 
 [[rows]]
 runtime = "codex"
 mode = "full-access"
-flags = []
-verified = false
-note = "Pending Task 5 — Codex --sandbox=danger-full-access mapping."
+flags = ["--sandbox=danger-full-access"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI danger-full-access: no sandbox enforcement. Surge logs `warn` whenever this row is resolved."
 
 # ── Gemini CLI ───────────────────────────────────────────────────────────────
+# Gemini CLI's native sandbox is Docker/Podman-only. Surge cannot honour the
+# read-only / workspace-write / workspace-network tiers against a non-Docker
+# Gemini launch — those rows stay declared-unverified so the resolver refuses
+# to start a non-doctor run rather than silently downgrade. Only `full-access`
+# is verified: it maps to Gemini's `--yolo` flag (skip approvals; the Docker
+# sandbox itself is orthogonal).
 
 [[rows]]
 runtime = "gemini"
 mode = "read-only"
 flags = []
 verified = false
-note = "Pending Task 5 — Gemini native sandbox is docker-only; read-only mapping is a documented gap (https://github.com/google-gemini/gemini-cli/issues — link to be updated when verified)."
+note = "Gemini CLI native sandbox is Docker/Podman-only — read-only mapping requires the user to opt into Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
 
 [[rows]]
 runtime = "gemini"
 mode = "workspace-write"
 flags = []
 verified = false
-note = "Pending Task 5 — Gemini docker-sandbox alignment with workspace-write."
+note = "Gemini CLI native sandbox is Docker/Podman-only — workspace-write mapping requires the user to opt into Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
 
 [[rows]]
 runtime = "gemini"
 mode = "workspace-network"
 flags = []
 verified = false
-note = "Pending Task 5 — Gemini docker-sandbox with network egress."
+note = "Gemini CLI native sandbox is Docker/Podman-only — workspace+network mapping requires Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
 
 [[rows]]
 runtime = "gemini"
 mode = "full-access"
-flags = []
-verified = false
-note = "Pending Task 5 — Gemini full-access (no sandbox flag)."
+flags = ["--yolo"]
+verified = true
+min_version = ">=0.4.0"
+note = "Gemini CLI full-access: --yolo skips approval prompts. Surge logs `warn` whenever this row is resolved. Docker sandboxing is orthogonal and configured by the user."
 
 # ── Cursor CLI ───────────────────────────────────────────────────────────────
 

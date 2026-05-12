@@ -89,7 +89,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
 
 ### Phase 2: ACP adapter — per-runtime mapping
 
-- [ ] **Task 4: Replace `AlwaysAllowSandbox` stub with matrix-driven launch-flag resolver for Claude Code.**
+- [x] **Task 4: Replace `AlwaysAllowSandbox` stub with matrix-driven launch-flag resolver for Claude Code.**
   - New file `crates/surge-acp/src/bridge/sandbox_resolver.rs`: `pub fn resolve_launch_flags(runtime: RuntimeKind, cfg: &SandboxConfig, matrix: &RuntimeSandboxMatrix, ctx: ResolveContext) -> Result<Vec<String>, SandboxResolveError>`. `ResolveContext` distinguishes `Run` from `Doctor` callers so unverified rows are allowed under doctor but refused in production runs.
   - `SandboxResolveError` is `#[non_exhaustive]` with variants `UnsupportedCombo { runtime, mode }`, `UnverifiedRuntime { runtime }`, `CustomInvalid(SandboxValidationError)`.
   - For `RuntimeKind::ClaudeCode`: emit `--allow-tool=*` / `--deny-tool=*` style flags per mode (read-only ⇒ deny-write; workspace-write ⇒ allow-fs-write deny-network; workspace+network ⇒ allow-fs-write allow-network; full-access ⇒ `--dangerously-allow-all` plus a `warn!` log on resolve).
@@ -98,7 +98,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Logging:** `tracing::debug!(target: "surge_acp.sandbox", runtime = ?runtime, mode = ?cfg.mode, flags = ?flags, "resolved sandbox launch flags");` on success. `tracing::warn!` once when emitting full-access flags. `tracing::error!(target: "surge_acp.sandbox", error = ?err, "sandbox resolve failed")` once in the error branch.
   - **Tests:** table-driven unit tests with `insta` snapshot per `(runtime, mode)` pair for Claude Code; one error-path test per `SandboxResolveError` variant.
 
-- [ ] **Task 5: Add matrix rows + resolver branches for Codex CLI and Gemini CLI (verified runtimes).**
+- [x] **Task 5: Add matrix rows + resolver branches for Codex CLI and Gemini CLI (verified runtimes).**
   - Codex: map to `--sandbox=read-only` / `--sandbox=workspace-write` / `--sandbox=workspace+network` / `--sandbox=danger-full-access` (existing Codex sandbox model). Gemini: map to Gemini's native sandbox flags (`--sandbox=docker` is the only "real" mode it supports — for `read-only`/`workspace-write` emit a documented downgrade refusal *only when* the user did not set `mode=full-access`; full-access maps to no sandbox flag).
   - Encode the Gemini limitation as an explicit unsupported row in the bundled matrix (`flags = []`, `verified = false`, note explaining the gap) — refuses to run rather than silently downgrading.
   - **Files:** `crates/surge-core/bundled/sandbox/matrix.toml` (rows), `crates/surge-acp/src/bridge/sandbox_resolver.rs` (branches).
@@ -106,7 +106,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** snapshot per pair; one negative test per refused combo verifying `SandboxResolveError::UnsupportedCombo { runtime, mode }`.
   - **Depends on Task 4.**
 
-- [ ] **Task 6: Declare (unverified) matrix rows for Cursor CLI, Copilot CLI, OpenCode, Goose.**
+- [x] **Task 6: Declare (unverified) matrix rows for Cursor CLI, Copilot CLI, OpenCode, Goose.**
   - Populate `bundled/sandbox/matrix.toml` with `verified = false` rows and concrete native flags where the agent CLI documents them as of 2026-05; otherwise empty `flags = []` with a non-empty `note` field naming the upstream tracking issue / docs URL.
   - The resolver returns `SandboxResolveError::UnverifiedRuntime` unless `ResolveContext::Doctor` was passed (see Task 4). Decide-or-defer: declared infrastructure for Cursor/Copilot/OpenCode/Goose, not enforced execution.
   - DO NOT add `RuntimeKind::Junie` / `RuntimeKind::Augment` enum variants in this milestone — adding variants without matrix rows violates decide-or-defer. Captured in Out of Scope.
@@ -115,7 +115,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** one refusal test per declared-unverified runtime in `ResolveContext::Run`; one acceptance test per runtime in `ResolveContext::Doctor`.
   - **Depends on Task 5.**
 
-- [ ] **Task 6b: Map detected agents to `RuntimeKind` in `builtin_registry.json`.**
+- [x] **Task 6b: Map detected agents to `RuntimeKind` in `builtin_registry.json`.**
   - Add a `runtime` field to every entry in `crates/surge-acp/builtin_registry.json` so `surge doctor` and the resolver can map a detected agent name to a `RuntimeKind` matrix row. Mapping: `claude-acp → claude-code`, `codex-acp → codex`, `gemini → gemini`, `github-copilot-cli → copilot-cli`, plus any other entries the registry lists today.
   - Update the parser/loader in `crates/surge-acp/src/registry.rs` (or whichever sibling owns the JSON schema) to read the new field as `Option<RuntimeKind>` with `#[serde(default)]`. Emit `tracing::warn!` on load when the field is absent — old registry files keep parsing but lose the matrix link.
   - Update `Registry::detect_installed_with_paths()` to surface the runtime alongside the binary path so `surge doctor` does not need a second lookup table.

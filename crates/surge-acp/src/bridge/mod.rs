@@ -40,6 +40,9 @@ pub use event::{AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, T
 pub mod sandbox;
 pub use sandbox::{AlwaysAllowSandbox, DenyListSandbox, Sandbox, SandboxDecision};
 
+pub mod sandbox_resolver;
+pub use sandbox_resolver::{ResolveContext, SandboxResolveError, resolve_launch_flags};
+
 pub mod tools;
 pub use tools::{ToolCategory, ToolDef};
 
