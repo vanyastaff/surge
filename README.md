@@ -28,7 +28,7 @@ Surge is **pre-release software**. Treat it as an active development workspace, 
 
 ## Key Features
 
-- **Agent-agnostic** — speaks ACP to Claude Code, Codex, Gemini, or any conformant agent.
+- **Agent-agnostic via ACP** — works with any ACP-conformant agent: Claude Code, Codex, Gemini, Cursor, Copilot, OpenCode, and more. See [ADR-0006](docs/adr/0006-acp-only-transport.md) for the rationale.
 - **Source-agnostic** — CLI, Telegram, UI, GitHub Issues, and Linear normalize through one intake path.
 - **Sandbox-delegated** — surge configures the agent runtime's native sandbox; no custom OS isolation.
 - **Declarative `flow.toml` graphs** — closed `NodeKind` enum, typed outcomes, deterministic routing.

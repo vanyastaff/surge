@@ -127,6 +127,8 @@ The ACP bridge runs on a **dedicated OS thread** with its own single-threaded To
 
 [acp]: https://agentclientprotocol.com
 
+> Why ACP and only ACP — see [ADR-0006](adr/0006-acp-only-transport.md).
+
 ### Channel-based IPC
 
 The engine talks to the bridge via an mpsc `BridgeCommand` channel and listens to a broadcast `BridgeEvent` stream:

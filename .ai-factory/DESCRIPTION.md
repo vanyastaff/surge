@@ -6,11 +6,11 @@ Surge is a **local-first meta-orchestrator for AFK AI coding**, written in Rust.
 
 The target experience: `initialize project → describe work → approve roadmap/flow → walk away → return to a PR`. The local daemon owns execution; Telegram and the desktop UI are monitoring and approval surfaces.
 
-Surge is **agent-agnostic** (speaks ACP to Claude Code, Codex, Gemini, or any conformant agent), **source-agnostic** (CLI, Telegram, UI, GitHub Issues, Linear normalize through a single intake path), and **sandbox-delegated** (no custom OS isolation; the agent runtime enforces sandboxing). Status: **pre-release**.
+Surge is **agent-agnostic via ACP** (any ACP-conformant agent: Claude Code, Codex, Gemini, Cursor, Copilot, OpenCode, ...; see [ADR-0006](../docs/adr/0006-acp-only-transport.md)), **source-agnostic** (CLI, Telegram, UI, GitHub Issues, Linear normalize through a single intake path), and **sandbox-delegated** (no custom OS isolation; the agent runtime enforces sandboxing). Status: **pre-release**.
 
 ## Core Features
 
-- **ACP bridge** to any conformant coding agent. The bridge runs on a dedicated OS thread with a single-threaded Tokio runtime (`!Send` futures from the SDK).
+- **ACP bridge** to any conformant coding agent. The bridge runs on a dedicated OS thread with a single-threaded Tokio runtime (`!Send` futures from the SDK). See [ADR-0006](../docs/adr/0006-acp-only-transport.md) for the rationale behind ACP-only transport.
 - **Declarative `flow.toml` graphs** with a closed `NodeKind` enum: `Agent`, `HumanGate`, `Branch`, `Loop`, `Subgraph`, `Notify`, `Terminal`. Routing is graph data, not LLM judgment.
 - **Event sourcing** — current state is the fold of an append-only event log. Replay, fork-from-here, and crash recovery are folds, not extra subsystems.
 - **Adaptive flow generation** — three-stage bootstrap (Description Author → Roadmap Planner → Flow Generator) picks structure per run; the user reviews and approves.
