@@ -84,29 +84,32 @@ Out of scope for this plan (tracked as follow-ups):
 
 **File:** `docs/adr/0006-acp-only-transport.md` (new)
 
-Follow the convention observed across `docs/adr/0001`–`0005`: TOML frontmatter with `status: accepted`, `deciders: vanyastaff`, `date: 2026-05-11`, `supersedes: none`. H1 title `# ADR 0006 — ACP-only agent transport`.
+Follow the contract documented in `docs/conventions/adr.md` and enforced by `crates/surge-core/src/artifact_contract.rs:validate_adr_frontmatter`: **TOML frontmatter delimited by `+++`** with `status = "accepted"`, `deciders = ["vanyastaff"]`, `date = "2026-05-11"`. H1 title `# ADR 0006 — ACP-only agent transport`.
 
-**Canonical section layout** (aligned with project ADR style — observed sections across existing ADRs):
+> Note: the 5 prior ADRs (`0001`–`0005`) use YAML `---` frontmatter and lack the required `## Status` section — they pre-date the artifact contract and are non-compliant. ADR-0006 is the first contract-compliant ADR. A separate cleanup pass should migrate the prior 5.
 
-1. `## Context` — the 2026 ACP landscape: ~33 agents registered at [github.com/agentclientprotocol/registry](https://github.com/agentclientprotocol/registry); the registry enforces standardized `authMethods` in the ACP handshake; every commercial-subscription coding CLI surge targets is ACP-conformant or in adapter form (Claude Code, Codex CLI, Gemini CLI, Cursor CLI, Copilot CLI in public preview, Junie, Augment/Auggie, Kimi, OpenCode, Goose). Reference surge's surrounding invariants: event-sourced run log with deterministic fold; declared hooks; injected tools; sandbox elevation roundtrip; multi-channel HumanGate approvals.
-2. `## Decision` — ACP is the sole agent-transport mechanism in surge. Non-ACP fallback (raw headless CLI wrapping) is rejected as a parallel backend.
-3. `## Rationale` — four ranked forces, in priority order:
+**Canonical section layout** (matches the artifact contract's required sections + project-specific extras):
+
+1. `## Status` — short statement, e.g. `Accepted.` (required by contract)
+2. `## Context` — the 2026 ACP landscape: ~33 agents registered at [github.com/agentclientprotocol/registry](https://github.com/agentclientprotocol/registry); the registry enforces standardized `authMethods` in the ACP handshake; every commercial-subscription coding CLI surge targets is ACP-conformant or in adapter form (Claude Code, Codex CLI, Gemini CLI, Cursor CLI, Copilot CLI in public preview, Junie, Augment/Auggie, Kimi, OpenCode, Goose). Reference surge's surrounding invariants: event-sourced run log with deterministic fold; declared hooks; injected tools; sandbox elevation roundtrip; multi-channel HumanGate approvals.
+3. `## Decision` — ACP is the sole agent-transport mechanism in surge. Non-ACP fallback (raw headless CLI wrapping) is rejected as a parallel backend.
+4. `## Rationale` — four ranked forces, in priority order:
    1. **Parser-maintenance avoidance** (primary). Agent CLIs release frequently; per-CLI stdout parsers would be a permanent treadmill. ACP gives a versioned contract that absorbs CLI changes upstream.
    2. **Subscription-CLI coverage.** Every commercial-subscription CLI surge cares about supports ACP in 2026.
    3. **Structural fit with surge invariants.** Event log, hooks, injected tools, sandbox elevation roundtrip all map to ACP primitives.
    4. **Auth-handshake standardization.** ACP registry requires agents to return valid `authMethods` — surge selects subscription/API-key via protocol, not per-CLI config-file logic.
-4. `## Alternatives Rejected` —
+5. `## Alternatives considered` (required by contract) —
    - **Non-ACP raw headless CLI wrapping.** Would require N stdout parsers per agent, no permission roundtrip (only preapprove-all flags), broken event-log determinism across CLI versions.
    - **Direct LLM API calls bypassing CLIs.** Forces API-key billing model; contradicts the subscription constraint that anchors the user-facing value proposition.
-5. `## Consequences` — `surge-acp` remains the sole agent-side adapter crate; `surge init` PATH-scan will widen as ACP coverage grows; "Sandbox delegation matrix" milestone scope widens accordingly.
+6. `## Consequences` — `surge-acp` remains the sole agent-side adapter crate; `surge init` PATH-scan will widen as ACP coverage grows; "Sandbox delegation matrix" milestone scope widens accordingly.
 
    `### Accepted costs and mitigations` (subsection) — three concrete costs each paired with a mitigation:
    - `!Send` futures from the SDK → dedicated OS thread + single-threaded Tokio + `LocalSet` (already implemented in `surge-acp`).
    - `unstable_session_usage` feature → pin the SDK rev in the workspace `Cargo.toml`; CI golden-file tests against real ACP agents.
    - Adapter quality variance (native vs adapter agents) → capability cross-check at handshake (surge declares expected capabilities per profile, fails fast on mismatch); `--trace-acp` flag for the debug surface.
 
-6. `## Out of Scope` — the non-ACP long tail (Aider, Plandex, Continue, Crush, RA.Aid, Devon, etc.) is out of scope because those are API-key-world tools that contradict the subscription constraint.
-7. `## Revisit conditions` — explicit triggers that would reopen this decision:
+7. `## Out of Scope` — the non-ACP long tail (Aider, Plandex, Continue, Crush, RA.Aid, Devon, etc.) is out of scope because those are API-key-world tools that contradict the subscription constraint.
+8. `## Revisit conditions` — explicit triggers that would reopen this decision:
    - ACP specification stalls or stagnates without movement on capabilities/auth.
    - A dominant commercial-subscription coding CLI emerges that refuses ACP for >12 months.
    - Surge's primary user base shifts to API-key workflows (incompatible with current subscription-only stance).
@@ -123,7 +126,7 @@ Do not add a separate `## References` section — none of the existing ADRs do.
 
 **Logging requirements:** N/A — markdown only.
 
-**Acceptance:** ADR file exists at the canonical path; frontmatter parses; all seven sections present in order; no broken external links; footnote-style references present.
+**Acceptance:** ADR file exists at the canonical path; **TOML frontmatter (`+++`) parses with required keys `status`, `deciders`, `date`**; all eight sections present in order (Status / Context / Decision / Rationale / Alternatives considered / Consequences / Out of Scope / Revisit conditions); no broken external links; footnote-style references present; `surge artifact validate --kind adr docs/adr/0006-acp-only-transport.md` would pass.
 
 ---
 

@@ -1,11 +1,14 @@
----
-status: accepted
-deciders: vanyastaff
-date: 2026-05-11
-supersedes: none
----
++++
+status = "accepted"
+deciders = ["vanyastaff"]
+date = "2026-05-11"
++++
 
 # ADR 0006 — ACP-only agent transport
+
+## Status
+
+Accepted.
 
 ## Context
 
@@ -30,11 +33,11 @@ ACP is the **sole** agent-transport mechanism in surge. The `surge-acp` crate is
 Four forces point in the same direction, ranked in priority order:
 
 1. **Parser-maintenance avoidance** (primary). Coding-agent CLIs ship frequent updates — sometimes weekly. Per-CLI stdout parsers (NDJSON formats, log prefixes, tool-call markers) would constitute a permanent treadmill of unrelated maintenance: every CLI minor bump risks silently breaking surge until a parser is patched. ACP fixes this surface as a versioned contract that absorbs CLI-internal changes upstream.
-2. **Subscription-CLI coverage.** Every commercial-subscription coding CLI surge cares about supports ACP in 2026 — either natively (Goose, fast-agent, code-assistant) or through an adapter (Claude Code, Codex CLI, Pi). The subscription constraint on the user side — "use the Pro/Max/Team plan you already pay for, do not paste an API key" — is satisfied because subscription auth lives in the CLI's own config (`~/.claude/`, `~/.codex/`, etc.); ACP does not interfere with it. The non-ACP world is overwhelmingly API-key tooling, which contradicts that constraint.
+2. **Subscription-CLI coverage.** Every commercial-subscription coding CLI that surge targets supports ACP in 2026 — either natively (Goose, fast-agent, code-assistant) or through an adapter (Claude Code, Codex CLI, Pi). The subscription constraint on the user side — "use the Pro/Max/Team plan you already pay for, do not paste an API key" — is satisfied because subscription auth lives in the CLI's own config (`~/.claude/`, `~/.codex/`, etc.); ACP does not interfere with it. The non-ACP world is overwhelmingly API-key tooling, which contradicts that constraint.
 3. **Structural fit with surge invariants.** Event-sourcing, hooks, injected tools, sandbox elevation, multi-channel approvals all map onto ACP primitives (typed JSON-RPC events, tool-call boundaries, permission callbacks, session resume). A non-ACP backend would either weaken these invariants or rebuild the same primitives on top of stdout — at which point it is ACP, badly.
 4. **Auth-handshake standardization.** The [ACP registry][registry] mandates that conformant agents return a valid `authMethods` array during handshake. Surge selects subscription, OAuth, or API-key via the protocol, with no per-CLI config-file logic. The set of supported auth methods grows automatically as the registry grows.
 
-## Alternatives Rejected
+## Alternatives considered
 
 **Non-ACP raw headless CLI wrapping.** A `providers/<name>/{runner, commands, telemetryParser, auth, mcp_adapter}` plugin model — the shape CodeMachine-CLI uses — was considered. It is rejected because: (a) every CLI requires its own stdout parser maintained against frequent releases; (b) no bidirectional permission callback exists in headless mode, forcing preapprove-all flags like `--dangerously-skip-permissions` and breaking the sandbox-elevation invariant; (c) event-log determinism becomes CLI-version-dependent; (d) injected tools have no first-class transport.
 
