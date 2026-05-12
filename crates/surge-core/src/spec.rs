@@ -80,6 +80,7 @@ impl SubtaskState {
 
 /// Execution metadata for a single subtask, persisted to spec.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[non_exhaustive]
 pub struct SubtaskExecution {
     /// Current execution state.
     #[serde(default)]
@@ -106,6 +107,7 @@ pub enum Complexity {
 
 /// Acceptance criteria for a subtask.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct AcceptanceCriteria {
     /// Human-readable description of what must be true.
     pub description: String,
@@ -114,8 +116,20 @@ pub struct AcceptanceCriteria {
     pub met: bool,
 }
 
+impl AcceptanceCriteria {
+    /// Create a new acceptance criterion in the unmet state.
+    #[must_use]
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+            met: false,
+        }
+    }
+}
+
 /// A subtask within a spec.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct Subtask {
     /// Unique identifier.
     pub id: SubtaskId,
@@ -148,6 +162,7 @@ pub struct Subtask {
 
 /// A complete spec describing a unit of work.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct Spec {
     /// Unique identifier.
     pub id: SpecId,
@@ -160,6 +175,50 @@ pub struct Spec {
     /// Ordered list of subtasks.
     #[serde(default)]
     pub subtasks: Vec<Subtask>,
+}
+
+impl Spec {
+    /// Create a new spec with a fresh [`SpecId`] and no subtasks.
+    ///
+    /// Mutate `subtasks` after construction or replace `id` for tests that need
+    /// a deterministic identifier.
+    #[must_use]
+    pub fn new(
+        title: impl Into<String>,
+        description: impl Into<String>,
+        complexity: Complexity,
+    ) -> Self {
+        Self {
+            id: SpecId::new(),
+            title: title.into(),
+            description: description.into(),
+            complexity,
+            subtasks: Vec::new(),
+        }
+    }
+}
+
+impl Subtask {
+    /// Create a new subtask with a fresh [`SubtaskId`] and empty optional fields.
+    #[must_use]
+    pub fn new(
+        title: impl Into<String>,
+        description: impl Into<String>,
+        complexity: Complexity,
+    ) -> Self {
+        Self {
+            id: SubtaskId::new(),
+            title: title.into(),
+            description: description.into(),
+            complexity,
+            files: Vec::new(),
+            acceptance_criteria: Vec::new(),
+            depends_on: Vec::new(),
+            story_file: None,
+            agent: None,
+            execution: SubtaskExecution::default(),
+        }
+    }
 }
 
 fn default_artifact_schema_version() -> u32 {

@@ -13,6 +13,7 @@ pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 /// Role artifact families that Surge validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ArtifactKind {
     /// Bootstrap description artifact.
     Description,
@@ -95,6 +96,7 @@ impl FromStr for ArtifactKind {
 /// Primary serialization format for an artifact contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ArtifactFormat {
     /// Markdown with required headings and optional structured sections.
     Markdown,
@@ -107,6 +109,7 @@ pub enum ArtifactFormat {
 /// Component that owns the schema-version field for a contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SchemaVersionOwner {
     /// Generic artifact contract version from [`ARTIFACT_SCHEMA_VERSION`].
     ArtifactContract,
@@ -118,6 +121,7 @@ pub enum SchemaVersionOwner {
 
 /// Stable reference embedded in profiles and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactContractRef {
     /// Artifact family.
     pub kind: ArtifactKind,
@@ -138,6 +142,7 @@ impl ArtifactContractRef {
 
 /// Canonical metadata for one artifact family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ArtifactContract {
     /// Artifact family.
     pub kind: ArtifactKind,

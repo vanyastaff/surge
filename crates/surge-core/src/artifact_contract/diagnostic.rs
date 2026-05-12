@@ -8,6 +8,7 @@ use super::contract::ArtifactKind;
 /// Severity for artifact validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ArtifactDiagnosticSeverity {
     /// Validation cannot accept the artifact.
     Error,
@@ -18,6 +19,7 @@ pub enum ArtifactDiagnosticSeverity {
 /// Stable diagnostic code emitted by artifact validators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ArtifactDiagnosticCode {
     /// Artifact path/name does not match the selected contract.
     InvalidArtifactPath,
@@ -83,6 +85,7 @@ impl fmt::Display for ArtifactDiagnosticCode {
 
 /// One validation diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactValidationDiagnostic {
     /// Stable machine-readable code.
     pub code: ArtifactDiagnosticCode,
@@ -135,6 +138,7 @@ impl ArtifactValidationDiagnostic {
 
 /// Validation report for one artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArtifactValidationReport {
     /// Artifact kind selected by the caller.
     pub kind: ArtifactKind,

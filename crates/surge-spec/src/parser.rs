@@ -255,46 +255,21 @@ impl SpecFile {
 mod tests {
     use super::*;
     use crate::builder::SubtaskBuilder;
-    use surge_core::id::{SpecId, SubtaskId};
-    use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask, SubtaskExecution};
+    use surge_core::id::SubtaskId;
+    use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask};
 
     fn sample_spec() -> Spec {
-        let sub1_id = SubtaskId::new();
-        Spec {
-            id: SpecId::new(),
-            title: "Test feature".to_string(),
-            description: "A test feature spec".to_string(),
-            complexity: Complexity::Standard,
-            subtasks: vec![
-                Subtask {
-                    id: sub1_id,
-                    title: "First step".to_string(),
-                    description: "Do the first thing".to_string(),
-                    complexity: Complexity::Simple,
-                    files: vec!["src/lib.rs".to_string()],
-                    acceptance_criteria: vec![AcceptanceCriteria {
-                        description: "Compiles".to_string(),
-                        met: false,
-                    }],
-                    depends_on: vec![],
-                    story_file: None,
-                    agent: None,
-                    execution: SubtaskExecution::default(),
-                },
-                Subtask {
-                    id: SubtaskId::new(),
-                    title: "Second step".to_string(),
-                    description: "Do the second thing".to_string(),
-                    complexity: Complexity::Simple,
-                    files: vec![],
-                    acceptance_criteria: vec![],
-                    depends_on: vec![sub1_id],
-                    story_file: None,
-                    agent: None,
-                    execution: SubtaskExecution::default(),
-                },
-            ],
-        }
+        let mut sub1 = Subtask::new("First step", "Do the first thing", Complexity::Simple);
+        sub1.files = vec!["src/lib.rs".to_string()];
+        sub1.acceptance_criteria = vec![AcceptanceCriteria::new("Compiles")];
+        let sub1_id = sub1.id;
+
+        let mut sub2 = Subtask::new("Second step", "Do the second thing", Complexity::Simple);
+        sub2.depends_on = vec![sub1_id];
+
+        let mut spec = Spec::new("Test feature", "A test feature spec", Complexity::Standard);
+        spec.subtasks = vec![sub1, sub2];
+        spec
     }
 
     #[test]

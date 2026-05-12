@@ -7,8 +7,7 @@ use agent_client_protocol::{ContentBlock, TextContent};
 use surge_acp::pool::{AgentPool, SessionHandle};
 use surge_core::SurgeError;
 use surge_core::event::SurgeEvent;
-use surge_core::id::SubtaskId;
-use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask, SubtaskExecution};
+use surge_core::spec::{AcceptanceCriteria, Complexity, Subtask};
 use surge_spec::SpecFile;
 use tracing::info;
 
@@ -282,18 +281,11 @@ description = "criterion text"
             .map(|n| format!("stories/{}", n.to_string_lossy()))
             .unwrap_or_default();
 
-        Ok(Subtask {
-            id: SubtaskId::new(),
-            title,
-            description: String::new(), // content lives in story file
-            complexity: Complexity::Standard,
-            files,
-            acceptance_criteria,
-            depends_on: vec![],
-            story_file: Some(story_file),
-            agent: None,
-            execution: SubtaskExecution::default(),
-        })
+        let mut subtask = Subtask::new(title, "", Complexity::Standard);
+        subtask.files = files;
+        subtask.acceptance_criteria = acceptance_criteria;
+        subtask.story_file = Some(story_file);
+        Ok(subtask)
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -372,10 +364,7 @@ description = "criterion text"
             if in_section && line.starts_with("- [ ] ") {
                 let desc = line.trim_start_matches("- [ ] ").trim().to_string();
                 if !desc.is_empty() {
-                    criteria.push(AcceptanceCriteria {
-                        description: desc,
-                        met: false,
-                    });
+                    criteria.push(AcceptanceCriteria::new(desc));
                 }
             }
         }

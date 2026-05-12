@@ -119,22 +119,10 @@ impl AgentRouter {
 mod tests {
     use super::*;
     use surge_core::config::RoutingConfig;
-    use surge_core::id::SubtaskId;
     use surge_core::spec::{Complexity, Subtask};
 
     fn make_subtask(complexity: Complexity) -> Subtask {
-        Subtask {
-            id: SubtaskId::new(),
-            title: "test".to_string(),
-            description: "test subtask".to_string(),
-            complexity,
-            files: vec![],
-            acceptance_criteria: vec![],
-            depends_on: vec![],
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        }
+        Subtask::new("test", "test subtask", complexity)
     }
 
     #[test]

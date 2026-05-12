@@ -155,6 +155,7 @@ fn describe_primary_format(kind: ArtifactKind) -> &'static str {
         surge_core::ArtifactFormat::Markdown => "markdown",
         surge_core::ArtifactFormat::Toml => "toml",
         surge_core::ArtifactFormat::FlowToml => "flow-toml",
+        _ => "unknown",
     }
 }
 

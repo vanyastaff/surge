@@ -156,48 +156,38 @@ fn dfs_has_cycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::id::SpecId;
     use surge_core::spec::{Complexity, Subtask};
 
     fn make_subtask(title: &str, depends_on: Vec<SubtaskId>) -> Subtask {
-        Subtask {
-            id: SubtaskId::new(),
-            title: title.to_string(),
-            description: format!("Do {title}"),
-            complexity: Complexity::Simple,
-            files: vec![],
-            acceptance_criteria: vec![],
-            depends_on,
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        }
+        let mut subtask = Subtask::new(title, format!("Do {title}"), Complexity::Simple);
+        subtask.depends_on = depends_on;
+        subtask
+    }
+
+    fn spec_with(title: &str, complexity: Complexity, subtasks: Vec<Subtask>) -> Spec {
+        let description = if subtasks.is_empty() {
+            "No subtasks".to_string()
+        } else {
+            format!("{title} description")
+        };
+        let mut spec = Spec::new(title, description, complexity);
+        spec.subtasks = subtasks;
+        spec
     }
 
     #[test]
     fn test_valid_spec() {
         let sub1 = make_subtask("Step 1", vec![]);
         let sub2 = make_subtask("Step 2", vec![sub1.id]);
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Valid spec".to_string(),
-            description: "A valid spec".to_string(),
-            complexity: Complexity::Standard,
-            subtasks: vec![sub1, sub2],
-        };
+        let spec = spec_with("Valid spec", Complexity::Standard, vec![sub1, sub2]);
         let result = validate(&spec);
         assert!(result.is_ok(), "errors: {:?}", result.errors);
     }
 
     #[test]
     fn test_empty_title() {
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "".to_string(),
-            description: "Desc".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![],
-        };
+        let mut spec = Spec::new("", "Desc", Complexity::Simple);
+        spec.subtasks = vec![];
         let result = validate(&spec);
         assert!(result.errors.iter().any(|e| e.contains("title is empty")));
     }
@@ -206,13 +196,7 @@ mod tests {
     fn test_invalid_dependency_ref() {
         let fake_id = SubtaskId::new();
         let sub1 = make_subtask("Step 1", vec![fake_id]);
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Bad refs".to_string(),
-            description: "Has bad refs".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![sub1],
-        };
+        let spec = spec_with("Bad refs", Complexity::Simple, vec![sub1]);
         let result = validate(&spec);
         assert!(result.errors.iter().any(|e| e.contains("non-existent")));
     }
@@ -221,13 +205,7 @@ mod tests {
     fn test_self_dependency() {
         let mut sub1 = make_subtask("Step 1", vec![]);
         sub1.depends_on = vec![sub1.id];
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Self dep".to_string(),
-            description: "Self dependency".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![sub1],
-        };
+        let spec = spec_with("Self dep", Complexity::Simple, vec![sub1]);
         let result = validate(&spec);
         assert!(
             result
@@ -239,39 +217,11 @@ mod tests {
 
     #[test]
     fn test_cycle_detection() {
-        let id_a = SubtaskId::new();
-        let id_b = SubtaskId::new();
-        let sub_a = Subtask {
-            id: id_a,
-            title: "A".to_string(),
-            description: "A".to_string(),
-            complexity: Complexity::Simple,
-            files: vec![],
-            acceptance_criteria: vec![],
-            depends_on: vec![id_b],
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        };
-        let sub_b = Subtask {
-            id: id_b,
-            title: "B".to_string(),
-            description: "B".to_string(),
-            complexity: Complexity::Simple,
-            files: vec![],
-            acceptance_criteria: vec![],
-            depends_on: vec![id_a],
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        };
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Cycle".to_string(),
-            description: "Has cycle".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![sub_a, sub_b],
-        };
+        let mut sub_a = Subtask::new("A", "A", Complexity::Simple);
+        let mut sub_b = Subtask::new("B", "B", Complexity::Simple);
+        sub_a.depends_on = vec![sub_b.id];
+        sub_b.depends_on = vec![sub_a.id];
+        let spec = spec_with("Cycle", Complexity::Simple, vec![sub_a, sub_b]);
         let result = validate(&spec);
         assert!(result.errors.iter().any(|e| e.contains("cycle")));
     }
@@ -281,13 +231,7 @@ mod tests {
         let subtasks: Vec<Subtask> = (0..8)
             .map(|i| make_subtask(&format!("Step {i}"), vec![]))
             .collect();
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Many subtasks".to_string(),
-            description: "Has 8 subtasks".to_string(),
-            complexity: Complexity::Complex,
-            subtasks,
-        };
+        let spec = spec_with("Many subtasks", Complexity::Complex, subtasks);
         let result = validate(&spec);
         assert!(result.is_ok(), "errors: {:?}", result.errors);
         assert!(
@@ -303,13 +247,7 @@ mod tests {
         let subtasks: Vec<Subtask> = (0..16)
             .map(|i| make_subtask(&format!("Step {i}"), vec![]))
             .collect();
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Too many subtasks".to_string(),
-            description: "Has 16 subtasks".to_string(),
-            complexity: Complexity::Complex,
-            subtasks,
-        };
+        let spec = spec_with("Too many subtasks", Complexity::Complex, subtasks);
         let result = validate(&spec);
         assert!(
             result
@@ -321,13 +259,7 @@ mod tests {
 
     #[test]
     fn test_no_subtasks_warning() {
-        let spec = Spec {
-            id: SpecId::new(),
-            title: "Empty".to_string(),
-            description: "No subtasks".to_string(),
-            complexity: Complexity::Simple,
-            subtasks: vec![],
-        };
+        let spec = spec_with("Empty", Complexity::Simple, vec![]);
         let result = validate(&spec);
         assert!(result.is_ok());
         assert!(result.warnings.iter().any(|w| w.contains("no subtasks")));

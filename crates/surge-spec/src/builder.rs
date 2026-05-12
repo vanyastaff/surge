@@ -1,7 +1,7 @@
 //! Builder pattern for constructing specs programmatically.
 
 use surge_core::SurgeError;
-use surge_core::id::{SpecId, SubtaskId};
+use surge_core::id::SubtaskId;
 use surge_core::spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
 
 /// Builder for constructing Spec instances.
@@ -55,13 +55,9 @@ impl SpecBuilder {
             .description
             .ok_or_else(|| SurgeError::Spec("Spec description is required".to_string()))?;
 
-        Ok(Spec {
-            id: SpecId::new(),
-            title,
-            description,
-            complexity: self.complexity,
-            subtasks: self.subtasks,
-        })
+        let mut spec = Spec::new(title, description, self.complexity);
+        spec.subtasks = self.subtasks;
+        Ok(spec)
     }
 }
 
@@ -120,10 +116,8 @@ impl SubtaskBuilder {
 
     #[must_use]
     pub fn criterion(mut self, description: impl Into<String>) -> Self {
-        self.acceptance_criteria.push(AcceptanceCriteria {
-            description: description.into(),
-            met: false,
-        });
+        self.acceptance_criteria
+            .push(AcceptanceCriteria::new(description));
         self
     }
 
@@ -141,18 +135,11 @@ impl SubtaskBuilder {
             .description
             .ok_or_else(|| SurgeError::Spec("Subtask description is required".to_string()))?;
 
-        Ok(Subtask {
-            id: SubtaskId::new(),
-            title,
-            description,
-            complexity: self.complexity,
-            files: self.files,
-            acceptance_criteria: self.acceptance_criteria,
-            depends_on: self.depends_on,
-            story_file: None,
-            agent: None,
-            execution: surge_core::spec::SubtaskExecution::default(),
-        })
+        let mut subtask = Subtask::new(title, description, self.complexity);
+        subtask.files = self.files;
+        subtask.acceptance_criteria = self.acceptance_criteria;
+        subtask.depends_on = self.depends_on;
+        Ok(subtask)
     }
 }
 

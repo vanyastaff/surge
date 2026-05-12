@@ -115,22 +115,12 @@ fn extract_json_block(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surge_core::id::SubtaskId;
-    use surge_core::spec::{Complexity, SubtaskExecution};
+    use surge_core::spec::Complexity;
 
     fn make_subtask(title: &str, complexity: Complexity) -> Subtask {
-        Subtask {
-            id: SubtaskId::new(),
-            title: title.to_string(),
-            description: String::new(),
-            complexity,
-            files: vec!["src/main.rs".to_string()],
-            acceptance_criteria: vec![],
-            depends_on: vec![],
-            story_file: None,
-            agent: None,
-            execution: SubtaskExecution::default(),
-        }
+        let mut subtask = Subtask::new(title, "", complexity);
+        subtask.files = vec!["src/main.rs".to_string()];
+        subtask
     }
 
     #[test]
