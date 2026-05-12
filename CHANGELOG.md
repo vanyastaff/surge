@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Artifact contract acceptance-criteria validation
+
+- **Stricter acceptance-criteria checks** — Spec (Markdown and TOML) and Story
+  artifacts now reject placeholder, empty-checkbox, or too-short acceptance
+  criteria (e.g. `TBD`, `- [ ]`, `?`). The new
+  `empty_acceptance_criteria` diagnostic code points to the offending criterion
+  by index (`Acceptance Criteria[N]` for Markdown,
+  `spec.subtasks[i].acceptance_criteria[j]` for TOML). Each criterion must be a
+  non-placeholder string of at least 8 characters after trimming.
+
 ### Added — Bootstrap & adaptive flow generation
 
 - **`surge bootstrap` CLI** — runs the bundled Description Author →
