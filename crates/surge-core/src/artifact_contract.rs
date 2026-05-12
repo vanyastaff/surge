@@ -20,6 +20,23 @@ use crate::spec::SpecArtifact;
 /// Current schema version used by Surge-owned artifact contracts.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 
+/// Minimum length (in characters) for an acceptance criterion body.
+const ACCEPTANCE_CRITERION_MIN_LENGTH: usize = 8;
+
+/// Lower-cased tokens treated as placeholder acceptance criteria.
+const ACCEPTANCE_CRITERION_PLACEHOLDERS: &[&str] = &[
+    "tbd",
+    "todo",
+    "?",
+    "??",
+    "???",
+    "n/a",
+    "-",
+    "tba",
+    "пока нет",
+    "wip",
+];
+
 /// Role artifact families that Surge validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -176,6 +193,8 @@ pub enum ArtifactDiagnosticCode {
     InvalidFrontmatter,
     /// Acceptance criteria are missing.
     MissingAcceptanceCriteria,
+    /// An acceptance criterion is empty, a placeholder, or too short to be testable.
+    EmptyAcceptanceCriteria,
     /// Artifact kind is not supported by this validator.
     UnsupportedArtifactKind,
     /// Flow graph parsed as TOML but failed engine-level graph validation.
@@ -203,6 +222,7 @@ impl ArtifactDiagnosticCode {
             Self::InvalidToml => "invalid_toml",
             Self::InvalidFrontmatter => "invalid_frontmatter",
             Self::MissingAcceptanceCriteria => "missing_acceptance_criteria",
+            Self::EmptyAcceptanceCriteria => "empty_acceptance_criteria",
             Self::UnsupportedArtifactKind => "unsupported_artifact_kind",
             Self::GraphValidationFailed => "graph_validation_failed",
             Self::GraphParseFailed => "graph_parse_failed",
@@ -854,15 +874,78 @@ fn roadmap_contains_ref(roadmap: &RoadmapArtifact, reference: &RoadmapItemRef) -
 }
 
 fn validate_spec_toml_acceptance(report: &mut ArtifactValidationReport, value: &toml::Value) {
-    if spec_toml_has_acceptance_criteria(value) {
+    let spec = value.get("spec").unwrap_or(value);
+    let Some(subtasks) = spec.get("subtasks").and_then(toml::Value::as_array) else {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("spec.subtasks.acceptance_criteria".to_string()),
+            "every spec subtask must include machine-readable acceptance criteria",
+        ));
+        return;
+    };
+
+    if subtasks.is_empty() {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("spec.subtasks.acceptance_criteria".to_string()),
+            "every spec subtask must include machine-readable acceptance criteria",
+        ));
         return;
     }
-    report.push(ArtifactValidationDiagnostic::error(
-        report.kind,
-        ArtifactDiagnosticCode::MissingAcceptanceCriteria,
-        Some("spec.subtasks.acceptance_criteria".to_string()),
-        "every spec subtask must include machine-readable acceptance criteria",
-    ));
+
+    for (subtask_index, subtask) in subtasks.iter().enumerate() {
+        let criteria = subtask
+            .get("acceptance_criteria")
+            .and_then(toml::Value::as_array);
+        let Some(criteria) = criteria else {
+            report.push(ArtifactValidationDiagnostic::error(
+                report.kind,
+                ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+                Some(format!(
+                    "spec.subtasks[{subtask_index}].acceptance_criteria"
+                )),
+                "every spec subtask must include machine-readable acceptance criteria",
+            ));
+            continue;
+        };
+
+        if criteria.is_empty() {
+            report.push(ArtifactValidationDiagnostic::error(
+                report.kind,
+                ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+                Some(format!(
+                    "spec.subtasks[{subtask_index}].acceptance_criteria"
+                )),
+                "every spec subtask must include machine-readable acceptance criteria",
+            ));
+            continue;
+        }
+
+        for (criterion_index, criterion) in criteria.iter().enumerate() {
+            let location =
+                format!("spec.subtasks[{subtask_index}].acceptance_criteria[{criterion_index}]");
+            let Some(text) = extract_toml_criterion_text(criterion) else {
+                report.push(ArtifactValidationDiagnostic::error(
+                    report.kind,
+                    ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
+                    Some(location),
+                    "acceptance criterion must be a string or a table with a `description` field",
+                ));
+                continue;
+            };
+            validate_acceptance_criterion_text(report, location, text);
+        }
+    }
+}
+
+fn extract_toml_criterion_text(value: &toml::Value) -> Option<&str> {
+    match value {
+        toml::Value::String(text) => Some(text.as_str()),
+        toml::Value::Table(table) => table.get("description").and_then(toml::Value::as_str),
+        _ => None,
+    }
 }
 
 fn parse_toml_value(report: &mut ArtifactValidationReport, content: &str) -> Option<toml::Value> {
@@ -930,25 +1013,6 @@ fn toml_field<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value>
         .try_fold(value, |current, segment| current.get(segment))
 }
 
-fn spec_toml_has_acceptance_criteria(value: &toml::Value) -> bool {
-    let spec = value.get("spec").unwrap_or(value);
-    let Some(subtasks) = spec.get("subtasks").and_then(toml::Value::as_array) else {
-        return false;
-    };
-
-    !subtasks.is_empty()
-        && subtasks
-            .iter()
-            .all(|subtask| toml_array_is_non_empty(subtask, "acceptance_criteria"))
-}
-
-fn toml_array_is_non_empty(value: &toml::Value, field: &str) -> bool {
-    value
-        .get(field)
-        .and_then(toml::Value::as_array)
-        .is_some_and(|items| !items.is_empty())
-}
-
 fn validate_adr_frontmatter(report: &mut ArtifactValidationReport, content: &str) {
     let Some(frontmatter) = parse_toml_frontmatter(report, content) else {
         return;
@@ -1007,17 +1071,124 @@ fn require_markdown_sections(
 }
 
 fn require_acceptance_criteria(report: &mut ArtifactValidationReport, content: &str) {
-    if has_markdown_heading(content, "Acceptance Criteria")
-        || content.to_ascii_lowercase().contains("acceptance criteria")
-    {
+    let bullets = extract_acceptance_criteria_bullets(content);
+    let Some(bullets) = bullets else {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("Acceptance Criteria".to_string()),
+            "artifact must include acceptance criteria",
+        ));
+        return;
+    };
+
+    if bullets.is_empty() {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::MissingAcceptanceCriteria,
+            Some("Acceptance Criteria".to_string()),
+            "acceptance criteria section has no bullets",
+        ));
         return;
     }
-    report.push(ArtifactValidationDiagnostic::error(
-        report.kind,
-        ArtifactDiagnosticCode::MissingAcceptanceCriteria,
-        Some("Acceptance Criteria".to_string()),
-        "artifact must include acceptance criteria",
-    ));
+
+    for (index, bullet) in bullets.iter().enumerate() {
+        validate_acceptance_criterion_text(report, format!("Acceptance Criteria[{index}]"), bullet);
+    }
+}
+
+fn extract_acceptance_criteria_bullets(content: &str) -> Option<Vec<&str>> {
+    let mut in_section = false;
+    let mut bullets = Vec::new();
+    for line in content.lines() {
+        let trimmed_start = line.trim_start();
+        if trimmed_start.starts_with('#') {
+            if in_section {
+                return Some(bullets);
+            }
+            let heading = trimmed_start.trim_start_matches('#').trim();
+            if strip_trailing_heading_marker(heading).eq_ignore_ascii_case("acceptance criteria") {
+                in_section = true;
+            }
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(bullet) = strip_bullet_marker(trimmed_start) {
+            bullets.push(bullet);
+        }
+    }
+    if in_section { Some(bullets) } else { None }
+}
+
+fn strip_bullet_marker(line: &str) -> Option<&str> {
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            return Some(rest);
+        }
+    }
+    if matches!(line, "-" | "*" | "+") {
+        return Some("");
+    }
+    let digit_end = line
+        .char_indices()
+        .find(|(_, ch)| !ch.is_ascii_digit())
+        .map_or(line.len(), |(index, _)| index);
+    if digit_end > 0 {
+        let tail = &line[digit_end..];
+        if let Some(rest) = tail.strip_prefix(". ") {
+            return Some(rest);
+        }
+        if tail == "." {
+            return Some("");
+        }
+    }
+    None
+}
+
+fn validate_acceptance_criterion_text(
+    report: &mut ArtifactValidationReport,
+    location: String,
+    raw: &str,
+) {
+    let trimmed = raw.trim();
+    let body = strip_optional_checkbox(trimmed).trim();
+
+    if body.is_empty() || is_placeholder_criterion(body) {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
+            Some(location),
+            "acceptance criterion is empty or placeholder",
+        ));
+        return;
+    }
+
+    if body.chars().count() < ACCEPTANCE_CRITERION_MIN_LENGTH {
+        report.push(ArtifactValidationDiagnostic::error(
+            report.kind,
+            ArtifactDiagnosticCode::EmptyAcceptanceCriteria,
+            Some(location),
+            "acceptance criterion is too short to be testable",
+        ));
+    }
+}
+
+fn strip_optional_checkbox(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    for marker in ["[ ]", "[x]", "[X]"] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            return rest;
+        }
+    }
+    trimmed
+}
+
+fn is_placeholder_criterion(text: &str) -> bool {
+    ACCEPTANCE_CRITERION_PLACEHOLDERS
+        .iter()
+        .any(|placeholder| text.eq_ignore_ascii_case(placeholder))
 }
 
 fn has_markdown_heading(content: &str, expected: &str) -> bool {
@@ -1792,8 +1963,287 @@ subtasks = [
         assert!(!report.is_valid());
         assert!(report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == ArtifactDiagnosticCode::MissingAcceptanceCriteria
-                && diagnostic.location.as_deref() == Some("spec.subtasks.acceptance_criteria")
+                && diagnostic.location.as_deref() == Some("spec.subtasks[1].acceptance_criteria")
         }));
+    }
+
+    #[test]
+    fn rejects_spec_markdown_placeholder_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.md")),
+            r#"# Spec
+
+## Goal
+Build a validator.
+
+## Subtasks
+- Add the pure core module.
+
+## Acceptance Criteria
+- TBD
+"#,
+        );
+
+        assert!(!report.is_valid(), "{report:#?}");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                && diagnostic.location.as_deref() == Some("Acceptance Criteria[0]")
+        }));
+    }
+
+    #[test]
+    fn rejects_spec_markdown_empty_checkbox_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.md")),
+            r#"# Spec
+
+## Goal
+Build a validator.
+
+## Subtasks
+- Add the pure core module.
+
+## Acceptance Criteria
+- [ ]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(
+            report.diagnostics.iter().any(
+                |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_spec_markdown_single_question_mark_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.md")),
+            r#"# Spec
+
+## Goal
+Build a validator.
+
+## Subtasks
+- Add the pure core module.
+
+## Acceptance Criteria
+- ?
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(
+            report.diagnostics.iter().any(
+                |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_spec_markdown_too_short_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.md")),
+            r#"# Spec
+
+## Goal
+Build a validator.
+
+## Subtasks
+- Add the pure core module.
+
+## Acceptance Criteria
+- works
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .filter(
+                    |diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                )
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn rejects_spec_markdown_when_acceptance_section_is_empty() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.md")),
+            r#"# Spec
+
+## Goal
+Build a validator.
+
+## Subtasks
+- Add the pure core module.
+
+## Acceptance Criteria
+
+## Constraints
+- Stay pure.
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::MissingAcceptanceCriteria
+        }));
+    }
+
+    #[test]
+    fn rejects_story_markdown_placeholder_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Story,
+            Some(Path::new("stories/story-002.md")),
+            r#"# Story 002
+
+## Context
+Demonstrate story-level placeholder rejection.
+
+## What needs to be done
+Add validation.
+
+## Architecture decisions
+None.
+
+## Files to modify
+- crates/surge-core/src/artifact_contract.rs
+
+## Acceptance criteria
+- N/A
+
+## Out of scope
+- Other artifacts.
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+        }));
+    }
+
+    #[test]
+    fn rejects_spec_toml_when_criterion_is_placeholder_string() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["TBD"] },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                && diagnostic.location.as_deref() == Some("spec.subtasks[0].acceptance_criteria[0]")
+        }));
+    }
+
+    #[test]
+    fn rejects_spec_toml_when_criterion_table_description_is_too_short() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = [{ description = "ok" }] },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+        }));
+    }
+
+    #[test]
+    fn accepts_spec_toml_with_table_form_criterion() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = [{ description = "valid fixtures pass validation" }] },
+]
+"#,
+        );
+
+        assert!(report.is_valid(), "{report:#?}");
+    }
+
+    #[test]
+    fn rejects_spec_toml_criterion_of_wrong_shape_with_shape_message() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = [42] },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        let shape_diag = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria
+                    && diagnostic.location.as_deref()
+                        == Some("spec.subtasks[0].acceptance_criteria[0]")
+            })
+            .expect("expected a shape diagnostic for the integer criterion");
+        assert!(
+            shape_diag.message.contains("string") && shape_diag.message.contains("description"),
+            "diagnostic message should explain the expected criterion shape, got: {:?}",
+            shape_diag.message,
+        );
+    }
+
+    #[test]
+    fn placeholder_match_is_case_insensitive_for_ascii() {
+        let report = validate_artifact(
+            ArtifactKind::Spec,
+            Some(Path::new("spec.toml")),
+            r#"schema_version = 1
+
+[spec]
+subtasks = [
+  { id = "one", acceptance_criteria = ["Tbd", "ToDo"] },
+]
+"#,
+        );
+
+        assert!(!report.is_valid());
+        let empty_count = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == ArtifactDiagnosticCode::EmptyAcceptanceCriteria)
+            .count();
+        assert_eq!(empty_count, 2);
     }
 
     #[test]

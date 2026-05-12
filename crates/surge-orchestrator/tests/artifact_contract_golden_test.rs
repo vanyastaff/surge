@@ -30,6 +30,15 @@ fn validate_fixture(kind: ArtifactKind, relative: &str) -> ArtifactValidationRep
     validate_artifact(kind, Some(artifact_path), &content)
 }
 
+fn validate_fixture_as(
+    kind: ArtifactKind,
+    relative: &str,
+    virtual_path: &str,
+) -> ArtifactValidationReport {
+    let (_, content) = load_fixture(relative);
+    validate_artifact(kind, Some(std::path::Path::new(virtual_path)), &content)
+}
+
 fn diagnostic_codes(report: &ArtifactValidationReport) -> Vec<ArtifactDiagnosticCode> {
     report
         .diagnostics
@@ -131,6 +140,25 @@ fn invalid_fixtures_emit_stable_diagnostic_codes() {
         assert_eq!(
             diagnostic_codes(&report),
             *expected_codes,
+            "{relative} diagnostic codes drifted"
+        );
+    }
+}
+
+#[test]
+fn invalid_spec_markdown_fixtures_emit_empty_acceptance_criteria() {
+    let cases = [
+        "invalid/spec-placeholder.md",
+        "invalid/spec-empty-checkbox.md",
+        "invalid/spec-question-mark.md",
+    ];
+
+    for relative in cases {
+        let report = validate_fixture_as(ArtifactKind::Spec, relative, "spec.md");
+        assert!(!report.is_valid(), "{relative} should be invalid");
+        assert_eq!(
+            diagnostic_codes(&report),
+            vec![ArtifactDiagnosticCode::EmptyAcceptanceCriteria],
             "{relative} diagnostic codes drifted"
         );
     }
