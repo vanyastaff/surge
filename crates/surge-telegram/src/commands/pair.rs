@@ -42,6 +42,25 @@ pub trait PairingWriter: Send + Sync {
 /// case-insensitive on the wire (the database stores Crockford
 /// uppercase); this handler normalises trim+uppercase before consume.
 ///
+/// # Known limitation — token consume + pairing write are not yet atomic
+///
+/// The current flow calls [`PairingTokenConsumer::consume`] *before*
+/// [`PairingWriter::pair`]. If the consume succeeds but the pair
+/// write then fails (rare — SQLite transient error), the token is
+/// permanently marked consumed and the operator has to mint a fresh
+/// one with `surge telegram setup`. The reverse order would open a
+/// security window: the token would remain valid between the pair
+/// write and the consume call, so a leaked token could pair a
+/// second chat in that gap.
+///
+/// The proper fix is a single transactional persistence operation
+/// (`pair_with_token(token, chat_id, now)`) that wraps both SQL
+/// calls in `BEGIN IMMEDIATE` ... `COMMIT`. It lands together with
+/// the live `polling_default(bot)` adapter — until that adapter
+/// runs, no `/pair` Telegram update reaches this handler and the
+/// race is moot. Tracked in the milestone plan as a follow-up to
+/// the deferred live-polling listener.
+///
 /// # Errors
 ///
 /// Returns [`TelegramCockpitError`] when token consume or pairings write

@@ -137,6 +137,20 @@ pub enum CallbackOutcome {
         /// Verb that fired.
         verb: CallbackVerb,
     },
+    /// The verb was [`CallbackVerb::Edit`]. The handler must NOT call
+    /// `resolve_human_input` here — tapping `Edit` is only an
+    /// expression of intent. The runtime is expected to send a
+    /// forced-reply prompt for the operator's feedback text, store
+    /// the prompt's `message_id` on the card's
+    /// `pending_edit_prompt_message_id`, and resolve the gate when
+    /// the reply arrives (Decision 7 of the Telegram cockpit
+    /// milestone plan).
+    PendingEditFeedback {
+        /// Card id awaiting a forced-reply feedback message.
+        card_id: String,
+        /// Run id the eventual resolution will target.
+        run_id: String,
+    },
     /// The originating chat is not on the pairings allowlist.
     AdmissionDenied {
         /// Chat id that attempted the callback.
@@ -266,10 +280,26 @@ where
         CallbackVerb::Approve => resolve(&parsed, &card, &ctx.engine, "approve", None).await,
         CallbackVerb::Reject => resolve(&parsed, &card, &ctx.engine, "reject", None).await,
         CallbackVerb::Edit => {
-            // Comment is collected via the forced-reply follow-up. For now
-            // we resolve with an empty comment — the production wiring
-            // attaches the operator's reply text once it lands.
-            resolve(&parsed, &card, &ctx.engine, "edit", Some(String::new())).await
+            // Decision 7: the engine MUST NOT be resolved here.
+            // Tapping `Edit` is only an expression of intent —
+            // resolving immediately with an empty comment would
+            // close the gate before the operator's feedback can be
+            // collected, and the subsequent reply text would have
+            // nowhere to land. The runtime owns the forced-reply
+            // prompt + reply correlation; we surface
+            // `PendingEditFeedback` so it knows to start that flow.
+            tracing::info!(
+                target: "telegram::callback",
+                chat_id = %chat_id,
+                verb = "edit",
+                card_id = %parsed.card_id,
+                run_id = %card.run_id,
+                "edit intent received; awaiting forced-reply feedback"
+            );
+            Ok(CallbackOutcome::PendingEditFeedback {
+                card_id: parsed.card_id,
+                run_id: card.run_id.clone(),
+            })
         },
         CallbackVerb::Ack => {
             tracing::info!(
@@ -611,16 +641,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_verb_seeds_empty_comment_on_engine_call() {
+    async fn edit_verb_defers_resolution_pending_forced_reply() {
         let store = FakeStore::default();
-        store.insert(open_card(SAMPLE_CARD_ID, "run-1"));
+        store.insert(open_card(SAMPLE_CARD_ID, "run-XYZ"));
         let ctx = ctx(store, FakeAdmission::allowing(), FakeEngine::default());
         let data = format!("cockpit:edit:{SAMPLE_CARD_ID}");
-        let _ = handle_callback(42, &data, &ctx).await.unwrap();
-        let calls = ctx.engine.calls();
-        assert_eq!(calls[0].2["outcome"], "edit");
-        // MVP seeds an empty comment; the forced-reply path will refill it.
-        assert_eq!(calls[0].2["comment"], "");
+        let outcome = handle_callback(42, &data, &ctx).await.unwrap();
+        match outcome {
+            CallbackOutcome::PendingEditFeedback { card_id, run_id } => {
+                assert_eq!(card_id, SAMPLE_CARD_ID);
+                assert_eq!(run_id, "run-XYZ");
+            },
+            other => panic!("expected PendingEditFeedback, got {other:?}"),
+        }
+        // Crucially: engine MUST NOT have been called — resolution
+        // is deferred until the forced-reply feedback arrives.
+        assert!(ctx.engine.calls().is_empty());
     }
 
     #[tokio::test]

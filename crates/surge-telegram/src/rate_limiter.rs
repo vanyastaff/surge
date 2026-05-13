@@ -1,23 +1,29 @@
-//! Cockpit rate limiter — token-bucket per chat with a global ceiling.
+//! Cockpit rate limiter — token-bucket per chat plus a time-refilled
+//! global bucket.
 //!
 //! Decision 9 of the Telegram cockpit milestone plan pins the limits:
 //!
 //! - Per-chat: sustained `1 update/sec`, burst `5`.
 //! - Global: `25 updates/sec` across all chats.
 //!
-//! [`CockpitRateLimiter::acquire`] returns a [`RateLimitToken`] that holds
-//! a permit on the global semaphore for its lifetime; dropping the token
-//! releases the permit. Per-chat throttling is enforced inside `acquire`
-//! by parking until the chat's bucket has refilled to at least one
-//! token.
+//! Both limits use the same [`BucketState`] implementation —
+//! capacity-bounded token bucket with continuous refill — so the
+//! global ceiling is genuinely a *rate* (updates per second), not a
+//! concurrency cap. Fast-completing calls cannot exceed the global
+//! quota by recycling permits, because tokens only return at the
+//! refill rate.
+//!
+//! [`CockpitRateLimiter::acquire`] parks until BOTH buckets have a
+//! token, then returns a [`RateLimitToken`] marker. The token is
+//! `#[must_use]` for API ergonomics but holds no resources — drop
+//! semantics are a no-op.
 //!
 //! `RequestError::RetryAfter` handling lives in the emit code, not here —
 //! the limiter only protects against self-inflicted bursts.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 
 /// Default per-chat burst capacity. Set to `5` so a small flurry of edits
@@ -29,9 +35,12 @@ pub const DEFAULT_PER_CHAT_BURST: u32 = 5;
 /// documented soft cap is `1 msg/sec/chat`; we stay on that line.
 pub const DEFAULT_PER_CHAT_REFILL_PER_SEC: u32 = 1;
 
-/// Default global concurrent ceiling. Telegram's documented soft cap is
-/// `~30/sec` across all chats; we leave a safety margin of 5.
-pub const DEFAULT_GLOBAL_LIMIT: usize = 25;
+/// Default global ceiling — updates per second across all chats.
+/// Telegram's documented soft cap is `~30/sec`; we leave a safety
+/// margin of 5. Used as both the bucket capacity (burst) and the
+/// per-second refill rate (sustained), so the limiter genuinely caps
+/// the rate (not just concurrent in-flight calls).
+pub const DEFAULT_GLOBAL_LIMIT: u32 = 25;
 
 /// Internal state of one chat's token bucket.
 #[derive(Debug)]
@@ -97,7 +106,7 @@ impl BucketState {
 /// Rate limiter shared across every cockpit emit / Bot API call.
 pub struct CockpitRateLimiter {
     per_chat: Mutex<HashMap<i64, BucketState>>,
-    global: Arc<Semaphore>,
+    global: Mutex<BucketState>,
     capacity: u32,
     refill_per_sec: u32,
 }
@@ -121,38 +130,57 @@ impl CockpitRateLimiter {
         )
     }
 
-    /// Construct a limiter with custom limits. Used by tests and the
-    /// daemon's config-driven path.
+    /// Construct a limiter with custom limits.
+    ///
+    /// `global_per_sec` is the sustained rate AND the burst capacity —
+    /// the global bucket starts full and refills at the same rate per
+    /// second. This is genuinely a rate cap (not a concurrency cap):
+    /// fast-completing calls cannot exceed the per-second budget by
+    /// recycling permits.
     #[must_use]
     pub fn with_limits(
         per_chat_burst: u32,
         per_chat_refill_per_sec: u32,
-        global_limit: usize,
+        global_per_sec: u32,
     ) -> Self {
+        let now = Instant::now();
         Self {
             per_chat: Mutex::new(HashMap::new()),
-            global: Arc::new(Semaphore::new(global_limit)),
+            global: Mutex::new(BucketState::fresh(now, global_per_sec, global_per_sec)),
             capacity: per_chat_burst,
             refill_per_sec: per_chat_refill_per_sec,
         }
     }
 
-    /// Acquire a rate-limit permit for `chat_id`. Blocks until both the
-    /// per-chat bucket and the global ceiling allow the call.
+    /// Acquire a rate-limit permit for `chat_id`. Parks until BOTH the
+    /// global bucket and the per-chat bucket have a token available.
     ///
-    /// The returned [`RateLimitToken`] must outlive the Bot API call it
-    /// gates. Dropping the token releases the global permit immediately;
-    /// the per-chat token is consumed (not held) so concurrent calls for
-    /// the same chat compete for the bucket, not for the token.
+    /// The returned [`RateLimitToken`] is a `#[must_use]` marker —
+    /// dropping it is a no-op. Tokens are time-based, not
+    /// connection-pool-based, so there is nothing to release.
     pub async fn acquire(&self, chat_id: i64) -> RateLimitToken {
-        // Hold the global permit before parking on the per-chat bucket so
-        // the global ceiling is always observed.
-        let permit = self
-            .global
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("global semaphore is never closed");
+        // Park until the global bucket has a token. Doing this first
+        // means a saturated global rate cannot be bypassed by a chat
+        // whose per-chat bucket is full.
+        loop {
+            let wait = {
+                let now = Instant::now();
+                let mut g = self.global.lock().await;
+                g.try_consume(now)
+            };
+            match wait {
+                Ok(()) => break,
+                Err(d) => {
+                    tracing::debug!(
+                        target: "telegram::rate",
+                        kind = "global",
+                        wait_ms = %d.as_millis(),
+                        "rate-limit park",
+                    );
+                    tokio::time::sleep(d).await;
+                },
+            }
+        }
 
         loop {
             let wait = {
@@ -161,16 +189,14 @@ impl CockpitRateLimiter {
                 let bucket = map
                     .entry(chat_id)
                     .or_insert_with(|| BucketState::fresh(now, self.capacity, self.refill_per_sec));
-                match bucket.try_consume(now) {
-                    Ok(()) => None,
-                    Err(d) => Some(d),
-                }
+                bucket.try_consume(now)
             };
             match wait {
-                None => break,
-                Some(d) => {
+                Ok(()) => break,
+                Err(d) => {
                     tracing::debug!(
                         target: "telegram::rate",
+                        kind = "per_chat",
                         chat_id = %chat_id,
                         wait_ms = %d.as_millis(),
                         "rate-limit park",
@@ -186,31 +212,30 @@ impl CockpitRateLimiter {
             "rate-limit acquired",
         );
 
-        RateLimitToken { _permit: permit }
+        RateLimitToken {}
     }
 
-    /// Currently-available permits on the global semaphore. Useful for
-    /// metrics; the test suite uses this to assert the global counter
-    /// rebounds after a token drop.
-    #[must_use]
-    pub fn global_available(&self) -> usize {
-        self.global.available_permits()
+    /// Currently-available tokens in the global bucket. Useful for
+    /// telemetry; returns the snapshot value without refilling.
+    pub async fn global_available(&self) -> u32 {
+        self.global.lock().await.available
     }
 }
 
-/// RAII guard returned by [`CockpitRateLimiter::acquire`].
+/// Marker returned by [`CockpitRateLimiter::acquire`].
 ///
-/// While alive, the holder owns one permit on the global semaphore. Drop
-/// releases the permit. The per-chat token has been consumed at acquire
-/// time; it is not held by this guard.
+/// Both the global and per-chat tokens are consumed at acquire time
+/// and refill on a clock — there is no permit to release, so dropping
+/// this value is a no-op. The `#[must_use]` keeps callers honest about
+/// the intent of binding the token for the lifetime of the Bot API
+/// call.
 #[must_use = "the rate-limit token must outlive the API call it gates"]
-pub struct RateLimitToken {
-    _permit: OwnedSemaphorePermit,
-}
+pub struct RateLimitToken {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
     #[tokio::test(start_paused = true)]
@@ -219,8 +244,8 @@ mod tests {
         // No park expected, so the future resolves immediately under
         // paused time.
         let _token = limiter.acquire(42).await;
-        // Global permits dropped by one.
-        assert_eq!(limiter.global_available(), DEFAULT_GLOBAL_LIMIT - 1);
+        // Global bucket consumed one of its DEFAULT_GLOBAL_LIMIT tokens.
+        assert_eq!(limiter.global_available().await, DEFAULT_GLOBAL_LIMIT - 1,);
     }
 
     #[tokio::test(start_paused = true)]
@@ -237,13 +262,14 @@ mod tests {
     async fn sixth_call_parks_until_bucket_refills() {
         let limiter = Arc::new(CockpitRateLimiter::with_limits(5, 1, 25));
 
-        // Burn the burst of 5.
+        // Burn the per-chat burst of 5.
         let mut held = Vec::new();
         for _ in 0..5 {
             held.push(limiter.acquire(42).await);
         }
 
-        // The 6th call must park. Run it concurrently and advance time.
+        // The 6th call must park on the per-chat bucket. Run it
+        // concurrently and advance time.
         let limiter_clone = Arc::clone(&limiter);
         let park_task = tokio::spawn(async move { limiter_clone.acquire(42).await });
 
@@ -251,11 +277,11 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(
             !park_task.is_finished(),
-            "6th acquire must park before the bucket refills"
+            "6th acquire must park before the per-chat bucket refills"
         );
 
-        // Advance virtual time by 1s. With refill_per_sec=1 the bucket
-        // gains one token, unblocking the parked call.
+        // Advance virtual time by 1s. With per-chat refill_per_sec=1
+        // the bucket gains one token, unblocking the parked call.
         tokio::time::advance(StdDuration::from_secs(1)).await;
         tokio::task::yield_now().await;
         let _token6 = park_task.await.expect("park task finishes after refill");
@@ -264,44 +290,54 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn per_chat_buckets_are_independent() {
+        // Per-chat bucket of 1 with refill 1/sec; global of 25/sec.
+        // Two calls to two different chats both land instantly.
         let limiter = CockpitRateLimiter::with_limits(1, 1, 25);
         let _a = limiter.acquire(42).await;
-        // Chat 99 has its own bucket — second acquire is instant.
         let _b = limiter.acquire(99).await;
     }
 
     #[tokio::test(start_paused = true)]
-    async fn dropping_token_returns_permit_to_global_semaphore() {
-        let limiter = CockpitRateLimiter::with_limits(1, 1, 2);
-        let t1 = limiter.acquire(42).await;
-        let t2 = limiter.acquire(99).await;
-        assert_eq!(limiter.global_available(), 0);
-        drop(t1);
-        assert_eq!(limiter.global_available(), 1);
-        drop(t2);
-        assert_eq!(limiter.global_available(), 2);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn global_ceiling_blocks_when_all_permits_held() {
+    async fn global_rate_throttles_burst_across_chats() {
+        // Global of 2/sec, per-chat of 10/sec — so the global is the
+        // binding constraint. Two calls land instantly (drain the
+        // bucket); the third must park until the bucket refills.
         let limiter = Arc::new(CockpitRateLimiter::with_limits(10, 10, 2));
         let _a = limiter.acquire(1).await;
         let _b = limiter.acquire(2).await;
-        assert_eq!(limiter.global_available(), 0);
+        assert_eq!(limiter.global_available().await, 0);
 
         let limiter_clone = Arc::clone(&limiter);
         let third = tokio::spawn(async move { limiter_clone.acquire(3).await });
         tokio::task::yield_now().await;
         assert!(
             !third.is_finished(),
-            "third acquire must park while the global ceiling is saturated"
+            "third acquire must park while the global bucket is drained"
         );
 
-        drop(_a);
+        // Advance virtual time by 1s — global refill of 2/sec adds
+        // two tokens, unblocking the parked call.
+        tokio::time::advance(StdDuration::from_secs(1)).await;
         tokio::task::yield_now().await;
         let _t3 = third
             .await
-            .expect("third acquire resolves once a permit frees up");
+            .expect("third acquire resolves once the global bucket refills");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_token_does_not_return_capacity() {
+        // Time-based limiter: dropping a token is a no-op. The
+        // bucket only refills on the clock. This is intentional —
+        // see the module docstring.
+        let limiter = CockpitRateLimiter::with_limits(1, 1, 2);
+        let t1 = limiter.acquire(42).await;
+        let t2 = limiter.acquire(99).await;
+        assert_eq!(limiter.global_available().await, 0);
+        drop(t1);
+        drop(t2);
+        // Still zero — the bucket only refills on the clock, not on
+        // permit drop.
+        assert_eq!(limiter.global_available().await, 0);
     }
 
     #[test]

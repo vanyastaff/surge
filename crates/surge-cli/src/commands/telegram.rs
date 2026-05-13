@@ -176,8 +176,17 @@ fn open_registry_connection() -> Result<rusqlite::Connection> {
     rusqlite::Connection::open(&db_path).map_err(|e| anyhow!("open registry: {e}"))
 }
 
-/// `~/.surge/` — same convention every other CLI command uses.
+/// `$SURGE_HOME` if set and non-empty, otherwise `~/.surge/`.
+///
+/// Mirrors the resolution helper in `commands/bootstrap.rs` so isolated
+/// installs and tests that point `SURGE_HOME` at a temp dir see the
+/// same registry the daemon writes to.
 fn surge_home_dir() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("SURGE_HOME")
+        && !custom.is_empty()
+    {
+        return Ok(PathBuf::from(custom));
+    }
     let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
     Ok(base.join(".surge"))
 }

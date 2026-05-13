@@ -312,11 +312,11 @@ async fn t25_cockpit_approve_callback_resolves_gate_once() {
     assert!(calls[0].2.get("comment").is_none());
 }
 
-// ── T26: edit → engine resolve with comment ──────────────────────
+// ── T26: edit defers engine resolution pending forced-reply ──────
 
 #[tokio::test]
-async fn t26_cockpit_edit_callback_seeds_edit_outcome_with_comment() {
-    let store = (FakeCards::with(sample_card("CARD-B", "run-2", true)));
+async fn t26_cockpit_edit_callback_defers_until_forced_reply() {
+    let store = FakeCards::with(sample_card("CARD-B", "run-2", true));
     let ctx = CallbackCtx {
         store,
         admission: FakeAdmission::pair(42),
@@ -326,19 +326,20 @@ async fn t26_cockpit_edit_callback_seeds_edit_outcome_with_comment() {
     let outcome = handle_callback(42, "cockpit:edit:CARD-B", &ctx)
         .await
         .unwrap();
-    assert!(matches!(
-        outcome,
-        CallbackOutcome::Resolved {
-            verb: CallbackVerb::Edit,
-            ..
+    // Decision 7: edit callback only signals intent — engine must
+    // not be called yet. The runtime sends a forced-reply prompt
+    // and resolves with the typed comment when the reply lands.
+    match outcome {
+        CallbackOutcome::PendingEditFeedback { card_id, run_id } => {
+            assert_eq!(card_id, "CARD-B");
+            assert_eq!(run_id, "run-2");
         },
-    ));
-    let calls = ctx.engine.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].2["outcome"], "edit");
-    // MVP: callback seeds an empty comment; `/feedback <run_id>
-    // <text>` is the textual alternative.
-    assert_eq!(calls[0].2["comment"], "");
+        other => panic!("expected PendingEditFeedback, got {other:?}"),
+    }
+    assert!(
+        ctx.engine.calls().is_empty(),
+        "engine.resolve_human_input MUST NOT fire from the edit callback",
+    );
 }
 
 // ── T27: reconcile never sends new messages ─────────────────────

@@ -755,6 +755,97 @@ async fn enqueue_l2_template_start(
     );
 }
 
+/// L3 path — synthesize a Start action so the run begins without
+/// waiting for an operator tap.
+///
+/// The L1 inbox card is still emitted for observability (the operator
+/// sees the run in flight on their phone); the synthesized
+/// `InboxActionRow` runs through the same `InboxActionConsumer ::
+/// handle_start` path with `policy_hint = None` so the launcher
+/// resolves the bootstrap graph normally. Post-completion the
+/// `AutomationMergeGate` consumer fires.
+async fn enqueue_l3_auto_start(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    _task_details: &surge_intake::types::TaskDetails,
+    priority: surge_intake::Priority,
+) {
+    use surge_persistence::inbox_queue::{self, InboxActionKind};
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now();
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some("Enqueued".into()),
+            duplicate_of: None,
+            priority: Some(priority.label().into()),
+            state: TicketState::InboxNotified,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: Some(callback_token.clone()),
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: ticket_index insert failed");
+            return;
+        }
+    } else if let Err(e) = repo.set_callback_token(task_id_str, &callback_token) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L3: set_callback_token failed");
+        return;
+    }
+
+    if let Err(e) = inbox_queue::append_action(
+        &conn,
+        InboxActionKind::Start,
+        task_id_str,
+        &callback_token,
+        "auto",
+        None,
+        None,
+    ) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L3: append_action failed");
+        return;
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        priority = ?priority,
+        "L3 auto-start enqueued (card emitted alongside for observability)"
+    );
+}
+
 /// Reflect a non-`NewTask` event from the tracker into `ticket_index`.
 ///
 /// Handles three flavors of `TaskEventKind`:
@@ -1000,8 +1091,19 @@ async fn dispatch_triage_decision(
                     "L0 policy reached dispatch_triage_decision — should have been short-circuited"
                 );
             },
-            AutomationPolicy::Standard | AutomationPolicy::Auto { .. } => {
+            AutomationPolicy::Standard => {
                 enqueue_l1_inbox_card(storage, event, task_details, priority, summary).await;
+            },
+            AutomationPolicy::Auto { .. } => {
+                // L3 = visible card for observability + synthesized
+                // auto-Start so the operator does not have to tap.
+                // The card emission lands as a bystander view; the
+                // launcher proceeds without waiting for human input.
+                // The merge gate fires post-completion (see
+                // `AutomationMergeGate`).
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary.clone())
+                    .await;
+                enqueue_l3_auto_start(storage, event, task_details, priority).await;
             },
             // `AutomationPolicy` is `#[non_exhaustive]` — any tier added
             // in a future milestone falls through to the safe L1 path
@@ -1265,6 +1367,17 @@ async fn spawn_inbox_subsystems(
     tokio::spawn(desktop.run(shutdown_for_desktop));
 
     // Telegram bot (only if config provides a chat ID + token).
+    //
+    // Token resolution order:
+    //   1. Secrets store under `telegram.cockpit.bot_token` —
+    //      populated by `surge telegram setup`.
+    //   2. Env var named by `[telegram].bot_token_env` (legacy path,
+    //      kept for back-compat with `.env`-style deployments).
+    //
+    // The secrets path is preferred so the documented CLI flow
+    // (`surge telegram setup` → `/pair`) actually wires the daemon's
+    // bot — without this lookup the persisted token was silently
+    // ignored and only the env var path worked.
     if let Some(tg_cfg) = config.telegram.as_ref() {
         let chat_id = tg_cfg.chat_id.or_else(|| {
             tg_cfg
@@ -1272,10 +1385,12 @@ async fn spawn_inbox_subsystems(
                 .as_deref()
                 .and_then(|env| std::env::var(env).ok().and_then(|s| s.parse::<i64>().ok()))
         });
-        let token = tg_cfg
-            .bot_token_env
-            .as_deref()
-            .and_then(|env| std::env::var(env).ok());
+        let token = resolve_bot_token_from_secrets(&storage).or_else(|| {
+            tg_cfg
+                .bot_token_env
+                .as_deref()
+                .and_then(|env| std::env::var(env).ok())
+        });
         match (chat_id, token) {
             (Some(chat_id), Some(token)) => {
                 let bot = teloxide::Bot::new(token.clone());
@@ -1302,6 +1417,36 @@ async fn spawn_inbox_subsystems(
         }
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");
+    }
+}
+
+/// Read the cockpit bot token from the secrets store. Returns `None`
+/// when the row is absent or the registry connection cannot be
+/// acquired (a missing token is the common "not configured" case, not
+/// a fatal error, so we log at debug and fall through to the env-var
+/// fallback in the caller).
+fn resolve_bot_token_from_secrets(
+    storage: &Arc<surge_persistence::runs::storage::Storage>,
+) -> Option<String> {
+    use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, get_secret};
+    match storage.acquire_registry_conn() {
+        Ok(conn) => match get_secret(&conn, TELEGRAM_BOT_TOKEN_KEY) {
+            Ok(token) => token,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "secrets store lookup for cockpit bot token failed; trying env var"
+                );
+                None
+            },
+        },
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "could not acquire registry conn for cockpit bot token lookup"
+            );
+            None
+        },
     }
 }
 

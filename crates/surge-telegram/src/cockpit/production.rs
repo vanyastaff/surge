@@ -396,18 +396,33 @@ impl UpdateRoutes for ProductionRoutes {
             // Silently drop — admission denial is INFO-logged inside admit().
             return;
         }
-        info!(
+        warn!(
             target: "telegram::cmd",
             %chat_id,
             cmd = %cmd,
             args_len = args.len(),
-            "command dispatched",
+            "command dispatched but server-side handlers not yet wired in production — \
+             /pair, /status, /runs, /run, /abort, /snooze, /feedback do nothing yet"
         );
-        // The actual command reply formatting + Bot API send-back is
-        // wired in a follow-up that owns the Bot handle for output.
-        // For now we log the dispatch so the operator can verify
-        // routing works end-to-end; the e2e tests in T25-T28 exercise
-        // the same seam with assertable recorders.
+        // Server-side wiring is gated on TWO follow-ups that must
+        // land together:
+        //   1. The live `polling_default(bot)` update stream (today
+        //      `spawn_telegram_cockpit` passes `stream::empty()`), so
+        //      this method is currently dead code in production — no
+        //      Telegram update ever reaches it.
+        //   2. Bot-reply integration: each handler in
+        //      `crate::commands::*` returns a `CommandReply` that
+        //      needs `bot.send_message(chat_id, reply.text)`. That
+        //      requires `ProductionRoutes` to carry the
+        //      `teloxide::Bot` (today only the dispatch context's
+        //      `TelegramApi` adapter does, and it is owned by the
+        //      emitter).
+        // Until both land, every command path is a deliberate no-op
+        // with a WARN so an operator who configured the cockpit but
+        // sees nothing happen knows where to look. Unit tests in
+        // `commands::*` exercise each handler with fake deps; the
+        // e2e tests in `tests/cockpit_e2e.rs` exercise the routing
+        // surface end-to-end on the callback path.
     }
 
     async fn handle_reply(&self, chat_id: i64, reply_to_message_id: i64, text: &str) {

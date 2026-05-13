@@ -261,22 +261,46 @@ async fn apply_merge_decision(
         ),
     };
 
-    if let Err(e) = source.post_comment(task_id, &body).await {
+    // Both side-effects must succeed before we record the dedup row.
+    // Otherwise a transient provider failure would be marked as
+    // emitted and the next `RunFinished` retry would no-op, leaving
+    // the ticket without the merge decision visible on the tracker.
+    let comment_ok = match source.post_comment(task_id, &body).await {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(
+                target: "intake::merge_gate",
+                error = %e,
+                task_id = %task_id_str,
+                "merge gate comment post failed; will retry on next RunFinished"
+            );
+            false
+        },
+    };
+    let label_ok = match source.set_label(task_id, label, true).await {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(
+                target: "intake::merge_gate",
+                error = %e,
+                task_id = %task_id_str,
+                label = label,
+                "merge gate set_label failed; will retry on next RunFinished"
+            );
+            false
+        },
+    };
+
+    if !(comment_ok && label_ok) {
         warn!(
             target: "intake::merge_gate",
-            error = %e,
             task_id = %task_id_str,
-            "merge gate comment post failed"
+            run_id = %run_id_str,
+            comment_ok,
+            label_ok,
+            "merge gate emission incomplete — skipping intake_emit_log record so retry can fire"
         );
-    }
-    if let Err(e) = source.set_label(task_id, label, true).await {
-        warn!(
-            target: "intake::merge_gate",
-            error = %e,
-            task_id = %task_id_str,
-            label = label,
-            "merge gate set_label failed"
-        );
+        return;
     }
 
     {
