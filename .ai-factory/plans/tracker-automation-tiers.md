@@ -96,7 +96,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - Tests against in-memory SQLite: roundtrip + idempotency property.
   - Verification: `cargo test -p surge-persistence`.
 
-- [ ] **Task 3 — Extract `launch_ticket_run` helper** (Decision 3)
+- [x] **Task 3 — Extract `launch_ticket_run` helper** (Decision 3)
   - New module `crates/surge-daemon/src/inbox/ticket_run_launcher.rs` with:
     - `pub async fn fetch_ticket_for_start(repo, sources, callback_token) -> Result<TicketStart, ...>`.
     - `pub async fn launch_ticket_run(start, opts: LaunchOpts, engine, builder, archetypes, repo, ...) -> Result<RunHandle, ...>`.

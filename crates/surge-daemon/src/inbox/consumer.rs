@@ -8,14 +8,15 @@ use std::time::Duration;
 use surge_core::SurgeConfig;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
-use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
-use surge_orchestrator::engine::config::EngineRunConfig;
+use surge_orchestrator::bootstrap::BootstrapGraphBuilder;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::inbox_queue::{self, InboxActionKind, InboxActionRow};
 use surge_persistence::intake::{IntakeError, IntakeRepo, TicketState};
 use surge_persistence::runs::storage::Storage;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+use crate::inbox::ticket_run_launcher::{LaunchOutcome, TicketRunLauncher};
 
 /// Polls `inbox_action_queue` and dispatches handlers.
 pub struct InboxActionConsumer {
@@ -86,133 +87,69 @@ impl InboxActionConsumer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Build a [`TicketRunLauncher`] from this consumer's daemon-level state.
+    ///
+    /// Cheap: every field clone is either an `Arc` bump or a `PathBuf` /
+    /// small-config clone. Done per `handle_start` invocation rather than
+    /// stored to avoid touching upstream construction sites.
+    fn launcher(&self) -> TicketRunLauncher {
+        TicketRunLauncher::new(
+            Arc::clone(&self.storage),
+            Arc::clone(&self.engine),
+            Arc::clone(&self.bootstrap),
+            self.worktrees_root.clone(),
+            self.project_root.clone(),
+            self.config.clone(),
+        )
+    }
+
     async fn handle_start(&self, row: &InboxActionRow) -> Result<(), String> {
-        // Resolve ticket row.
-        let ticket_row = {
-            let conn = self
-                .storage
-                .acquire_registry_conn()
-                .map_err(|e| e.to_string())?;
-            IntakeRepo::new(&conn)
-                .fetch_by_callback_token(&row.callback_token)
-                .map_err(|e| e.to_string())?
-        };
-        let Some(ticket_row) = ticket_row else {
+        let launcher = self.launcher();
+        let Some(start) = launcher
+            .fetch_ticket_for_start(&self.sources, &row.callback_token)
+            .await?
+        else {
             info!(token = %row.callback_token, "Start: callback token not found; ignoring");
             return Ok(());
         };
+
         // Idempotency: state must still be awaiting decision.
         if !matches!(
-            ticket_row.state,
+            start.ticket_row.state,
             TicketState::InboxNotified | TicketState::Snoozed
         ) {
             info!(
-                state = ?ticket_row.state,
-                task_id = %ticket_row.task_id,
+                state = ?start.ticket_row.state,
+                task_id = %start.ticket_row.task_id,
                 "Start: ticket no longer awaiting decision; ignoring"
             );
             return Ok(());
         }
 
-        // Resolve TaskSource.
-        let source = self
-            .sources
-            .get(&ticket_row.source_id)
-            .ok_or_else(|| format!("source {} not registered", ticket_row.source_id))?;
-        let task_id =
-            TaskId::try_new(ticket_row.task_id.clone()).map_err(|e| format!("task_id: {e}"))?;
-        let details = source
-            .fetch_task(&task_id)
-            .await
-            .map_err(|e| format!("fetch_task: {e}"))?;
-
-        // Provision worktree.
-        let run_id = surge_core::id::RunId::new();
-        let worktree = self.worktrees_root.join(run_id.to_string());
-        std::fs::create_dir_all(&worktree).map_err(|e| format!("worktree mkdir: {e}"))?;
-
-        // Build graph.
-        let prompt = BootstrapPrompt {
-            title: details.title.clone(),
-            description: details.description.clone(),
-            tracker_url: Some(details.url.clone()),
-            priority: ticket_row
-                .priority
-                .as_deref()
-                .and_then(crate::inbox::consumer_helpers::parse_priority_str),
-            labels: details.labels.clone(),
-        };
-        let graph = self
-            .bootstrap
-            .build(run_id, prompt, worktree.clone())
-            .await
-            .map_err(|e| format!("bootstrap.build: {e}"))?;
-
-        // Start the run.
-        let run_config = surge_orchestrator::project_context::with_project_context_seed(
-            EngineRunConfig::default(),
-            &self.project_root,
-            &self.config,
-        );
-        let handle = self
-            .engine
-            .start_run(run_id, graph, worktree, run_config)
-            .await
-            .map_err(|e| format!("engine.start_run: {e}"))?;
-
-        // Update ticket_index: state=RunStarted, run_id set, callback_token cleared.
-        {
-            let conn = self
-                .storage
-                .acquire_registry_conn()
-                .map_err(|e| e.to_string())?;
-            let repo = IntakeRepo::new(&conn);
-            repo.set_run_id(&ticket_row.task_id, run_id.to_string())
-                .map_err(|e| e.to_string())?;
-            match repo.update_state_validated(&ticket_row.task_id, TicketState::RunStarted) {
-                Ok(()) => {},
-                Err(IntakeError::InvalidTransition { from, to }) => {
-                    warn!(
-                        ?from,
-                        ?to,
-                        task_id = %ticket_row.task_id,
-                        "Start: state transition rejected; assuming concurrent action"
-                    );
-                    return Ok(());
-                },
-                Err(e) => return Err(e.to_string()),
-            }
-            repo.clear_callback_token(&ticket_row.task_id)
-                .map_err(|e| e.to_string())?;
+        match launcher.launch(start, &row.decided_via).await? {
+            LaunchOutcome::Launched(run) => {
+                let sync = crate::inbox::state_sync::TicketStateSync::new(
+                    run.task_id.clone(),
+                    Arc::clone(&self.storage),
+                    run.source,
+                );
+                tokio::spawn(sync.run(run.handle));
+                info!(
+                    task_id = %run.task_id,
+                    run_id = %run.run_id,
+                    "inbox Start dispatched"
+                );
+            },
+            LaunchOutcome::StateRejected { task_id, from, to } => {
+                warn!(
+                    ?from,
+                    ?to,
+                    task_id,
+                    "Start: state transition rejected; assuming concurrent action"
+                );
+            },
         }
 
-        // Post tracker comment. Map the wire-level `decided_via` ("telegram"
-        // / "desktop") to a human-readable label since this string is shown
-        // verbatim to ticket viewers.
-        let via_label = match row.decided_via.as_str() {
-            "telegram" => "Telegram",
-            "desktop" => "the desktop notification",
-            other => other,
-        };
-        let comment = format!(
-            "Surge run #{} started — see {} for progress.",
-            run_id.short(),
-            via_label,
-        );
-        if let Err(e) = source.post_comment(&task_id, &comment).await {
-            warn!(error = %e, task_id = %task_id, "tracker comment on Start failed");
-        }
-
-        // Spawn TicketStateSync to follow the run.
-        let sync = crate::inbox::state_sync::TicketStateSync::new(
-            task_id.clone(),
-            Arc::clone(&self.storage),
-            Arc::clone(source),
-        );
-        tokio::spawn(sync.run(handle));
-
-        info!(task_id = %task_id, run_id = %run_id, "inbox Start dispatched");
         Ok(())
     }
 
