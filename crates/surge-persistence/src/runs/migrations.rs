@@ -49,6 +49,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0008-telegram-pairings",
         include_str!("migrations/registry/0008_telegram_pairings.sql"),
     ),
+    (
+        "registry-0009-telegram-cards",
+        include_str!("migrations/registry/0009_telegram_cards.sql"),
+    ),
+    (
+        "registry-0010-snooze-subjects",
+        include_str!("migrations/registry/0010_snooze_subjects.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
