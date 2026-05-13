@@ -13,6 +13,7 @@ pub mod card;
 pub mod cockpit;
 pub mod commands;
 pub mod error;
+pub mod rate_limiter;
 
 pub use card::{
     CardEmitter, CardKind, CardStore, EmitOutcome, RenderedCard, TelegramApi, render_bootstrap,
