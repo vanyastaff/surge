@@ -29,6 +29,15 @@ pub enum RecordedCall {
         call_id: String,
         payload: ToolResultPayload,
     },
+    /// `AcpBridge::reply_to_permission` was invoked. `option_id` is the
+    /// ID the engine selected (e.g. `"allow"`, `"deny"`); the variant
+    /// carries the cancelled-vs-selected outcome via `cancelled`.
+    ReplyToPermission {
+        session: SessionId,
+        request_id: String,
+        /// `Some(option_id)` for `Selected`, `None` for `Cancelled`.
+        option_id: Option<String>,
+    },
     SessionState {
         session: SessionId,
     },
@@ -146,10 +155,27 @@ impl BridgeFacade for MockBridge {
 
     async fn reply_to_permission(
         &self,
-        _session: SessionId,
-        _request_id: String,
-        _response: agent_client_protocol::RequestPermissionResponse,
+        session: SessionId,
+        request_id: String,
+        response: agent_client_protocol::RequestPermissionResponse,
     ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        use agent_client_protocol::RequestPermissionOutcome;
+        let option_id = match response.outcome {
+            RequestPermissionOutcome::Selected(sel) => Some(sel.option_id.0.as_ref().to_string()),
+            RequestPermissionOutcome::Cancelled => None,
+            // RequestPermissionOutcome is `#[non_exhaustive]` in the SDK;
+            // future variants record as `Cancelled` (None) until the test
+            // fixture handles them explicitly.
+            _ => None,
+        };
+        self.recorded_calls
+            .lock()
+            .await
+            .push(RecordedCall::ReplyToPermission {
+                session,
+                request_id,
+                option_id,
+            });
         Ok(())
     }
 

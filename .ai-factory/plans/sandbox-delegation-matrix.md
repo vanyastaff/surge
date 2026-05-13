@@ -157,7 +157,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** round-trip a v1-encoded payload through `MigrationV1ToV2` → identical `EventPayload`. Round-trip a payload containing each new variant through `schema_version=2` → identical `EventPayload`. Reject `schema_version > MAX_SUPPORTED_VERSION` with a clear error.
   - **Depends on Tasks 8, 12.**
 
-- [ ] **Task 9: Negative tests — blocked elevation surfaces as `StageFailed`, unsupported combo refuses run start.**
+- [x] **Task 9: Negative tests — blocked elevation surfaces as `StageFailed`, unsupported combo refuses run start.**
   - Add `crates/surge-orchestrator/tests/elevation_blocked.rs`: drive an agent stage that requests elevation, deny it, assert the outcome is `StageFailed` with `reason` referencing the denied capability.
   - Add `crates/surge-orchestrator/tests/sandbox_unsupported_combo.rs`: load a `flow.toml` with `runtime = "gemini"` + `mode = "read-only"` (a row marked `verified = false` with empty flags), assert `engine run` refuses with the typed sandbox-resolve error and the daemon never appends `RunStarted`.
   - **Files:** `crates/surge-orchestrator/tests/elevation_blocked.rs`, `crates/surge-orchestrator/tests/sandbox_unsupported_combo.rs`.
