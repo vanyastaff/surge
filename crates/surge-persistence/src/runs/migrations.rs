@@ -41,6 +41,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0006-roadmap-patch-index",
         include_str!("migrations/registry/0006_roadmap_patch_index.sql"),
     ),
+    (
+        "registry-0007-telegram-pairing-tokens",
+        include_str!("migrations/registry/0007_telegram_pairing_tokens.sql"),
+    ),
+    (
+        "registry-0008-telegram-pairings",
+        include_str!("migrations/registry/0008_telegram_pairings.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

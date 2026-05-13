@@ -74,6 +74,9 @@ pub mod store;
 /// New M2 Surge storage layer (per-run event log, registry, worktree integration).
 pub mod runs;
 
+/// Telegram cockpit persistence — pairing tokens, paired-chat allowlist, cards.
+pub mod telegram;
+
 pub use runs::inbox_queue;
 
 /// Persistence error types
