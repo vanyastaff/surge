@@ -32,6 +32,11 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -53,23 +58,29 @@ jobs:
             ${{ runner.os }}-target-test-
             ${{ runner.os }}-target-
 
-      - name: Run tests
-        run: cargo test --workspace --exclude surge-ui --verbose
+      # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
+      # in its own process by default, which avoids parallel SQLite/WAL races
+      # we hit on Windows under the old harness.
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace --exclude surge-ui --no-fail-fast
+
+      # nextest does not run doctests; the canonical workaround is a single
+      # extra `cargo test --doc` invocation. Cheap because no recompilation.
+      - name: Run doctests
+        run: cargo test --workspace --exclude surge-ui --doc
 
       - name: Build mock_acp_agent for engine integration tests
         if: matrix.os == 'ubuntu-latest'
         run: cargo build -p surge-acp --bin mock_acp_agent
 
-      - name: Run M5 engine integration tests (--ignored)
+      # `--ignored` covers tests that need the mock_acp_agent binary or a real
+      # external ACP runtime. Linux-only because that's where the binary is
+      # built above. `continue-on-error` keeps a single external-dep flake
+      # from blocking the rest of the gate.
+      - name: Run engine integration tests (--ignored)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p surge-orchestrator --tests -- --ignored
+        run: cargo nextest run -p surge-orchestrator --run-ignored only
         timeout-minutes: 10
-        # `--ignored` includes long-running e2e flows and tests that need an
-        # external ACP agent; continue-on-error so a single one doesn't fail
-        # the build. (Earlier comment blamed an "M5.1 bridge reply-routing
-        # hang" — M5.1 has since landed and the AcpBridge::Drop deadlock that
-        # caused those hangs is fixed; the gate stays for the genuinely
-        # external-dep tests.)
         continue-on-error: true
 
   clippy:
