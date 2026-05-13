@@ -38,9 +38,11 @@ surge-persistence.workspace = true
 surge-notify.workspace = true
 notify-rust = { workspace = true }
 surge-intake.workspace = true
+surge-telegram = { path = "../surge-telegram" }
 teloxide.workspace = true
 reqwest.workspace = true
 ulid.workspace = true
+futures = "0.3"
 
 # Unix signal handling
 [target.'cfg(unix)'.dependencies]

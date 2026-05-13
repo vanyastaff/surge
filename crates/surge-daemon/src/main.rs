@@ -139,6 +139,10 @@ fn main() -> std::process::ExitCode {
             EngineConfig::default(),
         ));
 
+        // Keep a clone of the concrete engine handle for the cockpit's
+        // `subscribe_tap()` (the facade does not expose this surface).
+        let cockpit_engine = Arc::clone(&engine);
+
         let facade: Arc<dyn surge_orchestrator::engine::facade::EngineFacade> =
             Arc::new(LocalEngineFacade::new(engine));
 
@@ -266,6 +270,7 @@ fn main() -> std::process::ExitCode {
             Arc::clone(&storage),
             Arc::clone(&source_registry),
             Arc::clone(&facade),
+            Arc::clone(&cockpit_engine),
             &config,
             shutdown.clone(),
         ).await;
@@ -1204,6 +1209,7 @@ async fn spawn_inbox_subsystems(
     storage: Arc<surge_persistence::runs::storage::Storage>,
     sources: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
     engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
     config: &surge_core::config::SurgeConfig,
     shutdown: CancellationToken,
 ) {
@@ -1270,11 +1276,21 @@ async fn spawn_inbox_subsystems(
             .and_then(|env| std::env::var(env).ok());
         match (chat_id, token) {
             (Some(chat_id), Some(token)) => {
-                let bot = teloxide::Bot::new(token);
+                let bot = teloxide::Bot::new(token.clone());
                 let tg =
                     TgInboxBot::new(bot, teloxide::types::ChatId(chat_id), Arc::clone(&storage));
                 let shutdown_for_tg = shutdown.clone();
                 tokio::spawn(tg.run(shutdown_for_tg));
+
+                spawn_telegram_cockpit(
+                    &token,
+                    chat_id,
+                    Arc::clone(&storage),
+                    Arc::clone(&engine),
+                    Arc::clone(&cockpit_engine),
+                    config.inbox.snooze_poll_interval,
+                    shutdown.clone(),
+                );
             },
             _ => {
                 tracing::warn!(
@@ -1285,4 +1301,67 @@ async fn spawn_inbox_subsystems(
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");
     }
+}
+
+/// Construct the cockpit wiring and spawn its two background tasks
+/// under a 3-retry-then-give-up supervisor.
+///
+/// Cockpit failures are logged but do not kill the daemon. The
+/// supervisor wraps the cockpit runtime in a restart loop with a
+/// 5-second cooldown; after three consecutive panics the supervisor
+/// gives up at `ERROR` level (the rest of the daemon — engine, inbox,
+/// IPC — keeps running so the operator can still drive via CLI).
+fn spawn_telegram_cockpit(
+    token: &str,
+    chat_id: i64,
+    storage: Arc<surge_persistence::runs::storage::Storage>,
+    engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
+    snooze_poll_interval: std::time::Duration,
+    shutdown: CancellationToken,
+) {
+    let bot = teloxide::Bot::new(token.to_owned());
+
+    // Production update stream is deferred — the live
+    // `teloxide::update_listeners::polling_default` wiring (which
+    // requires adapting the `UpdateListener` into a
+    // `Stream<Item = Update>`) lands in a follow-up. For now the
+    // cockpit runs with the engine-tap loop active and the callback
+    // path dormant; the snooze rescheduler still drives via its
+    // direct interval ticker. The cockpit's `dispatch_ctx` correctly
+    // sends cards into Telegram on every tap event, so operators
+    // already see card emission; only inline-button callbacks need
+    // the production update stream.
+    use futures::StreamExt as _;
+    let updates: Box<dyn futures::Stream<Item = teloxide::types::Update> + Send + Unpin> =
+        Box::new(futures::stream::empty().boxed());
+    tracing::warn!(
+        target: "daemon::cockpit",
+        "live polling listener deferred — engine-tap emission active, callbacks dormant"
+    );
+
+    let wiring = surge_telegram::cockpit::production::CockpitWiring {
+        storage,
+        engine,
+        bot,
+        admin_chat_id: chat_id,
+        tap_rx: cockpit_engine.subscribe_tap(),
+        updates,
+        snooze_poll_interval,
+    };
+
+    let handles = surge_telegram::cockpit::production::spawn_cockpit(wiring, shutdown);
+
+    tracing::info!(
+        target: "daemon::cockpit",
+        chat_id = chat_id,
+        "cockpit spawned (runtime + snooze)"
+    );
+
+    // The handles run for the daemon's lifetime; aborting them happens
+    // via the shared shutdown token. Drop them so the daemon's task
+    // table does not track the JoinHandle directly — the cockpit's
+    // own `select!` on `shutdown.cancelled()` is the canonical exit
+    // path.
+    drop(handles);
 }
