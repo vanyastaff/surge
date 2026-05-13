@@ -13,10 +13,11 @@
 #     upstream issue / docs page where the gap will be closed.
 #
 # Provenance: rows for the v0.1 verified runtimes (Claude Code, Codex,
-# Gemini) ship empty here and are populated by Tasks 4 and 5 of the
-# "Sandbox delegation matrix" milestone — see
-# `.ai-factory/plans/sandbox-delegation-matrix.md`. Declared-unverified rows
-# for Cursor / Copilot / OpenCode / Goose are populated by Task 6.
+# Gemini full-access) ship verified with concrete launch flags here.
+# Declared-unverified rows for Cursor / Copilot / OpenCode / Goose and
+# for Gemini's non-full-access modes ship with empty flags and a note
+# pointing at the upstream tracking issue or docs page — surge refuses
+# to start a non-doctor run against them until they are verified.
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
 

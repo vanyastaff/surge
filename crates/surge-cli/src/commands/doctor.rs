@@ -73,14 +73,27 @@ async fn run_report(format: DoctorFormat) -> Result<()> {
     let matrix = surge_core::default_matrix();
     info!(
         target: "surge_cli.doctor",
+        registry_count = registry.list().len(),
         detected_count = detected.len(),
         "registry detection complete"
     );
 
+    // Index detections by agent id so every registry entry can find its
+    // command_path (when present). Reports are stable across machines:
+    // every declared agent gets a row, with `binary_path = None` and
+    // `version_status = ProbeFailed` for the ones not on PATH.
+    let detected_by_id: std::collections::HashMap<String, surge_acp::DetectedAgent> = detected
+        .into_iter()
+        .map(|d| (d.entry.id.clone(), d))
+        .collect();
+
     let mut report = DoctorReport::new();
-    for agent in detected {
-        let entry = build_doctor_entry(agent.entry.clone(), agent.command_path, &matrix).await;
-        report.entries.push(entry);
+    for entry in registry.list() {
+        let command_path = detected_by_id
+            .get(&entry.id)
+            .and_then(|d| d.command_path.clone());
+        let doctor_entry = build_doctor_entry(entry.clone(), command_path, &matrix).await;
+        report.entries.push(doctor_entry);
     }
 
     render(&report, format)?;

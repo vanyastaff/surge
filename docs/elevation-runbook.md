@@ -104,7 +104,7 @@ engine.resolve_elevation(
 ).await?;
 ```
 
-The `option_id` must be one of the IDs the agent offered in `RequestPermissionRequest.options`; surge's bridge falls back to `"allow"` / `"deny"` if the operator's value doesn't match, but a faithful pick keeps the agent's allow-once vs allow-always semantics intact.
+The `option_id` should be one of the IDs the agent offered in `RequestPermissionRequest.options` — the agent stage validates the operator's value against that list before replying and falls back to the first option whose ID matches the literal `"allow"` / `"deny"` token (or, failing that, the first option in the list) so a stale or malformed pick from an operator surface cannot leave the agent waiting. The fallback path emits `tracing::warn!` so the regression is observable.
 
 ## Failure modes
 
