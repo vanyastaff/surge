@@ -222,7 +222,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Files:** `crates/surge-core/src/sandbox_matrix.rs` (tests block).
   - **Depends on Task 1.**
 
-- [ ] **Task 15: Audit-logging assertion test.**
+- [x] **Task 15: Audit-logging assertion test.**
   - Add `crates/surge-orchestrator/tests/elevation_audit.rs`: assert every `SandboxElevationRequested` / `SandboxElevationDecided` event carries `node`, `capability`, decision/reason, and timestamp from the event envelope; assert no PII (raw prompt content) leaks into the payload. Use `insta` snapshot for the payload shape.
   - This formalizes the roadmap deliverable "every elevation request + decision recorded with command summary" without adding a separate audit log file.
   - **Files:** `crates/surge-orchestrator/tests/elevation_audit.rs`.
