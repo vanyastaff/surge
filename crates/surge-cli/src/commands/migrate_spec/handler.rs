@@ -65,10 +65,7 @@ pub fn run(args: MigrateSpecArgs) -> Result<()> {
     write_output(&rendered, args.output.as_ref())?;
     report_warnings(&result.warnings);
 
-    info!(
-        warnings = result.warnings.len(),
-        "migrate-spec finished",
-    );
+    info!(warnings = result.warnings.len(), "migrate-spec finished",);
 
     if !result.warnings.is_empty() && !args.allow_warnings {
         warn!(
@@ -83,7 +80,10 @@ pub fn run(args: MigrateSpecArgs) -> Result<()> {
 
 fn load_legacy_spec(path: &std::path::Path) -> Result<LegacySpecFile> {
     LegacySpecFile::load(path).with_context(|| {
-        format!("migrate-spec: failed to read legacy spec at {}", path.display())
+        format!(
+            "migrate-spec: failed to read legacy spec at {}",
+            path.display()
+        )
     })
 }
 
@@ -116,9 +116,8 @@ fn write_output(rendered: &str, output: Option<&PathBuf>) -> Result<()> {
                     })?;
                 }
             }
-            fs::write(path, rendered).with_context(|| {
-                format!("migrate-spec: failed to write {}", path.display())
-            })?;
+            fs::write(path, rendered)
+                .with_context(|| format!("migrate-spec: failed to write {}", path.display()))?;
             info!(output = %path.display(), "wrote flow.toml");
             Ok(())
         },

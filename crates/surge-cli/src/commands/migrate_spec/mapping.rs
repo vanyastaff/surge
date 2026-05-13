@@ -44,10 +44,9 @@ impl std::fmt::Display for MappingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptySpec => write!(f, "spec has zero subtasks; nothing to migrate"),
-            Self::UnknownDependency { subtask, missing } => write!(
-                f,
-                "subtask {subtask} depends on unknown subtask {missing}"
-            ),
+            Self::UnknownDependency { subtask, missing } => {
+                write!(f, "subtask {subtask} depends on unknown subtask {missing}")
+            },
             Self::SelfDependency { subtask } => {
                 write!(f, "subtask {subtask} depends on itself")
             },
@@ -231,9 +230,10 @@ fn resolve_start(
             ),
         });
     }
-    roots
-        .first()
-        .map_or_else(|| id_map[&subtasks[0].id].clone(), |s| id_map[&s.id].clone())
+    roots.first().map_or_else(
+        || id_map[&subtasks[0].id].clone(),
+        |s| id_map[&s.id].clone(),
+    )
 }
 
 fn collect_soft_warnings(
@@ -424,7 +424,11 @@ fn complexity_str(subtask: &Subtask) -> String {
 fn build_terminal_node(id: &str, terminal_kind: &str, index: usize) -> Table {
     let mut node = Table::new();
     node.insert("id", value(id.to_string()));
-    let y = if terminal_kind == "success" { 0.0 } else { 200.0 };
+    let y = if terminal_kind == "success" {
+        0.0
+    } else {
+        200.0
+    };
     node.insert("position", Item::Table(build_position(index, y)));
     node.insert("declared_outcomes", value(Array::new()));
 
@@ -585,7 +589,11 @@ mod tests {
             pass_edges >= 3,
             "expected at least 3 pass edges (deps + leaf→success), got {pass_edges}",
         );
-        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert!(
+            result.warnings.is_empty(),
+            "warnings: {:?}",
+            result.warnings
+        );
     }
 
     #[test]
@@ -596,7 +604,11 @@ mod tests {
         let spec = make_spec("FanOut", vec![a, b, c]);
 
         let result = map_spec_to_flow(&spec).unwrap();
-        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert!(
+            result.warnings.is_empty(),
+            "warnings: {:?}",
+            result.warnings
+        );
         let rendered = render(&result);
         assert!(rendered.contains("[nodes.s2]"));
         assert!(rendered.contains("[nodes.s3]"));

@@ -11,8 +11,8 @@ use std::path::Path;
 
 use assert_cmd::Command;
 use serde::Serialize;
-use surge_core::spec::{Complexity, Spec, Subtask};
 use surge_core::id::SubtaskId;
+use surge_core::spec::{Complexity, Spec, Subtask};
 use tempfile::TempDir;
 
 /// Minimal serializer for the legacy `.spec.toml` shape — duplicated here
@@ -66,7 +66,10 @@ fn single_subtask() {
 
     let (code, stdout) = run_migrate(&path);
 
-    assert_eq!(code, 0, "expected exit 0 (no warnings); got {code}\n{stdout}");
+    assert_eq!(
+        code, 0,
+        "expected exit 0 (no warnings); got {code}\n{stdout}"
+    );
     insta::assert_snapshot!("single", stdout);
 }
 
