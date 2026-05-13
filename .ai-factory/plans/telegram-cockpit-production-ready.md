@@ -89,10 +89,10 @@ These are decisions taken at planning time so `/aif-implement` does not re-litig
 
 ### Phase 0 — Decisions (no code)
 
-- [ ] Task 1: ADR 0009 — reject `HumanInputResolver` trait. Document Decision 3 (engine entry-point is the contract). Files: `docs/adr/0009-no-human-input-resolver-trait.md`. Logging: N/A. Acceptance: ADR present, links to `engine::engine::resolve_human_input` call site.
-- [ ] Task 2: ADR 0010 — `callback_data` schema (`cockpit:<verb>:<card_id>` vs `inbox:*` namespace). Document Decision 5 and the 64-byte limit. Files: `docs/adr/0010-telegram-callback-schema.md`. Acceptance: ADR enumerates every supported verb.
-- [ ] Task 3: ADR 0011 — card lifecycle, idempotency, recovery (Decisions 4, 8, 10). Files: `docs/adr/0011-telegram-card-lifecycle.md`. Acceptance: ADR includes the `(run_id, node_key, attempt_index)` triple rationale and the `editMessageText`-only invariant.
-- [ ] Task 4: ADR 0012 — separation of `surge-notify` vs `surge-telegram` (Decision 1). Files: `docs/adr/0012-surge-telegram-crate-split.md`. Acceptance: ADR explains why the long-poll loop is NOT in `surge-notify`.
+- [x] Task 1: ADR 0009 — reject `HumanInputResolver` trait. Document Decision 3 (engine entry-point is the contract). Files: `docs/adr/0009-no-human-input-resolver-trait.md`. Logging: N/A. Acceptance: ADR present, links to `engine::engine::resolve_human_input` call site.
+- [x] Task 2: ADR 0010 — `callback_data` schema (`cockpit:<verb>:<card_id>` vs `inbox:*` namespace). Document Decision 5 and the 64-byte limit. Files: `docs/adr/0010-telegram-callback-schema.md`. Acceptance: ADR enumerates every supported verb.
+- [x] Task 3: ADR 0011 — card lifecycle, idempotency, recovery (Decisions 4, 8, 10). Files: `docs/adr/0011-telegram-card-lifecycle.md`. Acceptance: ADR includes the `(run_id, node_key, attempt_index)` triple rationale and the `editMessageText`-only invariant.
+- [x] Task 4: ADR 0012 — separation of `surge-notify` vs `surge-telegram` (Decision 1). Files: `docs/adr/0012-surge-telegram-crate-split.md`. Acceptance: ADR explains why the long-poll loop is NOT in `surge-notify`.
 <!-- Commit checkpoint: tasks 1-4 -->
 
 ### Phase 1 — `surge-telegram` crate scaffolding & shared types
