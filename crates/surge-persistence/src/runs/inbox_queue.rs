@@ -187,6 +187,89 @@ pub fn mark_action_processed(conn: &Connection, seq: i64) -> rusqlite::Result<()
     Ok(())
 }
 
+/// One pending cockpit-card snooze, returned by [`list_due_cockpit_snoozes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueCockpitSnooze {
+    /// `inbox_action_queue.seq` of the snooze row — pass to
+    /// [`mark_action_processed`] once the re-emit succeeds.
+    pub seq: i64,
+    /// Cockpit card ULID stored in `subject_ref`.
+    pub card_id: String,
+    /// Absolute wake-up time recorded by the operator's `/snooze`
+    /// command.
+    pub snooze_until: DateTime<Utc>,
+}
+
+/// Append a fresh cockpit-card snooze row.
+///
+/// Stored on the same `inbox_action_queue` table as inbox snoozes,
+/// discriminated by `subject_kind = 'cockpit_card'` with `subject_ref`
+/// carrying the cockpit card ULID. Returns the assigned seq.
+pub fn append_cockpit_snooze(
+    conn: &Connection,
+    card_id: &str,
+    decided_via: &str,
+    snooze_until: DateTime<Utc>,
+) -> rusqlite::Result<i64> {
+    let now = Utc::now();
+    // `task_id` and `callback_token` are not meaningful for cockpit
+    // snoozes; we store the card id in both so the schema-level
+    // NOT NULL constraints stay happy and any operator-visible
+    // diagnostics still see something useful.
+    conn.execute(
+        "INSERT INTO inbox_action_queue \
+            (kind, task_id, callback_token, decided_via, snooze_until, enqueued_at, policy_hint, \
+             subject_kind, subject_ref) \
+         VALUES ('snooze', ?1, ?1, ?2, ?3, ?4, NULL, 'cockpit_card', ?1)",
+        params![
+            card_id,
+            decided_via,
+            snooze_until.to_rfc3339(),
+            now.to_rfc3339(),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// List unprocessed cockpit-card snoozes whose wake-up time has elapsed.
+///
+/// `now` is the cutoff timestamp; production passes `chrono::Utc::now()`,
+/// tests pass a mock clock value for determinism.
+pub fn list_due_cockpit_snoozes(
+    conn: &Connection,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<Vec<DueCockpitSnooze>> {
+    let mut stmt = conn.prepare(
+        "SELECT seq, subject_ref, snooze_until \
+         FROM inbox_action_queue \
+         WHERE kind = 'snooze' \
+           AND subject_kind = 'cockpit_card' \
+           AND processed_at IS NULL \
+           AND snooze_until IS NOT NULL \
+           AND snooze_until <= ?1 \
+         ORDER BY seq ASC",
+    )?;
+    let mut rows = stmt.query(params![now.to_rfc3339()])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        let snooze_until_str: String = r.get(2)?;
+        out.push(DueCockpitSnooze {
+            seq: r.get(0)?,
+            card_id: r.get(1)?,
+            snooze_until: DateTime::parse_from_rfc3339(&snooze_until_str)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        e.to_string().into(),
+                    )
+                })?
+                .with_timezone(&Utc),
+        });
+    }
+    Ok(out)
+}
+
 /// Append a delivery row for an outgoing inbox card.
 pub fn append_delivery(
     conn: &Connection,
@@ -317,8 +400,10 @@ mod tests {
         conn.execute_batch(m2).unwrap();
         let m3 = include_str!("migrations/registry/0005_inbox_queues.sql");
         conn.execute_batch(m3).unwrap();
-        let m4 = include_str!("migrations/registry/0012_inbox_action_policy_hint.sql");
+        let m4 = include_str!("migrations/registry/0010_snooze_subjects.sql");
         conn.execute_batch(m4).unwrap();
+        let m5 = include_str!("migrations/registry/0012_inbox_action_policy_hint.sql");
+        conn.execute_batch(m5).unwrap();
         conn
     }
 
@@ -413,6 +498,63 @@ mod tests {
 
         record_desktop_delivered(&conn, seq).unwrap();
         assert_eq!(list_pending_desktop_deliveries(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn append_cockpit_snooze_then_list_due_round_trips() {
+        let conn = db();
+        let future = chrono::DateTime::parse_from_rfc3339("2026-05-13T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let seq = append_cockpit_snooze(&conn, "CARD-ABC", "telegram", future).unwrap();
+        assert!(seq > 0);
+
+        // Cutoff before the wake-up: no due rows.
+        let early = chrono::DateTime::parse_from_rfc3339("2026-05-13T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(list_due_cockpit_snoozes(&conn, early).unwrap().is_empty());
+
+        // Cutoff after the wake-up: row surfaces.
+        let late = chrono::DateTime::parse_from_rfc3339("2026-05-13T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let due = list_due_cockpit_snoozes(&conn, late).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].card_id, "CARD-ABC");
+        assert_eq!(due[0].seq, seq);
+
+        // Marking processed removes the row from the due list.
+        mark_action_processed(&conn, seq).unwrap();
+        assert!(list_due_cockpit_snoozes(&conn, late).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_due_cockpit_snoozes_filters_other_subject_kinds() {
+        let conn = db();
+        let future = chrono::DateTime::parse_from_rfc3339("2026-05-13T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Insert an inbox-ticket snooze that should NOT be returned.
+        append_action(
+            &conn,
+            InboxActionKind::Snooze,
+            "linear:wsp/T-1",
+            "tok",
+            "telegram",
+            Some(future),
+            None,
+        )
+        .unwrap();
+        // And a cockpit-card snooze that SHOULD be returned.
+        append_cockpit_snooze(&conn, "CARD-XYZ", "telegram", future).unwrap();
+
+        let late = chrono::DateTime::parse_from_rfc3339("2026-05-13T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let due = list_due_cockpit_snoozes(&conn, late).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].card_id, "CARD-XYZ");
     }
 
     #[test]
