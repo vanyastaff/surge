@@ -95,6 +95,8 @@ impl Platform {
                 ];
                 if let Some(h) = home {
                     paths.push(h.join("AppData\\Local"));
+                    paths.push(h.join("AppData\\Roaming\\npm"));
+                    paths.push(h.join(".local\\bin"));
                 }
                 paths
             },

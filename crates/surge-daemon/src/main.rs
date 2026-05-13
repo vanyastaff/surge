@@ -139,6 +139,10 @@ fn main() -> std::process::ExitCode {
             EngineConfig::default(),
         ));
 
+        // Keep a clone of the concrete engine handle for the cockpit's
+        // `subscribe_tap()` (the facade does not expose this surface).
+        let cockpit_engine = Arc::clone(&engine);
+
         let facade: Arc<dyn surge_orchestrator::engine::facade::EngineFacade> =
             Arc::new(LocalEngineFacade::new(engine));
 
@@ -237,10 +241,24 @@ fn main() -> std::process::ExitCode {
                 Arc::clone(&notifier),
                 Arc::clone(&storage),
                 Arc::clone(&bridge),
+                Arc::clone(&facade),
             )
             .await
             {
-                intake_completion::spawn(completion_rx, source_map_arc, conn_arc);
+                // Run-completion → tracker comment + ticket FSM transition.
+                intake_completion::spawn(completion_rx, Arc::clone(&source_map_arc), Arc::clone(&conn_arc));
+                // L3 auto-merge gate. Subscribes to the same global event
+                // stream via a separate receiver so the two consumers do
+                // not contend. The `JoinHandle` is intentionally dropped:
+                // shutdown is driven by the broadcast channel closing
+                // (when `BroadcastRegistry` is dropped), not by aborting
+                // the task explicitly.
+                let merge_gate_rx = broadcast_registry.subscribe_global();
+                let _merge_gate_handle = surge_daemon::automation_merge_gate::spawn(
+                    merge_gate_rx,
+                    source_map_arc,
+                    conn_arc,
+                );
             } else {
                 info!("intake disabled; run-completion → tracker-comment hook not started");
             }
@@ -252,6 +270,7 @@ fn main() -> std::process::ExitCode {
             Arc::clone(&storage),
             Arc::clone(&source_registry),
             Arc::clone(&facade),
+            Arc::clone(&cockpit_engine),
             &config,
             shutdown.clone(),
         ).await;
@@ -414,6 +433,20 @@ async fn handle_triage_event(
         },
     };
 
+    // Step 2.5: tracker-automation policy gate.
+    //
+    // Resolve the tier from labels BEFORE paying the triage-author LLM
+    // cost. L0 (`surge:disabled` or label absent) short-circuits here:
+    // write a `Skipped` ticket_index row with `triage_decision = L0Skipped`
+    // and return. L1/L2/L3 fall through into triage; the resolved policy
+    // is then forwarded to `dispatch_triage_decision` so the Enqueued arm
+    // branches without recomputing.
+    let policy = surge_intake::resolve_policy(&task_details.labels);
+    if policy.is_disabled() {
+        apply_l0_short_circuit(storage, &event, &task_details).await;
+        return;
+    }
+
     // Step 3: candidates (soft failure → empty).
     let candidates = surge_intake::candidates::build_for_task(&*source, &task_details, 15)
         .await
@@ -472,54 +505,617 @@ async fn handle_triage_event(
             },
         };
 
-    dispatch_triage_decision(decision, &event, &task_details, &source, notifier, storage).await;
+    dispatch_triage_decision(
+        decision,
+        policy,
+        &event,
+        &task_details,
+        &source,
+        notifier,
+        storage,
+    )
+    .await;
+}
+
+/// L0 short-circuit: persist a `Skipped` ticket_index row with the
+/// `L0Skipped` triage-decision discriminator and return without paying
+/// the triage-author LLM cost. Idempotent on re-fire — if the row
+/// already exists in a non-`Skipped` state, transition is attempted
+/// through the validated FSM; on transition rejection (terminal state,
+/// concurrent action) the policy gate silently no-ops.
+async fn apply_l0_short_circuit(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    task_details: &surge_intake::types::TaskDetails,
+) {
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let now = chrono::Utc::now();
+    let _ = task_details; // currently unused; future tracker comments may want title/url.
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some(surge_intake::TRIAGE_DECISION_L0.into()),
+            duplicate_of: None,
+            priority: None,
+            state: TicketState::Skipped,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: None,
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: ticket_index insert failed");
+            return;
+        }
+    } else {
+        match repo.update_state_validated(task_id_str, TicketState::Skipped) {
+            Ok(()) => {},
+            Err(surge_persistence::intake::IntakeError::InvalidTransition { from, .. }) => {
+                tracing::info!(
+                    target: "intake::policy",
+                    task_id = %task_id_str,
+                    ?from,
+                    "L0: ticket already in terminal/inflight state; no transition needed"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id_str, "L0: state transition failed");
+                return;
+            },
+        }
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        triage_decision = surge_intake::TRIAGE_DECISION_L0,
+        "L0 short-circuit applied — triage skipped"
+    );
+}
+
+/// L1 / L3 path — produce the standard inbox card via the existing
+/// `enqueue_inbox_card` helper. The user approves the card; the
+/// consumer's launcher uses the configured bootstrap builder.
+async fn enqueue_l1_inbox_card(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    task_details: &surge_intake::types::TaskDetails,
+    priority: surge_intake::Priority,
+    summary: String,
+) {
+    let provider = event
+        .task_id
+        .as_str()
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let payload = surge_notify::messages::InboxCardPayload {
+        task_id: event.task_id.clone(),
+        source_id: event.source_id.clone(),
+        provider,
+        title: task_details.title.clone(),
+        summary,
+        priority,
+        task_url: task_details.url.clone(),
+        callback_token,
+    };
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %event.task_id,
+        priority = ?payload.priority,
+        "L1/L3: enqueuing inbox card"
+    );
+    if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(storage, &payload).await {
+        tracing::warn!(
+            error = %e,
+            task_id = %event.task_id,
+            "L1/L3: inbox card enqueue failed"
+        );
+    }
+}
+
+/// L2 path — skip the inbox card and synthesize an `InboxActionRow {
+/// kind: Start, policy_hint: Some(template_name) }` directly so the
+/// consumer's launcher resolves the named template. The ticket_index
+/// row is created/updated in `InboxNotified` state with a fresh
+/// `callback_token` so [`crate::inbox::ticket_run_launcher::TicketRunLauncher::fetch_ticket_for_start`]
+/// can locate it.
+async fn enqueue_l2_template_start(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    _task_details: &surge_intake::types::TaskDetails,
+    template_name: &str,
+    priority: surge_intake::Priority,
+) {
+    use surge_persistence::inbox_queue::{self, InboxActionKind};
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now();
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some("Enqueued".into()),
+            duplicate_of: None,
+            priority: Some(priority.label().into()),
+            state: TicketState::InboxNotified,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: Some(callback_token.clone()),
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: ticket_index insert failed");
+            return;
+        }
+    } else {
+        match repo.update_state_validated(task_id_str, TicketState::InboxNotified) {
+            Ok(()) => {},
+            Err(surge_persistence::intake::IntakeError::InvalidTransition { from, .. }) => {
+                tracing::info!(
+                    target: "intake::policy",
+                    task_id = %task_id_str,
+                    ?from,
+                    "L2: ticket not eligible for InboxNotified transition; skipping enqueue"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id_str, "L2: state transition failed");
+                return;
+            },
+        }
+        if let Err(e) = repo.set_callback_token(task_id_str, &callback_token) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: set_callback_token failed");
+            return;
+        }
+    }
+
+    if let Err(e) = inbox_queue::append_action(
+        &conn,
+        InboxActionKind::Start,
+        task_id_str,
+        &callback_token,
+        "auto",
+        None,
+        Some(template_name),
+    ) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L2: append_action failed");
+        return;
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        template = template_name,
+        priority = ?priority,
+        "L2 template start enqueued"
+    );
+}
+
+/// L3 path — synthesize a Start action so the run begins without
+/// waiting for an operator tap.
+///
+/// The L1 inbox card is still emitted for observability (the operator
+/// sees the run in flight on their phone); the synthesized
+/// `InboxActionRow` runs through the same `InboxActionConsumer ::
+/// handle_start` path with `policy_hint = None` so the launcher
+/// resolves the bootstrap graph normally. Post-completion the
+/// `AutomationMergeGate` consumer fires.
+async fn enqueue_l3_auto_start(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    _task_details: &surge_intake::types::TaskDetails,
+    priority: surge_intake::Priority,
+) {
+    use surge_persistence::inbox_queue::{self, InboxActionKind};
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now();
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some("Enqueued".into()),
+            duplicate_of: None,
+            priority: Some(priority.label().into()),
+            state: TicketState::InboxNotified,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: Some(callback_token.clone()),
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L3: ticket_index insert failed");
+            return;
+        }
+    } else if let Err(e) = repo.set_callback_token(task_id_str, &callback_token) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L3: set_callback_token failed");
+        return;
+    }
+
+    if let Err(e) = inbox_queue::append_action(
+        &conn,
+        InboxActionKind::Start,
+        task_id_str,
+        &callback_token,
+        "auto",
+        None,
+        None,
+    ) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L3: append_action failed");
+        return;
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        priority = ?priority,
+        "L3 auto-start enqueued (card emitted alongside for observability)"
+    );
+}
+
+/// Reflect a non-`NewTask` event from the tracker into `ticket_index`.
+///
+/// Handles three flavors of `TaskEventKind`:
+/// - `TaskClosed` / `StatusChanged { to: "closed" }`: if the ticket is
+///   `Active`, call `EngineFacade::stop_run` with reason
+///   `"closed externally"` and transition to `Aborted`. If the ticket
+///   is `InboxNotified`, clear the callback token and transition to
+///   `Skipped` with `triage_decision = "ExternallyClosed"`. Terminal
+///   states are no-op.
+/// - `LabelsChanged { added }` containing `surge:disabled`: triggers
+///   the same graceful abort path as a status-close (the user wants
+///   the run to stop). Other `surge:*` label transitions are INFO-
+///   logged but do not escalate (the operator must restart).
+/// - Other variants: ignored (defensive — `TaskEventKind` is
+///   `#[serde(tag = "kind")]` rather than `#[non_exhaustive]`, so the
+///   set is closed; the wildcard arm is purely a forward-compat
+///   safety net).
+async fn handle_external_update(
+    event: surge_intake::types::TaskEvent,
+    sources: &Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
+    storage: &Arc<Storage>,
+    engine: &Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+) {
+    use surge_intake::types::TaskEventKind;
+
+    let task_id = event.task_id.as_str().to_string();
+    match event.kind {
+        TaskEventKind::TaskClosed => {
+            apply_external_close(storage, engine, &task_id).await;
+        },
+        TaskEventKind::StatusChanged { ref to, .. } if to.eq_ignore_ascii_case("closed") => {
+            apply_external_close(storage, engine, &task_id).await;
+        },
+        TaskEventKind::StatusChanged { ref from, ref to } => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                from = %from,
+                to = %to,
+                "external status change (not closed); ticket_index untouched"
+            );
+        },
+        TaskEventKind::LabelsChanged {
+            ref added,
+            ref removed,
+        } => {
+            let disabled_added = added
+                .iter()
+                .any(|l| l == surge_intake::policy::labels::DISABLED);
+            if disabled_added {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "surge:disabled added mid-run; treating as graceful abort"
+                );
+                apply_external_close(storage, engine, &task_id).await;
+                return;
+            }
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                added = ?added,
+                removed = ?removed,
+                "external labels changed; no FSM action"
+            );
+        },
+        TaskEventKind::NewTask => {
+            // Defensive: NewTask should never reach this handler — the
+            // router gates on event.kind and only forwards non-NewTask
+            // events here.
+            tracing::warn!(
+                target: "intake::router",
+                task_id = %task_id,
+                "NewTask reached external-update handler; routing bug"
+            );
+        },
+    }
+    let _ = sources; // reserved for future tracker-comment side-effects.
+}
+
+/// Shared "close" path used by both `TaskClosed`/`StatusChanged → closed`
+/// and the `surge:disabled` mid-run label transition.
+async fn apply_external_close(
+    storage: &Arc<Storage>,
+    engine: &Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    task_id: &str,
+) {
+    use surge_persistence::intake::{IntakeRepo, TicketState};
+
+    // Phase 1 — snapshot state + run_id under a scoped connection so the
+    // non-`Send` `IntakeRepo` doesn't survive across the upcoming await.
+    let row = {
+        let conn = match storage.acquire_registry_conn() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id, "external-close: acquire conn failed");
+                return;
+            },
+        };
+        match IntakeRepo::new(&conn).fetch(task_id) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "external-close: unknown ticket; no FSM action"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id, "external-close: fetch failed");
+                return;
+            },
+        }
+    };
+
+    // Phase 2 — engine-side abort if there is a live run. This is the
+    // await point; no IntakeRepo is held here.
+    let live_run = matches!(row.state, TicketState::Active | TicketState::RunStarted);
+    if live_run
+        && let Some(run_id_str) = row.run_id.as_deref()
+        && let Ok(run_id) = run_id_str.parse::<surge_core::id::RunId>()
+        && let Err(e) = engine.stop_run(run_id, "closed externally".into()).await
+    {
+        tracing::warn!(
+            target: "intake::router",
+            error = %e,
+            task_id = %task_id,
+            run_id = %run_id_str,
+            "external-close: stop_run failed"
+        );
+    }
+
+    // Phase 3 — apply the FSM transition under a fresh scoped connection.
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id, "external-close: re-acquire conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    match row.state {
+        TicketState::Active | TicketState::RunStarted => {
+            if let Err(e) = repo.update_state_validated(task_id, TicketState::Aborted) {
+                tracing::warn!(
+                    target: "intake::router",
+                    error = ?e,
+                    task_id = %task_id,
+                    "external-close: transition → Aborted refused"
+                );
+            } else {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "external-close: ticket aborted (active run stopped)"
+                );
+            }
+        },
+        TicketState::InboxNotified | TicketState::Snoozed => {
+            if let Err(e) = repo.clear_callback_token(task_id) {
+                tracing::warn!(error = ?e, task_id = %task_id, "external-close: clear_callback_token failed");
+            }
+            if let Err(e) = repo.update_state_validated(task_id, TicketState::Skipped) {
+                tracing::warn!(
+                    target: "intake::router",
+                    error = ?e,
+                    task_id = %task_id,
+                    "external-close: transition → Skipped refused"
+                );
+            } else {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    triage_decision = surge_intake::TRIAGE_DECISION_EXTERNALLY_CLOSED,
+                    "external-close: card invalidated"
+                );
+            }
+        },
+        // Terminal / pre-triage states: no FSM action.
+        TicketState::Completed
+        | TicketState::Failed
+        | TicketState::Aborted
+        | TicketState::Skipped
+        | TicketState::Stale
+        | TicketState::TriageStale => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                state = ?row.state,
+                "external-close: terminal state; no-op"
+            );
+        },
+        _ => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                state = ?row.state,
+                "external-close: state has no explicit handling; no-op"
+            );
+        },
+    }
 }
 
 /// Route a `TriageDecision` to the appropriate output channel.
+///
+/// `policy` is the resolved tier from `handle_triage_event` (L0 already
+/// short-circuited upstream; this function sees L1/L2/L3 only). The
+/// `Enqueued` arm branches on the tier:
+/// - L1 (`Standard`): the existing inbox-card path — user approves
+///   before any run starts.
+/// - L2 (`Template { name }`): skip the inbox card entirely and
+///   synthesize an `InboxActionRow { kind: Start, policy_hint }`
+///   directly so the consumer's launcher resolves the named template.
+/// - L3 (`Auto`): identical to L1 for the inbox-card leg in this
+///   milestone — auto-approve at HumanGate and post-completion merge
+///   are wired by [`crate::AutomationMergeGate`] / future tasks.
 async fn dispatch_triage_decision(
     decision: surge_intake::types::TriageDecision,
+    policy: surge_intake::AutomationPolicy,
     event: &surge_intake::types::TaskEvent,
     task_details: &surge_intake::types::TaskDetails,
     source: &Arc<dyn TaskSource>,
     notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
     storage: &Arc<Storage>,
 ) {
+    use surge_intake::AutomationPolicy;
     use surge_intake::types::TriageDecision;
     let _ = source; // currently unused in Enqueued/Unclear paths after the inbox-queue cut over.
     match decision {
         TriageDecision::Enqueued {
             priority, summary, ..
-        } => {
-            let provider = event
-                .task_id
-                .as_str()
-                .split(':')
-                .next()
-                .unwrap_or("unknown")
-                .to_string();
-            let callback_token = ulid::Ulid::new().to_string();
-            let payload = surge_notify::messages::InboxCardPayload {
-                task_id: event.task_id.clone(),
-                source_id: event.source_id.clone(),
-                provider,
-                title: task_details.title.clone(),
-                summary,
-                priority,
-                task_url: task_details.url.clone(),
-                callback_token,
-            };
-            tracing::info!(
-                task_id = %event.task_id,
-                priority = ?payload.priority,
-                "enqueuing LLM-derived InboxCard"
-            );
-            if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(storage, &payload).await {
+        } => match policy {
+            AutomationPolicy::Template { name } => {
+                enqueue_l2_template_start(storage, event, task_details, &name, priority).await;
+            },
+            AutomationPolicy::Disabled => {
+                // Defensive: L0 should have been short-circuited upstream.
                 tracing::warn!(
-                    error = %e,
+                    target: "intake::policy",
                     task_id = %event.task_id,
-                    "LLM-derived InboxCard enqueue failed"
+                    "L0 policy reached dispatch_triage_decision — should have been short-circuited"
                 );
-            }
+            },
+            AutomationPolicy::Standard => {
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary).await;
+            },
+            AutomationPolicy::Auto { .. } => {
+                // L3 = visible card for observability + synthesized
+                // auto-Start so the operator does not have to tap.
+                // The card emission lands as a bystander view; the
+                // launcher proceeds without waiting for human input.
+                // The merge gate fires post-completion (see
+                // `AutomationMergeGate`).
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary.clone())
+                    .await;
+                enqueue_l3_auto_start(storage, event, task_details, priority).await;
+            },
+            // `AutomationPolicy` is `#[non_exhaustive]` — any tier added
+            // in a future milestone falls through to the safe L1 path
+            // (visible card; operator approval) until explicitly wired.
+            _ => {
+                tracing::warn!(
+                    target: "intake::policy",
+                    task_id = %event.task_id,
+                    "unknown AutomationPolicy variant; falling back to L1 inbox card"
+                );
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary).await;
+            },
         },
         TriageDecision::Duplicate { of, reasoning } => {
             let body = format!(
@@ -580,12 +1176,14 @@ async fn dispatch_triage_decision(
 /// same source registry and SQLite connection. Returns `None` when
 /// intake setup fails (registry DB open / pragma failure); the caller
 /// should skip wiring downstream consumers in that case.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
     notifier: Arc<dyn surge_notify::NotifyDeliverer>,
     storage: Arc<Storage>,
     bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
+    engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
 ) -> Option<(
     Arc<HashMap<String, Arc<dyn TaskSource>>>,
     Arc<TokioMutex<rusqlite::Connection>>,
@@ -637,11 +1235,13 @@ async fn spawn_task_router(
 
     // Consume router output. Triage events go through the LLM dispatch path
     // (which on Enqueued enqueues an inbox card via `enqueue_inbox_card`);
-    // EarlyDuplicate events post a tracker comment.
+    // EarlyDuplicate events post a tracker comment; ExternalUpdate events
+    // reflect external status/label/closed changes into ticket_index.
     let source_map_for_consumer = source_map;
     let bridge_for_consumer = Arc::clone(&bridge);
     let storage_for_consumer = Arc::clone(&storage);
     let notifier_for_consumer = Arc::clone(&notifier);
+    let engine_for_consumer = engine;
     let source_map_for_caller = Arc::clone(&source_map_for_consumer);
     let conn_for_caller = Arc::clone(&conn_arc);
     tokio::spawn(async move {
@@ -683,6 +1283,26 @@ async fn spawn_task_router(
                         ),
                     }
                 },
+                surge_intake::router::RouterOutput::ExternalUpdate { event } => {
+                    handle_external_update(
+                        event,
+                        &source_map_for_consumer,
+                        &storage_for_consumer,
+                        &engine_for_consumer,
+                    )
+                    .await;
+                },
+                // `RouterOutput` is `#[non_exhaustive]` — defensive
+                // catch for any future variant that lands without an
+                // explicit handler. Logging is enough; events fall on
+                // the floor rather than corrupting state.
+                other => {
+                    tracing::warn!(
+                        target: "intake::router",
+                        kind = ?std::mem::discriminant(&other),
+                        "router emitted unhandled RouterOutput variant; dropping"
+                    );
+                },
             }
         }
     });
@@ -694,6 +1314,7 @@ async fn spawn_inbox_subsystems(
     storage: Arc<surge_persistence::runs::storage::Storage>,
     sources: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
     engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
     config: &surge_core::config::SurgeConfig,
     shutdown: CancellationToken,
 ) {
@@ -701,9 +1322,16 @@ async fn spawn_inbox_subsystems(
         consumer::InboxActionConsumer, desktop_listener::DesktopActionListener,
         snooze_scheduler::SnoozeScheduler, tg_bot::TgInboxBot,
     };
+    use surge_orchestrator::archetype_registry::ArchetypeRegistry;
     use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, MinimalBootstrapGraphBuilder};
 
     let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
+    let archetypes: Arc<ArchetypeRegistry> =
+        Arc::new(ArchetypeRegistry::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "ArchetypeRegistry::load failed; using empty registry");
+            ArchetypeRegistry::from_dir(std::path::Path::new("definitely-missing"))
+                .expect("from_dir on missing path returns empty registry")
+        }));
     let worktrees_root = surge_runs_dir().join("worktrees");
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
@@ -715,6 +1343,7 @@ async fn spawn_inbox_subsystems(
         storage: Arc::clone(&storage),
         bootstrap: Arc::clone(&bootstrap),
         engine: Arc::clone(&engine),
+        archetypes: Arc::clone(&archetypes),
         sources: Arc::clone(&sources),
         worktrees_root,
         project_root,
@@ -738,6 +1367,17 @@ async fn spawn_inbox_subsystems(
     tokio::spawn(desktop.run(shutdown_for_desktop));
 
     // Telegram bot (only if config provides a chat ID + token).
+    //
+    // Token resolution order:
+    //   1. Secrets store under `telegram.cockpit.bot_token` —
+    //      populated by `surge telegram setup`.
+    //   2. Env var named by `[telegram].bot_token_env` (legacy path,
+    //      kept for back-compat with `.env`-style deployments).
+    //
+    // The secrets path is preferred so the documented CLI flow
+    // (`surge telegram setup` → `/pair`) actually wires the daemon's
+    // bot — without this lookup the persisted token was silently
+    // ignored and only the env var path worked.
     if let Some(tg_cfg) = config.telegram.as_ref() {
         let chat_id = tg_cfg.chat_id.or_else(|| {
             tg_cfg
@@ -745,17 +1385,29 @@ async fn spawn_inbox_subsystems(
                 .as_deref()
                 .and_then(|env| std::env::var(env).ok().and_then(|s| s.parse::<i64>().ok()))
         });
-        let token = tg_cfg
-            .bot_token_env
-            .as_deref()
-            .and_then(|env| std::env::var(env).ok());
+        let token = resolve_bot_token_from_secrets(&storage).or_else(|| {
+            tg_cfg
+                .bot_token_env
+                .as_deref()
+                .and_then(|env| std::env::var(env).ok())
+        });
         match (chat_id, token) {
             (Some(chat_id), Some(token)) => {
-                let bot = teloxide::Bot::new(token);
+                let bot = teloxide::Bot::new(token.clone());
                 let tg =
                     TgInboxBot::new(bot, teloxide::types::ChatId(chat_id), Arc::clone(&storage));
                 let shutdown_for_tg = shutdown.clone();
                 tokio::spawn(tg.run(shutdown_for_tg));
+
+                spawn_telegram_cockpit(
+                    &token,
+                    chat_id,
+                    Arc::clone(&storage),
+                    Arc::clone(&engine),
+                    Arc::clone(&cockpit_engine),
+                    config.inbox.snooze_poll_interval,
+                    shutdown.clone(),
+                );
             },
             _ => {
                 tracing::warn!(
@@ -766,4 +1418,97 @@ async fn spawn_inbox_subsystems(
     } else {
         tracing::info!("no [telegram] config — TgInboxBot skipped");
     }
+}
+
+/// Read the cockpit bot token from the secrets store. Returns `None`
+/// when the row is absent or the registry connection cannot be
+/// acquired (a missing token is the common "not configured" case, not
+/// a fatal error, so we log at debug and fall through to the env-var
+/// fallback in the caller).
+fn resolve_bot_token_from_secrets(
+    storage: &Arc<surge_persistence::runs::storage::Storage>,
+) -> Option<String> {
+    use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, get_secret};
+    match storage.acquire_registry_conn() {
+        Ok(conn) => match get_secret(&conn, TELEGRAM_BOT_TOKEN_KEY) {
+            Ok(token) => token,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "secrets store lookup for cockpit bot token failed; trying env var"
+                );
+                None
+            },
+        },
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "could not acquire registry conn for cockpit bot token lookup"
+            );
+            None
+        },
+    }
+}
+
+/// Construct the cockpit wiring and spawn its two background tasks
+/// under a 3-retry-then-give-up supervisor.
+///
+/// Cockpit failures are logged but do not kill the daemon. The
+/// supervisor wraps the cockpit runtime in a restart loop with a
+/// 5-second cooldown; after three consecutive panics the supervisor
+/// gives up at `ERROR` level (the rest of the daemon — engine, inbox,
+/// IPC — keeps running so the operator can still drive via CLI).
+fn spawn_telegram_cockpit(
+    token: &str,
+    chat_id: i64,
+    storage: Arc<surge_persistence::runs::storage::Storage>,
+    engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
+    snooze_poll_interval: std::time::Duration,
+    shutdown: CancellationToken,
+) {
+    let bot = teloxide::Bot::new(token.to_owned());
+
+    // Production update stream is deferred — the live
+    // `teloxide::update_listeners::polling_default` wiring (which
+    // requires adapting the `UpdateListener` into a
+    // `Stream<Item = Update>`) lands in a follow-up. For now the
+    // cockpit runs with the engine-tap loop active and the callback
+    // path dormant; the snooze rescheduler still drives via its
+    // direct interval ticker. The cockpit's `dispatch_ctx` correctly
+    // sends cards into Telegram on every tap event, so operators
+    // already see card emission; only inline-button callbacks need
+    // the production update stream.
+    use futures::StreamExt as _;
+    let updates: Box<dyn futures::Stream<Item = teloxide::types::Update> + Send + Unpin> =
+        Box::new(futures::stream::empty().boxed());
+    tracing::warn!(
+        target: "daemon::cockpit",
+        "live polling listener deferred — engine-tap emission active, callbacks dormant"
+    );
+
+    let wiring = surge_telegram::cockpit::production::CockpitWiring {
+        storage,
+        engine,
+        bot,
+        admin_chat_id: chat_id,
+        tap_rx: cockpit_engine.subscribe_tap(),
+        updates,
+        snooze_poll_interval,
+    };
+
+    let handles = surge_telegram::cockpit::production::spawn_cockpit(wiring, shutdown);
+
+    tracing::info!(
+        target: "daemon::cockpit",
+        chat_id = chat_id,
+        "cockpit spawned (runtime + snooze)"
+    );
+
+    // The handles run for the daemon's lifetime; aborting them happens
+    // via the shared shutdown token. Drop them so the daemon's task
+    // table does not track the JoinHandle directly — the cockpit's
+    // own `select!` on `shutdown.cancelled()` is the canonical exit
+    // path.
+    drop(handles);
 }

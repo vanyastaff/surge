@@ -1,5 +1,10 @@
 default_agent = "test-agent"
 
+[agents.claude-acp]
+args = ["@zed-industries/claude-agent-acp"]
+command = "npx"
+transport = "stdio"
+
 [agents.myagent]
 args = []
 command = "C:/Program Files/Git/usr/bin/myagent"

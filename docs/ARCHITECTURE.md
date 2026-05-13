@@ -234,14 +234,27 @@ flowchart TD
     Inbox -->|user taps Start| Bootstrap[Description → Roadmap → Flow]
 ```
 
-For tracker-sourced work the **tracker is the master**: surge writes only labels (`surge-priority/<level>`, `surge:enabled`, `surge:auto`, `surge:template/<name>`) and comments; ticket status stays under the user's control. Automation level is selected via labels:
+For tracker-sourced work the **tracker is the master**: surge writes only labels (`surge-priority/<level>`, `surge:enabled`, `surge:auto`, `surge:template/<name>`, plus the post-completion `surge:merge-proposed` / `surge:merge-blocked`) and comments; ticket status stays under the user's control. Automation level is selected via labels and resolved by the closed enum `surge_intake::policy::AutomationPolicy`:
 
-- **L0** — surge ignores the ticket.
-- **L1** — full bootstrap (default).
-- **L2** — `surge:template/<name>`, skip bootstrap.
-- **L3** — `surge:auto`, full auto including merge.
+| Tier | Label trigger | Behaviour |
+|------|---------------|-----------|
+| **L0** | `surge:disabled` or no `surge:*` label | Surge short-circuits before triage. The ticket is logged in `ticket_index` as `Skipped` with `triage_decision = "L0Skipped"` — no LLM cost. |
+| **L1** | `surge:enabled` | Full bootstrap (Description → Roadmap → Flow) gated by an inbox card + operator click. **Default explicit opt-in.** |
+| **L2** | `surge:template/<name>` | Inbox card skipped; the named archetype is resolved against `ArchetypeRegistry` and the run starts directly. Unknown names degrade to L1 with a WARN log. |
+| **L3** | `surge:auto` | Bootstrap leg identical to L1 (card visible for observation). After `RunFinished { Completed }` the `AutomationMergeGate` consumer evaluates merge readiness and posts a `surge:merge-proposed` or `surge:merge-blocked` decision. |
 
-This is implemented in the `surge-intake` crate around a `TaskSource` trait so future sources (Discord, Jira, Slack, Notion, …) plug in without core changes.
+Precedence (most restrictive wins): `surge:disabled > surge:auto > surge:template/<name> > surge:enabled > absent`. The decision logic lives in one tested site (`surge_intake::policy::resolve_policy` with proptests over arbitrary label vectors).
+
+**External state changes** reflect back into the FSM:
+
+- `TaskClosed` or `StatusChanged { to: "closed" }` → `EngineFacade::stop_run` for active runs, `ticket_index` transitions to `Aborted` (active) or `Skipped` (awaiting decision) with the `ExternallyClosed` discriminator.
+- `LabelsChanged { added: ["surge:disabled"] }` mid-run → graceful abort via the same close path.
+
+The router (`surge_intake::router::TaskRouter`) classifies events: `NewTask` events flow through Tier-1 PreFilter into the triage path; everything else surfaces as `RouterOutput::ExternalUpdate` and bypasses dedup.
+
+**Idempotency** is centralised in the `intake_emit_log` table keyed by `(source_id, task_id, event_kind, run_id)`. Every outbound side-effect that must survive daemon restarts records there; retries no-op. Event kinds: `triage_decision`, `run_started`, `run_completed`, `run_failed`, `run_aborted`, `merge_proposed`, `merge_blocked`.
+
+This is implemented in the `surge-intake` crate around a `TaskSource` trait so future sources (Discord, Jira, Slack, Notion, …) plug in without core changes. The full reference lives in [`docs/tracker-automation.md`](tracker-automation.md) and the decision record is [ADR 0013](adr/0013-tracker-automation-tiers.md).
 
 ## 9. Approval surfaces
 

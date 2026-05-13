@@ -12,6 +12,7 @@ members = [
     "crates/surge-daemon",
     "crates/surge-mcp",
     "crates/surge-intake",
+    "crates/surge-telegram",
 ]
 
 [workspace.package]
@@ -103,6 +104,9 @@ lineark-sdk = "3"
 # GitHub REST client
 octocrab = "0.42"
 
+# Telegram bot framework (surge-daemon inbox, surge-telegram cockpit)
+teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler"] }
+
 # Notification channels (surge-notify)
 notify-rust = "4"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
@@ -140,6 +144,7 @@ surge-notify = { path = "crates/surge-notify" }
 surge-daemon = { path = "crates/surge-daemon" }
 surge-mcp = { path = "crates/surge-mcp" }
 surge-intake = { path = "crates/surge-intake" }
+surge-telegram = { path = "crates/surge-telegram" }
 
 # M7 dependencies
 rmcp = { version = ">=1.6, <2.0", default-features = false, features = ["client", "transport-child-process"] }

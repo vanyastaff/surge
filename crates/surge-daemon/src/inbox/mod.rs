@@ -12,6 +12,7 @@ pub mod desktop_listener;
 pub mod snooze_scheduler;
 pub mod state_sync;
 pub mod tg_bot;
+pub mod ticket_run_launcher;
 
 /// Channel through which an inbox decision was received.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

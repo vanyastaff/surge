@@ -212,6 +212,44 @@ Target paths:
 - CLI / Telegram / UI natural-language work enters the bootstrap path.
 - GitHub Issues and Linear issues are fetched, normalized, and fed into the same bootstrap path.
 
+### Tracker-source tiers
+
+For tickets ingested from a `TaskSource` (GitHub Issues / Linear), the automation level is selected by labels on the ticket itself. The four tiers branch the otherwise-identical intake pipeline:
+
+```mermaid
+flowchart LR
+    Ticket["Tracker event<br/>(NewTask)"]
+    Resolve{resolve_policy<br/>by labels}
+    Skip["L0 — ticket_index = Skipped<br/>no triage cost"]
+    Triage["Triage author"]
+    Card["L1 — inbox card<br/>(user clicks Start)"]
+    Synth["L2 — synthesize Start<br/>policy_hint = template"]
+    Visible["L3 — card visible<br/>(observation only)"]
+    Run["Engine run"]
+    Gate{L3 merge gate<br/>after Completed}
+    Decision["surge:merge-proposed<br/>or surge:merge-blocked"]
+
+    Ticket --> Resolve
+    Resolve -->|surge:disabled / absent| Skip
+    Resolve -->|surge:enabled| Triage
+    Resolve -->|surge:template/X| Triage
+    Resolve -->|surge:auto| Triage
+    Triage -->|Enqueued + L1| Card
+    Triage -->|Enqueued + L2| Synth
+    Triage -->|Enqueued + L3| Visible
+    Card --> Run
+    Synth --> Run
+    Visible --> Run
+    Run --> Gate
+    Gate --> Decision
+```
+
+Full operator reference: [tracker-automation.md](tracker-automation.md). Decision record: [ADR 0013](adr/0013-tracker-automation-tiers.md).
+
+### Telegram cockpit approvals
+
+Bootstrap approvals (Description / Roadmap / Flow stages) and every `HumanGate` resolution are mirrored to Telegram as inline-keyboard cards. Tap `✅ Approve`, `✏ Edit`, or `❌ Reject` on the card; the cockpit translates the callback into `Engine::resolve_human_input` — the same entry point the CLI `surge bootstrap` console-approval path uses (see [ADR 0009](adr/0009-no-human-input-resolver-trait.md)). Setup, pairing, and the full command reference live in [telegram.md](telegram.md).
+
 ## Current Bootstrap Implementation
 
 The implemented bootstrap path is a graph like any other graph. The bundled

@@ -6,17 +6,22 @@
 //!
 //! See `docs/ARCHITECTURE.md`.
 
+pub mod cadence;
 pub mod candidates;
 pub mod dedup;
 pub mod error;
 pub mod github;
 pub mod linear;
+pub mod policy;
 pub mod router;
 pub mod source;
 pub mod testing;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use policy::{
+    AutomationPolicy, TRIAGE_DECISION_EXTERNALLY_CLOSED, TRIAGE_DECISION_L0, resolve_policy,
+};
 pub use source::TaskSource;
 pub use types::{
     Priority, TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary, Tier1Decision,

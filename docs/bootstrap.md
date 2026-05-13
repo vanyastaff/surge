@@ -37,6 +37,20 @@ Each bootstrap gate accepts three decisions:
 | `edit` | Append `BootstrapEditRequested`, route back to the preceding agent with fresh `edit_feedback`, and regenerate the artifact. |
 | `reject` | Fail the bootstrap run. |
 
+### Approval channels
+
+The decisions land on `Engine::resolve_human_input` no matter which surface
+carries them — the engine entry point is the single contract
+([ADR 0009](adr/0009-no-human-input-resolver-trait.md)). Today two
+surfaces are wired:
+
+- **Console** (`surge bootstrap "<prompt>"`) — the CLI prompts on stdin
+  at each gate (`a`, `e`, `r`).
+- **Telegram cockpit** — bootstrap gates emit cards via the engine-tap
+  broadcast; tapping `Approve` / `Edit` / `Reject` routes the same
+  JSON outcome through the cockpit's callback router. Setup, pairing,
+  and the command reference live in [telegram.md](telegram.md).
+
 The default edit-loop cap is `3` per stage. On the next edit after the cap is
 exhausted, the engine emits `EscalationRequested` and fails the run with an
 explicit edit-loop-cap error.

@@ -11,11 +11,13 @@ pub mod format;
 pub mod git;
 pub mod init;
 pub mod insights;
+pub mod intake;
 pub mod memory;
 pub mod migrate_spec;
 pub mod profile;
 pub mod project;
 pub mod registry;
+pub mod telegram;
 pub mod tracker;
 
 // Fuzzy-resolve a spec id (full ULID, prefix, or filename) to a

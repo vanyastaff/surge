@@ -168,7 +168,7 @@
   - Integration test against a known MCP server (filesystem MCP)
   - Sandbox: MCP children honor the run's `SandboxIntent` where the runtime supports it
 
-- [ ] **Telegram cockpit production-ready** — first-class approval surface (touches `surge-notify`, `surge-daemon`, `surge-cli`, `surge-persistence`)
+- [x] **Telegram cockpit production-ready** — first-class approval surface (touches `surge-notify`, `surge-daemon`, `surge-cli`, `surge-persistence`) — landed via plan `.ai-factory/plans/telegram-cockpit-production-ready.md`. New `surge-telegram` crate hosts the bot loop, callback router, card store, recovery reconciler, rate limiter, and `cockpit::production` adapters; daemon spawns it next to `TgInboxBot`. Sandbox elevation card and webhook receiver explicitly deferred (Out of Scope §). The production teloxide-polling `Stream` adapter is wired into `CockpitWiring` but the live polling source is a one-line `polling_default(bot)` swap pending a follow-up (engine-tap dispatch and snooze re-emit are live).
   - `surge telegram setup` with ephemeral binding token persisted in registry SQLite
   - Per-user authorization — only paired chat IDs receive cards; admission failures logged
   - Bootstrap card: Description / Roadmap / Flow stage previews with approve / edit / redo buttons
@@ -184,7 +184,7 @@
   - Rate-limit handling against Telegram Bot API
   - Snooze ergonomics from inbox subsystem extended to cockpit cards (`/snooze 1h` etc.)
 
-- [ ] **Tracker automation tiers** — L0–L3 honored on GitHub Issues and Linear (touches `surge-intake`, `surge-orchestrator`, `surge-daemon`)
+- [x] **Tracker automation tiers** — L0–L3 honored on GitHub Issues and Linear (touches `surge-intake`, `surge-orchestrator`, `surge-daemon`) — landed via plan `.ai-factory/plans/tracker-automation-tiers.md`, see [ADR 0013](../docs/adr/0013-tracker-automation-tiers.md). L3 PR-readiness check and `CadenceController` source-loop wiring deferred to follow-up tasks with explicit blocked/no-op fallbacks today.
   - L0 (`surge:disabled` or label absent): tracker ignores ticket entirely
   - L1 (`surge:enabled`, default): full bootstrap; user approves before run starts
   - L2 (`surge:template/<name>`): skip bootstrap, use named template directly

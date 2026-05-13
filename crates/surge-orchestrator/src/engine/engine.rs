@@ -4,6 +4,7 @@
 
 use crate::engine::config::{EngineConfig, EngineRunConfig};
 use crate::engine::error::EngineError;
+use crate::engine::event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 use crate::engine::handle::RunHandle;
 use crate::engine::tools::ToolDispatcher;
 use crate::profile_loader::ProfileRegistry;
@@ -35,6 +36,12 @@ pub struct Engine {
     /// senders + cancellation token so engine-level methods (resolve, stop)
     /// can route into the right task.
     runs: Arc<tokio::sync::RwLock<HashMap<RunId, ActiveRun>>>,
+    /// Engine-level broadcast tap of every run-event appended to any active
+    /// run's persisted log. Sized at [`TAP_BUFFER_SIZE`]; slow subscribers
+    /// receive [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)
+    /// rather than blocking the writer side. See [`event_tap`] for the
+    /// recovery contract.
+    event_tap: tokio::sync::broadcast::Sender<RunEventTap>,
 }
 
 pub(crate) struct ActiveRun {
@@ -105,6 +112,7 @@ impl Engine {
         mcp_registry: Option<Arc<surge_mcp::McpRegistry>>,
         config: EngineConfig,
     ) -> Self {
+        let (event_tap, _initial_subscriber) = tokio::sync::broadcast::channel(TAP_BUFFER_SIZE);
         Self {
             bridge,
             storage,
@@ -113,6 +121,7 @@ impl Engine {
             mcp_registry,
             config: Arc::new(config),
             runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            event_tap,
         }
     }
 
@@ -138,6 +147,7 @@ impl Engine {
         if profile_registry.is_some() {
             config.profile_registry = profile_registry;
         }
+        let (event_tap, _initial_subscriber) = tokio::sync::broadcast::channel(TAP_BUFFER_SIZE);
         Self {
             bridge,
             storage,
@@ -146,7 +156,57 @@ impl Engine {
             mcp_registry,
             config: Arc::new(config),
             runs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            event_tap,
         }
+    }
+
+    /// Forward every event appended to `writer` onto the engine's broadcast
+    /// tap until the underlying subscription terminates (run closed or
+    /// subscriber stream errored).
+    ///
+    /// The forwarder uses `RunWriter::subscribe_events` — the same SQL-backed
+    /// polling stream consumed by the run handle's `events_stream` — so the
+    /// tap reflects the persisted log, not transient in-memory state. The
+    /// task self-terminates when the stream ends; there is no explicit
+    /// cancellation path because dropping the underlying storage handle
+    /// closes the subscription.
+    fn spawn_event_forwarder(&self, run_id: RunId, writer: &surge_persistence::runs::RunWriter) {
+        let stream = writer.subscribe_events();
+        let tap_sender = self.event_tap.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut stream = std::pin::pin!(stream);
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(event) => {
+                        let _ = tap_sender.send(RunEventTap { run_id, event });
+                    },
+                    Err(err) => {
+                        tracing::debug!(
+                            target: "engine::tap",
+                            %run_id,
+                            error = ?err,
+                            "run event forwarder ended",
+                        );
+                        break;
+                    },
+                }
+            }
+        });
+    }
+
+    /// Subscribe to the engine's run-event broadcast tap.
+    ///
+    /// Receivers see every [`ReadEvent`](surge_persistence::runs::ReadEvent)
+    /// appended to any active run's log, wrapped in a [`RunEventTap`] that
+    /// carries the originating [`RunId`]. The broadcast buffer is
+    /// [`TAP_BUFFER_SIZE`] long; subscribers that fall behind receive
+    /// [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)
+    /// and are expected to trigger a reconcile against the persisted log
+    /// rather than recover the dropped events.
+    #[must_use]
+    pub fn subscribe_tap(&self) -> tokio::sync::broadcast::Receiver<RunEventTap> {
+        self.event_tap.subscribe()
     }
 
     /// Borrow the profile registry, if one is wired into this engine.
@@ -204,6 +264,7 @@ impl Engine {
             .create_run(run_id, &worktree_path, None)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
+        self.spawn_event_forwarder(run_id, &writer);
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
@@ -500,6 +561,7 @@ impl Engine {
             .open_run_writer(run_id)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
+        self.spawn_event_forwarder(run_id, &writer);
 
         let reader = self
             .storage

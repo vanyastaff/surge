@@ -41,6 +41,34 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0006-roadmap-patch-index",
         include_str!("migrations/registry/0006_roadmap_patch_index.sql"),
     ),
+    (
+        "registry-0007-telegram-pairing-tokens",
+        include_str!("migrations/registry/0007_telegram_pairing_tokens.sql"),
+    ),
+    (
+        "registry-0008-telegram-pairings",
+        include_str!("migrations/registry/0008_telegram_pairings.sql"),
+    ),
+    (
+        "registry-0009-telegram-cards",
+        include_str!("migrations/registry/0009_telegram_cards.sql"),
+    ),
+    (
+        "registry-0010-snooze-subjects",
+        include_str!("migrations/registry/0010_snooze_subjects.sql"),
+    ),
+    (
+        "registry-0011-secrets",
+        include_str!("migrations/registry/0011_secrets.sql"),
+    ),
+    (
+        "registry-0012-inbox-action-policy-hint",
+        include_str!("migrations/registry/0012_inbox_action_policy_hint.sql"),
+    ),
+    (
+        "registry-0013-intake-emit-log",
+        include_str!("migrations/registry/0013_intake_emit_log.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

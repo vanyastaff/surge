@@ -56,6 +56,10 @@ pub mod budget;
 /// Storage layer for external ticket intake
 pub mod intake;
 
+/// Per-side-effect idempotency log for outbound intake actions
+/// (tracker comments, label changes, merge proposals).
+pub mod intake_emit_log;
+
 /// Data models for token usage tracking
 pub mod models;
 
@@ -73,6 +77,13 @@ pub mod store;
 
 /// New M2 Surge storage layer (per-run event log, registry, worktree integration).
 pub mod runs;
+
+/// Generic key-value secret store backing CLI subcommands and runtime
+/// secret-reads (Telegram bot token, etc.).
+pub mod secrets;
+
+/// Telegram cockpit persistence — pairing tokens, paired-chat allowlist, cards.
+pub mod telegram;
 
 pub use runs::inbox_queue;
 
