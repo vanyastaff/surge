@@ -172,7 +172,6 @@ flowchart TD
     GitHub[GitHub issue URL or ID]
     Linear[Linear issue URL or ID]
     ExistingFlow[Existing flow.toml]
-    LegacySpec[Legacy spec.toml]
 
     TrackerFetch[Fetch tracker payload]
     Intake[Intake normalizer]
@@ -181,7 +180,6 @@ flowchart TD
     FlowGenerator[Flow Generator<br/>flow.toml]
     Validate[Parse and validate graph]
     Engine[surge-orchestrator engine]
-    Legacy[Legacy spec pipeline]
 
     CliText --> Intake
     CliFile --> Intake
@@ -197,9 +195,7 @@ flowchart TD
     FlowGenerator --> Validate
 
     ExistingFlow --> Validate
-    LegacySpec --> Legacy
     Validate --> Engine
-    Legacy --> Engine
 ```
 
 Current practical paths:
@@ -209,7 +205,7 @@ Current practical paths:
 - `surge bootstrap "<prompt>"` starts from free-form work, generates `description.md`, `roadmap.md`, and `flow.toml`, then launches the materialized follow-up graph.
 - `surge engine run <flow.toml>` starts from an already-authored graph.
 - `surge engine run --template <name>` starts from a bundled or user archetype template and skips bootstrap.
-- `surge run <spec_id>` uses the older spec pipeline.
+- `surge migrate-spec <path>` translates an existing `.spec.toml` into a `flow.toml` for one-shot migration from the retired structured-spec pipeline (see [`migrate-spec-to-flow.md`](migrate-spec-to-flow.md)).
 
 Target paths:
 

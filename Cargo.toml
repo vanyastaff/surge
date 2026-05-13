@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/surge-core",
     "crates/surge-acp",
-    "crates/surge-spec",
     "crates/surge-git",
     "crates/surge-persistence",
     "crates/surge-orchestrator",
@@ -134,7 +133,6 @@ tokio-test = "0.4"
 # Internal crates
 surge-core = { path = "crates/surge-core" }
 surge-acp = { path = "crates/surge-acp" }
-surge-spec = { path = "crates/surge-spec" }
 surge-git = { path = "crates/surge-git" }
 surge-persistence = { path = "crates/surge-persistence" }
 surge-orchestrator = { path = "crates/surge-orchestrator" }

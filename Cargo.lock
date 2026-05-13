@@ -2277,12 +2277,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
-
-[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5204,16 +5198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "petgraph"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
-dependencies = [
- "fixedbitset",
- "indexmap",
-]
-
-[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7260,6 +7244,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 5.0.1",
+ "insta",
  "nix 0.29.0",
  "owo-colors",
  "predicates",
@@ -7273,7 +7258,6 @@ dependencies = [
  "surge-notify",
  "surge-orchestrator",
  "surge-persistence",
- "surge-spec",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -7444,7 +7428,6 @@ dependencies = [
  "surge-mcp",
  "surge-notify",
  "surge-persistence",
- "surge-spec",
  "tempfile",
  "thiserror 2.0.18",
  "tiny_http",
@@ -7485,18 +7468,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
-]
-
-[[package]]
-name = "surge-spec"
-version = "0.1.0"
-dependencies = [
- "petgraph",
- "serde",
- "surge-core",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "tracing",
 ]
 
 [[package]]

@@ -46,10 +46,9 @@ This pattern was chosen because it matches what surge actually is: a single user
 │   │   ├── bundled/flows/                  # First-party flow.toml assets baked in via include_str!
 │   │   └── benches/                        # criterion benches (harness = false)
 │   │
-│   ├── surge-spec/                         # Legacy structured-spec format (kept while flow.toml stabilizes)
 │   │
 │   │   ── Application layer (orchestrator / engine) ──────────────────────────
-│   ├── surge-orchestrator/                 # Engine: graph executor + legacy spec pipeline
+│   ├── surge-orchestrator/                 # Engine: graph executor + bootstrap chain + roadmap-amendment surfaces
 │   │   ├── src/
 │   │   │   ├── prompt.rs                   # PromptRenderer — Handlebars wrapper (strict + lenient)
 │   │   │   ├── archetype_registry.rs       # User/bundled flow template lookup

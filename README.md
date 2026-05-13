@@ -18,10 +18,10 @@ Surge is **pre-release software**. Treat it as an active development workspace, 
 
 - `surge-core` — graph, profile, event, sandbox, approval, and validation types.
 - `surge-acp` — ACP client / pool / bridge, agent registry, discovery, health, mock ACP agent.
-- `surge-orchestrator` — legacy spec pipeline plus the newer graph engine.
+- `surge-orchestrator` — graph engine (`engine/`), bootstrap chain, project-context helper, roadmap-amendment surfaces.
 - `surge-persistence` — SQLite-backed run storage, event logs, views, memory, analytics.
 - `surge-daemon` — long-running local engine host over Unix sockets / Windows named pipes.
-- `surge-cli` — agents, specs, git worktrees, graph engine, daemon, registry, memory, insights, analytics.
+- `surge-cli` — agents, profiles, git worktrees, graph engine, daemon, registry, memory, insights, analytics, legacy-spec auto-translator (`surge migrate-spec`).
 - `surge-notify` — desktop, webhook, Slack, email, and Telegram delivery backends.
 - `surge-mcp` — stdio MCP server lifecycle and tool delegation, currently wired at the library / engine level rather than through a user-facing config file.
 - `surge-ui` — GPUI desktop shell under development.

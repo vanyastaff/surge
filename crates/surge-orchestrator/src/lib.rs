@@ -1,10 +1,13 @@
-//! Orchestrator — drives specs through the full pipeline.
+//! Orchestrator — graph executor (`engine` module) + bootstrap chain, project
+//! context, and roadmap-amendment surfaces.
+//!
+//! The legacy spec pipeline (budget, circuit_breaker, conflict, context,
+//! executor, gates, parallel, phases, pipeline, planner, project, qa, retry,
+//! schedule) was retired as part of the **Legacy pipeline retirement**
+//! milestone. All work now flows through [`engine::Engine`].
 
-// Pre-existing legacy code (budget, circuit_breaker, conflict, context,
-// executor, gates, parallel, phases, pipeline, planner, project, qa, retry,
-// schedule); M5 does not modify these modules.  These allows suppress pedantic
-// lints that fire when clippy::pedantic is enabled on the engine module, which
-// Rust propagates to the entire crate via -D flags.
+// Suppress remaining pedantic lints carried over from the legacy surface.
+// As the engine module tightens its own lints, this list will shrink.
 #![allow(clippy::cast_lossless)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
@@ -50,40 +53,24 @@
 #![allow(clippy::manual_string_new)]
 #![allow(clippy::match_wildcard_for_single_variants)]
 
+// After the Legacy pipeline retirement milestone, every surviving root
+// module is a cross-cutting surface consumed by surge-cli, surge-daemon,
+// or integration tests — none of them is engine-only. Folding them under
+// `engine/` would force every consumer to add an `engine::` prefix without
+// any architectural benefit, so they stay at the crate root.
 pub mod archetype_registry;
 pub mod bootstrap;
 pub mod bootstrap_driver;
-pub mod budget;
-pub mod circuit_breaker;
-pub mod conflict;
-pub mod context;
 pub mod engine;
-pub mod executor;
 pub mod feature_driver;
 pub mod flow_amendment;
-pub mod gates;
-pub mod parallel;
-pub mod phases;
-pub mod pipeline;
-pub mod planner;
 pub mod profile_loader;
-pub mod project;
 pub mod project_context;
 pub mod prompt;
-pub mod qa;
-pub mod retry;
 pub mod roadmap_amendment;
 pub mod roadmap_document;
 pub mod roadmap_target;
-pub mod schedule;
 pub mod triage;
-
-pub use budget::{BudgetStatus, BudgetTracker};
-pub use parallel::ParallelExecutor;
-pub use phases::Phase;
-pub use pipeline::{Orchestrator, OrchestratorConfig, PipelineResult};
-pub use planner::PlannerPhase;
-pub use project::{ProjectConfig, ProjectExecutor, ProjectResult};
 
 /// TOML source of the `Triage Author` bootstrap profile, bundled at compile time.
 ///

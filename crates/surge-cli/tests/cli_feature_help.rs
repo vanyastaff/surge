@@ -34,14 +34,13 @@ fn feature_describe_help_lists_target_and_output_flags() {
 #[test]
 fn feature_list_empty_registry_json_works() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
+    let surge_home = temp.path().join("surge_home");
+    std::fs::create_dir_all(&surge_home).unwrap();
 
     Command::cargo_bin("surge")
         .unwrap()
         .args(["feature", "list", "--all-projects", "--json"])
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
+        .env("SURGE_HOME", &surge_home)
         .assert()
         .success()
         .stdout(contains("[]"));
@@ -50,14 +49,13 @@ fn feature_list_empty_registry_json_works() {
 #[test]
 fn feature_show_missing_patch_reports_error() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
+    let surge_home = temp.path().join("surge_home");
+    std::fs::create_dir_all(&surge_home).unwrap();
 
     Command::cargo_bin("surge")
         .unwrap()
         .args(["feature", "show", "rpatch-missing"])
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
+        .env("SURGE_HOME", &surge_home)
         .assert()
         .failure()
         .stderr(contains("roadmap patch not found"));

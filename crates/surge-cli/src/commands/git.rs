@@ -1,49 +1,5 @@
 use anyhow::Result;
 
-pub fn diff(spec_id: String) -> Result<()> {
-    let mgr = surge_git::GitManager::discover()?;
-    let diff = mgr.diff(&spec_id)?;
-    if diff.is_empty() {
-        println!("No changes in worktree for '{spec_id}'");
-    } else {
-        println!("{diff}");
-    }
-    Ok(())
-}
-
-pub fn merge(spec_id: String, yes: bool) -> Result<()> {
-    if !yes {
-        println!("⚡ Merge worktree for '{spec_id}' into current branch?");
-        println!("   Run with -y to skip confirmation.");
-        return Ok(());
-    }
-
-    let mgr = surge_git::GitManager::discover()?;
-    mgr.merge(&spec_id, None, true)?;
-    println!("✅ Merged '{spec_id}' into current branch");
-    Ok(())
-}
-
-pub fn discard(spec_id: String, yes: bool) -> Result<()> {
-    if !yes {
-        println!("⚡ Discard worktree and branch for '{spec_id}'?");
-        println!("   This is irreversible. Run with -y to confirm.");
-        return Ok(());
-    }
-
-    let mgr = surge_git::GitManager::discover()?;
-    let repo_path = mgr.repo_path().to_path_buf();
-
-    // Create audit logger in .surge/cleanup.log
-    let audit_path = repo_path.join(".surge").join("cleanup.log");
-    let audit = surge_git::CleanupAudit::new(audit_path)?;
-    let lifecycle = surge_git::LifecycleManager::with_audit(mgr, audit);
-
-    lifecycle.discard(&spec_id)?;
-    println!("✅ Discarded worktree for '{spec_id}'");
-    Ok(())
-}
-
 pub fn clean(yes: bool) -> Result<()> {
     let mgr = surge_git::GitManager::discover()?;
     let repo_path = mgr.repo_path().to_path_buf();

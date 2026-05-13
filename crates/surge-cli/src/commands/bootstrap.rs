@@ -388,8 +388,21 @@ fn parse_run_id(s: &str) -> Result<RunId> {
 }
 
 fn surge_home_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
-    let dir = home.join(".surge");
+    // Honour SURGE_HOME like the rest of the orchestrator so tests can
+    // isolate per-tempdir; see `feature::surge_home_dir` for the same note.
+    let dir = if let Ok(custom) = std::env::var("SURGE_HOME") {
+        if !custom.is_empty() {
+            PathBuf::from(custom)
+        } else {
+            dirs::home_dir()
+                .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
+                .join(".surge")
+        }
+    } else {
+        dirs::home_dir()
+            .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
+            .join(".surge")
+    };
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     Ok(dir)
 }
