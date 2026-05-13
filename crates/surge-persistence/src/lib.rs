@@ -56,6 +56,10 @@ pub mod budget;
 /// Storage layer for external ticket intake
 pub mod intake;
 
+/// Per-side-effect idempotency log for outbound intake actions
+/// (tracker comments, label changes, merge proposals).
+pub mod intake_emit_log;
+
 /// Data models for token usage tracking
 pub mod models;
 

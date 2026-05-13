@@ -88,7 +88,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - Verbose tracing at `target: "intake::policy"` (DEBUG on input labels, INFO on resolved tier).
   - Verification: `cargo build -p surge-intake && cargo test -p surge-intake policy && cargo clippy -p surge-intake -- -D warnings`.
 
-- [ ] **Task 2 — Persistence migrations: `policy_hint` column + `intake_emit_log` table** (Decisions 4, 5)
+- [x] **Task 2 — Persistence migrations: `policy_hint` column + `intake_emit_log` table** (Decisions 4, 5)
   - Migration `registry/<next>_inbox_action_policy_hint.sql`: `ALTER TABLE inbox_action_queue ADD COLUMN policy_hint TEXT DEFAULT NULL`.
   - Migration `registry/<next>_intake_emit_log.sql`: `CREATE TABLE intake_emit_log (source_id TEXT NOT NULL, task_id TEXT NOT NULL, event_kind TEXT NOT NULL, run_id TEXT NOT NULL, recorded_at_ms INTEGER NOT NULL, PRIMARY KEY (source_id, task_id, event_kind, run_id))`.
   - Extend `InboxActionRow` with `policy_hint: Option<String>` + repo read/write.

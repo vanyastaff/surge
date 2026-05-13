@@ -258,8 +258,16 @@ pub(crate) async fn handle_action(
     let conn = storage
         .acquire_registry_conn()
         .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
-    inbox_queue::append_action(&conn, action, &task_id, token, via.as_str(), snooze_until)
-        .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
+    inbox_queue::append_action(
+        &conn,
+        action,
+        &task_id,
+        token,
+        via.as_str(),
+        snooze_until,
+        None,
+    )
+    .map_err(|e| CallbackHandleError::Persistence(e.to_string()))?;
     info!(task_id = %task_id, action = action.as_str(), via = via.as_str(), "inbox action enqueued");
     Ok(())
 }

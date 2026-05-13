@@ -61,6 +61,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0011-secrets",
         include_str!("migrations/registry/0011_secrets.sql"),
     ),
+    (
+        "registry-0012-inbox-action-policy-hint",
+        include_str!("migrations/registry/0012_inbox_action_policy_hint.sql"),
+    ),
+    (
+        "registry-0013-intake-emit-log",
+        include_str!("migrations/registry/0013_intake_emit_log.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

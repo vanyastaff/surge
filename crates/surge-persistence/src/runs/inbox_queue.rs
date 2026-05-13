@@ -28,6 +28,14 @@ pub struct InboxActionRow {
     pub snooze_until: Option<DateTime<Utc>>,
     /// Time the row was inserted.
     pub enqueued_at: DateTime<Utc>,
+    /// Automation-policy hint set by `dispatch_triage_decision`.
+    ///
+    /// For L2 (`AutomationPolicy::Template { name }`) this carries the
+    /// template name, which `InboxActionConsumer::handle_start` looks up
+    /// against `ArchetypeRegistry::resolve` instead of running bootstrap.
+    /// `None` for L1 / L3 / pre-tier rows. Unknown template names degrade
+    /// to L1 at the call site (with a WARN log).
+    pub policy_hint: Option<String>,
 }
 
 /// Action kind on `inbox_action_queue.kind`.
@@ -88,6 +96,10 @@ pub struct InboxDeliveryRow {
 }
 
 /// Append a new action row. Returns the assigned seq.
+///
+/// `policy_hint` carries the L2 template name for `kind = Start` rows
+/// enqueued by the triage decision dispatch; pass `None` for all other
+/// callers (L1, L3, snooze, skip).
 pub fn append_action(
     conn: &Connection,
     kind: InboxActionKind,
@@ -95,12 +107,13 @@ pub fn append_action(
     callback_token: &str,
     decided_via: &str,
     snooze_until: Option<DateTime<Utc>>,
+    policy_hint: Option<&str>,
 ) -> rusqlite::Result<i64> {
     let now = Utc::now();
     conn.execute(
         "INSERT INTO inbox_action_queue \
-            (kind, task_id, callback_token, decided_via, snooze_until, enqueued_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (kind, task_id, callback_token, decided_via, snooze_until, enqueued_at, policy_hint) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             kind.as_str(),
             task_id,
@@ -108,6 +121,7 @@ pub fn append_action(
             decided_via,
             snooze_until.map(|d| d.to_rfc3339()),
             now.to_rfc3339(),
+            policy_hint,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -116,7 +130,8 @@ pub fn append_action(
 /// Read pending action rows (`processed_at IS NULL`), ordered by seq.
 pub fn list_pending_actions(conn: &Connection) -> rusqlite::Result<Vec<InboxActionRow>> {
     let mut stmt = conn.prepare(
-        "SELECT seq, kind, task_id, callback_token, decided_via, snooze_until, enqueued_at \
+        "SELECT seq, kind, task_id, callback_token, decided_via, snooze_until, enqueued_at, \
+                policy_hint \
          FROM inbox_action_queue WHERE processed_at IS NULL ORDER BY seq ASC",
     )?;
     let mut out = Vec::new();
@@ -157,6 +172,7 @@ pub fn list_pending_actions(conn: &Connection) -> rusqlite::Result<Vec<InboxActi
                     )
                 })?
                 .with_timezone(&Utc),
+            policy_hint: r.get(7)?,
         });
     }
     Ok(out)
@@ -301,6 +317,8 @@ mod tests {
         conn.execute_batch(m2).unwrap();
         let m3 = include_str!("migrations/registry/0005_inbox_queues.sql");
         conn.execute_batch(m3).unwrap();
+        let m4 = include_str!("migrations/registry/0012_inbox_action_policy_hint.sql");
+        conn.execute_batch(m4).unwrap();
         conn
     }
 
@@ -314,6 +332,7 @@ mod tests {
             "tok1",
             "telegram",
             None,
+            None,
         )
         .unwrap();
         assert!(seq > 0);
@@ -321,6 +340,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, InboxActionKind::Start);
         assert_eq!(pending[0].callback_token, "tok1");
+        assert_eq!(pending[0].policy_hint, None);
         mark_action_processed(&conn, seq).unwrap();
         assert_eq!(list_pending_actions(&conn).unwrap().len(), 0);
     }
@@ -338,10 +358,46 @@ mod tests {
             "tok2",
             "desktop",
             Some(until),
+            None,
         )
         .unwrap();
         let pending = list_pending_actions(&conn).unwrap();
         assert_eq!(pending[0].snooze_until, Some(until));
+    }
+
+    #[test]
+    fn policy_hint_round_trips_for_l2_start() {
+        let conn = db();
+        append_action(
+            &conn,
+            InboxActionKind::Start,
+            "github_issues:user/repo#42",
+            "tok-l2",
+            "telegram",
+            None,
+            Some("rust-crate"),
+        )
+        .unwrap();
+        let pending = list_pending_actions(&conn).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].policy_hint.as_deref(), Some("rust-crate"));
+    }
+
+    #[test]
+    fn policy_hint_defaults_to_null_when_absent() {
+        let conn = db();
+        append_action(
+            &conn,
+            InboxActionKind::Start,
+            "linear:t/T-9",
+            "tok-l1",
+            "desktop",
+            None,
+            None,
+        )
+        .unwrap();
+        let pending = list_pending_actions(&conn).unwrap();
+        assert!(pending[0].policy_hint.is_none());
     }
 
     #[test]
@@ -368,6 +424,7 @@ mod tests {
             "linear:t/T-3",
             "tok3",
             "telegram",
+            None,
             None,
         )
         .unwrap();

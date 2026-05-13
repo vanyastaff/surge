@@ -248,6 +248,7 @@ async fn scenario_a_start_happy_path() {
             "tok_start_1",
             "telegram",
             None,
+            None,
         )
         .unwrap();
     }
@@ -306,6 +307,7 @@ async fn scenario_b_snooze_then_re_emit() {
             "tok_snooze_2",
             "telegram",
             Some(Utc::now() - chrono::Duration::seconds(1)),
+            None,
         )
         .unwrap();
     }
@@ -367,6 +369,7 @@ async fn scenario_c_skip_sets_label_and_state() {
             "tok_skip_3",
             "telegram",
             None,
+            None,
         )
         .unwrap();
     }
@@ -412,6 +415,7 @@ async fn scenario_d_idempotent_double_start() {
             "tok_dbl_4",
             "telegram",
             None,
+            None,
         )
         .unwrap();
         inbox_queue::append_action(
@@ -420,6 +424,7 @@ async fn scenario_d_idempotent_double_start() {
             "mock:t#4",
             "tok_dbl_4",
             "telegram",
+            None,
             None,
         )
         .unwrap();
@@ -458,6 +463,7 @@ async fn scenario_e_engine_failure_keeps_state_inbox_notified() {
             "mock:t#5",
             "tok_fail_5",
             "telegram",
+            None,
             None,
         )
         .unwrap();
