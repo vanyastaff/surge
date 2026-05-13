@@ -6,7 +6,7 @@
 
 ## Why this page is still here
 
-External references and older commits link to this file. Removing it would break those links. The content below describes the schema that the legacy pipeline accepted; it is no longer enforced by surge and `surge spec` subcommands will be removed once the deprecation window closes (see [`.ai-factory/ROADMAP.md`](../../.ai-factory/ROADMAP.md)).
+External references and older commits link to this file. Removing it would break those links. The content below describes the schema that the legacy pipeline accepted; it is no longer enforced by surge, the `surge-spec` crate has been deleted, and the `surge spec` / `surge run` subcommands have been removed from the CLI (see [`.ai-factory/ROADMAP.md`](../../.ai-factory/ROADMAP.md), milestone "Legacy pipeline retirement").
 
 ## What replaces it
 

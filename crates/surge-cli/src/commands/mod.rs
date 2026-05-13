@@ -37,10 +37,13 @@ pub fn load_spec_by_id(id: &str) -> anyhow::Result<crate::legacy_spec::LegacySpe
         return crate::legacy_spec::LegacySpecFile::load(&with_ext);
     }
 
+    // `list_all` already calls `LegacySpecFile::load` for every entry and
+    // populates `path` on the returned value, so we can return the matched
+    // spec directly instead of re-reading it from disk.
     let specs = crate::legacy_spec::LegacySpecFile::list_all()?;
-    for (spec_path, spec_file) in specs {
+    for (_spec_path, spec_file) in specs {
         if spec_file.spec.id.to_string().contains(id) {
-            return crate::legacy_spec::LegacySpecFile::load(&spec_path);
+            return Ok(spec_file);
         }
     }
 

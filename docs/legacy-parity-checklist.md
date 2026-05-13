@@ -25,14 +25,14 @@ This checklist enumerates every legacy module, names its replacement in the engi
 | 6 | `context.rs` | 336 | `engine/frames.rs` + `engine/stage/bindings.rs` | `tests/engine_agent_artifact_emission_test.rs` | ✅ verified |
 | 7 | `retry.rs` | 310 | `engine/hooks/mod.rs` (`on_error` retry policy) | `tests/engine_m6_loop_retry.rs` | ✅ verified |
 | 8 | `circuit_breaker.rs` | 301 | `engine/hooks/mod.rs` (`on_error` suppress policy) | `tests/on_error_suppress_test.rs` | ✅ verified |
-| 9 | `project.rs` | 284 | Daemon-driven engine loop (consumed via `surge-daemon::server`) | _Pending — added by Phase 6.1 daemon smoke_ | ⏳ pending Phase 6.1 |
+| 9 | `project.rs` | 284 | Daemon-driven engine loop (`surge-daemon::server` consuming `EngineFacade`) | `crates/surge-daemon/tests/daemon_e2e_smoke.rs` | ✅ verified (daemon already on `EngineFacade`) |
 | 10 | `budget.rs` | 224 | `engine/frames.rs::RunMemory` token tracking | `tests/engine_snapshot_unit.rs` | ✅ verified |
 | 11 | `conflict.rs` | 185 | `engine/routing.rs::resolve_edge` | `tests/engine_m7_routing_dispatcher.rs` | ✅ verified |
 | 12 | `schedule.rs` | 178 | `engine/stage/loop_stage.rs` batched iteration | `tests/engine_m6_static_loop.rs` | ✅ verified |
 | 13 | `parallel.rs` | 165 | `engine/stage/loop_stage.rs` iteration | `tests/engine_m6_iterable_loop.rs` | ✅ verified |
 | 14 | `phases.rs` | 29 | `engine/stage/mod.rs::NodeKind` dispatch | `tests/engine_start_run_smoke.rs` | ✅ verified |
 
-**Totals:** 5,540 legacy lines mapped. 13/14 modules verified by an existing engine-path test; 1 (`project.rs`) deferred to Phase 6.1 daemon migration smoke.
+**Totals:** 5,540 legacy lines mapped. 14/14 modules verified by an existing engine-path test before deletion. The `project.rs` row was originally expected to be verified by a Phase 6.1 daemon migration smoke; inspection during execution showed the daemon was already on `EngineFacade`, so `daemon_e2e_smoke.rs` served as the verifying test instead.
 
 ## Out-of-Tree Consumers
 
@@ -44,7 +44,7 @@ Modules that import or call into the legacy path from outside `surge-orchestrato
 | `surge-cli/src/commands/project.rs` | `ProjectExecutor`, `ProjectConfig`, `ProjectResult` | Split: `surge project describe` keeps `surge-orchestrator::project_context` (kept alive — see Task 6.3); legacy `surge project run`-style commands removed in Phase 5.2. |
 | `surge-cli/src/commands/feature.rs` | `ProjectExecutor` (legacy path) | Migrated in Phase 5.2 to drive `surge feature` against the engine; ProjectExecutor reference removed. |
 | `surge-cli/src/commands/spec.rs` | `surge_spec::*` (parser, builder, graph, validation, templates) | Entire module removed in Phase 5.1. |
-| `surge-cli/src/commands/mod.rs` | `load_spec_by_id` helper | Removed in Phase 5.1. |
+| `surge-cli/src/commands/mod.rs` | `load_spec_by_id` helper | Kept intentionally (now routed through `crate::legacy_spec::LegacySpecFile`); the analytics / insights / memory subcommands still resolve historical persistence data by `spec_id`. The helper retires when those queries migrate to `run_id`. |
 | `surge-daemon/src/server.rs` | `pipeline::Orchestrator` | Retargeted to `Engine::run` in Phase 6.1; replacement verified by daemon smoke documented there. |
 | `surge-orchestrator/tests/helpers.rs` | `surge_spec::SpecFile` | Replaced with `flow.toml` fixture loaders in Phase 4.5. |
 | `surge-orchestrator/tests/e2e_pipeline.rs` | `surge_spec::DependencyGraph`, `SpecFile` | Test ported to `tests/engine_e2e_spec_parity.rs` in Phase 4.1; legacy file deleted afterward. |

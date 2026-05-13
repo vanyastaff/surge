@@ -1,8 +1,8 @@
 //! `surge migrate-spec` CLI handler.
 //!
-//! Reads a legacy `.spec.toml` (via the deprecated [`surge_spec::SpecFile`]
-//! parser — this is the only surviving direct caller during the retirement
-//! window) and emits a `flow.toml` document built by [`super::mapping`].
+//! Reads a legacy `.spec.toml` via [`crate::legacy_spec::LegacySpecFile`]
+//! (the local DTO that replaced the deleted `surge-spec` crate) and emits a
+//! `flow.toml` document built by [`super::mapping`].
 //!
 //! Exit codes:
 //! - `0` — clean migration with no warnings, or warnings but `--allow-warnings`.
