@@ -1780,8 +1780,23 @@ fn load_project_config_for_current_repo() -> Result<(SurgeConfig, PathBuf)> {
 }
 
 fn surge_home_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
-    let dir = home.join(".surge");
+    // Honour the SURGE_HOME env var first so tests can isolate per-tempdir.
+    // `dirs::home_dir()` on Windows uses `SHGetKnownFolderPath` which ignores
+    // `USERPROFILE` overrides, so falling back to it directly makes parallel
+    // tests on Windows race on a single real `~/.surge/` SQLite file.
+    let dir = if let Ok(custom) = std::env::var("SURGE_HOME") {
+        if !custom.is_empty() {
+            PathBuf::from(custom)
+        } else {
+            dirs::home_dir()
+                .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
+                .join(".surge")
+        }
+    } else {
+        dirs::home_dir()
+            .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
+            .join(".surge")
+    };
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     Ok(dir)
 }
