@@ -6,6 +6,7 @@
 //!
 //! See `docs/ARCHITECTURE.md`.
 
+pub mod cadence;
 pub mod candidates;
 pub mod dedup;
 pub mod error;

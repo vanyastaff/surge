@@ -122,7 +122,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
     - `LabelsChanged { added: surge:auto | surge:template/*, .. }` on Standard in-flight: INFO log only.
   - Tests: router routing + handler FSM transitions.
 
-- [ ] **Task 6 — `CadenceController` for tier-aware polling** (ROADMAP §198, milestone wires #4)
+- [x] **Task 6 — `CadenceController` for tier-aware polling** (ROADMAP §198, milestone wires #4)
   - Wrap each source's poll loop in a `CadenceController` that picks the most aggressive tier among active tickets for that source (L1 = 5min, L2 = 2min, L3 = 1min) and applies exponential backoff with jitter on `Error::RateLimited`.
   - Tests: deterministic schedule under `tokio::time::pause`, backoff curve assertion, recovery after rate-limit.
 
