@@ -233,11 +233,9 @@ pub fn count_open(conn: &Connection) -> Result<i64, CardsError> {
 /// Returns [`CardsError::Sqlite`] on storage failure.
 pub fn latest_updated_at_ms(conn: &Connection) -> Result<Option<i64>, CardsError> {
     let row: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(updated_at) FROM telegram_cards",
-            [],
-            |row| row.get::<_, Option<i64>>(0),
-        )
+        .query_row("SELECT MAX(updated_at) FROM telegram_cards", [], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
         .optional()?
         .flatten();
     Ok(row)

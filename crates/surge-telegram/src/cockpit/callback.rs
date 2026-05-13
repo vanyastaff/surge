@@ -269,14 +269,7 @@ where
             // Comment is collected via the forced-reply follow-up. For now
             // we resolve with an empty comment — the production wiring
             // attaches the operator's reply text once it lands.
-            resolve(
-                &parsed,
-                &card,
-                &ctx.engine,
-                "edit",
-                Some(String::new()),
-            )
-            .await
+            resolve(&parsed, &card, &ctx.engine, "edit", Some(String::new())).await
         },
         CallbackVerb::Ack => {
             tracing::info!(
@@ -430,11 +423,10 @@ mod tests {
             call_id: Option<String>,
             response: serde_json::Value,
         ) -> Result<()> {
-            self.calls.lock().unwrap().push((
-                run_id.to_owned(),
-                call_id,
-                response,
-            ));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((run_id.to_owned(), call_id, response));
             Ok(())
         }
     }
@@ -529,7 +521,11 @@ mod tests {
 
     #[tokio::test]
     async fn unparseable_callback_returns_unknown_without_touching_anything() {
-        let ctx = ctx(FakeStore::default(), FakeAdmission::denying(), FakeEngine::default());
+        let ctx = ctx(
+            FakeStore::default(),
+            FakeAdmission::denying(),
+            FakeEngine::default(),
+        );
         let outcome = handle_callback(42, "garbage", &ctx).await.unwrap();
         assert!(matches!(outcome, CallbackOutcome::Unknown { .. }));
         // Engine must not have been called.
@@ -590,7 +586,10 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            CallbackOutcome::Resolved { verb: CallbackVerb::Approve, .. }
+            CallbackOutcome::Resolved {
+                verb: CallbackVerb::Approve,
+                ..
+            }
         ));
         let calls = ctx.engine.calls();
         assert_eq!(calls.len(), 1);
@@ -645,14 +644,18 @@ mod tests {
         let outcome = handle_callback(42, &snooze, &ctx).await.unwrap();
         assert!(matches!(
             outcome,
-            CallbackOutcome::NotImplemented { verb: CallbackVerb::Snooze }
+            CallbackOutcome::NotImplemented {
+                verb: CallbackVerb::Snooze
+            }
         ));
 
         let abort = format!("cockpit:abort:{SAMPLE_CARD_ID}");
         let outcome = handle_callback(42, &abort, &ctx).await.unwrap();
         assert!(matches!(
             outcome,
-            CallbackOutcome::NotImplemented { verb: CallbackVerb::Abort }
+            CallbackOutcome::NotImplemented {
+                verb: CallbackVerb::Abort
+            }
         ));
 
         assert!(ctx.engine.calls().is_empty());

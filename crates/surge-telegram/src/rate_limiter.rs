@@ -299,7 +299,9 @@ mod tests {
 
         drop(_a);
         tokio::task::yield_now().await;
-        let _t3 = third.await.expect("third acquire resolves once a permit frees up");
+        let _t3 = third
+            .await
+            .expect("third acquire resolves once a permit frees up");
     }
 
     #[test]

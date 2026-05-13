@@ -32,11 +32,7 @@ pub trait RunSnapshotProvider: Send + Sync {
 /// # Errors
 ///
 /// Returns whatever the underlying [`RunSnapshotProvider`] returns.
-pub async fn handle_status<P>(
-    chat_id: i64,
-    args: &str,
-    provider: &P,
-) -> Result<CommandReply>
+pub async fn handle_status<P>(chat_id: i64, args: &str, provider: &P) -> Result<CommandReply>
 where
     P: RunSnapshotProvider,
 {
@@ -70,7 +66,9 @@ where
             %run_id,
             "status — no such run",
         );
-        return Ok(CommandReply::new(format!("❌ No run found for `{run_id}`.")));
+        return Ok(CommandReply::new(format!(
+            "❌ No run found for `{run_id}`."
+        )));
     };
 
     tracing::info!(
@@ -88,10 +86,7 @@ where
 /// `card::render::render_status`), kept distinct so callers can choose
 /// between a card and a plain reply without coupling.
 fn render_snapshot(snap: &RunStatusSnapshot) -> String {
-    let active = snap
-        .active_node
-        .as_deref()
-        .unwrap_or("(not yet started)");
+    let active = snap.active_node.as_deref().unwrap_or("(not yet started)");
     let outcome = snap.last_outcome.as_deref().unwrap_or("—");
     let attempt = snap
         .last_attempt
@@ -100,7 +95,11 @@ fn render_snapshot(snap: &RunStatusSnapshot) -> String {
         .elapsed_ms
         .map_or_else(|| "—".to_owned(), |ms| format!("{}s", ms / 1_000));
     let state = if snap.terminal {
-        if snap.failed { "❌ failed" } else { "✅ done" }
+        if snap.failed {
+            "❌ failed"
+        } else {
+            "✅ done"
+        }
     } else {
         "▶ running"
     };

@@ -11,6 +11,6 @@ pub mod render;
 
 pub use emit::{CardEmitter, CardStore, EmitOutcome, TelegramApi};
 pub use render::{
-    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation,
-    render_failure, render_human_gate, render_status,
+    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation, render_failure,
+    render_human_gate, render_status,
 };

@@ -92,11 +92,9 @@ pub fn delete_secret(conn: &Connection, key: &str) -> Result<(), SecretsError> {
 /// Returns [`SecretsError::Sqlite`] on storage failure.
 pub fn has_secret(conn: &Connection, key: &str) -> Result<bool, SecretsError> {
     let row: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM secrets WHERE key = ?",
-            params![key],
-            |row| row.get(0),
-        )
+        .query_row("SELECT 1 FROM secrets WHERE key = ?", params![key], |row| {
+            row.get(0)
+        })
         .optional()?;
     Ok(row.is_some())
 }

@@ -210,7 +210,14 @@ impl TicketRunLauncher {
         // Build the run graph — L2 template path takes priority; everything
         // else falls back to the configured bootstrap builder.
         let graph = self
-            .resolve_graph(&ticket_row, &task_id, &details, run_id, &worktree, policy_hint)
+            .resolve_graph(
+                &ticket_row,
+                &task_id,
+                &details,
+                run_id,
+                &worktree,
+                policy_hint,
+            )
             .await?;
 
         // Start the run with project-context seed applied.

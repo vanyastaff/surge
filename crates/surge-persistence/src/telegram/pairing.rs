@@ -211,10 +211,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(
-            consumed_at.is_none(),
-            "expired-rejection must not consume"
-        );
+        assert!(consumed_at.is_none(), "expired-rejection must not consume");
     }
 
     #[test]

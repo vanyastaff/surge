@@ -210,15 +210,14 @@ pub fn fetch(conn: &Connection, key: EmitKey<'_>) -> rusqlite::Result<Option<Emi
                 )
             })?;
             let recorded_ms: i64 = r.get(4)?;
-            let recorded_at = DateTime::<Utc>::from_timestamp_millis(recorded_ms).ok_or_else(
-                || {
+            let recorded_at =
+                DateTime::<Utc>::from_timestamp_millis(recorded_ms).ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
                         4,
                         rusqlite::types::Type::Integer,
                         format!("invalid timestamp ms: {recorded_ms}").into(),
                     )
-                },
-            )?;
+                })?;
             Ok(EmitLogRow {
                 source_id: r.get(0)?,
                 task_id: r.get(1)?,
@@ -242,12 +241,7 @@ mod tests {
         conn
     }
 
-    fn key<'a>(
-        source: &'a str,
-        task: &'a str,
-        kind: EmitEventKind,
-        run: &'a str,
-    ) -> EmitKey<'a> {
+    fn key<'a>(source: &'a str, task: &'a str, kind: EmitEventKind, run: &'a str) -> EmitKey<'a> {
         EmitKey {
             source_id: source,
             task_id: task,
@@ -261,7 +255,12 @@ mod tests {
         let conn = db();
         let exists = has(
             &conn,
-            key("github", "github:user/repo#1", EmitEventKind::RunStarted, "r1"),
+            key(
+                "github",
+                "github:user/repo#1",
+                EmitEventKind::RunStarted,
+                "r1",
+            ),
         )
         .unwrap();
         assert!(!exists);
@@ -270,7 +269,12 @@ mod tests {
     #[test]
     fn record_then_has_round_trip() {
         let conn = db();
-        let k = key("github", "github:u/r#7", EmitEventKind::RunCompleted, "run-42");
+        let k = key(
+            "github",
+            "github:u/r#7",
+            EmitEventKind::RunCompleted,
+            "run-42",
+        );
         let inserted = record(&conn, k.clone()).unwrap();
         assert!(inserted);
         assert!(has(&conn, k).unwrap());

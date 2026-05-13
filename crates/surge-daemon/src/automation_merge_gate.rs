@@ -228,10 +228,7 @@ async fn already_emitted(
         run_id: run_id_str,
     };
     let guard = conn.lock().await;
-    match (
-        has(&guard, key_proposed),
-        has(&guard, key_blocked),
-    ) {
+    match (has(&guard, key_proposed), has(&guard, key_blocked)) {
         (Ok(p), Ok(b)) => p || b,
         (Err(e), _) | (_, Err(e)) => {
             warn!(target: "intake::merge_gate", error = %e, "intake_emit_log has() failed");
@@ -323,10 +320,7 @@ async fn apply_merge_decision(
 /// The function is `async` so the real implementation can issue HTTP
 /// calls without changing the call site.
 #[allow(clippy::unused_async)]
-async fn check_merge_readiness(
-    _source: &Arc<dyn TaskSource>,
-    _task_id: &TaskId,
-) -> MergeReadiness {
+async fn check_merge_readiness(_source: &Arc<dyn TaskSource>, _task_id: &TaskId) -> MergeReadiness {
     MergeReadiness::Blocked(
         "PR readiness check is not implemented yet — \
          this is a stub default that lands the L3 gate plumbing. \

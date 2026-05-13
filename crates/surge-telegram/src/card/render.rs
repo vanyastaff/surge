@@ -104,11 +104,7 @@ pub fn render_human_gate(card_id: &str, prompt: &str) -> RenderedCard {
 /// produced at this stage (e.g. the first lines of the artifact). It is
 /// trimmed to the Telegram 4096-byte body limit upstream.
 #[must_use]
-pub fn render_bootstrap(
-    card_id: &str,
-    stage: BootstrapStage,
-    stage_summary: &str,
-) -> RenderedCard {
+pub fn render_bootstrap(card_id: &str, stage: BootstrapStage, stage_summary: &str) -> RenderedCard {
     let stage_label = match stage {
         BootstrapStage::Description => "Description",
         BootstrapStage::Roadmap => "Roadmap",
@@ -144,7 +140,11 @@ pub fn render_status(run_id: &RunId, snapshot: &RunStatusSnapshot) -> RenderedCa
         .map_or_else(|| "—".to_owned(), |ms| format!("{}s", ms / 1_000));
     let event_count = snapshot.event_count;
     let terminal = if snapshot.terminal {
-        if snapshot.failed { "❌ failed" } else { "✅ done" }
+        if snapshot.failed {
+            "❌ failed"
+        } else {
+            "✅ done"
+        }
     } else {
         "▶ running"
     };

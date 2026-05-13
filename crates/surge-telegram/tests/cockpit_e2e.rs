@@ -33,11 +33,11 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use surge_notify::telegram::InboxKeyboardButton;
 use surge_persistence::telegram::cards::Card;
-use surge_telegram::{CardEmitter, CardStore, TelegramApi, TelegramCockpitError};
 use surge_telegram::cockpit::{
     Admission, CallbackCtx, CallbackOutcome, CallbackVerb, EngineResolver, ReconcileReport,
     handle_callback, reconcile_open_cards,
 };
+use surge_telegram::{CardEmitter, CardStore, TelegramApi, TelegramCockpitError};
 
 // ── Fakes ─────────────────────────────────────────────────────────
 
@@ -294,10 +294,15 @@ async fn t25_cockpit_approve_callback_resolves_gate_once() {
         engine,
     };
 
-    let outcome = handle_callback(42, "cockpit:approve:CARD-A", &ctx).await.unwrap();
+    let outcome = handle_callback(42, "cockpit:approve:CARD-A", &ctx)
+        .await
+        .unwrap();
     assert!(matches!(
         outcome,
-        CallbackOutcome::Resolved { verb: CallbackVerb::Approve, .. },
+        CallbackOutcome::Resolved {
+            verb: CallbackVerb::Approve,
+            ..
+        },
     ));
 
     let calls = ctx.engine.calls();
@@ -318,10 +323,15 @@ async fn t26_cockpit_edit_callback_seeds_edit_outcome_with_comment() {
         engine: FakeEngine::default(),
     };
 
-    let outcome = handle_callback(42, "cockpit:edit:CARD-B", &ctx).await.unwrap();
+    let outcome = handle_callback(42, "cockpit:edit:CARD-B", &ctx)
+        .await
+        .unwrap();
     assert!(matches!(
         outcome,
-        CallbackOutcome::Resolved { verb: CallbackVerb::Edit, .. },
+        CallbackOutcome::Resolved {
+            verb: CallbackVerb::Edit,
+            ..
+        },
     ));
     let calls = ctx.engine.calls();
     assert_eq!(calls.len(), 1);
@@ -342,7 +352,11 @@ async fn t27_reconcile_does_not_send_new_messages_after_restart() {
         .await
         .unwrap();
     assert_eq!(report.total, 1);
-    assert_eq!(bot.send_count(), 0, "reconcile must NEVER call send_message");
+    assert_eq!(
+        bot.send_count(),
+        0,
+        "reconcile must NEVER call send_message"
+    );
     // The recover module closes cards whose run is unknown (our snapshot
     // fake returns None for every run id), so the open card is closed.
     assert_eq!(store.closed_ids(), vec!["CARD-C"]);
@@ -368,7 +382,9 @@ async fn t28a_stale_tap_on_closed_card_does_not_call_engine() {
         admission: FakeAdmission::pair(42),
         engine: FakeEngine::default(),
     };
-    let outcome = handle_callback(42, "cockpit:approve:CARD-D", &ctx).await.unwrap();
+    let outcome = handle_callback(42, "cockpit:approve:CARD-D", &ctx)
+        .await
+        .unwrap();
     assert!(matches!(outcome, CallbackOutcome::StaleTap { .. }));
     assert!(ctx.engine.calls().is_empty());
 }
@@ -384,8 +400,13 @@ async fn t28b_unpaired_chat_is_denied_at_admission() {
         admission: FakeAdmission::pair(42),
         engine: FakeEngine::default(),
     };
-    let outcome = handle_callback(99, "cockpit:approve:CARD-E", &ctx).await.unwrap();
-    assert!(matches!(outcome, CallbackOutcome::AdmissionDenied { chat_id: 99 }));
+    let outcome = handle_callback(99, "cockpit:approve:CARD-E", &ctx)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        CallbackOutcome::AdmissionDenied { chat_id: 99 }
+    ));
     assert!(ctx.engine.calls().is_empty());
 }
 
@@ -399,7 +420,9 @@ async fn t28c_missing_card_id_returns_stale_tap() {
         admission: FakeAdmission::pair(42),
         engine: FakeEngine::default(),
     };
-    let outcome = handle_callback(42, "cockpit:approve:NOPE", &ctx).await.unwrap();
+    let outcome = handle_callback(42, "cockpit:approve:NOPE", &ctx)
+        .await
+        .unwrap();
     assert!(matches!(outcome, CallbackOutcome::StaleTap { .. }));
     assert!(ctx.engine.calls().is_empty());
 }

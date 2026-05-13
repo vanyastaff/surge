@@ -153,9 +153,7 @@ impl CadenceController {
     /// Returns `0` for unknown sources.
     #[must_use]
     pub fn backoff_exp(&self, source_id: &str) -> u32 {
-        self.sources
-            .get(source_id)
-            .map_or(0, |s| s.backoff_exp)
+        self.sources.get(source_id).map_or(0, |s| s.backoff_exp)
     }
 
     /// Compute the next poll interval for `source_id`.
@@ -176,9 +174,7 @@ impl CadenceController {
         };
         let base = state.base;
         let multiplier = 1u32.checked_shl(state.backoff_exp).unwrap_or(u32::MAX);
-        let target_secs = base
-            .as_secs()
-            .saturating_mul(u64::from(multiplier));
+        let target_secs = base.as_secs().saturating_mul(u64::from(multiplier));
         let target = Duration::from_secs(target_secs).min(intervals::BACKOFF_CEILING);
         apply_jitter(target, jitter_unit_interval)
     }

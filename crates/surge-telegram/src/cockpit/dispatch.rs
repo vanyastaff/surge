@@ -10,8 +10,8 @@ use surge_orchestrator::engine::RunEventTap;
 
 use crate::card::emit::{CardEmitter, CardStore, EmitOutcome, TelegramApi};
 use crate::card::render::{
-    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation,
-    render_failure, render_human_gate,
+    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation, render_failure,
+    render_human_gate,
 };
 use crate::error::Result;
 
@@ -330,9 +330,7 @@ mod tests {
         ) -> Result<String> {
             let mut cards = self.cards.lock().unwrap();
             if let Some(existing) = cards.iter().find(|c| {
-                c.run_id == run_id
-                    && c.node_key == node_key
-                    && c.attempt_index == attempt_index
+                c.run_id == run_id && c.node_key == node_key && c.attempt_index == attempt_index
             }) {
                 return Ok(existing.card_id.clone());
             }

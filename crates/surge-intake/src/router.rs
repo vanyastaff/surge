@@ -246,13 +246,11 @@ mod tests {
             .unwrap()
             .unwrap();
         match received {
-            RouterOutput::ExternalUpdate { event } => {
-                match event.kind {
-                    TaskEventKind::LabelsChanged { added, .. } => {
-                        assert_eq!(added, vec!["surge:disabled".to_string()]);
-                    },
-                    other => panic!("expected LabelsChanged, got {other:?}"),
-                }
+            RouterOutput::ExternalUpdate { event } => match event.kind {
+                TaskEventKind::LabelsChanged { added, .. } => {
+                    assert_eq!(added, vec!["surge:disabled".to_string()]);
+                },
+                other => panic!("expected LabelsChanged, got {other:?}"),
             },
             other => panic!("expected ExternalUpdate, got {other:?}"),
         }

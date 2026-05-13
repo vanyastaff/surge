@@ -117,12 +117,8 @@ pub trait CardStore: Send + Sync {
 
     /// Conditional `content_hash` update — returns `true` when the stored
     /// value actually changed.
-    async fn update_content_hash(
-        &self,
-        card_id: &str,
-        new_hash: &str,
-        now_ms: i64,
-    ) -> Result<bool>;
+    async fn update_content_hash(&self, card_id: &str, new_hash: &str, now_ms: i64)
+    -> Result<bool>;
 
     /// Return every open (non-closed) card, oldest first. Used by the
     /// recovery reconciler at cockpit startup.
@@ -304,9 +300,7 @@ mod tests {
         ) -> Result<String> {
             let mut cards = self.cards.lock().unwrap();
             if let Some(existing) = cards.iter().find(|c| {
-                c.run_id == run_id
-                    && c.node_key == node_key
-                    && c.attempt_index == attempt_index
+                c.run_id == run_id && c.node_key == node_key && c.attempt_index == attempt_index
             }) {
                 return Ok(existing.card_id.clone());
             }
@@ -481,7 +475,10 @@ mod tests {
         store.insert(pristine_card(SAMPLE_CARD_ID, 42, &rendered.content_hash));
 
         let emitter = CardEmitter::new(store, api);
-        let outcome = emitter.emit(SAMPLE_CARD_ID, &rendered, 1_500).await.unwrap();
+        let outcome = emitter
+            .emit(SAMPLE_CARD_ID, &rendered, 1_500)
+            .await
+            .unwrap();
 
         assert_eq!(outcome, EmitOutcome::Sent { message_id: 9876 });
         let sent = emitter.api().send_calls();
@@ -506,7 +503,10 @@ mod tests {
         store.insert(card);
 
         let emitter = CardEmitter::new(store, api);
-        let outcome = emitter.emit(SAMPLE_CARD_ID, &rendered, 2_000).await.unwrap();
+        let outcome = emitter
+            .emit(SAMPLE_CARD_ID, &rendered, 2_000)
+            .await
+            .unwrap();
 
         assert_eq!(outcome, EmitOutcome::NoOp);
         assert!(emitter.api().send_calls().is_empty());

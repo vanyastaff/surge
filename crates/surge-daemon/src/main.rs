@@ -531,7 +531,11 @@ async fn apply_l0_short_circuit(
     use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
 
     let task_id_str = event.task_id.as_str();
-    let provider = task_id_str.split(':').next().unwrap_or("unknown").to_string();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
     let now = chrono::Utc::now();
     let _ = task_details; // currently unused; future tracker comments may want title/url.
 
@@ -660,7 +664,11 @@ async fn enqueue_l2_template_start(
     use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
 
     let task_id_str = event.task_id.as_str();
-    let provider = task_id_str.split(':').next().unwrap_or("unknown").to_string();
+    let provider = task_id_str
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
     let callback_token = ulid::Ulid::new().to_string();
     let now = chrono::Utc::now();
 
@@ -865,16 +873,11 @@ async fn apply_external_close(
 
     // Phase 2 — engine-side abort if there is a live run. This is the
     // await point; no IntakeRepo is held here.
-    let live_run = matches!(
-        row.state,
-        TicketState::Active | TicketState::RunStarted
-    );
+    let live_run = matches!(row.state, TicketState::Active | TicketState::RunStarted);
     if live_run
         && let Some(run_id_str) = row.run_id.as_deref()
         && let Ok(run_id) = run_id_str.parse::<surge_core::id::RunId>()
-        && let Err(e) = engine
-            .stop_run(run_id, "closed externally".into())
-            .await
+        && let Err(e) = engine.stop_run(run_id, "closed externally".into()).await
     {
         tracing::warn!(
             target: "intake::router",
@@ -1221,13 +1224,12 @@ async fn spawn_inbox_subsystems(
     use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, MinimalBootstrapGraphBuilder};
 
     let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
-    let archetypes: Arc<ArchetypeRegistry> = Arc::new(
-        ArchetypeRegistry::load().unwrap_or_else(|e| {
+    let archetypes: Arc<ArchetypeRegistry> =
+        Arc::new(ArchetypeRegistry::load().unwrap_or_else(|e| {
             tracing::warn!(error = %e, "ArchetypeRegistry::load failed; using empty registry");
             ArchetypeRegistry::from_dir(std::path::Path::new("definitely-missing"))
                 .expect("from_dir on missing path returns empty registry")
-        }),
-    );
+        }));
     let worktrees_root = surge_runs_dir().join("worktrees");
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");

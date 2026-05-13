@@ -71,12 +71,7 @@ pub trait UpdateRoutes: Send + Sync {
     /// `(chat_id, reply_to_message_id, text)` triple so the impl can
     /// look up any pending forced-reply prompt and resolve the
     /// associated edit gate.
-    async fn handle_reply(
-        &self,
-        chat_id: i64,
-        reply_to_message_id: i64,
-        text: &str,
-    );
+    async fn handle_reply(&self, chat_id: i64, reply_to_message_id: i64, text: &str);
 }
 
 /// Bundle of every dependency [`run_cockpit`] needs.
@@ -244,10 +239,8 @@ pub async fn drive_update_loop<S, T, P, R>(
     }
 }
 
-async fn handle_tap<S, T, P, R>(
-    runtime: &Arc<CockpitRuntime<S, T, P, R>>,
-    tap: RunEventTap,
-) where
+async fn handle_tap<S, T, P, R>(runtime: &Arc<CockpitRuntime<S, T, P, R>>, tap: RunEventTap)
+where
     S: CardStore,
     T: TelegramApi,
     P: RunSnapshotProvider,
@@ -304,10 +297,8 @@ where
     }
 }
 
-async fn route_update<S, T, P, R>(
-    runtime: &Arc<CockpitRuntime<S, T, P, R>>,
-    update: Update,
-) where
+async fn route_update<S, T, P, R>(runtime: &Arc<CockpitRuntime<S, T, P, R>>, update: Update)
+where
     S: CardStore,
     T: TelegramApi,
     P: RunSnapshotProvider,
@@ -407,12 +398,7 @@ mod tests {
                 .unwrap()
                 .push((chat_id, text.to_owned()));
         }
-        async fn handle_reply(
-            &self,
-            chat_id: i64,
-            reply_to_message_id: i64,
-            text: &str,
-        ) {
+        async fn handle_reply(&self, chat_id: i64, reply_to_message_id: i64, text: &str) {
             self.replies
                 .lock()
                 .unwrap()

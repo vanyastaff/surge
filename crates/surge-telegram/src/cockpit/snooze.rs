@@ -324,12 +324,7 @@ mod tests {
         async fn mark_message_sent(&self, _: &str, _: i64, _: &str, _: i64) -> Result<()> {
             unreachable!("snooze tests do not exercise mark_message_sent")
         }
-        async fn update_content_hash(
-            &self,
-            card_id: &str,
-            new_hash: &str,
-            _: i64,
-        ) -> Result<bool> {
+        async fn update_content_hash(&self, card_id: &str, new_hash: &str, _: i64) -> Result<bool> {
             self.hashes
                 .lock()
                 .unwrap()
@@ -407,9 +402,11 @@ mod tests {
         }
     }
 
-    fn rescheduler(q: FakeQueue, s: FakeStore, a: FakeApi)
-        -> CockpitSnoozeRescheduler<FakeQueue, FakeStore, FakeApi>
-    {
+    fn rescheduler(
+        q: FakeQueue,
+        s: FakeStore,
+        a: FakeApi,
+    ) -> CockpitSnoozeRescheduler<FakeQueue, FakeStore, FakeApi> {
         CockpitSnoozeRescheduler {
             queue: q,
             store: s,
@@ -419,7 +416,11 @@ mod tests {
 
     #[tokio::test]
     async fn empty_queue_returns_empty_report() {
-        let rt = rescheduler(FakeQueue::default(), FakeStore::default(), FakeApi::default());
+        let rt = rescheduler(
+            FakeQueue::default(),
+            FakeStore::default(),
+            FakeApi::default(),
+        );
         let r = rt.tick(0).await.unwrap();
         assert_eq!(r, TickReport::default());
     }

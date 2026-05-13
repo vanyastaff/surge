@@ -103,7 +103,10 @@ mod tests {
     #[async_trait]
     impl RunStarter for FakeStarter {
         async fn start_run(&self, archetype_or_path: &str) -> Result<String> {
-            self.calls.lock().unwrap().push(archetype_or_path.to_owned());
+            self.calls
+                .lock()
+                .unwrap()
+                .push(archetype_or_path.to_owned());
             match &*self.result.lock().unwrap() {
                 Ok(id) => Ok(id.clone()),
                 Err(_) => Err(TelegramCockpitError::Persistence("test".into())),

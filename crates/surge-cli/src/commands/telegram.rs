@@ -106,9 +106,7 @@ fn setup(token: Option<String>, label: String, ttl_secs: u64) -> Result<()> {
     println!();
     println!("    /pair {pairing_token}");
     println!();
-    println!(
-        "Then start the daemon with `surge daemon start` to begin receiving cockpit cards."
-    );
+    println!("Then start the daemon with `surge daemon start` to begin receiving cockpit cards.");
     Ok(())
 }
 

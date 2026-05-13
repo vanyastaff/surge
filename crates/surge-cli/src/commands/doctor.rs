@@ -117,9 +117,16 @@ fn render_telegram_section() {
     println!("─── telegram-cockpit ───");
     match collect_telegram_health() {
         Ok(health) => {
-            let bot = if health.bot_token_configured { "✅ yes" } else { "❌ no" };
+            let bot = if health.bot_token_configured {
+                "✅ yes"
+            } else {
+                "❌ no"
+            };
             println!("  bot token configured:        {bot}");
-            println!("  active pairings:             {n}", n = health.active_pairings);
+            println!(
+                "  active pairings:             {n}",
+                n = health.active_pairings
+            );
             println!("  open cards:                  {n}", n = health.open_cards);
             let last_api = match health.last_bot_api_at_ms {
                 Some(ms) => format_unix_ms(ms),
@@ -163,15 +170,15 @@ fn collect_telegram_health() -> Result<TelegramHealth> {
             last_bot_api_at_ms: None,
         });
     }
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| anyhow::anyhow!("open registry: {e}"))?;
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("open registry: {e}"))?;
 
     let bot_token_configured = has_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
         .map_err(|e| anyhow::anyhow!("query secret: {e}"))?;
-    let active_pairings = pairings::count_active(&conn)
-        .map_err(|e| anyhow::anyhow!("count active pairings: {e}"))?;
-    let open_cards = cards::count_open(&conn)
-        .map_err(|e| anyhow::anyhow!("count open cards: {e}"))?;
+    let active_pairings =
+        pairings::count_active(&conn).map_err(|e| anyhow::anyhow!("count active pairings: {e}"))?;
+    let open_cards =
+        cards::count_open(&conn).map_err(|e| anyhow::anyhow!("count open cards: {e}"))?;
     let last_bot_api_at_ms = cards::latest_updated_at_ms(&conn)
         .map_err(|e| anyhow::anyhow!("latest card updated_at: {e}"))?;
 

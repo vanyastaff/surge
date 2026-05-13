@@ -200,7 +200,9 @@ fn build_inline_keyboard(rows: &[Vec<InboxKeyboardButton>]) -> InlineKeyboardMar
                 .map(|btn| {
                     if btn.is_url {
                         let url = btn.data.parse().unwrap_or_else(|_| {
-                            "https://example.invalid/".parse().expect("static valid url")
+                            "https://example.invalid/"
+                                .parse()
+                                .expect("static valid url")
                         });
                         InlineKeyboardButton::new(&btn.label, InlineKeyboardButtonKind::Url(url))
                     } else {
@@ -326,10 +328,7 @@ impl Admission for PairingsAdmission {
             .storage
             .acquire_registry_conn()
             .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
-        Ok(surge_persistence::telegram::pairings::is_admitted(
-            &conn, chat_id,
-        )
-        .unwrap_or(false))
+        Ok(surge_persistence::telegram::pairings::is_admitted(&conn, chat_id).unwrap_or(false))
     }
 }
 
@@ -496,8 +495,7 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
     };
     let engine_resolver = EngineFacadeResolver { engine };
 
-    let emitter =
-        crate::card::emit::CardEmitter::new(card_store.clone(), bot_api.clone());
+    let emitter = crate::card::emit::CardEmitter::new(card_store.clone(), bot_api.clone());
     let dispatch_ctx = crate::cockpit::dispatch::CockpitCtx {
         emitter,
         admin_chat_id,
@@ -516,13 +514,8 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
     let rt_runtime = Arc::clone(&runtime);
     let rt_shutdown = shutdown.clone();
     let runtime_handle = tokio::spawn(async move {
-        if let Err(err) = crate::cockpit::run::run_cockpit(
-            rt_runtime,
-            tap_rx,
-            updates,
-            rt_shutdown,
-        )
-        .await
+        if let Err(err) =
+            crate::cockpit::run::run_cockpit(rt_runtime, tap_rx, updates, rt_shutdown).await
         {
             error!(
                 target: "daemon::cockpit",
