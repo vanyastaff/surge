@@ -206,7 +206,7 @@ Out:
 
 ### Phase 5 — Retire CLI Surfaces
 
-#### Task 5.1: Remove `surge spec` Subcommand Tree
+#### Task 5.1: Remove `surge spec` Subcommand Tree ✅
 
 - **Deliverable:** `surge spec ...` no longer exists in the CLI; `SpecCommands` enum and module gone.
 - **Files:**
@@ -216,7 +216,7 @@ Out:
 - **Logging:** n/a.
 - **Acceptance:** `cargo run -p surge-cli -- spec` → clap "no such subcommand"; `cargo build -p surge-cli` clean.
 
-#### Task 5.2: Remove / Retarget Spec-Keyed Top-Level Commands
+#### Task 5.2: Remove / Retarget Spec-Keyed Top-Level Commands ✅
 
 - **Decision (decide-or-defer):** REMOVE `surge run`, `surge status`, `surge logs`, `surge plan`, `surge skip`, `surge diff`, `surge merge`, `surge discard`. Engine equivalents (`surge engine run|status|logs|stop|resume`) already cover the supported behaviours. Renaming `surge engine` → `surge` is deferred to a follow-up release note.
 - **Files:**
@@ -228,7 +228,7 @@ Out:
 - **Logging:** n/a.
 - **Acceptance:** `surge --help` lists only `init`, `project`, `profile`, `engine`, `feature`, `doctor`, `mcp`, `migrate-spec` (and any preserved subgroup); `cargo build -p surge-cli` clean.
 
-#### Task 5.3: Update CLI Integration Tests
+#### Task 5.3: Update CLI Integration Tests ✅
 
 - **Deliverable:** CLI integration tests stop invoking removed commands.
 - **Files:** audit `crates/surge-cli/tests/*.rs`; remove or migrate tests that reference removed subcommands.

@@ -13,14 +13,18 @@ pub mod init;
 pub mod insights;
 pub mod memory;
 pub mod migrate_spec;
-pub mod pipeline;
 pub mod profile;
 pub mod project;
 pub mod registry;
-pub mod spec;
 pub mod tracker;
 
-/// Load a spec by ID or filename.
+// Fuzzy-resolve a spec id (full ULID, prefix, or filename) to a `SpecFile`
+// loaded from `.surge/specs/`. Used by analytics/insights/memory subcommands
+// that still query historical data tagged with the legacy spec_id.
+//
+// TODO: Phase 7 — when surge-spec is deleted, these analytics queries must
+// migrate to run_id (engine path) or be retired alongside it.
+#[allow(deprecated)]
 pub fn load_spec_by_id(id: &str) -> anyhow::Result<surge_spec::SpecFile> {
     let path = std::path::Path::new(id);
     if path.exists() {
@@ -40,5 +44,5 @@ pub fn load_spec_by_id(id: &str) -> anyhow::Result<surge_spec::SpecFile> {
         }
     }
 
-    anyhow::bail!("Spec '{}' not found. Check surge spec list.", id)
+    anyhow::bail!("Spec '{}' not found in .surge/specs/", id)
 }

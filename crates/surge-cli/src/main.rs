@@ -18,7 +18,7 @@ use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,
     config::ConfigCommands, feature::FeatureCommands, init::InitArgs, insights::InsightsCommands,
     memory::MemoryCommands, migrate_spec::MigrateSpecArgs, project::ProjectCommands,
-    registry::RegistryCommands, spec::SpecCommands, tracker::TrackerCommand,
+    registry::RegistryCommands, tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -57,12 +57,6 @@ enum Commands {
         command: AgentCommands,
     },
 
-    /// Manage specs
-    Spec {
-        #[command(subcommand)]
-        command: SpecCommands,
-    },
-
     /// Validate and inspect Surge artifacts.
     Artifact {
         #[command(subcommand)]
@@ -71,92 +65,6 @@ enum Commands {
 
     /// Translate a legacy `.spec.toml` into a `flow.toml` document.
     MigrateSpec(MigrateSpecArgs),
-
-    /// Run a spec through the full pipeline
-    Run {
-        /// Spec ID or filename
-        spec_id: String,
-        /// Override max parallel subtasks
-        #[arg(short = 'p', long)]
-        parallel: Option<usize>,
-        /// Override planner agent
-        #[arg(long)]
-        planner: Option<String>,
-        /// Override coder agent
-        #[arg(long)]
-        coder: Option<String>,
-        /// Resume from last checkpoint
-        #[arg(long)]
-        resume: bool,
-    },
-
-    /// Show pipeline status for a spec
-    Status {
-        /// Spec ID
-        spec_id: String,
-    },
-
-    /// Show pipeline logs for a spec
-    Logs {
-        /// Spec ID
-        spec_id: String,
-        /// Follow log output in real time
-        #[arg(short, long)]
-        follow: bool,
-    },
-
-    /// Plan a spec (show execution order) without running it
-    Plan {
-        /// Spec ID
-        spec_id: String,
-        /// Agent to use for planning
-        #[arg(long)]
-        agent: Option<String>,
-    },
-
-    /// Skip a subtask by marking it as skipped
-    Skip {
-        /// Spec ID
-        spec_id: String,
-        /// Subtask ID to skip
-        subtask_id: String,
-    },
-
-    /// Pause a running task
-    Pause {
-        /// Task ID or spec ID
-        task_id: String,
-    },
-
-    /// Resume a paused task
-    Resume {
-        /// Task ID or spec ID
-        task_id: String,
-    },
-
-    /// Show diff for a spec's worktree
-    Diff {
-        /// Spec ID
-        spec_id: String,
-    },
-
-    /// Merge a spec's worktree into the current branch
-    Merge {
-        /// Spec ID
-        spec_id: String,
-        /// Skip confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    /// Discard a spec's worktree and branch
-    Discard {
-        /// Spec ID
-        spec_id: String,
-        /// Skip confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
 
     /// Clean up orphaned worktrees and merged branches
     Clean {
@@ -492,65 +400,12 @@ async fn run_command(command: Commands) -> Result<()> {
             commands::agent::run(command).await?;
         },
 
-        Commands::Spec { command } => {
-            commands::spec::run(command)?;
-        },
-
         Commands::Artifact { command } => {
             commands::artifact::run(command)?;
         },
 
         Commands::MigrateSpec(args) => {
             commands::migrate_spec::run(args)?;
-        },
-
-        Commands::Run {
-            spec_id,
-            parallel,
-            planner,
-            coder,
-            resume,
-        } => {
-            commands::pipeline::run(spec_id, parallel, planner, coder, resume).await?;
-        },
-
-        Commands::Status { spec_id } => {
-            commands::pipeline::status(spec_id)?;
-        },
-
-        Commands::Logs { spec_id, follow } => {
-            commands::pipeline::logs(spec_id, follow)?;
-        },
-
-        Commands::Plan { spec_id, agent } => {
-            commands::pipeline::plan(spec_id, agent)?;
-        },
-
-        Commands::Skip {
-            spec_id,
-            subtask_id,
-        } => {
-            commands::pipeline::skip(spec_id, subtask_id)?;
-        },
-
-        Commands::Pause { task_id } => {
-            commands::pipeline::pause(task_id)?;
-        },
-
-        Commands::Resume { task_id } => {
-            commands::pipeline::resume(task_id).await?;
-        },
-
-        Commands::Diff { spec_id } => {
-            commands::git::diff(spec_id)?;
-        },
-
-        Commands::Merge { spec_id, yes } => {
-            commands::git::merge(spec_id, yes)?;
-        },
-
-        Commands::Discard { spec_id, yes } => {
-            commands::git::discard(spec_id, yes)?;
         },
 
         Commands::Clean { yes } => {
