@@ -19,6 +19,8 @@ surge feature ...       draft, approve, list, show, or reject roadmap amendments
 surge artifact ...      validate generated artifacts against Surge contracts
 surge migrate-spec ...  translate a legacy .spec.toml into a flow.toml
 surge daemon ...        manage the long-running local engine host
+surge tracker ...       list configured task sources, test connectivity
+surge intake ...        inspect tracker-intake state (ticket index)
 surge clean             clean up orphaned worktrees and merged branches
 surge worktrees         list active worktrees
 surge analytics ...     view token/cost analytics
@@ -105,6 +107,21 @@ surge project describe --author-mode deterministic
 
 Set `RUST_LOG=surge=debug` when diagnosing agent detection, config section updates, or project-context scan decisions.
 
+## Tracker Intake
+
+Two command groups expose the tracker-source side. `surge tracker` deals with **configuration** (what's wired up in `surge.toml`); `surge intake` deals with **observed state** (what the daemon's ticket index currently looks like).
+
+```text
+surge tracker list                        # task sources configured in surge.toml
+surge tracker test <source-id>            # liveness probe — list_open_tasks() against the provider
+surge intake list                         # ticket index, newest first (table or JSON)
+surge intake list --tracker <source-id>   # filter by source
+surge intake list --format json           # stable JSON, pipeable into `jq`
+surge intake list --limit 200             # cap (hard ceiling 1000)
+```
+
+`surge intake list` columns: `SOURCE | TASK | STATE | PRIO | RUN | LAST SEEN`. State is the `ticket_index` FSM value (`Seen`, `Triaged`, `InboxNotified`, `RunStarted`, `Active`, `Completed`, `Failed`, `Aborted`, `Skipped`, …). See [tracker-automation.md](tracker-automation.md) for tier semantics (L0–L3) and the label conventions that drive them.
+
 ## Target Command Ideas
 
 From the product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), command names are not final while the CLI is being aligned:
@@ -116,6 +133,7 @@ surge task ...          create a focused task run
 ## See Also
 
 - [Getting Started](getting-started.md) — install Surge and run the first flow
+- [Tracker automation](tracker-automation.md) — tier labels (L0–L3) and intake inspection
 - [Artifact Conventions](conventions/README.md) — generated artifact contracts and validator examples
 - [Workflow](workflow.md) — how runs are bootstrapped, executed, and logged
 - [Architecture](ARCHITECTURE.md) — the canonical architecture document

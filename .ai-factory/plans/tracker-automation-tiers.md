@@ -136,7 +136,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - `--format json|table` (default table), optional `--tracker <id>`.
   - In-memory DB integration test.
 
-- [ ] **Task 9 — ADR 0014 + tracker-automation docs** (mandatory docs checkpoint)
+- [x] **Task 9 — ADR 0013 + tracker-automation docs** (mandatory docs checkpoint; renumbered from the plan's placeholder "0014" — next available ADR slot was 0013)
   - `docs/adr/0014-tracker-automation-tiers.md`: tier semantics, label precedence, FSM additions, idempotency contract, interaction with bootstrap and templates.
   - `docs/tracker-automation.md` (new, user-facing): tier table, label conventions, examples, troubleshooting.
   - `docs/cli.md`: add `surge intake list` section.
