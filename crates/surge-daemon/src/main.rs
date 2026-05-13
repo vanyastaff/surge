@@ -237,6 +237,7 @@ fn main() -> std::process::ExitCode {
                 Arc::clone(&notifier),
                 Arc::clone(&storage),
                 Arc::clone(&bridge),
+                Arc::clone(&facade),
             )
             .await
             {
@@ -728,6 +729,216 @@ async fn enqueue_l2_template_start(
     );
 }
 
+/// Reflect a non-`NewTask` event from the tracker into `ticket_index`.
+///
+/// Handles three flavors of `TaskEventKind`:
+/// - `TaskClosed` / `StatusChanged { to: "closed" }`: if the ticket is
+///   `Active`, call `EngineFacade::stop_run` with reason
+///   `"closed externally"` and transition to `Aborted`. If the ticket
+///   is `InboxNotified`, clear the callback token and transition to
+///   `Skipped` with `triage_decision = "ExternallyClosed"`. Terminal
+///   states are no-op.
+/// - `LabelsChanged { added }` containing `surge:disabled`: triggers
+///   the same graceful abort path as a status-close (the user wants
+///   the run to stop). Other `surge:*` label transitions are INFO-
+///   logged but do not escalate (the operator must restart).
+/// - Other variants: ignored (defensive — `TaskEventKind` is
+///   `#[serde(tag = "kind")]` rather than `#[non_exhaustive]`, so the
+///   set is closed; the wildcard arm is purely a forward-compat
+///   safety net).
+async fn handle_external_update(
+    event: surge_intake::types::TaskEvent,
+    sources: &Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
+    storage: &Arc<Storage>,
+    engine: &Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+) {
+    use surge_intake::types::TaskEventKind;
+
+    let task_id = event.task_id.as_str().to_string();
+    match event.kind {
+        TaskEventKind::TaskClosed => {
+            apply_external_close(storage, engine, &task_id).await;
+        },
+        TaskEventKind::StatusChanged { ref to, .. } if to.eq_ignore_ascii_case("closed") => {
+            apply_external_close(storage, engine, &task_id).await;
+        },
+        TaskEventKind::StatusChanged { ref from, ref to } => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                from = %from,
+                to = %to,
+                "external status change (not closed); ticket_index untouched"
+            );
+        },
+        TaskEventKind::LabelsChanged {
+            ref added,
+            ref removed,
+        } => {
+            let disabled_added = added
+                .iter()
+                .any(|l| l == surge_intake::policy::labels::DISABLED);
+            if disabled_added {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "surge:disabled added mid-run; treating as graceful abort"
+                );
+                apply_external_close(storage, engine, &task_id).await;
+                return;
+            }
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                added = ?added,
+                removed = ?removed,
+                "external labels changed; no FSM action"
+            );
+        },
+        TaskEventKind::NewTask => {
+            // Defensive: NewTask should never reach this handler — the
+            // router gates on event.kind and only forwards non-NewTask
+            // events here.
+            tracing::warn!(
+                target: "intake::router",
+                task_id = %task_id,
+                "NewTask reached external-update handler; routing bug"
+            );
+        },
+    }
+    let _ = sources; // reserved for future tracker-comment side-effects.
+}
+
+/// Shared "close" path used by both `TaskClosed`/`StatusChanged → closed`
+/// and the `surge:disabled` mid-run label transition.
+async fn apply_external_close(
+    storage: &Arc<Storage>,
+    engine: &Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
+    task_id: &str,
+) {
+    use surge_persistence::intake::{IntakeRepo, TicketState};
+
+    // Phase 1 — snapshot state + run_id under a scoped connection so the
+    // non-`Send` `IntakeRepo` doesn't survive across the upcoming await.
+    let row = {
+        let conn = match storage.acquire_registry_conn() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id, "external-close: acquire conn failed");
+                return;
+            },
+        };
+        match IntakeRepo::new(&conn).fetch(task_id) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "external-close: unknown ticket; no FSM action"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id, "external-close: fetch failed");
+                return;
+            },
+        }
+    };
+
+    // Phase 2 — engine-side abort if there is a live run. This is the
+    // await point; no IntakeRepo is held here.
+    let live_run = matches!(
+        row.state,
+        TicketState::Active | TicketState::RunStarted
+    );
+    if live_run
+        && let Some(run_id_str) = row.run_id.as_deref()
+        && let Ok(run_id) = run_id_str.parse::<surge_core::id::RunId>()
+        && let Err(e) = engine
+            .stop_run(run_id, "closed externally".into())
+            .await
+    {
+        tracing::warn!(
+            target: "intake::router",
+            error = %e,
+            task_id = %task_id,
+            run_id = %run_id_str,
+            "external-close: stop_run failed"
+        );
+    }
+
+    // Phase 3 — apply the FSM transition under a fresh scoped connection.
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id, "external-close: re-acquire conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    match row.state {
+        TicketState::Active | TicketState::RunStarted => {
+            if let Err(e) = repo.update_state_validated(task_id, TicketState::Aborted) {
+                tracing::warn!(
+                    target: "intake::router",
+                    error = ?e,
+                    task_id = %task_id,
+                    "external-close: transition → Aborted refused"
+                );
+            } else {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    "external-close: ticket aborted (active run stopped)"
+                );
+            }
+        },
+        TicketState::InboxNotified | TicketState::Snoozed => {
+            if let Err(e) = repo.clear_callback_token(task_id) {
+                tracing::warn!(error = ?e, task_id = %task_id, "external-close: clear_callback_token failed");
+            }
+            if let Err(e) = repo.update_state_validated(task_id, TicketState::Skipped) {
+                tracing::warn!(
+                    target: "intake::router",
+                    error = ?e,
+                    task_id = %task_id,
+                    "external-close: transition → Skipped refused"
+                );
+            } else {
+                tracing::info!(
+                    target: "intake::router",
+                    task_id = %task_id,
+                    triage_decision = surge_intake::TRIAGE_DECISION_EXTERNALLY_CLOSED,
+                    "external-close: card invalidated"
+                );
+            }
+        },
+        // Terminal / pre-triage states: no FSM action.
+        TicketState::Completed
+        | TicketState::Failed
+        | TicketState::Aborted
+        | TicketState::Skipped
+        | TicketState::Stale
+        | TicketState::TriageStale => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                state = ?row.state,
+                "external-close: terminal state; no-op"
+            );
+        },
+        _ => {
+            tracing::info!(
+                target: "intake::router",
+                task_id = %task_id,
+                state = ?row.state,
+                "external-close: state has no explicit handling; no-op"
+            );
+        },
+    }
+}
+
 /// Route a `TriageDecision` to the appropriate output channel.
 ///
 /// `policy` is the resolved tier from `handle_triage_event` (L0 already
@@ -842,12 +1053,14 @@ async fn dispatch_triage_decision(
 /// same source registry and SQLite connection. Returns `None` when
 /// intake setup fails (registry DB open / pragma failure); the caller
 /// should skip wiring downstream consumers in that case.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_task_router(
     sources: Vec<Arc<dyn TaskSource>>,
     source_map: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
     notifier: Arc<dyn surge_notify::NotifyDeliverer>,
     storage: Arc<Storage>,
     bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
+    engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
 ) -> Option<(
     Arc<HashMap<String, Arc<dyn TaskSource>>>,
     Arc<TokioMutex<rusqlite::Connection>>,
@@ -899,11 +1112,13 @@ async fn spawn_task_router(
 
     // Consume router output. Triage events go through the LLM dispatch path
     // (which on Enqueued enqueues an inbox card via `enqueue_inbox_card`);
-    // EarlyDuplicate events post a tracker comment.
+    // EarlyDuplicate events post a tracker comment; ExternalUpdate events
+    // reflect external status/label/closed changes into ticket_index.
     let source_map_for_consumer = source_map;
     let bridge_for_consumer = Arc::clone(&bridge);
     let storage_for_consumer = Arc::clone(&storage);
     let notifier_for_consumer = Arc::clone(&notifier);
+    let engine_for_consumer = engine;
     let source_map_for_caller = Arc::clone(&source_map_for_consumer);
     let conn_for_caller = Arc::clone(&conn_arc);
     tokio::spawn(async move {
@@ -944,6 +1159,26 @@ async fn spawn_task_router(
                             "failed to post duplicate comment"
                         ),
                     }
+                },
+                surge_intake::router::RouterOutput::ExternalUpdate { event } => {
+                    handle_external_update(
+                        event,
+                        &source_map_for_consumer,
+                        &storage_for_consumer,
+                        &engine_for_consumer,
+                    )
+                    .await;
+                },
+                // `RouterOutput` is `#[non_exhaustive]` — defensive
+                // catch for any future variant that lands without an
+                // explicit handler. Logging is enough; events fall on
+                // the floor rather than corrupting state.
+                other => {
+                    tracing::warn!(
+                        target: "intake::router",
+                        kind = ?std::mem::discriminant(&other),
+                        "router emitted unhandled RouterOutput variant; dropping"
+                    );
                 },
             }
         }

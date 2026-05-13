@@ -114,7 +114,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - `InboxActionConsumer::handle_start` reads `policy_hint`; if `Some(name)`, the launcher calls `ArchetypeRegistry::resolve(name)` instead of `BootstrapGraphBuilder::build`. Unknown name ⇒ WARN, degrade to `Standard`.
   - Tests with `MockTaskSource` covering each tier and unknown-template fallback.
 
-- [ ] **Task 5 — External state-change reflection** (Decision 7)
+- [x] **Task 5 — External state-change reflection** (Decision 7)
   - Extend `TaskRouter` to forward `StatusChanged` / `TaskClosed` / `LabelsChanged` into a new `RouterOutput::ExternalUpdate { event }`.
   - Daemon handler:
     - `TaskClosed` or `StatusChanged { to: "closed" }`: if `state == Active`, `EngineFacade::abort_run(run_id)` + transition `Aborted` (reason `"closed externally"`); if `InboxNotified`, clear callback token + transition `Skipped` (`triage_decision = "ExternallyClosed"`); terminal states are no-op.
