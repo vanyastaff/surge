@@ -184,7 +184,7 @@
   - Rate-limit handling against Telegram Bot API
   - Snooze ergonomics from inbox subsystem extended to cockpit cards (`/snooze 1h` etc.)
 
-- [ ] **Tracker automation tiers** — L0–L3 honored on GitHub Issues and Linear (touches `surge-intake`, `surge-orchestrator`, `surge-daemon`)
+- [x] **Tracker automation tiers** — L0–L3 honored on GitHub Issues and Linear (touches `surge-intake`, `surge-orchestrator`, `surge-daemon`) — landed via plan `.ai-factory/plans/tracker-automation-tiers.md`, see [ADR 0013](../docs/adr/0013-tracker-automation-tiers.md). L3 PR-readiness check and `CadenceController` source-loop wiring deferred to follow-up tasks with explicit blocked/no-op fallbacks today.
   - L0 (`surge:disabled` or label absent): tracker ignores ticket entirely
   - L1 (`surge:enabled`, default): full bootstrap; user approves before run starts
   - L2 (`surge:template/<name>`): skip bootstrap, use named template directly
