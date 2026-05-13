@@ -241,7 +241,20 @@ fn main() -> std::process::ExitCode {
             )
             .await
             {
-                intake_completion::spawn(completion_rx, source_map_arc, conn_arc);
+                // Run-completion → tracker comment + ticket FSM transition.
+                intake_completion::spawn(completion_rx, Arc::clone(&source_map_arc), Arc::clone(&conn_arc));
+                // L3 auto-merge gate. Subscribes to the same global event
+                // stream via a separate receiver so the two consumers do
+                // not contend. The `JoinHandle` is intentionally dropped:
+                // shutdown is driven by the broadcast channel closing
+                // (when `BroadcastRegistry` is dropped), not by aborting
+                // the task explicitly.
+                let merge_gate_rx = broadcast_registry.subscribe_global();
+                let _merge_gate_handle = surge_daemon::automation_merge_gate::spawn(
+                    merge_gate_rx,
+                    source_map_arc,
+                    conn_arc,
+                );
             } else {
                 info!("intake disabled; run-completion → tracker-comment hook not started");
             }

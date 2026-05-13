@@ -11,6 +11,7 @@
 
 // Modules added incrementally in Phase 3+.
 pub mod admission;
+pub mod automation_merge_gate;
 pub mod broadcast;
 pub mod error;
 pub mod inbox;

@@ -126,7 +126,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - Wrap each source's poll loop in a `CadenceController` that picks the most aggressive tier among active tickets for that source (L1 = 5min, L2 = 2min, L3 = 1min) and applies exponential backoff with jitter on `Error::RateLimited`.
   - Tests: deterministic schedule under `tokio::time::pause`, backoff curve assertion, recovery after rate-limit.
 
-- [ ] **Task 7 — `AutomationMergeGate` for L3** (ROADMAP §203, milestone wires #3)
+- [x] **Task 7 — `AutomationMergeGate` for L3** (ROADMAP §203, milestone wires #3)
   - Consumer subscribing to `GlobalDaemonEvent::RunFinished`.
   - On `Completed`: lookup policy via `ticket_index`; if `Auto { merge_when_clean: true }` AND PR has all-checks-green AND review-approved, post merge action; otherwise post `merge-blocked` comment with reason.
   - Idempotency via `intake_emit_log` (`merge_proposed` / `merge_blocked`).
