@@ -6,12 +6,20 @@
 //! command dispatcher (in the bot loop, not landed yet) parses incoming
 //! `/command args` messages and routes to the matching handler.
 
+pub mod abort;
+pub mod feedback;
 pub mod pair;
+pub mod run;
 pub mod runs;
+pub mod snooze;
 pub mod status;
 
+pub use abort::{RunAborter, handle_abort};
+pub use feedback::handle_feedback;
 pub use pair::{PairingTokenConsumer, PairingWriter, handle_pair};
+pub use run::{RunStarter, handle_run};
 pub use runs::{RunListProvider, RunRow, handle_runs};
+pub use snooze::{CockpitSnoozeWriter, handle_snooze};
 pub use status::{RunSnapshotProvider, handle_status};
 
 /// Reply produced by a bot command handler. The bot loop translates this
