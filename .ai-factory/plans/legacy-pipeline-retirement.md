@@ -90,7 +90,7 @@ Out:
 
 ### Phase 2 — `surge migrate-spec` CLI
 
-#### Task 2.1: Spec→Flow Mapping Rules
+#### Task 2.1: Spec→Flow Mapping Rules ✅
 
 - **Deliverable:** `crates/surge-cli/src/commands/migrate_spec/mapping.rs` — pure functions converting `surge_spec::SpecFile` → `toml_edit::Document` shaped as flow.toml.
 - **Mapping rules (decided):**
@@ -108,7 +108,7 @@ Out:
 - **Logging:** `debug!(subtask = %id, "mapped subtask")` per subtask; `warn!(subtask = %id, reason = ?, "ambiguous mapping")` per fallback.
 - **Acceptance:** module compiles standalone with `cargo test -p surge-cli migrate_spec::mapping::tests` ≥ 6 cases (single, linear chain, fan-out, fan-in, diamond, no-profile).
 
-#### Task 2.2: `surge migrate-spec <path>` Subcommand
+#### Task 2.2: `surge migrate-spec <path>` Subcommand ✅
 
 - **Deliverable:** clap subcommand `surge migrate-spec <input.spec.toml> [--output <path>] [--allow-warnings]`.
 - **Behavior (decided):**
@@ -123,15 +123,15 @@ Out:
 - **Logging:** `info!(input = %path, output = ?dst, "migrate-spec starting")`, `debug!(...)` per step, `info!(warnings = n, "migrate-spec finished")`.
 - **Acceptance:** `surge migrate-spec --help` shows new command; running against the fixtures in Task 2.3 produces valid flow.toml that loads via `surge-orchestrator` flow loader.
 
-#### Task 2.3: Tests for migrate-spec
+#### Task 2.3: Tests for migrate-spec ✅
 
 - **Deliverable:**
-  - Unit tests for mapping rules in `migrate_spec/mapping.rs` (6+ cases per Task 2.1).
-  - Integration test `crates/surge-cli/tests/migrate_spec_e2e.rs` running the binary handler against fixture files and asserting flow.toml parses + matches snapshot via `insta`.
-- **Fixtures (create):** `crates/surge-cli/tests/fixtures/legacy/{linear_chain,fan_out,diamond,no_profile,single}.spec.toml` — minimum 5 fixtures.
-- **Files (create):** `crates/surge-cli/tests/migrate_spec_e2e.rs`, `crates/surge-cli/tests/fixtures/legacy/*.spec.toml`, `crates/surge-cli/tests/snapshots/...` (insta).
-- **Logging:** test-only via `tracing-test`.
-- **Acceptance:** `cargo test -p surge-cli migrate_spec` green; `cargo insta accept` runs clean once and snapshots are committed.
+  - Unit tests for mapping rules in `migrate_spec/mapping.rs` (12 cases — done in Task 2.1).
+  - Integration test `crates/surge-cli/tests/migrate_spec_e2e.rs` running the `surge migrate-spec` binary against programmatically-built spec fixtures and asserting (a) the binary exit code and (b) the output `flow.toml` matches an `insta` snapshot.
+- **Decision (decide-or-defer):** Build spec fixtures programmatically via `surge_spec::SpecFile::save` inside a `tempfile::tempdir` rather than hand-authored `.spec.toml` files. Reasons: snapshot stability does not require fixed ULIDs (mapping reassigns to `sN`), maintenance burden is lower, and the workspace already disallows checked-in legacy `.spec.toml` examples.
+- **Files (create):** `crates/surge-cli/tests/migrate_spec_e2e.rs`, `crates/surge-cli/tests/snapshots/migrate_spec_e2e__*.snap` (insta).
+- **Logging:** test-only via `tracing-subscriber` from the `surge` binary; tests do not need their own subscriber.
+- **Acceptance:** `cargo test -p surge-cli --test migrate_spec_e2e` green; `cargo insta accept` runs clean once and snapshots are committed.
 
 **Phase exit:** `surge migrate-spec` exists, tested, and emits flow.toml that loads through the engine.
 

@@ -12,6 +12,7 @@ pub mod git;
 pub mod init;
 pub mod insights;
 pub mod memory;
+pub mod migrate_spec;
 pub mod pipeline;
 pub mod profile;
 pub mod project;

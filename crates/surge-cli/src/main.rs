@@ -17,8 +17,8 @@ mod commands;
 use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,
     config::ConfigCommands, feature::FeatureCommands, init::InitArgs, insights::InsightsCommands,
-    memory::MemoryCommands, project::ProjectCommands, registry::RegistryCommands,
-    spec::SpecCommands, tracker::TrackerCommand,
+    memory::MemoryCommands, migrate_spec::MigrateSpecArgs, project::ProjectCommands,
+    registry::RegistryCommands, spec::SpecCommands, tracker::TrackerCommand,
 };
 
 #[derive(Parser)]
@@ -68,6 +68,9 @@ enum Commands {
         #[command(subcommand)]
         command: commands::artifact::ArtifactCommands,
     },
+
+    /// Translate a legacy `.spec.toml` into a `flow.toml` document.
+    MigrateSpec(MigrateSpecArgs),
 
     /// Run a spec through the full pipeline
     Run {
@@ -354,6 +357,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "surge=info".into()),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
@@ -368,6 +372,7 @@ async fn main() -> Result<()> {
             | Commands::Feature { .. }
             | Commands::Engine { .. }
             | Commands::Artifact { .. }
+            | Commands::MigrateSpec(_)
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
@@ -493,6 +498,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Artifact { command } => {
             commands::artifact::run(command)?;
+        },
+
+        Commands::MigrateSpec(args) => {
+            commands::migrate_spec::run(args)?;
         },
 
         Commands::Run {
