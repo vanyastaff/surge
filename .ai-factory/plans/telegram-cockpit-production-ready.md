@@ -112,7 +112,7 @@ These are decisions taken at planning time so `/aif-implement` does not re-litig
 
 ### Phase 3 — Read API: query the event log for `/status` and `/runs`
 
-- [ ] Task 12: `RunEventQuery` read-API. New module `crates/surge-persistence/src/runs/query.rs` exposing `pub async fn current_status(run_id) -> Result<RunStatusSnapshot>` (fold the event log to derive: active node, last `StageEntered`, last outcome, terminal flag, elapsed_ms, archetype if any) and `pub async fn list_runs(limit, since) -> Result<Vec<RunSummary>>`. Reuse existing fold helpers — do NOT re-implement fold. Files: `crates/surge-persistence/src/runs/query.rs`, `crates/surge-persistence/src/lib.rs`. Logging: DEBUG on each query. Tests: golden fold on a fixture event-log file (existing test fixtures under `crates/surge-orchestrator/tests/fixtures/` if any; else synthesize). **Depends on:** Task 7.
+- [x] Task 12: `RunEventQuery` read-API. New module `crates/surge-persistence/src/runs/query.rs` exposing `pub async fn current_status(run_id) -> Result<RunStatusSnapshot>` (fold the event log to derive: active node, last `StageEntered`, last outcome, terminal flag, elapsed_ms, archetype if any) and `pub async fn list_runs(limit, since) -> Result<Vec<RunSummary>>`. Reuse existing fold helpers — do NOT re-implement fold. Files: `crates/surge-persistence/src/runs/query.rs`, `crates/surge-persistence/src/lib.rs`. Logging: DEBUG on each query. Tests: golden fold on a fixture event-log file (existing test fixtures under `crates/surge-orchestrator/tests/fixtures/` if any; else synthesize). **Depends on:** Task 7.
 <!-- Commit checkpoint: task 12 -->
 
 ### Phase 4 — Card renderer + cockpit dispatch core
