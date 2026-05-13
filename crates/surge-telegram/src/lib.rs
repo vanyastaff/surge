@@ -9,6 +9,11 @@
 //! See [ADR 0012](../../../docs/adr/0012-surge-telegram-crate-split.md) for
 //! the crate split rationale.
 
+pub mod card;
 pub mod error;
 
+pub use card::{
+    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation,
+    render_failure, render_human_gate, render_status,
+};
 pub use error::{Result, TelegramCockpitError};

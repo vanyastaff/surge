@@ -22,6 +22,9 @@ surge-notify.workspace = true
 surge-persistence.workspace = true
 surge-orchestrator.workspace = true
 
+sha2.workspace = true
+hex.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile.workspace = true
