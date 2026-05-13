@@ -241,7 +241,7 @@ Out:
 
 ### Phase 6 — Retire Legacy Orchestrator Modules
 
-#### Task 6.1: Migrate `surge-daemon` Server to Engine
+#### Task 6.1: Migrate `surge-daemon` Server to Engine ✅
 
 - **Deliverable:** `surge-daemon/src/server.rs` runs flows via `Engine::run`, not `pipeline::Orchestrator::execute`.
 - **Files:**
@@ -251,7 +251,7 @@ Out:
 - **Logging:** `info!` on daemon startup with engine config; `debug!` per event observed.
 - **Acceptance:** daemon starts; `surge engine run --daemon examples/flow_minimal_agent.toml` succeeds end-to-end against the running daemon.
 
-#### Task 6.2: Delete Legacy Modules from surge-orchestrator
+#### Task 6.2: Delete Legacy Modules from surge-orchestrator ✅
 
 - **Deliverable:** 14 modules removed.
 - **Files (delete):** `crates/surge-orchestrator/src/{pipeline,planner,executor,gates,qa,retry,circuit_breaker,parallel,schedule,phases,budget,context,project,conflict}.rs`.
@@ -260,7 +260,7 @@ Out:
 - **Logging:** n/a (removal).
 - **Acceptance:** `cargo build -p surge-orchestrator --all-targets` clean; `cargo test -p surge-orchestrator` green; `Select-String "use surge_spec" crates/surge-orchestrator/src/` empty.
 
-#### Task 6.3: Verify `project_context` Survives Clean
+#### Task 6.3: Verify `project_context` Survives Clean ✅
 
 - **Deliverable:** `crates/surge-orchestrator/src/project_context.rs` does not import surge-spec; `surge project describe` still works.
 - **Files:** `crates/surge-orchestrator/src/project_context.rs` (modify if needed).
