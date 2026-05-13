@@ -51,6 +51,23 @@ pub struct DoctorEntry {
     pub matrix: Vec<MatrixCell>,
 }
 
+impl DoctorEntry {
+    /// Constructor for callers outside `surge-core` (the type is
+    /// `#[non_exhaustive]`).
+    #[must_use]
+    pub fn new(agent_name: impl Into<String>) -> Self {
+        Self {
+            agent_name: agent_name.into(),
+            runtime: None,
+            binary_path: None,
+            detected_version: None,
+            policy: None,
+            version_status: VersionStatus::NotApplicable,
+            matrix: Vec::new(),
+        }
+    }
+}
+
 /// Outcome of comparing a detected runtime version against the declared
 /// minimum-version policy.
 #[non_exhaustive]
@@ -83,6 +100,38 @@ pub struct MatrixCell {
     /// note is set.
     #[serde(default)]
     pub note: String,
+}
+
+impl MatrixCell {
+    /// Constructor for callers outside `surge-core` (the type is
+    /// `#[non_exhaustive]`).
+    #[must_use]
+    pub fn new(mode: SandboxMode, status: MatrixCellStatus) -> Self {
+        Self {
+            mode,
+            status,
+            flags: Vec::new(),
+            note: String::new(),
+        }
+    }
+
+    /// Builder: replace `flags`.
+    #[must_use]
+    pub fn with_flags<I, S>(mut self, flags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.flags = flags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Builder: replace `note`.
+    #[must_use]
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = note.into();
+        self
+    }
 }
 
 /// Status of a matrix cell as seen by `surge doctor`.
