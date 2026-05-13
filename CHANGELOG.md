@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Telegram cockpit production-ready
+
+- **New `surge-telegram` crate** — owns the long-running Telegram cockpit:
+  bot loop scaffolding (`cockpit::run`), callback router
+  (`cockpit::callback`), card renderer + emitter (`card::{render, emit}`),
+  recovery reconciler (`cockpit::recover`), token-bucket rate limiter
+  (`rate_limiter`), and production trait adapters (`cockpit::production`)
+  that wrap persistence / engine / teloxide for daemon use. Crate split
+  rationale documented in [ADR 0012](docs/adr/0012-surge-telegram-crate-split.md).
+- **`surge telegram setup / revoke / list` CLI** (`surge-cli`) — persists
+  the bot token under `telegram.cockpit.bot_token` in the registry
+  SQLite, mints a 6-character base32 pairing token (default 10-minute
+  TTL), and manages the `telegram_pairings` allowlist.
+- **Paired-chat admission** — every callback and command runs an
+  allowlist check against `telegram_pairings`; unpaired chats short-
+  circuit before any engine call. `/pair` is the only command available
+  to unpaired chats.
+- **Cockpit cards** — `human_gate`, `bootstrap_<stage>`, `status`,
+  `completion`, `failure`, `escalation`. Single card per
+  `(run_id, node_key, attempt_index)` triple; updates use
+  `editMessageText` only (no spam-sends). Hash-match short-circuits
+  no-op updates ([ADR 0011](docs/adr/0011-telegram-card-lifecycle.md)).
+- **Bot commands** — `/pair`, `/status`, `/runs`, `/run`, `/abort`,
+  `/snooze`, `/feedback`. The mutating four (`/run`, `/abort`,
+  `/snooze`, `/feedback`) reuse the same `Engine::resolve_human_input`
+  contract the CLI console approvals use ([ADR 0009](docs/adr/0009-no-human-input-resolver-trait.md)).
+- **Callback wire format** —
+  [ADR 0010](docs/adr/0010-telegram-callback-schema.md) fixes the
+  `cockpit:<verb>:<card_id>` schema; the inbox subsystem's
+  `inbox:*` namespace remains untouched.
+- **Snooze re-emission** — `/snooze 30m` on a reply to a cockpit card
+  inserts into `inbox_action_queue` with `subject_kind='cockpit_card'`;
+  the new `CockpitSnoozeRescheduler` polls due rows and edits the
+  card with a `🛏 Snooze ended` footer once the wake-up time elapses.
+  Snooze persistence extension to the inbox queue (registry migration
+  0010) is shared with the existing inbox-ticket snooze pipeline.
+- **Rate limiter** — token-bucket per chat (1/sec sustained, burst 5)
+  plus a 25/sec global ceiling. Telegram `Retry-After` honoured
+  verbatim with a single in-band retry.
+- **Recovery reconciler** — on daemon restart and on tap-receiver
+  `RecvError::Lagged`, walks every open card, joins against the
+  current run snapshot, and either closes (terminal state) or edits
+  (state diverged). Never issues a new `sendMessage`.
+- **Daemon wiring** — `spawn_telegram_cockpit` helper in
+  `surge-daemon` constructs all production adapters and spawns the
+  cockpit runtime + snooze rescheduler next to the existing
+  `TgInboxBot`. Cockpit failures absorbed by the outer loop's
+  shutdown-aware `select!` so the rest of the daemon survives.
+- **ADRs**: [0009](docs/adr/0009-no-human-input-resolver-trait.md),
+  [0010](docs/adr/0010-telegram-callback-schema.md),
+  [0011](docs/adr/0011-telegram-card-lifecycle.md),
+  [0012](docs/adr/0012-surge-telegram-crate-split.md).
+- **Docs**: [docs/telegram.md](docs/telegram.md) (new) + updates to
+  `docs/cli.md`, `docs/workflow.md`, `docs/bootstrap.md`, `docs/README.md`.
+
+Deliberately deferred (deferred-with-fallback per the milestone plan):
+the **live polling update stream** (engine-tap dispatch and snooze
+re-emit run in production today; callback delivery requires the
+production `polling_default(bot)` adapter swap), the **webhook
+receiver** (long-poll is the default), and the **sandbox-elevation
+card** (owned by the sandbox-delegation-matrix milestone).
+
+### Added — Tracker automation tiers (L0–L3)
+
+- L0 / L1 / L2 / L3 tier model resolved deterministically from
+  tracker labels (`surge:disabled`, `surge:enabled`,
+  `surge:template/<name>`, `surge:auto`).
+  [ADR 0013](docs/adr/0013-tracker-automation-tiers.md) and
+  [docs/tracker-automation.md](docs/tracker-automation.md).
+- `surge_intake::policy::resolve_policy` is the single resolver;
+  proptests cover precedence under permutation.
+- `surge intake list` CLI renders the ticket index (table or JSON).
+- New persistence: `intake_emit_log` table for side-effect
+  idempotency, `policy_hint` column on `inbox_action_queue` for L2
+  carry, `CockpitSnoozeRescheduler` queue rows reuse the same table.
+- `AutomationMergeGate` consumer evaluates L3 PR readiness on
+  `RunFinished { Completed }` (the readiness check itself is stubbed
+  to "Blocked: not yet implemented" — the gate's plumbing is
+  complete; the GitHub-checks/review query lands in a follow-up).
+- `CadenceController` algorithm ships in `surge_intake::cadence`;
+  the integration into source poll loops is staged for a follow-up.
+
 ### Added — Self-describing artifact contracts
 
 - **`surge artifact schema <kind>` CLI** — exports the JSON Schema (draft

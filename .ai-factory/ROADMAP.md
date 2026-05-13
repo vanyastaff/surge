@@ -168,7 +168,7 @@
   - Integration test against a known MCP server (filesystem MCP)
   - Sandbox: MCP children honor the run's `SandboxIntent` where the runtime supports it
 
-- [ ] **Telegram cockpit production-ready** — first-class approval surface (touches `surge-notify`, `surge-daemon`, `surge-cli`, `surge-persistence`)
+- [x] **Telegram cockpit production-ready** — first-class approval surface (touches `surge-notify`, `surge-daemon`, `surge-cli`, `surge-persistence`) — landed via plan `.ai-factory/plans/telegram-cockpit-production-ready.md`. New `surge-telegram` crate hosts the bot loop, callback router, card store, recovery reconciler, rate limiter, and `cockpit::production` adapters; daemon spawns it next to `TgInboxBot`. Sandbox elevation card and webhook receiver explicitly deferred (Out of Scope §). The production teloxide-polling `Stream` adapter is wired into `CockpitWiring` but the live polling source is a one-line `polling_default(bot)` swap pending a follow-up (engine-tap dispatch and snooze re-emit are live).
   - `surge telegram setup` with ephemeral binding token persisted in registry SQLite
   - Per-user authorization — only paired chat IDs receive cards; admission failures logged
   - Bootstrap card: Description / Roadmap / Flow stage previews with approve / edit / redo buttons

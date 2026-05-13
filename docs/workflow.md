@@ -246,6 +246,10 @@ flowchart LR
 
 Full operator reference: [tracker-automation.md](tracker-automation.md). Decision record: [ADR 0013](adr/0013-tracker-automation-tiers.md).
 
+### Telegram cockpit approvals
+
+Bootstrap approvals (Description / Roadmap / Flow stages) and every `HumanGate` resolution are mirrored to Telegram as inline-keyboard cards. Tap `✅ Approve`, `✏ Edit`, or `❌ Reject` on the card; the cockpit translates the callback into `Engine::resolve_human_input` — the same entry point the CLI `surge bootstrap` console-approval path uses (see [ADR 0009](adr/0009-no-human-input-resolver-trait.md)). Setup, pairing, and the full command reference live in [telegram.md](telegram.md).
+
 ## Current Bootstrap Implementation
 
 The implemented bootstrap path is a graph like any other graph. The bundled
