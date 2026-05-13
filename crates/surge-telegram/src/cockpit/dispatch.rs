@@ -392,6 +392,26 @@ mod tests {
             }
             Ok(false)
         }
+
+        async fn find_open(&self) -> Result<Vec<Card>> {
+            let cards = self.cards.lock().unwrap();
+            Ok(cards
+                .iter()
+                .filter(|c| c.closed_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn close(&self, card_id: &str, now_ms: i64) -> Result<()> {
+            let mut cards = self.cards.lock().unwrap();
+            if let Some(card) = cards.iter_mut().find(|c| c.card_id == card_id) {
+                if card.closed_at.is_none() {
+                    card.closed_at = Some(now_ms);
+                    card.updated_at = now_ms;
+                }
+            }
+            Ok(())
+        }
     }
 
     struct InMemApi {

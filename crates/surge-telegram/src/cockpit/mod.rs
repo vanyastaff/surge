@@ -7,9 +7,11 @@
 
 pub mod callback;
 pub mod dispatch;
+pub mod recover;
 
 pub use callback::{
     Admission, CallbackCtx, CallbackOutcome, CallbackParseError, CallbackVerb, EngineResolver,
     ParsedCallback, handle_callback, parse_callback_data,
 };
 pub use dispatch::{CockpitCtx, DispatchOutcome, dispatch};
+pub use recover::{ReconcileReport, reconcile_open_cards};

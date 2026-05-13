@@ -123,6 +123,14 @@ pub trait CardStore: Send + Sync {
         new_hash: &str,
         now_ms: i64,
     ) -> Result<bool>;
+
+    /// Return every open (non-closed) card, oldest first. Used by the
+    /// recovery reconciler at cockpit startup.
+    async fn find_open(&self) -> Result<Vec<Card>>;
+
+    /// Soft-close a card by setting `closed_at`. Idempotent — calling on
+    /// an already-closed card is a no-op.
+    async fn close(&self, card_id: &str, now_ms: i64) -> Result<()>;
 }
 
 /// Emitter that turns a [`RenderedCard`] into the correct Bot API call plus
@@ -368,6 +376,26 @@ mod tests {
                 return Ok(true);
             }
             Ok(false)
+        }
+
+        async fn find_open(&self) -> Result<Vec<Card>> {
+            let cards = self.cards.lock().unwrap();
+            Ok(cards
+                .iter()
+                .filter(|c| c.closed_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn close(&self, card_id: &str, now_ms: i64) -> Result<()> {
+            let mut cards = self.cards.lock().unwrap();
+            if let Some(card) = cards.iter_mut().find(|c| c.card_id == card_id) {
+                if card.closed_at.is_none() {
+                    card.closed_at = Some(now_ms);
+                    card.updated_at = now_ms;
+                }
+            }
+            Ok(())
         }
     }
 

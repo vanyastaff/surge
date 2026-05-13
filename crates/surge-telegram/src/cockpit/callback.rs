@@ -488,6 +488,14 @@ mod tests {
         ) -> Result<bool> {
             unreachable!("callback tests do not exercise update_content_hash")
         }
+
+        async fn find_open(&self) -> Result<Vec<Card>> {
+            unreachable!("callback tests do not exercise find_open")
+        }
+
+        async fn close(&self, _card_id: &str, _now_ms: i64) -> Result<()> {
+            unreachable!("callback tests do not exercise close")
+        }
     }
 
     fn open_card(card_id: &str, run_id: &str) -> Card {
