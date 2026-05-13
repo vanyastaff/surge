@@ -97,6 +97,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .unwrap();

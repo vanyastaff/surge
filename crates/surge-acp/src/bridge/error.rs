@@ -127,6 +127,21 @@ pub enum ReplyToToolError {
     UnknownCallId(String),
 }
 
+/// Errors from `AcpBridge::reply_to_permission`.
+#[derive(Debug, Error)]
+pub enum ReplyToPermissionError {
+    /// Bridge transport failed (channel send/receive).
+    #[error("bridge: {0}")]
+    Bridge(#[source] BridgeError),
+    /// The session was unknown or already ended.
+    #[error("session not found or already ended")]
+    SessionGone,
+    /// The `request_id` doesn't match an outstanding permission request
+    /// (likely already resolved, timed out, or never issued).
+    #[error("no outstanding permission request with id {0}")]
+    UnknownRequestId(String),
+}
+
 /// Wrapper for errors originating in the underlying ACP SDK.
 #[derive(Debug, Error)]
 pub enum AcpError {
@@ -178,6 +193,7 @@ mod tests {
         bound::<SendMessageError>();
         bound::<CloseSessionError>();
         bound::<ReplyToToolError>();
+        bound::<ReplyToPermissionError>();
         bound::<AcpError>();
     }
 }

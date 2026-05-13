@@ -17,8 +17,9 @@ use agent_client_protocol::{
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use surge_core::SessionId;
-use tokio::sync::{Mutex, broadcast};
-use tracing::{debug, warn};
+use tokio::sync::{Mutex, broadcast, oneshot};
+use tracing::{debug, info, warn};
+use ulid::Ulid;
 
 use crate::shared::path_guard::ensure_in_worktree;
 use crate::shared::secrets::SecretsRedactor;
@@ -29,6 +30,11 @@ use crate::terminal::{
 use super::event::BridgeEvent;
 use super::sandbox::{Sandbox, SandboxDecision};
 use super::session_inner::SessionStateInner;
+
+/// Pending-permissions registry size that triggers a `warn` log. Hit usually
+/// means the engine isn't draining decisions fast enough or that approval
+/// channels are mis-configured.
+const PENDING_PERMISSION_WARN_THRESHOLD: usize = 32;
 
 /// Bridge-side ACP `Client` trait impl. One instance per open session.
 ///
@@ -55,7 +61,109 @@ pub(crate) struct BridgeClient {
     pub(crate) terminals: Arc<Mutex<Terminals>>,
 }
 
+/// Pick an `option_id` for the canned Allow/Deny response.
+///
+/// Tries to match `desired_id` (`"allow"` / `"deny"`) against the option IDs
+/// the agent offered in the request. Falls back to constructing a fresh
+/// `PermissionOptionId::new(desired_id)` when the agent omitted the
+/// corresponding option — the SDK will reject genuinely unknown IDs at the
+/// next layer.
+fn pick_option(req: &RequestPermissionRequest, desired_id: &str) -> PermissionOptionId {
+    for opt in &req.options {
+        if opt.option_id.0.as_ref() == desired_id {
+            return opt.option_id.clone();
+        }
+    }
+    PermissionOptionId::new(desired_id)
+}
+
 impl BridgeClient {
+    /// Park the permission request in `SessionStateInner::pending_permissions`,
+    /// broadcast a `PermissionRequested` event, and await the engine's
+    /// decision via `reply_to_permission`.
+    ///
+    /// When the receiver side drops without a value (session closed / engine
+    /// failure) the agent receives `Cancelled` so it never blocks forever.
+    async fn await_elevation(
+        &self,
+        req: RequestPermissionRequest,
+        capability: String,
+    ) -> AcpResult<RequestPermissionResponse> {
+        let request_id = Ulid::new().to_string();
+        let tool_name = req.tool_call.fields.title.clone().unwrap_or_default();
+        let options: Vec<String> = req
+            .options
+            .iter()
+            .map(|o| o.option_id.0.as_ref().to_string())
+            .collect();
+
+        let (tx, rx) = oneshot::channel::<RequestPermissionResponse>();
+        {
+            let mut state = self.state.borrow_mut();
+            let pending_count = state.pending_permissions.len() + 1;
+            state
+                .pending_permissions
+                .insert(request_id.clone(), tx);
+            if pending_count >= PENDING_PERMISSION_WARN_THRESHOLD {
+                warn!(
+                    target: "surge_acp.bridge.client",
+                    session = %self.session_id,
+                    pending_count,
+                    "pending permission registry growing — engine may be slow to respond"
+                );
+            }
+        }
+
+        info!(
+            target: "surge_acp.bridge.client",
+            session = %self.session_id,
+            request_id = %request_id,
+            tool = %tool_name,
+            capability = %capability,
+            "elevation requested by agent — awaiting engine decision"
+        );
+
+        let _ = self.event_tx.send(BridgeEvent::PermissionRequested {
+            session: self.session_id,
+            request_id: request_id.clone(),
+            tool: tool_name,
+            capability,
+            options,
+        });
+
+        match rx.await {
+            Ok(response) => {
+                debug!(
+                    target: "surge_acp.bridge.client",
+                    session = %self.session_id,
+                    request_id = %request_id,
+                    "permission resolved by engine"
+                );
+                Ok(response)
+            },
+            Err(_recv_err) => {
+                // The oneshot sender was dropped before the engine replied —
+                // typically because the session is closing. Clear any stale
+                // entry (`reply_to_permission` removes the entry before
+                // sending; we only reach here if nothing was sent at all) and
+                // tell the agent the request was cancelled.
+                self.state
+                    .borrow_mut()
+                    .pending_permissions
+                    .remove(&request_id);
+                warn!(
+                    target: "surge_acp.bridge.client",
+                    session = %self.session_id,
+                    request_id = %request_id,
+                    "permission oneshot dropped before engine replied; reporting Cancelled to agent"
+                );
+                Ok(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Cancelled,
+                ))
+            },
+        }
+    }
+
     /// Construct a new `BridgeClient`.
     ///
     /// `terminals` is initialised from `worktree_root` so that every spawned
@@ -85,42 +193,50 @@ impl BridgeClient {
 
 #[async_trait::async_trait(?Send)]
 impl Client for BridgeClient {
-    /// Consult the `Sandbox` and return Allow or Deny without prompting the
-    /// user. Both `Deny` and `Elevate` decisions resolve to a "deny" option
-    /// here; the elevation flow is handled at tool-dispatch time (Phase 8).
+    /// Handle an ACP `request_permission` from the agent.
+    ///
+    /// Routing:
+    /// - The local `Sandbox` is consulted first for fast-path Allow/Deny
+    ///   decisions on tools surge already classifies. `Allow` and `Deny`
+    ///   short-circuit so we don't roundtrip through the operator for
+    ///   well-understood cases (e.g. read-only mode + read tool).
+    /// - Everything else — `Elevate { .. }` from a sandbox that classifies
+    ///   the call as elevation-worthy — broadcasts
+    ///   [`BridgeEvent::PermissionRequested`], parks a `oneshot` in
+    ///   `SessionStateInner::pending_permissions`, and awaits the engine's
+    ///   `AcpBridge::reply_to_permission` decision. Sessions that end with
+    ///   pending requests resolve them as `Cancelled` so the agent never
+    ///   blocks past session lifetime.
     async fn request_permission(
         &self,
         req: RequestPermissionRequest,
     ) -> AcpResult<RequestPermissionResponse> {
-        // The tool name lives at req.tool_call.fields.title (Option<String>).
-        // Fall back to the empty string if the agent omitted it.
         let tool_name = req.tool_call.fields.title.clone().unwrap_or_default();
-        let mcp_id: Option<String> = None; // Phase 8 fills in once tool dispatch lands
-
+        let mcp_id: Option<String> = None;
         let decision = self.sandbox.allows_tool(&tool_name, mcp_id.as_deref());
         debug!(
+            target: "surge_acp.bridge.client",
             session = %self.session_id,
             tool = %tool_name,
             decision = ?decision,
             "request_permission via Sandbox"
         );
 
-        let outcome = match decision {
-            SandboxDecision::Allow => RequestPermissionOutcome::Selected(
-                SelectedPermissionOutcome::new(PermissionOptionId::new("allow")),
-            ),
-            SandboxDecision::Deny { .. } | SandboxDecision::Elevate { .. } => {
-                // Both Deny and Elevate result in a denial in M3. Elevate routes
-                // to the engine via `BridgeEvent::ToolCall::sandbox_decision`
-                // attached at tool-dispatch time (Phase 8); request_permission
-                // here is a fast denial path.
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    PermissionOptionId::new("deny"),
-                ))
+        match decision {
+            SandboxDecision::Allow => Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(pick_option(
+                    &req, "allow",
+                ))),
+            )),
+            SandboxDecision::Deny { .. } => Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(pick_option(
+                    &req, "deny",
+                ))),
+            )),
+            SandboxDecision::Elevate { capability } => {
+                self.await_elevation(req, capability).await
             },
-        };
-
-        Ok(RequestPermissionResponse::new(outcome))
+        }
     }
 
     /// Write a text file within the worktree. Path-guard enforced before any IO.

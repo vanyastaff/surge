@@ -30,6 +30,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod daemon_facade;
+pub mod elevation;
 pub mod engine;
 pub mod error;
 pub mod facade;

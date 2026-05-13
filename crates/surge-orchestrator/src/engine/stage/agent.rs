@@ -83,6 +83,12 @@ pub struct AgentStageParams<'a> {
     /// Lifecycle-hook executor. The default `HookExecutor::new()` runs hooks
     /// via the OS shell; tests substitute via `HookExecutor::with_spawner`.
     pub hook_executor: &'a HookExecutor,
+    /// Engine-side tracker for in-flight ACP elevation requests. Populated
+    /// when [`surge_acp::bridge::event::BridgeEvent::PermissionRequested`]
+    /// arrives; drained by the decision router (Task 8) when the operator
+    /// replies. Shared because multiple agent stages may run concurrently
+    /// against the same bridge.
+    pub pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
 }
 
 /// Merge profile-level hooks with node-level hooks for one effective agent run.
@@ -566,6 +572,51 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
                 break outcome;
+            },
+            BridgeEvent::PermissionRequested {
+                request_id,
+                tool,
+                capability,
+                options,
+                ..
+            } => {
+                tracing::info!(
+                    target: "surge_orch.elevation",
+                    session = ?session_id,
+                    request_id = %request_id,
+                    capability = %capability,
+                    tool = %tool,
+                    "elevation requested by agent — appending SandboxElevationRequested",
+                );
+                p.writer
+                    .append_event(VersionedEventPayload::new(
+                        EventPayload::SandboxElevationRequested {
+                            node: p.node.clone(),
+                            capability: capability.clone(),
+                        },
+                    ))
+                    .await
+                    .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                let pending_count = p
+                    .pending_elevations
+                    .register(crate::engine::elevation::PendingElevation {
+                        session: session_id,
+                        request_id: request_id.clone(),
+                        node: p.node.clone(),
+                        capability,
+                        tool,
+                        options,
+                        requested_at: chrono::Utc::now(),
+                    })
+                    .await;
+                if pending_count >= crate::engine::elevation::PENDING_REGISTRY_WARN_THRESHOLD {
+                    tracing::warn!(
+                        target: "surge_orch.elevation",
+                        pending_count,
+                        "engine pending-elevation registry growing — approval channels may be slow",
+                    );
+                }
             },
             BridgeEvent::SessionEnded { reason, .. } => {
                 let disposition = match &reason {
@@ -1233,6 +1284,7 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
         | BridgeEvent::ToolResult { session, .. }
         | BridgeEvent::OutcomeReported { session, .. }
         | BridgeEvent::HumanInputRequested { session, .. }
+        | BridgeEvent::PermissionRequested { session, .. }
         | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
     }

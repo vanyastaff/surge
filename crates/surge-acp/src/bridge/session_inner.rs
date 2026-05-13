@@ -4,6 +4,9 @@
 
 use std::collections::HashMap;
 
+use agent_client_protocol::RequestPermissionResponse;
+use tokio::sync::oneshot;
+
 use crate::bridge::event::SessionEndReason;
 
 /// Per-session mutable state. Accessed via `Rc<RefCell<...>>` because every
@@ -25,6 +28,12 @@ pub(crate) struct SessionStateInner {
     /// Open tool calls keyed by call_id — used to correlate `tool/call` and
     /// `tool/result` from the agent.
     pub open_tool_calls: HashMap<String, OpenToolCall>,
+
+    /// Outstanding `request_permission` calls awaiting an engine decision.
+    /// Keyed by the bridge-generated `request_id`; the stored `oneshot` is
+    /// fulfilled by `AcpBridge::reply_to_permission`, which the engine calls
+    /// once the operator decides the elevation.
+    pub pending_permissions: HashMap<String, oneshot::Sender<RequestPermissionResponse>>,
 
     /// Set when the session is in the closing path; observer/waiter tasks
     /// should drain quickly and exit.
@@ -49,6 +58,7 @@ impl SessionStateInner {
             // happened, which is the opposite of reality on a fresh session).
             last_token_usage_emitted: false,
             open_tool_calls: HashMap::new(),
+            pending_permissions: HashMap::new(),
             closing: false,
             end_emitted: None,
         }

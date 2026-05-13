@@ -128,7 +128,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
 
 ### Phase 3: Elevation roundtrip
 
-- [ ] **Task 7: Wire ACP `RequestPermissionRequest` into the surge event log as `SandboxElevationRequested`.**
+- [x] **Task 7: Wire ACP `RequestPermissionRequest` into the surge event log as `SandboxElevationRequested`.**
   - Translation point lives in `crates/surge-acp/src/bridge/session.rs` and `crates/surge-acp/src/bridge/client.rs` (where `request_permission` is currently referenced — verify with `grep request_permission crates/surge-acp/src/bridge/`). Top-level bridge lifecycle in `bridge/acp_bridge.rs` + `bridge/worker.rs` does not need direct changes.
   - Add a `BridgeEvent::PermissionRequest { session_id, request: RequestPermissionRequest, reply: PermissionReplyHandle }` variant to `crates/surge-acp/src/bridge/event.rs` (or extend the existing event shape there — inspect first). `PermissionReplyHandle` wraps a `tokio::sync::oneshot::Sender<RequestPermissionResponse>` plus the original `request_id` for correlation.
   - In `crates/surge-orchestrator/src/engine/stage/agent.rs` (already subscribes to bridge events), observe `PermissionRequest` and append `EventPayload::SandboxElevationRequested { node, capability }` via the engine's existing event-append path. `capability` format: `"<kind>:<details>"` (e.g., `"fs-write:./src/foo.rs"`, `"network:api.example.com"`, `"shell:cargo run"`), derived from `RequestPermissionRequest.tool_call.tool_name` and arguments.

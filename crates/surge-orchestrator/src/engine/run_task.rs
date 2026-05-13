@@ -171,6 +171,7 @@ struct RunExecutionState {
     applied_graph_revision_seq: u64,
     processed_graph_revision_seq: u64,
     pending_graph_revisions: Vec<ObservedGraphRevision>,
+    pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -204,6 +205,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         applied_graph_revision_seq,
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
+        pending_elevations: crate::engine::elevation::PendingElevations::new(),
     })
 }
 
@@ -342,6 +344,7 @@ async fn execute_agent_node(
         mcp_servers: params.mcp_servers.clone(),
         profile_registry: params.profile_registry.clone(),
         hook_executor: &state.hook_executor,
+        pending_elevations: state.pending_elevations.clone(),
     })
     .await;
 

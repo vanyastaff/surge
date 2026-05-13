@@ -29,7 +29,10 @@
 
 // Submodules are wired in subsequent tasks.
 pub mod error;
-pub use error::{AcpError, BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
+pub use error::{
+    AcpError, BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError,
+    ReplyToToolError, SendMessageError,
+};
 
 pub mod event;
 pub use event::{AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, ToolResultPayload};
