@@ -27,9 +27,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use surge_core::SurgeConfig;
+use surge_core::graph::Graph;
 use surge_core::id::RunId;
 use surge_intake::TaskSource;
 use surge_intake::types::{TaskDetails, TaskId};
+use surge_orchestrator::archetype_registry::ArchetypeRegistry;
 use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, BootstrapPrompt};
 use surge_orchestrator::engine::config::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
@@ -81,13 +83,15 @@ pub enum LaunchOutcome {
     },
 }
 
-/// Shared launcher state — handle to storage, engine, bootstrap builder
-/// and the daemon-level paths/config. Cloned cheaply via `Arc` fields.
+/// Shared launcher state — handle to storage, engine, bootstrap builder,
+/// archetype registry, and the daemon-level paths/config. Cloned cheaply
+/// via `Arc` fields.
 #[derive(Clone)]
 pub struct TicketRunLauncher {
     storage: Arc<Storage>,
     engine: Arc<dyn EngineFacade>,
     bootstrap: Arc<dyn BootstrapGraphBuilder>,
+    archetypes: Arc<ArchetypeRegistry>,
     worktrees_root: PathBuf,
     project_root: PathBuf,
     config: SurgeConfig,
@@ -100,6 +104,7 @@ impl TicketRunLauncher {
         storage: Arc<Storage>,
         engine: Arc<dyn EngineFacade>,
         bootstrap: Arc<dyn BootstrapGraphBuilder>,
+        archetypes: Arc<ArchetypeRegistry>,
         worktrees_root: PathBuf,
         project_root: PathBuf,
         config: SurgeConfig,
@@ -108,6 +113,7 @@ impl TicketRunLauncher {
             storage,
             engine,
             bootstrap,
+            archetypes,
             worktrees_root,
             project_root,
             config,
@@ -162,13 +168,21 @@ impl TicketRunLauncher {
         }))
     }
 
-    /// Provision a worktree, build the bootstrap graph, start the run,
+    /// Provision a worktree, build the run graph (bootstrap or
+    /// archetype-template depending on `policy_hint`), start the run,
     /// transition `ticket_index` to `RunStarted`, and post the tracker
     /// "started" comment.
     ///
     /// `decided_via` is the wire-level channel string from
-    /// `InboxActionRow.decided_via` (`"telegram"` / `"desktop"`); the
-    /// human-readable label rendering happens inside.
+    /// `InboxActionRow.decided_via` (`"telegram"` / `"desktop"` /
+    /// `"auto"`); the human-readable label rendering happens inside.
+    ///
+    /// `policy_hint` carries the L2 template name from
+    /// `InboxActionRow.policy_hint`. When `Some(name)` the launcher
+    /// resolves the name against the `ArchetypeRegistry` and uses the
+    /// template's graph as-is. When `None` (L1 / L3 path) it falls
+    /// through to the configured `BootstrapGraphBuilder::build`.
+    /// Unknown template names degrade to bootstrap with a WARN log.
     ///
     /// # Errors
     /// Returns a user-facing error string when worktree provisioning,
@@ -179,6 +193,7 @@ impl TicketRunLauncher {
         &self,
         start: TicketStart,
         decided_via: &str,
+        policy_hint: Option<&str>,
     ) -> Result<LaunchOutcome, String> {
         let TicketStart {
             ticket_row,
@@ -192,22 +207,11 @@ impl TicketRunLauncher {
         let worktree = self.worktrees_root.join(run_id.to_string());
         std::fs::create_dir_all(&worktree).map_err(|e| format!("worktree mkdir: {e}"))?;
 
-        // Build graph via the configured bootstrap builder.
-        let prompt = BootstrapPrompt {
-            title: details.title.clone(),
-            description: details.description.clone(),
-            tracker_url: Some(details.url.clone()),
-            priority: ticket_row
-                .priority
-                .as_deref()
-                .and_then(crate::inbox::consumer_helpers::parse_priority_str),
-            labels: details.labels.clone(),
-        };
+        // Build the run graph — L2 template path takes priority; everything
+        // else falls back to the configured bootstrap builder.
         let graph = self
-            .bootstrap
-            .build(run_id, prompt, worktree.clone())
-            .await
-            .map_err(|e| format!("bootstrap.build: {e}"))?;
+            .resolve_graph(&ticket_row, &task_id, &details, run_id, &worktree, policy_hint)
+            .await?;
 
         // Start the run with project-context seed applied.
         let run_config = surge_orchestrator::project_context::with_project_context_seed(
@@ -273,6 +277,60 @@ impl TicketRunLauncher {
             source,
             handle,
         }))
+    }
+
+    /// Resolve the run graph from `policy_hint` (L2 template) or fall
+    /// back to the bootstrap builder. Unknown template names degrade to
+    /// bootstrap with a WARN log so an operator misconfiguration does
+    /// not block the run.
+    async fn resolve_graph(
+        &self,
+        ticket_row: &IntakeRow,
+        task_id: &TaskId,
+        details: &TaskDetails,
+        run_id: RunId,
+        worktree: &std::path::Path,
+        policy_hint: Option<&str>,
+    ) -> Result<Graph, String> {
+        if let Some(name) = policy_hint {
+            match self.archetypes.resolve(name) {
+                Ok(resolved) => {
+                    info!(
+                        target: "intake::launcher",
+                        task_id = %task_id,
+                        run_id = %run_id,
+                        template = %name,
+                        "L2: resolved template archetype"
+                    );
+                    return Ok(resolved.graph);
+                },
+                Err(e) => {
+                    warn!(
+                        target: "intake::launcher",
+                        task_id = %task_id,
+                        run_id = %run_id,
+                        template = %name,
+                        error = %e,
+                        "L2: template not found; degrading to L1 bootstrap"
+                    );
+                },
+            }
+        }
+
+        let prompt = BootstrapPrompt {
+            title: details.title.clone(),
+            description: details.description.clone(),
+            tracker_url: Some(details.url.clone()),
+            priority: ticket_row
+                .priority
+                .as_deref()
+                .and_then(crate::inbox::consumer_helpers::parse_priority_str),
+            labels: details.labels.clone(),
+        };
+        self.bootstrap
+            .build(run_id, prompt, worktree.to_path_buf())
+            .await
+            .map_err(|e| format!("bootstrap.build: {e}"))
     }
 }
 

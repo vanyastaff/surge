@@ -8,6 +8,7 @@ use std::time::Duration;
 use surge_core::SurgeConfig;
 use surge_intake::TaskSource;
 use surge_intake::types::TaskId;
+use surge_orchestrator::archetype_registry::ArchetypeRegistry;
 use surge_orchestrator::bootstrap::BootstrapGraphBuilder;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::inbox_queue::{self, InboxActionKind, InboxActionRow};
@@ -26,6 +27,10 @@ pub struct InboxActionConsumer {
     pub bootstrap: Arc<dyn BootstrapGraphBuilder>,
     /// Engine facade used to actually start runs.
     pub engine: Arc<dyn EngineFacade>,
+    /// Archetype-template registry used by the L2 path
+    /// (`surge:template/<name>`). Looked up from
+    /// [`surge_persistence::inbox_queue::InboxActionRow::policy_hint`].
+    pub archetypes: Arc<ArchetypeRegistry>,
     /// Source registry for tracker comments / labels.
     pub sources: Arc<HashMap<String, Arc<dyn TaskSource>>>,
     /// Root directory under which per-run worktrees are created.
@@ -97,6 +102,7 @@ impl InboxActionConsumer {
             Arc::clone(&self.storage),
             Arc::clone(&self.engine),
             Arc::clone(&self.bootstrap),
+            Arc::clone(&self.archetypes),
             self.worktrees_root.clone(),
             self.project_root.clone(),
             self.config.clone(),
@@ -126,7 +132,10 @@ impl InboxActionConsumer {
             return Ok(());
         }
 
-        match launcher.launch(start, &row.decided_via).await? {
+        match launcher
+            .launch(start, &row.decided_via, row.policy_hint.as_deref())
+            .await?
+        {
             LaunchOutcome::Launched(run) => {
                 let sync = crate::inbox::state_sync::TicketStateSync::new(
                     run.task_id.clone(),

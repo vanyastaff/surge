@@ -414,6 +414,20 @@ async fn handle_triage_event(
         },
     };
 
+    // Step 2.5: tracker-automation policy gate.
+    //
+    // Resolve the tier from labels BEFORE paying the triage-author LLM
+    // cost. L0 (`surge:disabled` or label absent) short-circuits here:
+    // write a `Skipped` ticket_index row with `triage_decision = L0Skipped`
+    // and return. L1/L2/L3 fall through into triage; the resolved policy
+    // is then forwarded to `dispatch_triage_decision` so the Enqueued arm
+    // branches without recomputing.
+    let policy = surge_intake::resolve_policy(&task_details.labels);
+    if policy.is_disabled() {
+        apply_l0_short_circuit(storage, &event, &task_details).await;
+        return;
+    }
+
     // Step 3: candidates (soft failure → empty).
     let candidates = surge_intake::candidates::build_for_task(&*source, &task_details, 15)
         .await
@@ -472,54 +486,302 @@ async fn handle_triage_event(
             },
         };
 
-    dispatch_triage_decision(decision, &event, &task_details, &source, notifier, storage).await;
+    dispatch_triage_decision(
+        decision,
+        policy,
+        &event,
+        &task_details,
+        &source,
+        notifier,
+        storage,
+    )
+    .await;
+}
+
+/// L0 short-circuit: persist a `Skipped` ticket_index row with the
+/// `L0Skipped` triage-decision discriminator and return without paying
+/// the triage-author LLM cost. Idempotent on re-fire — if the row
+/// already exists in a non-`Skipped` state, transition is attempted
+/// through the validated FSM; on transition rejection (terminal state,
+/// concurrent action) the policy gate silently no-ops.
+async fn apply_l0_short_circuit(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    task_details: &surge_intake::types::TaskDetails,
+) {
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str.split(':').next().unwrap_or("unknown").to_string();
+    let now = chrono::Utc::now();
+    let _ = task_details; // currently unused; future tracker comments may want title/url.
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some(surge_intake::TRIAGE_DECISION_L0.into()),
+            duplicate_of: None,
+            priority: None,
+            state: TicketState::Skipped,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: None,
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L0: ticket_index insert failed");
+            return;
+        }
+    } else {
+        match repo.update_state_validated(task_id_str, TicketState::Skipped) {
+            Ok(()) => {},
+            Err(surge_persistence::intake::IntakeError::InvalidTransition { from, .. }) => {
+                tracing::info!(
+                    target: "intake::policy",
+                    task_id = %task_id_str,
+                    ?from,
+                    "L0: ticket already in terminal/inflight state; no transition needed"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id_str, "L0: state transition failed");
+                return;
+            },
+        }
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        triage_decision = surge_intake::TRIAGE_DECISION_L0,
+        "L0 short-circuit applied — triage skipped"
+    );
+}
+
+/// L1 / L3 path — produce the standard inbox card via the existing
+/// `enqueue_inbox_card` helper. The user approves the card; the
+/// consumer's launcher uses the configured bootstrap builder.
+async fn enqueue_l1_inbox_card(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    task_details: &surge_intake::types::TaskDetails,
+    priority: surge_intake::Priority,
+    summary: String,
+) {
+    let provider = event
+        .task_id
+        .as_str()
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let payload = surge_notify::messages::InboxCardPayload {
+        task_id: event.task_id.clone(),
+        source_id: event.source_id.clone(),
+        provider,
+        title: task_details.title.clone(),
+        summary,
+        priority,
+        task_url: task_details.url.clone(),
+        callback_token,
+    };
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %event.task_id,
+        priority = ?payload.priority,
+        "L1/L3: enqueuing inbox card"
+    );
+    if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(storage, &payload).await {
+        tracing::warn!(
+            error = %e,
+            task_id = %event.task_id,
+            "L1/L3: inbox card enqueue failed"
+        );
+    }
+}
+
+/// L2 path — skip the inbox card and synthesize an `InboxActionRow {
+/// kind: Start, policy_hint: Some(template_name) }` directly so the
+/// consumer's launcher resolves the named template. The ticket_index
+/// row is created/updated in `InboxNotified` state with a fresh
+/// `callback_token` so [`crate::inbox::ticket_run_launcher::TicketRunLauncher::fetch_ticket_for_start`]
+/// can locate it.
+async fn enqueue_l2_template_start(
+    storage: &Arc<Storage>,
+    event: &surge_intake::types::TaskEvent,
+    _task_details: &surge_intake::types::TaskDetails,
+    template_name: &str,
+    priority: surge_intake::Priority,
+) {
+    use surge_persistence::inbox_queue::{self, InboxActionKind};
+    use surge_persistence::intake::{IntakeRepo, IntakeRow, TicketState};
+
+    let task_id_str = event.task_id.as_str();
+    let provider = task_id_str.split(':').next().unwrap_or("unknown").to_string();
+    let callback_token = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now();
+
+    let conn = match storage.acquire_registry_conn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: acquire registry conn failed");
+            return;
+        },
+    };
+    let repo = IntakeRepo::new(&conn);
+
+    let existing = match repo.fetch(task_id_str) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: fetch failed");
+            return;
+        },
+    };
+
+    if existing.is_none() {
+        let row = IntakeRow {
+            task_id: task_id_str.into(),
+            source_id: event.source_id.clone(),
+            provider,
+            run_id: None,
+            triage_decision: Some("Enqueued".into()),
+            duplicate_of: None,
+            priority: Some(priority.label().into()),
+            state: TicketState::InboxNotified,
+            first_seen: now,
+            last_seen: now,
+            snooze_until: None,
+            callback_token: Some(callback_token.clone()),
+            tg_chat_id: None,
+            tg_message_id: None,
+        };
+        if let Err(e) = repo.insert(&row) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: ticket_index insert failed");
+            return;
+        }
+    } else {
+        match repo.update_state_validated(task_id_str, TicketState::InboxNotified) {
+            Ok(()) => {},
+            Err(surge_persistence::intake::IntakeError::InvalidTransition { from, .. }) => {
+                tracing::info!(
+                    target: "intake::policy",
+                    task_id = %task_id_str,
+                    ?from,
+                    "L2: ticket not eligible for InboxNotified transition; skipping enqueue"
+                );
+                return;
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task_id_str, "L2: state transition failed");
+                return;
+            },
+        }
+        if let Err(e) = repo.set_callback_token(task_id_str, &callback_token) {
+            tracing::warn!(error = %e, task_id = %task_id_str, "L2: set_callback_token failed");
+            return;
+        }
+    }
+
+    if let Err(e) = inbox_queue::append_action(
+        &conn,
+        InboxActionKind::Start,
+        task_id_str,
+        &callback_token,
+        "auto",
+        None,
+        Some(template_name),
+    ) {
+        tracing::warn!(error = %e, task_id = %task_id_str, "L2: append_action failed");
+        return;
+    }
+
+    tracing::info!(
+        target: "intake::policy",
+        task_id = %task_id_str,
+        template = template_name,
+        priority = ?priority,
+        "L2 template start enqueued"
+    );
 }
 
 /// Route a `TriageDecision` to the appropriate output channel.
+///
+/// `policy` is the resolved tier from `handle_triage_event` (L0 already
+/// short-circuited upstream; this function sees L1/L2/L3 only). The
+/// `Enqueued` arm branches on the tier:
+/// - L1 (`Standard`): the existing inbox-card path — user approves
+///   before any run starts.
+/// - L2 (`Template { name }`): skip the inbox card entirely and
+///   synthesize an `InboxActionRow { kind: Start, policy_hint }`
+///   directly so the consumer's launcher resolves the named template.
+/// - L3 (`Auto`): identical to L1 for the inbox-card leg in this
+///   milestone — auto-approve at HumanGate and post-completion merge
+///   are wired by [`crate::AutomationMergeGate`] / future tasks.
 async fn dispatch_triage_decision(
     decision: surge_intake::types::TriageDecision,
+    policy: surge_intake::AutomationPolicy,
     event: &surge_intake::types::TaskEvent,
     task_details: &surge_intake::types::TaskDetails,
     source: &Arc<dyn TaskSource>,
     notifier: &Arc<dyn surge_notify::NotifyDeliverer>,
     storage: &Arc<Storage>,
 ) {
+    use surge_intake::AutomationPolicy;
     use surge_intake::types::TriageDecision;
     let _ = source; // currently unused in Enqueued/Unclear paths after the inbox-queue cut over.
     match decision {
         TriageDecision::Enqueued {
             priority, summary, ..
-        } => {
-            let provider = event
-                .task_id
-                .as_str()
-                .split(':')
-                .next()
-                .unwrap_or("unknown")
-                .to_string();
-            let callback_token = ulid::Ulid::new().to_string();
-            let payload = surge_notify::messages::InboxCardPayload {
-                task_id: event.task_id.clone(),
-                source_id: event.source_id.clone(),
-                provider,
-                title: task_details.title.clone(),
-                summary,
-                priority,
-                task_url: task_details.url.clone(),
-                callback_token,
-            };
-            tracing::info!(
-                task_id = %event.task_id,
-                priority = ?payload.priority,
-                "enqueuing LLM-derived InboxCard"
-            );
-            if let Err(e) = surge_daemon::inbox::enqueue_inbox_card(storage, &payload).await {
+        } => match policy {
+            AutomationPolicy::Template { name } => {
+                enqueue_l2_template_start(storage, event, task_details, &name, priority).await;
+            },
+            AutomationPolicy::Disabled => {
+                // Defensive: L0 should have been short-circuited upstream.
                 tracing::warn!(
-                    error = %e,
+                    target: "intake::policy",
                     task_id = %event.task_id,
-                    "LLM-derived InboxCard enqueue failed"
+                    "L0 policy reached dispatch_triage_decision — should have been short-circuited"
                 );
-            }
+            },
+            AutomationPolicy::Standard | AutomationPolicy::Auto { .. } => {
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary).await;
+            },
+            // `AutomationPolicy` is `#[non_exhaustive]` — any tier added
+            // in a future milestone falls through to the safe L1 path
+            // (visible card; operator approval) until explicitly wired.
+            _ => {
+                tracing::warn!(
+                    target: "intake::policy",
+                    task_id = %event.task_id,
+                    "unknown AutomationPolicy variant; falling back to L1 inbox card"
+                );
+                enqueue_l1_inbox_card(storage, event, task_details, priority, summary).await;
+            },
         },
         TriageDecision::Duplicate { of, reasoning } => {
             let body = format!(
@@ -701,9 +963,17 @@ async fn spawn_inbox_subsystems(
         consumer::InboxActionConsumer, desktop_listener::DesktopActionListener,
         snooze_scheduler::SnoozeScheduler, tg_bot::TgInboxBot,
     };
+    use surge_orchestrator::archetype_registry::ArchetypeRegistry;
     use surge_orchestrator::bootstrap::{BootstrapGraphBuilder, MinimalBootstrapGraphBuilder};
 
     let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
+    let archetypes: Arc<ArchetypeRegistry> = Arc::new(
+        ArchetypeRegistry::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "ArchetypeRegistry::load failed; using empty registry");
+            ArchetypeRegistry::from_dir(std::path::Path::new("definitely-missing"))
+                .expect("from_dir on missing path returns empty registry")
+        }),
+    );
     let worktrees_root = surge_runs_dir().join("worktrees");
     if let Err(e) = std::fs::create_dir_all(&worktrees_root) {
         tracing::warn!(error = %e, path = %worktrees_root.display(), "failed to create worktrees root");
@@ -715,6 +985,7 @@ async fn spawn_inbox_subsystems(
         storage: Arc::clone(&storage),
         bootstrap: Arc::clone(&bootstrap),
         engine: Arc::clone(&engine),
+        archetypes: Arc::clone(&archetypes),
         sources: Arc::clone(&sources),
         worktrees_root,
         project_root,

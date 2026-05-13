@@ -209,10 +209,17 @@ fn make_consumer(
     let mut sources: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
     sources.insert("mock:t".into(), Arc::clone(&source) as Arc<dyn TaskSource>);
     let bootstrap: Arc<dyn BootstrapGraphBuilder> = Arc::new(MinimalBootstrapGraphBuilder::new());
+    let archetypes = Arc::new(
+        surge_orchestrator::archetype_registry::ArchetypeRegistry::from_dir(std::path::Path::new(
+            "definitely-missing-dir-for-tests",
+        ))
+        .expect("from_dir on missing path returns empty registry"),
+    );
     InboxActionConsumer {
         storage,
         bootstrap,
         engine,
+        archetypes,
         sources: Arc::new(sources),
         worktrees_root: std::env::temp_dir().join("inbox_test_worktrees"),
         project_root: std::env::temp_dir(),

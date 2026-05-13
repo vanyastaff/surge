@@ -105,7 +105,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - Tests: launcher unit tests with `MockBridge`; consumer + CLI integration regression.
   - Verification: `cargo test -p surge-daemon -p surge-cli`.
 
-- [ ] **Task 4 — Policy decision wiring: L0 / L1 / L2 / L3** (Decision 2)
+- [x] **Task 4 — Policy decision wiring: L0 / L1 / L2 / L3** (Decision 2)
   - L0 short-circuit in `handle_triage_event` (`main.rs:407`-ish, between `fetch_task` and `build_for_task`): if `resolve_policy(task_details.labels) == Disabled`, write `ticket_index` row with state `Skipped`, `triage_decision = "L0Skipped"`, record in `intake_emit_log`, return without dispatching triage.
   - L1 / L2 / L3 branching in `dispatch_triage_decision` `Enqueued` arm:
     - `Standard` ⇒ unchanged path (inbox card).
