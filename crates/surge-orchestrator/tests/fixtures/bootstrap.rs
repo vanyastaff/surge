@@ -70,7 +70,9 @@ impl BootstrapHarness {
     }
 
     pub async fn wait_for_subscribe_count(&self, expected: usize) {
-        for _ in 0..100 {
+        // 500 * 10ms = 5s — generous enough for Windows CI runners,
+        // which were timing out at the prior 1s budget under load.
+        for _ in 0..500 {
             let count = self
                 .mock
                 .recorded_calls
