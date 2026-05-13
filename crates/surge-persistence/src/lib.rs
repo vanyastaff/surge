@@ -74,6 +74,10 @@ pub mod store;
 /// New M2 Surge storage layer (per-run event log, registry, worktree integration).
 pub mod runs;
 
+/// Generic key-value secret store backing CLI subcommands and runtime
+/// secret-reads (Telegram bot token, etc.).
+pub mod secrets;
+
 /// Telegram cockpit persistence — pairing tokens, paired-chat allowlist, cards.
 pub mod telegram;
 

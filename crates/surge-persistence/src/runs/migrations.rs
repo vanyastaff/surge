@@ -57,6 +57,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0010-snooze-subjects",
         include_str!("migrations/registry/0010_snooze_subjects.sql"),
     ),
+    (
+        "registry-0011-secrets",
+        include_str!("migrations/registry/0011_secrets.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.

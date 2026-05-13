@@ -30,6 +30,7 @@ owo-colors = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 surge-daemon = { workspace = true }
+rusqlite = { workspace = true }
 which = "6"
 
 [target.'cfg(unix)'.dependencies]

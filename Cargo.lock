@@ -7248,6 +7248,7 @@ dependencies = [
  "nix 0.29.0",
  "owo-colors",
  "predicates",
+ "rusqlite",
  "serde",
  "serde_json",
  "surge-acp",

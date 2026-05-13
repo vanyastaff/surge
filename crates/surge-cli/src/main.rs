@@ -154,6 +154,12 @@ enum Commands {
         #[command(subcommand)]
         command: ProjectCommands,
     },
+
+    /// Configure and inspect the Telegram cockpit (bot token, pairings).
+    Telegram {
+        #[command(subcommand)]
+        command: commands::telegram::TelegramCommands,
+    },
 }
 
 /// Set up signal handlers for graceful shutdown.
@@ -468,6 +474,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Project { command } => {
             commands::project::run(command).await?;
+        },
+
+        Commands::Telegram { command } => {
+            commands::telegram::run(command).await?;
         },
 
         Commands::Init(args) => {
