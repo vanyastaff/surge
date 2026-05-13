@@ -141,6 +141,15 @@ pub(crate) async fn bridge_loop(
                 let result = reply_to_tool_impl(&sessions, &event_tx, session, call_id, payload);
                 let _ = reply.send(result);
             },
+            BridgeCommand::ReplyToPermission {
+                session,
+                request_id,
+                response,
+                reply,
+            } => {
+                let result = reply_to_permission_impl(&sessions, session, request_id, response);
+                let _ = reply.send(result);
+            },
             BridgeCommand::Shutdown { reply } => {
                 close_all_sessions(&sessions, &event_tx, SessionEndReason::ForcedClose).await;
                 let _ = reply.send(());
@@ -948,6 +957,49 @@ fn reply_to_tool_impl(
         payload,
     });
 
+    Ok(())
+}
+
+/// Worker-side implementation of `AcpBridge::reply_to_permission`.
+///
+/// Removes the `request_id` from `SessionStateInner::pending_permissions`
+/// and fulfils its oneshot with the engine's response.
+///
+/// Failure modes:
+/// - `SessionGone` when the session is missing from the session map.
+/// - `UnknownRequestId` when no pending entry exists (already replied, timed
+///   out, or never issued).
+fn reply_to_permission_impl(
+    sessions: &SessionMap,
+    session: SessionId,
+    request_id: String,
+    response: agent_client_protocol::RequestPermissionResponse,
+) -> Result<(), super::error::ReplyToPermissionError> {
+    use super::error::ReplyToPermissionError;
+
+    let inner = {
+        let map = sessions.borrow();
+        let Some(s) = map.get(&session) else {
+            return Err(ReplyToPermissionError::SessionGone);
+        };
+        s.inner.clone()
+    };
+
+    let Some(tx) = inner.borrow_mut().pending_permissions.remove(&request_id) else {
+        return Err(ReplyToPermissionError::UnknownRequestId(request_id));
+    };
+
+    // If the agent already gave up (very short timeout, agent crash) the
+    // receiver may have been dropped — swallow the SendError; the agent is
+    // already gone and there is nothing more to do here.
+    if tx.send(response).is_err() {
+        warn!(
+            target: "surge_acp.bridge.worker",
+            session = %session,
+            request_id = %request_id,
+            "permission oneshot receiver dropped before reply; agent already cancelled"
+        );
+    }
     Ok(())
 }
 

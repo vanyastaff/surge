@@ -183,6 +183,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .expect("stage should complete with the retry outcome");
@@ -285,6 +286,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
         mcp_servers: Vec::new(),
         profile_registry: Some(registry),
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .expect("stage should complete after profile hook rejection retry");
@@ -367,6 +369,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await;
 

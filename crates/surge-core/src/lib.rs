@@ -38,6 +38,7 @@ pub mod artifact_contract;
 pub mod branch_config;
 pub mod bundled_flows;
 pub mod content_hash;
+pub mod doctor;
 pub mod edge;
 pub mod graph;
 pub mod hooks;
@@ -53,7 +54,9 @@ pub mod profile;
 pub mod run_event;
 pub mod run_state;
 pub mod run_status;
+pub mod runtime;
 pub mod sandbox;
+pub mod sandbox_matrix;
 pub mod subgraph_config;
 pub mod terminal_config;
 pub mod validation;
@@ -96,11 +99,12 @@ pub use artifact_contract::{
 };
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
+pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
-pub use migrations::{IdentityV1, MigrationChain, migrate_payload};
+pub use migrations::{IdentityV1, IdentityV2, MigrationChain, migrate_payload};
 pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;
 pub use profile::bundled::{BUNDLED_COUNT, BundledRegistry};
@@ -117,6 +121,9 @@ pub use run_event::{
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
 pub use run_status::{ParseRunStatusError, RunStatus};
+pub use runtime::{RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy};
+pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};
+pub use sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow, default_matrix};
 pub use validation::{
     NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind, validate,
     validate_with_resolver,

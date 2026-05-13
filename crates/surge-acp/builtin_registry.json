@@ -15,7 +15,8 @@
     "tags": ["anthropic", "popular"],
     "capabilities": ["code", "plan", "review", "test", "refactor", "chat"],
     "models": [],
-    "long_description": ""
+    "long_description": "",
+    "runtime": "claude-code"
   },
   {
     "id": "github-copilot-cli",
@@ -33,7 +34,8 @@
     "tags": ["github", "popular"],
     "capabilities": ["code", "plan", "review", "chat"],
     "models": [],
-    "long_description": ""
+    "long_description": "",
+    "runtime": "copilot"
   },
   {
     "id": "codex-acp",
@@ -51,7 +53,8 @@
     "tags": ["openai", "popular", "open-source"],
     "capabilities": ["code", "chat"],
     "models": [],
-    "long_description": ""
+    "long_description": "",
+    "runtime": "codex"
   },
   {
     "id": "gemini",
@@ -69,6 +72,7 @@
     "tags": ["google", "popular", "open-source"],
     "capabilities": ["code", "refactor", "chat"],
     "models": [],
-    "long_description": ""
+    "long_description": "",
+    "runtime": "gemini"
   }
 ]

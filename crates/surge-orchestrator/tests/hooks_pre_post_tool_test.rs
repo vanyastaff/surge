@@ -148,6 +148,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .expect("agent stage should still complete after pre-hook reject");
@@ -254,6 +255,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .expect("agent stage should complete normally");

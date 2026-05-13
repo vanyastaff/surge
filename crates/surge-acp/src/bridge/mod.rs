@@ -29,7 +29,10 @@
 
 // Submodules are wired in subsequent tasks.
 pub mod error;
-pub use error::{AcpError, BridgeError, CloseSessionError, OpenSessionError, SendMessageError};
+pub use error::{
+    AcpError, BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError,
+    ReplyToToolError, SendMessageError,
+};
 
 pub mod event;
 pub use event::{AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, ToolResultPayload};
@@ -39,6 +42,16 @@ pub use event::{AgentMessageMeta, BridgeEvent, SessionEndReason, ToolCallMeta, T
 
 pub mod sandbox;
 pub use sandbox::{AlwaysAllowSandbox, DenyListSandbox, Sandbox, SandboxDecision};
+
+pub mod sandbox_resolver;
+pub use sandbox_resolver::{ResolveContext, SandboxResolveError, resolve_launch_flags};
+
+// Re-exports from the ACP SDK that downstream callers (engine, doctor,
+// tests) need to construct `reply_to_permission` arguments.
+pub use agent_client_protocol::{
+    PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
+    SelectedPermissionOutcome,
+};
 
 pub mod tools;
 pub use tools::{ToolCategory, ToolDef};

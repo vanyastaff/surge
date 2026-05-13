@@ -71,6 +71,11 @@ pub struct RegistryEntry {
     pub models: Vec<String>,
     #[serde(default)]
     pub long_description: String,
+    /// The `surge_core::RuntimeKind` this agent maps to, for sandbox-matrix
+    /// lookup and `surge doctor` reporting. Optional for forward-compatibility
+    /// with older registry files; loaders emit `tracing::warn!` when absent.
+    #[serde(default)]
+    pub runtime: Option<surge_core::RuntimeKind>,
 }
 
 impl RegistryEntry {
@@ -399,6 +404,7 @@ impl Registry {
                     install_instructions: String::new(),
                     cli_binary: None,
                     website: None,
+                    runtime: None,
                     tags: vec!["custom".to_string()],
                     capabilities: if config.capabilities.is_empty() {
                         // Default to all capabilities if none specified
@@ -513,7 +519,28 @@ pub struct DetectedAgent {
 const BUILTIN_REGISTRY_JSON: &str = include_str!("../builtin_registry.json");
 
 fn builtin_agents() -> Vec<RegistryEntry> {
-    serde_json::from_str(BUILTIN_REGISTRY_JSON).expect("builtin_registry.json should be valid JSON")
+    let entries: Vec<RegistryEntry> = serde_json::from_str(BUILTIN_REGISTRY_JSON)
+        .expect("builtin_registry.json should be valid JSON");
+    for entry in &entries {
+        match entry.runtime {
+            Some(rt) => {
+                tracing::debug!(
+                    target: "surge_acp.registry",
+                    agent = %entry.id,
+                    runtime = ?rt,
+                    "registry entry loaded with runtime",
+                );
+            },
+            None => {
+                tracing::warn!(
+                    target: "surge_acp.registry",
+                    agent = %entry.id,
+                    "registry entry missing `runtime` field; sandbox matrix lookup will be skipped",
+                );
+            },
+        }
+    }
+    entries
 }
 
 const REGISTRY_ID_ALIASES: &[(&str, &str)] = &[
@@ -759,6 +786,76 @@ mod tests {
     }
 
     #[test]
+    fn builtin_entries_carry_runtime_mapping() {
+        // Surge doctor and the sandbox resolver rely on this mapping to find
+        // the matrix row for each detected agent.
+        let reg = Registry::builtin();
+        let cases = [
+            ("claude-acp", surge_core::RuntimeKind::ClaudeCode),
+            ("codex-acp", surge_core::RuntimeKind::Codex),
+            ("gemini", surge_core::RuntimeKind::Gemini),
+            ("github-copilot-cli", surge_core::RuntimeKind::CopilotCli),
+        ];
+        for (id, expected) in cases {
+            let entry = reg.find(id).unwrap_or_else(|| panic!("missing entry {id}"));
+            assert_eq!(
+                entry.runtime,
+                Some(expected),
+                "entry {id} must carry runtime mapping {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn registry_entry_parses_without_runtime_field() {
+        // Forward-compatibility: older registry JSON files without `runtime`
+        // must still parse — runtime defaults to None and surge doctor will
+        // report "matrix lookup skipped".
+        let json = r#"{
+            "id": "legacy-agent",
+            "display_name": "Legacy",
+            "description": "",
+            "version": "0.0.0",
+            "authors": [],
+            "license": "MIT",
+            "command": "echo",
+            "default_args": [],
+            "transport": "stdio",
+            "install_instructions": "",
+            "cli_binary": null,
+            "website": null,
+            "tags": [],
+            "capabilities": ["code"]
+        }"#;
+        let entry: RegistryEntry =
+            serde_json::from_str(json).expect("legacy JSON must still parse");
+        assert!(entry.runtime.is_none());
+    }
+
+    #[test]
+    fn registry_entry_parses_with_runtime_field() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "x",
+            "description": "",
+            "version": "0.0.0",
+            "authors": [],
+            "license": "MIT",
+            "command": "echo",
+            "default_args": [],
+            "transport": "stdio",
+            "install_instructions": "",
+            "cli_binary": null,
+            "website": null,
+            "tags": [],
+            "capabilities": ["code"],
+            "runtime": "claude-code"
+        }"#;
+        let entry: RegistryEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.runtime, Some(surge_core::RuntimeKind::ClaudeCode));
+    }
+
+    #[test]
     fn test_all_are_code_capable() {
         let reg = Registry::builtin();
         let coders = reg.by_capability(&AgentCapability::Code);
@@ -820,6 +917,7 @@ mod tests {
             capabilities: vec![AgentCapability::Code],
             models: vec![],
             long_description: String::new(),
+            runtime: None,
         }
     }
 

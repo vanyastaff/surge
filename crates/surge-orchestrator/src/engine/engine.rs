@@ -51,6 +51,9 @@ pub(crate) struct ActiveRun {
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
     pub roadmap_amendments:
         tokio::sync::mpsc::Sender<crate::engine::run_task::RoadmapAmendmentCommand>,
+    /// Tracker for in-flight ACP elevation requests. `Engine::resolve_elevation`
+    /// looks up entries here and fires their decision oneshot.
+    pub pending_elevations: Arc<crate::engine::elevation::PendingElevations>,
 }
 
 impl Engine {
@@ -226,11 +229,13 @@ impl Engine {
         let tool_resolutions =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
+        let pending_elevations = crate::engine::elevation::PendingElevations::new();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
+            pending_elevations: pending_elevations.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -254,6 +259,7 @@ impl Engine {
             gate_resolutions,
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
+            pending_elevations: pending_elevations.clone(),
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
@@ -457,6 +463,7 @@ impl Engine {
     /// reconstruct the last known cursor and memory, then resumes execution
     /// from that point. Returns immediately if the run is already active in
     /// this process.
+    #[allow(clippy::too_many_lines)]
     pub async fn resume_run(
         &self,
         run_id: RunId,
@@ -513,11 +520,13 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
 
+        let pending_elevations = crate::engine::elevation::PendingElevations::new();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
+            pending_elevations: pending_elevations.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -563,6 +572,7 @@ impl Engine {
             gate_resolutions,
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
+            pending_elevations: pending_elevations.clone(),
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
@@ -621,6 +631,36 @@ impl Engine {
             .await
             .map_err(|_| EngineError::Internal("roadmap amendment reply dropped".into()))?
             .map_err(|error| EngineError::Internal(format!("active roadmap amendment: {error}")))
+    }
+
+    /// Fire the operator's decision into a pending ACP elevation request.
+    ///
+    /// Looks up `(run_id, session_id, request_id)` in the run's
+    /// [`crate::engine::elevation::PendingElevations`] tracker and routes the
+    /// decision through the parked oneshot. The agent stage observes it,
+    /// appends `SandboxElevationDecided`, and calls
+    /// `AcpBridge::reply_to_permission` to release the agent.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::RunNotFound`] when no run with `run_id` is active.
+    /// - [`EngineError::Internal`] when the elevation is not pending or the
+    ///   stage's receiver was already dropped.
+    pub async fn resolve_elevation(
+        &self,
+        run_id: RunId,
+        session_id: surge_core::SessionId,
+        request_id: String,
+        decision: crate::engine::elevation::EngineElevationDecision,
+    ) -> Result<(), EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        active
+            .pending_elevations
+            .resolve(session_id, &request_id, decision)
+            .await
+            .map(|_| ())
+            .map_err(|e| EngineError::Internal(format!("resolve elevation: {e}")))
     }
 
     /// Provide answer to a paused run waiting on human input.

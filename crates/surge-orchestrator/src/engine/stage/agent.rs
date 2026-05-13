@@ -83,6 +83,40 @@ pub struct AgentStageParams<'a> {
     /// Lifecycle-hook executor. The default `HookExecutor::new()` runs hooks
     /// via the OS shell; tests substitute via `HookExecutor::with_spawner`.
     pub hook_executor: &'a HookExecutor,
+    /// Engine-side tracker for in-flight ACP elevation requests. Populated
+    /// when [`surge_acp::bridge::event::BridgeEvent::PermissionRequested`]
+    /// arrives; drained by the decision router (Task 8) when the operator
+    /// replies. Shared because multiple agent stages may run concurrently
+    /// against the same bridge.
+    pub pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
+}
+
+/// Pick the effective [`ApprovalConfig`] for an agent stage.
+///
+/// Precedence (highest first):
+///   1. `agent_config.approvals_override` — per-node override declared on
+///      the graph node.
+///   2. The resolved profile's `approvals` — inherited from
+///      `Profile.approvals` when the agent stage was wired via the profile
+///      registry.
+///   3. [`ApprovalConfig::default`] — the last-resort fallback (elevation
+///      timeout = 24 h, empty channels, etc.).
+///
+/// Whole-replace semantics: a node override drops the profile-level
+/// approvals entirely. Granular field-level merging is left for a future
+/// refactor (mirrors how `effective_agent_hooks` works at the hook level).
+#[must_use]
+pub(crate) fn effective_approvals(
+    agent_config: &AgentConfig,
+    resolved_profile: Option<&surge_core::profile::registry::ResolvedProfile>,
+) -> surge_core::approvals::ApprovalConfig {
+    if let Some(override_cfg) = agent_config.approvals_override.as_ref() {
+        return override_cfg.clone();
+    }
+    if let Some(profile) = resolved_profile {
+        return profile.profile.approvals.clone();
+    }
+    surge_core::approvals::ApprovalConfig::default()
 }
 
 /// Merge profile-level hooks with node-level hooks for one effective agent run.
@@ -164,6 +198,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         None
     };
     let effective_hooks = effective_agent_hooks(p.agent_config, resolved_profile.as_ref());
+    let effective_approval_cfg = effective_approvals(p.agent_config, resolved_profile.as_ref());
 
     // Prompt selection: explicit prompt_overrides.system wins; then
     // prompt_overrides.append_system; then the resolved profile's
@@ -566,6 +601,24 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
                 break outcome;
+            },
+            BridgeEvent::PermissionRequested {
+                request_id,
+                tool,
+                capability,
+                options,
+                ..
+            } => {
+                handle_permission_request(
+                    &p,
+                    &effective_approval_cfg,
+                    session_id,
+                    request_id,
+                    tool,
+                    capability,
+                    options,
+                )
+                .await?;
             },
             BridgeEvent::SessionEnded { reason, .. } => {
                 let disposition = match &reason {
@@ -1224,6 +1277,242 @@ fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
     has_normal_component.then(|| path.to_path_buf())
 }
 
+/// Inline handler for `BridgeEvent::PermissionRequested` that:
+///   1. appends `SandboxElevationRequested` to the event log,
+///   2. registers the request in `PendingElevations`,
+///   3. `select!`s between the operator's decision and `elevation_timeout`,
+///   4. appends `SandboxElevationDecided` (and `SandboxElevationTimedOut` on
+///      the timeout path),
+///   5. calls `AcpBridge::reply_to_permission` to release the agent.
+///
+/// Holding the agent stage on this handler matches ACP semantics: the agent
+/// itself is blocked on its `request_permission` call until surge replies,
+/// so there is no concurrent agent activity to drain.
+#[allow(clippy::too_many_lines)]
+async fn handle_permission_request(
+    p: &AgentStageParams<'_>,
+    effective_approval_cfg: &surge_core::approvals::ApprovalConfig,
+    session_id: surge_core::id::SessionId,
+    request_id: String,
+    tool: String,
+    capability: String,
+    options: Vec<String>,
+) -> Result<(), StageError> {
+    use agent_client_protocol::{
+        PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
+        SelectedPermissionOutcome,
+    };
+    use surge_core::run_event::ElevationDecision;
+    use tokio::time::sleep;
+
+    tracing::info!(
+        target: "surge_orch.elevation",
+        session = ?session_id,
+        request_id = %request_id,
+        capability = %capability,
+        tool = %tool,
+        "elevation requested by agent — appending SandboxElevationRequested",
+    );
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::SandboxElevationRequested {
+                node: p.node.clone(),
+                capability: capability.clone(),
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    let (rx, pending_count) = p
+        .pending_elevations
+        .register(crate::engine::elevation::PendingElevation {
+            session: session_id,
+            request_id: request_id.clone(),
+            node: p.node.clone(),
+            capability: capability.clone(),
+            tool: tool.clone(),
+            options: options.clone(),
+            requested_at: chrono::Utc::now(),
+        })
+        .await;
+    if pending_count >= crate::engine::elevation::PENDING_REGISTRY_WARN_THRESHOLD {
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            pending_count,
+            "engine pending-elevation registry growing — approval channels may be slow",
+        );
+    }
+
+    // Resolve the per-stage elevation timeout. The effective config (computed
+    // in `execute_agent_stage` via `effective_approvals`) layers
+    // `agent_config.approvals_override` over the resolved profile's
+    // approvals, so profile-level `elevation_timeout` is honoured when the
+    // node does not override it.
+    let timeout = effective_approval_cfg.resolved_elevation_timeout();
+
+    tracing::debug!(
+        target: "surge_orch.elevation",
+        session = ?session_id,
+        request_id = %request_id,
+        timeout_secs = timeout.as_secs(),
+        "awaiting operator decision",
+    );
+
+    let outcome = tokio::select! {
+        result = rx => result.ok(),
+        () = sleep(timeout) => None,
+    };
+
+    let response = if let Some(decision) = outcome {
+        tracing::info!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            decision = ?decision.decision,
+            remember = decision.remember,
+            "elevation decided by operator",
+        );
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationDecided {
+                    node: p.node.clone(),
+                    decision: decision.decision,
+                    remember: decision.remember,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+
+        let resolved_id = resolve_option_id(
+            &decision.option_id,
+            decision.decision,
+            &options,
+            session_id,
+            &request_id,
+        );
+        RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new(PermissionOptionId::new(resolved_id)),
+        ))
+    } else {
+        // Timeout path. Remove the pending entry so a late
+        // `Engine::resolve_elevation` cannot fire into the void.
+        let _ = p.pending_elevations.cancel(session_id, &request_id).await;
+        let elapsed_seconds = u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX);
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            elapsed_seconds,
+            "elevation timed out — denying by default",
+        );
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationTimedOut {
+                    node: p.node.clone(),
+                    capability: capability.clone(),
+                    elapsed_seconds,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationDecided {
+                    node: p.node.clone(),
+                    decision: ElevationDecision::Deny,
+                    remember: false,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+    };
+
+    if let Err(err) = p
+        .bridge
+        .reply_to_permission(session_id, request_id.clone(), response)
+        .await
+    {
+        // The bridge rejection is non-fatal to the stage: the agent is
+        // already gone (SessionGone) or the request_id is unknown (already
+        // resolved). Log and continue — the OutcomeReported / SessionEnded
+        // path will pick up the stage status.
+        tracing::error!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            error = ?err,
+            "bridge.reply_to_permission failed; agent may have already disconnected",
+        );
+    }
+    Ok(())
+}
+
+/// Pick the `option_id` to send back to the agent.
+///
+/// 1. If `desired` is in the agent's offered `options`, use it verbatim.
+/// 2. Else, look for the literal `"allow"` / `"deny"` token in `options`
+///    matching the decision kind — this catches the common case where the
+///    operator surface assumes the protocol uses "allow"/"deny" but the
+///    agent actually offered `"allow-once"` / `"allow-always"`.
+/// 3. Else, fall back to the first offered option (or `desired` verbatim
+///    if the agent supplied an empty list, which would be a protocol bug
+///    on the agent's side).
+///
+/// Every fallback emits `tracing::warn!` so the regression is observable.
+fn resolve_option_id(
+    desired: &str,
+    decision: surge_core::run_event::ElevationDecision,
+    options: &[String],
+    session_id: surge_core::id::SessionId,
+    request_id: &str,
+) -> String {
+    use surge_core::run_event::ElevationDecision;
+
+    if options.iter().any(|o| o == desired) {
+        return desired.to_string();
+    }
+
+    let literal = match decision {
+        ElevationDecision::Allow | ElevationDecision::AllowAndRemember => "allow",
+        ElevationDecision::Deny => "deny",
+    };
+    if let Some(literal_match) = options.iter().find(|o| o.as_str() == literal) {
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id,
+            desired = %desired,
+            chosen = %literal_match,
+            offered = ?options,
+            "operator option_id not in agent-offered options; falling back to literal allow/deny match"
+        );
+        return literal_match.clone();
+    }
+
+    if let Some(first) = options.first() {
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id,
+            desired = %desired,
+            chosen = %first,
+            offered = ?options,
+            "operator option_id not in offered options and no literal allow/deny match; falling back to first option"
+        );
+        return first.clone();
+    }
+
+    tracing::warn!(
+        target: "surge_orch.elevation",
+        session = ?session_id,
+        request_id,
+        desired = %desired,
+        "agent offered no options; replying with desired option_id verbatim — agent may reject"
+    );
+    desired.to_string()
+}
+
 fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     match event {
         BridgeEvent::SessionEstablished { session, .. }
@@ -1233,6 +1522,7 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
         | BridgeEvent::ToolResult { session, .. }
         | BridgeEvent::OutcomeReported { session, .. }
         | BridgeEvent::HumanInputRequested { session, .. }
+        | BridgeEvent::PermissionRequested { session, .. }
         | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
     }
@@ -1346,13 +1636,26 @@ fn sandbox_allows_mcp_tool(
     _tool: &str,
 ) -> bool {
     use surge_core::sandbox::SandboxMode;
+    // SandboxMode is `#[non_exhaustive]`. **Fail closed** for unknown
+    // variants: a future capability tier introduced as a *stricter* mode
+    // than today (for example a `WorkspaceWriteIsolated` that doesn't
+    // permit MCP) would silently leak MCP access if the default were
+    // permissive. The four explicit `true` arms below stay the source of
+    // truth — adding a new variant requires touching this match.
     match sandbox.mode {
         SandboxMode::ReadOnly => false,
-        // All other modes allow MCP — refine in M4 when sandbox enforcement lands.
         SandboxMode::WorkspaceWrite
         | SandboxMode::WorkspaceNetwork
         | SandboxMode::FullAccess
         | SandboxMode::Custom => true,
+        _ => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                mode = ?sandbox.mode,
+                "unknown SandboxMode in sandbox_allows_mcp_tool; failing closed (MCP denied)"
+            );
+            false
+        },
     }
 }
 

@@ -221,6 +221,7 @@ fn event_session_id(event: &BridgeEvent) -> Option<SessionId> {
         | BridgeEvent::ToolResult { session, .. }
         | BridgeEvent::OutcomeReported { session, .. }
         | BridgeEvent::HumanInputRequested { session, .. }
+        | BridgeEvent::PermissionRequested { session, .. }
         | BridgeEvent::SessionEnded { session, .. } => Some(*session),
         BridgeEvent::Error { session, .. } => *session,
     }

@@ -1,0 +1,245 @@
+# Sandbox delegation matrix — runtime × mode → launch flags.
+#
+# Each row maps a (runtime, SandboxMode) pair to the launch-flag tail that
+# surge appends to the agent's command line. The structure is locked by
+# `surge-core::sandbox_matrix::RuntimeSandboxRow`.
+#
+# Invariants enforced by tests in `sandbox_matrix.rs`:
+#   - No row may carry `verified = true` AND `flags = []` (a verified row
+#     means surge tested the launch flags against the live runtime).
+#   - No row may declare `mode = "custom"` — Custom is handled out-of-band
+#     by `SandboxConfig::Custom` validation, not by matrix lookup.
+#   - Every unverified row carries a non-empty `note` field pointing at the
+#     upstream issue / docs page where the gap will be closed.
+#
+# Provenance: rows for the v0.1 verified runtimes (Claude Code, Codex,
+# Gemini full-access) ship verified with concrete launch flags here.
+# Declared-unverified rows for Cursor / Copilot / OpenCode / Goose and
+# for Gemini's non-full-access modes ship with empty flags and a note
+# pointing at the upstream tracking issue or docs page — surge refuses
+# to start a non-doctor run against them until they are verified.
+
+# ── Claude Code ──────────────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "claude-code"
+mode = "read-only"
+flags = ["--allowedTools", "Read,Glob,Grep,LS", "--disallowedTools", "Write,Edit,Bash,WebFetch,WebSearch"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code read-only: filesystem read tools allowed, mutating tools and network denied."
+
+[[rows]]
+runtime = "claude-code"
+mode = "workspace-write"
+flags = ["--allowedTools", "Read,Write,Edit,Glob,Grep,LS", "--disallowedTools", "Bash,WebFetch,WebSearch"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code workspace-write (surge default): filesystem read+write, shell and network denied."
+
+[[rows]]
+runtime = "claude-code"
+mode = "workspace-network"
+flags = ["--allowedTools", "Read,Write,Edit,Glob,Grep,LS,WebFetch,WebSearch", "--disallowedTools", "Bash"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code workspace+network: filesystem write plus web fetch/search; shell still denied."
+
+[[rows]]
+runtime = "claude-code"
+mode = "full-access"
+flags = ["--dangerously-skip-permissions"]
+verified = true
+min_version = ">=2.0.0"
+note = "Claude Code full-access: skip all permission prompts. Surge logs `warn` whenever this row is resolved."
+
+# ── Codex CLI ────────────────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "codex"
+mode = "read-only"
+flags = ["--sandbox=read-only"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI read-only sandbox: filesystem read access, no writes, no shell, no network."
+
+[[rows]]
+runtime = "codex"
+mode = "workspace-write"
+flags = ["--sandbox=workspace-write"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI workspace-write sandbox: writes within workspace, no network."
+
+[[rows]]
+runtime = "codex"
+mode = "workspace-network"
+flags = ["--sandbox=workspace+network"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI workspace+network sandbox: writes within workspace plus network egress."
+
+[[rows]]
+runtime = "codex"
+mode = "full-access"
+flags = ["--sandbox=danger-full-access"]
+verified = true
+min_version = ">=0.5.0"
+note = "Codex CLI danger-full-access: no sandbox enforcement. Surge logs `warn` whenever this row is resolved."
+
+# ── Gemini CLI ───────────────────────────────────────────────────────────────
+# Gemini CLI's native sandbox is Docker/Podman-only. Surge cannot honour the
+# read-only / workspace-write / workspace-network tiers against a non-Docker
+# Gemini launch — those rows stay declared-unverified so the resolver refuses
+# to start a non-doctor run rather than silently downgrade. Only `full-access`
+# is verified: it maps to Gemini's `--yolo` flag (skip approvals; the Docker
+# sandbox itself is orthogonal).
+
+[[rows]]
+runtime = "gemini"
+mode = "read-only"
+flags = []
+verified = false
+note = "Gemini CLI native sandbox is Docker/Podman-only — read-only mapping requires the user to opt into Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
+
+[[rows]]
+runtime = "gemini"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Gemini CLI native sandbox is Docker/Podman-only — workspace-write mapping requires the user to opt into Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
+
+[[rows]]
+runtime = "gemini"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Gemini CLI native sandbox is Docker/Podman-only — workspace+network mapping requires Docker sandboxing externally. Refuses to start a non-doctor run rather than silently downgrading."
+
+[[rows]]
+runtime = "gemini"
+mode = "full-access"
+flags = ["--yolo"]
+verified = true
+min_version = ">=0.4.0"
+note = "Gemini CLI full-access: --yolo skips approval prompts. Surge logs `warn` whenever this row is resolved. Docker sandboxing is orthogonal and configured by the user."
+
+# ── Cursor CLI ───────────────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "cursor"
+mode = "read-only"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — cursor.com/docs/cli/acp sandbox flags not yet confirmed."
+
+[[rows]]
+runtime = "cursor"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — cursor.com/docs/cli/acp sandbox flags not yet confirmed."
+
+[[rows]]
+runtime = "cursor"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — cursor.com/docs/cli/acp sandbox flags not yet confirmed."
+
+[[rows]]
+runtime = "cursor"
+mode = "full-access"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — cursor.com/docs/cli/acp sandbox flags not yet confirmed."
+
+# ── GitHub Copilot CLI ───────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "copilot"
+mode = "read-only"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Copilot CLI ACP is in public preview (2026-01); flag forms pending GA."
+
+[[rows]]
+runtime = "copilot"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Copilot CLI ACP is in public preview (2026-01); flag forms pending GA."
+
+[[rows]]
+runtime = "copilot"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Copilot CLI ACP is in public preview (2026-01); flag forms pending GA."
+
+[[rows]]
+runtime = "copilot"
+mode = "full-access"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Copilot CLI ACP is in public preview (2026-01); flag forms pending GA."
+
+# ── SST OpenCode ─────────────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "opencode"
+mode = "read-only"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — OpenCode delegates to a configured provider; surge has not yet mapped the host-side flags."
+
+[[rows]]
+runtime = "opencode"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — OpenCode delegates to a configured provider; surge has not yet mapped the host-side flags."
+
+[[rows]]
+runtime = "opencode"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — OpenCode delegates to a configured provider; surge has not yet mapped the host-side flags."
+
+[[rows]]
+runtime = "opencode"
+mode = "full-access"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — OpenCode delegates to a configured provider; surge has not yet mapped the host-side flags."
+
+# ── Block Goose ──────────────────────────────────────────────────────────────
+
+[[rows]]
+runtime = "goose"
+mode = "read-only"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Goose ACP surface stable; sandbox CLI flags not yet enumerated."
+
+[[rows]]
+runtime = "goose"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Goose ACP surface stable; sandbox CLI flags not yet enumerated."
+
+[[rows]]
+runtime = "goose"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Goose ACP surface stable; sandbox CLI flags not yet enumerated."
+
+[[rows]]
+runtime = "goose"
+mode = "full-access"
+flags = []
+verified = false
+note = "Declared-unverified (Task 6) — Goose ACP surface stable; sandbox CLI flags not yet enumerated."

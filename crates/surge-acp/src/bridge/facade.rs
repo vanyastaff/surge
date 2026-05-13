@@ -12,9 +12,12 @@
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
+use agent_client_protocol::RequestPermissionResponse;
+
 use crate::bridge::acp_bridge::AcpBridge;
 use crate::bridge::error::{
-    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError, ReplyToToolError,
+    SendMessageError,
 };
 use crate::bridge::event::BridgeEvent;
 use crate::bridge::event::ToolResultPayload;
@@ -50,6 +53,15 @@ pub trait BridgeFacade: Send + Sync {
         payload: ToolResultPayload,
     ) -> Result<(), ReplyToToolError>;
 
+    /// Reply to an outstanding ACP permission request. Pair with the
+    /// matching `BridgeEvent::PermissionRequested` event's `request_id`.
+    async fn reply_to_permission(
+        &self,
+        session: SessionId,
+        request_id: String,
+        response: RequestPermissionResponse,
+    ) -> Result<(), ReplyToPermissionError>;
+
     /// Subscribe to the broadcast event stream. Each subscriber receives
     /// every event from every active session.
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent>;
@@ -84,6 +96,15 @@ impl BridgeFacade for AcpBridge {
         payload: ToolResultPayload,
     ) -> Result<(), ReplyToToolError> {
         AcpBridge::reply_to_tool(self, session, call_id, payload).await
+    }
+
+    async fn reply_to_permission(
+        &self,
+        session: SessionId,
+        request_id: String,
+        response: RequestPermissionResponse,
+    ) -> Result<(), ReplyToPermissionError> {
+        AcpBridge::reply_to_permission(self, session, request_id, response).await
     }
 
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {

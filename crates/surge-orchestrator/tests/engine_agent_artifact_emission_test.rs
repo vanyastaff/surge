@@ -117,6 +117,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .unwrap();
@@ -255,6 +256,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .unwrap();
@@ -363,6 +365,7 @@ subtasks = [
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .unwrap();
@@ -464,6 +467,7 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         mcp_servers: Vec::new(),
         profile_registry: None,
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .unwrap();
@@ -570,6 +574,7 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         mcp_servers: Vec::new(),
         profile_registry: Some(registry),
         hook_executor: &hook_executor,
+        pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
     })
     .await
     .expect("stage should retry after invalid ADR contract rejection");

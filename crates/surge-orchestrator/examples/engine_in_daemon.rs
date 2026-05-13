@@ -45,6 +45,14 @@ impl BridgeFacade for NoOpBridge {
     ) -> Result<(), ReplyToToolError> {
         Ok(())
     }
+    async fn reply_to_permission(
+        &self,
+        _: SessionId,
+        _: String,
+        _: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        Ok(())
+    }
     async fn session_state(&self, _: SessionId) -> Result<SessionState, BridgeError> {
         Err(BridgeError::WorkerDead)
     }

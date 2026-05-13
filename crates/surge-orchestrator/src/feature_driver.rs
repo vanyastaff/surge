@@ -152,6 +152,7 @@ pub async fn run_feature_planner(
         mcp_servers: params.mcp_servers,
         profile_registry: Some(params.profile_registry.clone()),
         hook_executor: params.hook_executor,
+        pending_elevations: crate::engine::elevation::PendingElevations::new(),
     })
     .await?;
 

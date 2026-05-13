@@ -30,6 +30,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod daemon_facade;
+pub mod elevation;
 pub mod engine;
 pub mod error;
 pub mod facade;
@@ -46,6 +47,7 @@ pub mod snapshot;
 pub mod stage;
 pub mod tools;
 pub mod validate;
+pub mod version_probe;
 
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};

@@ -1,0 +1,80 @@
+# Single-Agent flow that exercises the ACP elevation roundtrip.
+#
+# What this flow demonstrates:
+#   1. Agent stage opens an ACP session.
+#   2. Agent issues `request_permission` for a write capability.
+#   3. Surge appends `SandboxElevationRequested` to the run event log
+#      and parks the request.
+#   4. Operator calls `Engine::resolve_elevation` with Allow / Deny.
+#   5. Surge appends `SandboxElevationDecided` and replies through the
+#      ACP bridge; the agent receives `RequestPermissionResponse` and
+#      reports the `done` outcome.
+#
+# The full lifecycle is documented in `docs/elevation-runbook.md`. The
+# integration test in `crates/surge-orchestrator/tests/elevation_e2e.rs`
+# drives this flow against a scripted `MockBridge` so the test does not
+# depend on an installed ACP agent binary.
+
+schema_version = 1
+start = "impl_1"
+
+[metadata]
+name = "flow_elevation_demo"
+created_at = "2026-05-13T00:00:00Z"
+
+[nodes.impl_1]
+id = "impl_1"
+
+[nodes.impl_1.position]
+x = 0.0
+y = 0.0
+
+[[nodes.impl_1.declared_outcomes]]
+id = "done"
+description = "Implementation complete after elevation roundtrip"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.impl_1.config]
+node_kind = "agent"
+profile = "implementer@1.0"
+bindings = []
+hooks = []
+
+[nodes.impl_1.config.limits]
+timeout_seconds = 900
+
+# Elevation is enabled (the default) and bounded by a short timeout so
+# the test can assert the timeout path without waiting 24 h.
+[nodes.impl_1.config.approvals_override]
+policy = "on-request"
+sandbox_approval = true
+elevation = true
+elevation_channels = []
+elevation_timeout = "5s"
+
+[nodes.end]
+id = "end"
+declared_outcomes = []
+
+[nodes.end.position]
+x = 200.0
+y = 0.0
+
+[nodes.end.config]
+node_kind = "terminal"
+
+[nodes.end.config.kind]
+type = "success"
+
+[[edges]]
+id = "e_impl_to_end"
+to = "end"
+kind = "forward"
+
+[edges.from]
+node = "impl_1"
+outcome = "done"
+
+[edges.policy]
+on_max_exceeded = "escalate"

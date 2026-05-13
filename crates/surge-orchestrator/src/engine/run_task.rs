@@ -86,6 +86,10 @@ pub(crate) struct RunTaskParams {
     /// owns the writer, so amendments enter through this queue and are appended
     /// at safe graph boundaries.
     pub roadmap_amendments: mpsc::Receiver<RoadmapAmendmentCommand>,
+    /// Engine-side tracker for in-flight ACP elevation requests. Shared with
+    /// the `ActiveRun` entry so `Engine::resolve_elevation` can fire
+    /// decisions from outside the stage event loop.
+    pub pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
     /// Optional MCP registry. When `Some`, agent stages wrap the
     /// engine dispatcher with `RoutingToolDispatcher` to expose
     /// configured MCP tools alongside engine built-ins.
@@ -171,6 +175,7 @@ struct RunExecutionState {
     applied_graph_revision_seq: u64,
     processed_graph_revision_seq: u64,
     pending_graph_revisions: Vec<ObservedGraphRevision>,
+    pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -204,6 +209,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         applied_graph_revision_seq,
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
+        pending_elevations: params.pending_elevations.clone(),
     })
 }
 
@@ -342,6 +348,7 @@ async fn execute_agent_node(
         mcp_servers: params.mcp_servers.clone(),
         profile_registry: params.profile_registry.clone(),
         hook_executor: &state.hook_executor,
+        pending_elevations: state.pending_elevations.clone(),
     })
     .await;
 

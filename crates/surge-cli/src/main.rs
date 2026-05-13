@@ -225,6 +225,12 @@ enum Commands {
         command: commands::daemon::DaemonCommands,
     },
 
+    /// Diagnose ACP agents, runtime versions, and the sandbox-delegation matrix.
+    Doctor {
+        #[command(subcommand)]
+        command: commands::doctor::DoctorCommands,
+    },
+
     /// List, show, validate, or scaffold profiles.
     Profile {
         #[command(subcommand)]
@@ -364,6 +370,7 @@ async fn main() -> Result<()> {
             | Commands::Artifact { .. }
             | Commands::Tracker { .. }
             | Commands::Daemon { .. }
+            | Commands::Doctor { .. }
             | Commands::Profile { .. }
             | Commands::Project { .. }
     );
@@ -584,6 +591,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Daemon { command } => {
             commands::daemon::run(command).await?;
+        },
+
+        Commands::Doctor { command } => {
+            commands::doctor::run(command).await?;
         },
 
         Commands::Profile { command } => {

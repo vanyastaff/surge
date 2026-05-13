@@ -41,6 +41,7 @@ tiny_http = { workspace = true }
 surge-notify = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
+which = "6"
 
 [[example]]
 name = "engine_in_daemon"

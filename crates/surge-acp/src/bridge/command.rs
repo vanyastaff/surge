@@ -1,11 +1,13 @@
 //! Internal command channel payload. Public for tests; production callers
 //! use the `AcpBridge` methods rather than constructing commands directly.
 
+use agent_client_protocol::RequestPermissionResponse;
 use surge_core::SessionId;
 use tokio::sync::oneshot;
 
 use super::error::{
-    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError, ReplyToToolError,
+    SendMessageError,
 };
 use super::session::{MessageContent, SessionConfig, SessionState};
 
@@ -62,6 +64,19 @@ pub enum BridgeCommand {
         payload: super::event::ToolResultPayload,
         /// Reply channel carrying `()` on success or a `ReplyToToolError`.
         reply: oneshot::Sender<Result<(), ReplyToToolError>>,
+    },
+    /// Send a reply to an outstanding permission request — see
+    /// `AcpBridge::reply_to_permission`.
+    ReplyToPermission {
+        /// Target session.
+        session: SessionId,
+        /// Bridge-generated `request_id` from the matching
+        /// `BridgeEvent::PermissionRequested` event.
+        request_id: String,
+        /// ACP-shaped response (Selected option_id or Cancelled).
+        response: RequestPermissionResponse,
+        /// Reply channel carrying `()` on success or a `ReplyToPermissionError`.
+        reply: oneshot::Sender<Result<(), ReplyToPermissionError>>,
     },
     /// Test-only: inject a panic into the worker thread to exercise the
     /// `WorkerDead` recovery path. Gated by `#[cfg(any(test, feature = "test-helpers"))]`

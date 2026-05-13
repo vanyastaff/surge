@@ -67,7 +67,15 @@ async fn read_path_round_trips_v1_events() {
 
     assert_eq!(events.len(), 3);
     for (i, ev) in events.iter().enumerate() {
-        assert_eq!(ev.payload.schema_version, 1);
+        // New writes now emit MAX_SUPPORTED_VERSION (2 after the Phase 3
+        // schema bump that introduced SandboxElevationTimedOut +
+        // RuntimeVersionWarning). The migration chain still round-trips v1
+        // bytes — that is covered by surge-core's `migrations_v1_roundtrip`
+        // suite.
+        assert_eq!(
+            ev.payload.schema_version,
+            surge_core::migrations::MAX_SUPPORTED_VERSION,
+        );
         assert_eq!(ev.payload.payload, payloads[i]);
     }
 }

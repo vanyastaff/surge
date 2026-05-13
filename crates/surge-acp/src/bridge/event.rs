@@ -114,6 +114,36 @@ pub enum BridgeEvent {
         context: Option<String>,
     },
 
+    /// The agent requested an elevated permission via the ACP
+    /// `session/request_permission` method. The bridge holds an internal
+    /// oneshot reply channel keyed by `request_id`; the engine calls
+    /// [`crate::bridge::AcpBridge::reply_to_permission`] with the operator's
+    /// decision to release the agent. This event is broadcast for
+    /// observability only — it does not carry the reply channel.
+    ///
+    /// **Lifecycle.** Exactly one `PermissionRequested` is emitted per ACP
+    /// `request_permission` call. The bridge's `request_permission` impl
+    /// blocks until either `reply_to_permission` is called for the matching
+    /// `request_id` or the session ends — in the latter case the bridge
+    /// returns `Cancelled` to the agent and drops the oneshot.
+    PermissionRequested {
+        /// Session that requested the permission.
+        session: SessionId,
+        /// Bridge-generated correlator. Pass back via
+        /// [`crate::bridge::AcpBridge::reply_to_permission`].
+        request_id: String,
+        /// Tool name as the agent supplied it in `tool_call.title`. Empty
+        /// when the agent omitted the title.
+        tool: String,
+        /// Capability label derived by the bridge from `tool_call` and
+        /// arguments. Format: `"<kind>:<details>"`, falling back to
+        /// `"tool:<name>"` when the bridge cannot classify further.
+        capability: String,
+        /// Option IDs offered by the agent (e.g. `"allow"`, `"deny"`).
+        /// The engine selects one of these in its reply.
+        options: Vec<String>,
+    },
+
     /// Final event for the session. After this, `SessionId` is gone from the
     /// bridge's internal map.
     SessionEnded {

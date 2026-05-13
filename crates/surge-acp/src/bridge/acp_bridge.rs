@@ -9,7 +9,8 @@ use tracing::warn;
 
 use super::command::BridgeCommand;
 use super::error::{
-    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError, ReplyToToolError,
+    SendMessageError,
 };
 use super::event::BridgeEvent;
 use super::session::{MessageContent, SessionConfig, SessionState};
@@ -196,6 +197,44 @@ impl AcpBridge {
             .map_err(|e| ReplyToToolError::Bridge(BridgeError::CommandSendFailed(e.to_string())))?;
         rx.await
             .map_err(|_| ReplyToToolError::Bridge(BridgeError::ReplyDropped))?
+    }
+
+    /// Resolve an outstanding ACP permission request.
+    ///
+    /// Pass the `request_id` from the matching `BridgeEvent::PermissionRequested`
+    /// event plus the operator's decision; the bridge fulfils the parked
+    /// oneshot and the agent receives `response`. Pairs with the elevation
+    /// roundtrip wired in `BridgeClient::request_permission`.
+    ///
+    /// # Errors
+    ///
+    /// - [`ReplyToPermissionError::SessionGone`] — the session is no longer
+    ///   open in the bridge.
+    /// - [`ReplyToPermissionError::UnknownRequestId`] — the session is open
+    ///   but the `request_id` does not match a pending request (already
+    ///   resolved, timed out, or never issued).
+    /// - [`ReplyToPermissionError::Bridge`] — the worker thread is dead or
+    ///   the command channel is closed.
+    pub async fn reply_to_permission(
+        &self,
+        session: SessionId,
+        request_id: String,
+        response: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), ReplyToPermissionError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(BridgeCommand::ReplyToPermission {
+                session,
+                request_id,
+                response,
+                reply: tx,
+            })
+            .await
+            .map_err(|e| {
+                ReplyToPermissionError::Bridge(BridgeError::CommandSendFailed(e.to_string()))
+            })?;
+        rx.await
+            .map_err(|_| ReplyToPermissionError::Bridge(BridgeError::ReplyDropped))?
     }
 
     /// Test-only: inject a panic into the worker thread to verify that

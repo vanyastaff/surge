@@ -120,6 +120,15 @@ impl BridgeFacade for DeterministicMockBridge {
         Ok(())
     }
 
+    async fn reply_to_permission(
+        &self,
+        _session: SessionId,
+        _request_id: String,
+        _response: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        Ok(())
+    }
+
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
         self.tx.subscribe()
     }

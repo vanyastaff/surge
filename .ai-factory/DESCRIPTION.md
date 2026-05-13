@@ -16,7 +16,7 @@ Surge is **agent-agnostic via ACP** (any ACP-conformant agent: Claude Code, Code
 - **Adaptive flow generation** — three-stage bootstrap (Description Author → Roadmap Planner → Flow Generator) picks structure per run; the user reviews and approves.
 - **Project initialization and stable context** — `surge init` writes safe onboarding defaults, and `surge project describe` generates `project.md` for run-level `project_context` seeding.
 - **Reusable profiles** for agent nodes — system prompt, launch config, sandbox intent, allowed tools, declared outcomes, hooks, approval policy.
-- **Sandbox delegation** — agent nodes carry a sandbox intent (`read-only`, `workspace-write`, `workspace+network`, `full-access`); the bridge maps to the runtime's native flags.
+- **Sandbox delegation** — agent nodes carry a sandbox intent (`read-only`, `workspace-write`, `workspace+network`, `full-access`); the bridge maps to the runtime's native flags via the matrix documented in [`docs/sandbox-matrix.md`](../docs/sandbox-matrix.md). Elevation lifecycle for mid-run permission requests: [`docs/elevation-runbook.md`](../docs/elevation-runbook.md).
 - **Injected tools** — `report_stage_outcome` (dynamic per-node enum) and `request_human_input` are exposed to every session.
 - **Multi-channel approvals** — Telegram (primary cockpit via `teloxide`), desktop, email, Slack, webhook. Approvals are first-class events.
 - **Tracker intake** — GitHub Issues and Linear via a `TaskSource` trait; tracker is master, surge writes only labels and comments.
