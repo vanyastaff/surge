@@ -73,6 +73,14 @@ impl Orchestrator {
         let spec_id_str = spec_file.spec.id.to_string();
         let spec_id = spec_file.spec.id;
 
+        info!(
+            target: "surge.path.exercised",
+            path = "legacy",
+            spec_id = %spec_id,
+            task_id = %task_id,
+            "entered legacy pipeline path",
+        );
+
         // Spec directory for artefacts (requirements.md, architecture.md, stories/).
         let specs_dir = self.config.working_dir.join(".surge").join("specs");
         let spec_dir = specs_dir.join(&spec_id_str);

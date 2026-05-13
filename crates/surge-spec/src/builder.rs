@@ -5,6 +5,10 @@ use surge_core::id::SubtaskId;
 use surge_core::spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
 
 /// Builder for constructing Spec instances.
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub struct SpecBuilder {
     title: Option<String>,
     description: Option<String>,
@@ -68,6 +72,10 @@ impl Default for SpecBuilder {
 }
 
 /// Builder for constructing Subtask instances.
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub struct SubtaskBuilder {
     title: Option<String>,
     description: Option<String>,

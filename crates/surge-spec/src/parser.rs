@@ -7,6 +7,10 @@ use surge_core::spec::{Spec, SubtaskState};
 
 /// On-disk spec file wrapping a Spec with file metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub struct SpecFile {
     /// The spec definition.
     pub spec: Spec,

@@ -7,6 +7,10 @@ use surge_core::spec::Spec;
 
 /// Validation result with warnings and errors.
 #[derive(Debug, Clone, Default)]
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub struct ValidationResult {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
@@ -31,6 +35,10 @@ impl ValidationResult {
 }
 
 /// Validate a spec for correctness.
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub fn validate(spec: &Spec) -> ValidationResult {
     let mut result = ValidationResult::default();
 

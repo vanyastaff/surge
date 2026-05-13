@@ -9,6 +9,10 @@ use surge_core::id::SubtaskId;
 use surge_core::spec::Spec;
 
 /// A dependency graph of subtasks.
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub struct DependencyGraph {
     graph: DiGraph<SubtaskId, ()>,
     #[allow(dead_code)]

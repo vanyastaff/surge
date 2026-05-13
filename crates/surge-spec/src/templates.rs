@@ -7,6 +7,10 @@ use surge_core::spec::Complexity;
 
 /// Available built-in template types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub enum TemplateKind {
     Feature,
     Bugfix,
@@ -51,6 +55,10 @@ impl TemplateKind {
 }
 
 /// Generate a spec from a template.
+#[deprecated(
+    since = "0.1.0-pre",
+    note = "use surge-orchestrator::engine + flow.toml; surge-spec is retiring (see docs/migrate-spec-to-flow.md)"
+)]
 pub fn generate(kind: TemplateKind, description: &str) -> Result<SpecFile, SurgeError> {
     let spec = match kind {
         TemplateKind::Feature => {

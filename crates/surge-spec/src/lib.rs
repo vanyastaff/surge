@@ -1,5 +1,16 @@
 //! Spec system for Surge — parsing, building, validation, and dependency graphs.
+//!
+//! # Deprecated
+//!
+//! This crate is retiring as part of the **Legacy pipeline retirement** milestone.
+//! Use `surge-orchestrator::engine` and `flow.toml` for all new work. See
+//! `docs/migrate-spec-to-flow.md` for the migration guide and `surge migrate-spec`
+//! for the auto-translator.
 
+// Suppress deprecation warnings for in-crate re-exports and intra-module uses.
+// External consumers (surge-cli, surge-orchestrator) still see the warnings,
+// which is the intent for the deprecation window.
+#![allow(deprecated)]
 // Pre-existing legacy code; M5 does not modify this crate.
 // These allows suppress pedantic lints that fire when clippy::pedantic is
 // requested transitively by surge-orchestrator.

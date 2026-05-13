@@ -181,6 +181,14 @@ impl Engine {
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
 
+        tracing::info!(
+            target: "surge.path.exercised",
+            path = "engine",
+            kind = "start",
+            run_id = %run_id,
+            "entered engine path",
+        );
+
         validate_for_m6(&graph)?;
 
         if self.runs.read().await.contains_key(&run_id) {
@@ -474,6 +482,14 @@ impl Engine {
         use crate::engine::run_task::{RunTaskParams, execute};
         use tokio::sync::broadcast;
         use tokio_util::sync::CancellationToken;
+
+        tracing::info!(
+            target: "surge.path.exercised",
+            path = "engine",
+            kind = "resume",
+            run_id = %run_id,
+            "entered engine path",
+        );
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
