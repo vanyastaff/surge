@@ -10,10 +10,12 @@
 //! the crate split rationale.
 
 pub mod card;
+pub mod cockpit;
 pub mod error;
 
 pub use card::{
-    CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation,
-    render_failure, render_human_gate, render_status,
+    CardEmitter, CardKind, CardStore, EmitOutcome, RenderedCard, TelegramApi, render_bootstrap,
+    render_completion, render_escalation, render_failure, render_human_gate, render_status,
 };
+pub use cockpit::{CockpitCtx, DispatchOutcome, dispatch};
 pub use error::{Result, TelegramCockpitError};

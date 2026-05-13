@@ -6,8 +6,10 @@
 //! `callback_data` strings follow
 //! [ADR 0010](../../../../docs/adr/0010-telegram-callback-schema.md).
 
+pub mod emit;
 pub mod render;
 
+pub use emit::{CardEmitter, CardStore, EmitOutcome, TelegramApi};
 pub use render::{
     CardKind, RenderedCard, render_bootstrap, render_completion, render_escalation,
     render_failure, render_human_gate, render_status,
