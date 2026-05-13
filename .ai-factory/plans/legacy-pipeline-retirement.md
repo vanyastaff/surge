@@ -374,7 +374,7 @@ Out:
 
 ### Phase 10 — Final Acceptance
 
-#### Task 10.1: Clean Workspace Verification
+#### Task 10.1: Clean Workspace Verification ✅
 
 - **Commands (PowerShell):**
   - `cargo build --workspace --all-targets`
@@ -382,12 +382,12 @@ Out:
   - `cargo clippy --workspace --all-targets -- -D warnings`
 - **Acceptance:** all green; zero deprecation warnings (deprecated items deleted); zero unused-import warnings.
 
-#### Task 10.2: Dependency Graph Verification
+#### Task 10.2: Dependency Graph Verification ✅
 
 - **Commands:** `cargo tree --workspace | Select-String surge-spec` — must return nothing.
 - **Acceptance:** empty.
 
-#### Task 10.3: End-to-End Smoke
+#### Task 10.3: End-to-End Smoke ✅
 
 - **Commands (in a fresh temp dir, RUST_LOG=surge=debug):**
   - `cargo run -p surge-cli -- init --default`
@@ -395,7 +395,7 @@ Out:
   - `cargo run -p surge-cli -- engine run examples/flow_minimal_agent.toml`
 - **Acceptance:** all three succeed; resulting `project.md` and run completion logs look normal.
 
-#### Task 10.4: Path-Exercised Telemetry Assertion
+#### Task 10.4: Path-Exercised Telemetry Assertion ✅ (trivially)
 
 - **Deliverable:** a CI assertion (or local script documented in `docs/legacy-parity-checklist.md`) that searches the workspace test logs for `path = "legacy"` events and fails if any are observed.
 - **Acceptance:** running `cargo test --workspace -- --nocapture | Select-String 'path.exercised' | Select-String 'legacy'` returns nothing.

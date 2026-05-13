@@ -18,18 +18,20 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use surge_core::spec::Spec;
 
 /// On-disk shape of a legacy `.spec.toml` file.
 ///
-/// `path` is populated by [`Self::load`] for diagnostics; it is skipped during
-/// serialization so a `save` round-trip does not embed the source path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `path` is populated by [`Self::load`] so consumers can render diagnostic
+/// errors with the originating file. The struct is deserialize-only; the
+/// integration tests for `surge migrate-spec` inline a tiny serializable
+/// twin instead of taking a write dependency on this surface.
+#[derive(Debug, Clone, Deserialize)]
 pub struct LegacySpecFile {
     /// The spec payload.
     pub spec: Spec,
-    /// Path the file was loaded from, when known. Skipped on serialize.
+    /// Path the file was loaded from, when known.
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }
@@ -48,27 +50,6 @@ impl LegacySpecFile {
             .with_context(|| format!("failed to parse {} as a legacy spec", path.display()))?;
         file.path = Some(path.to_path_buf());
         Ok(file)
-    }
-
-    /// Serialize the file to TOML and write it to `path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the parent directory cannot be created, the
-    /// TOML serializer fails, or the write itself errors.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .with_context(|| format!("failed to serialize spec for {}", path.display()))?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("failed to create directory {}", parent.display())
-                })?;
-            }
-        }
-        std::fs::write(path, content)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        Ok(())
     }
 
     /// Resolve the project's default specs directory (`<cwd>/.surge/specs/`).

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use assert_cmd::Command;
 use serde::Serialize;
-use surge_core::spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
+use surge_core::spec::{Complexity, Spec, Subtask};
 use surge_core::id::SubtaskId;
 use tempfile::TempDir;
 
