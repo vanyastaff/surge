@@ -7471,6 +7471,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "surge-telegram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "surge-core",
+ "surge-notify",
+ "surge-orchestrator",
+ "surge-persistence",
+ "teloxide",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "surge-ui"
 version = "0.1.0"
 dependencies = [

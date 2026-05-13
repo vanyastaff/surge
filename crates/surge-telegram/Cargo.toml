@@ -1,0 +1,28 @@
+[package]
+name = "surge-telegram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+
+teloxide.workspace = true
+
+surge-core.workspace = true
+surge-notify.workspace = true
+surge-persistence.workspace = true
+surge-orchestrator.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile.workspace = true
+wiremock.workspace = true

@@ -38,7 +38,7 @@ surge-persistence.workspace = true
 surge-notify.workspace = true
 notify-rust = { workspace = true }
 surge-intake.workspace = true
-teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler"] }
+teloxide.workspace = true
 reqwest.workspace = true
 ulid.workspace = true
 
