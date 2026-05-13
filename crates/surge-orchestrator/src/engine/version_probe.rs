@@ -202,7 +202,9 @@ impl VersionCache {
     /// before lookup so callers can pass relative paths without breaking
     /// cache reuse.
     pub async fn probe(&self, binary: &Path) -> Result<Version, ProbeError> {
-        let key = binary.canonicalize().unwrap_or_else(|_| binary.to_path_buf());
+        let key = binary
+            .canonicalize()
+            .unwrap_or_else(|_| binary.to_path_buf());
         if let Some(cached) = self.inner.lock().await.get(&key) {
             return cached.clone();
         }
@@ -241,8 +243,8 @@ mod tests {
     #[test]
     fn evaluate_below_minimum_returns_warning() {
         let detected = Version::parse("1.9.0").unwrap();
-        let warning = evaluate_against_policy(&detected, Some(&policy(">=2.0.0")))
-            .expect("below minimum");
+        let warning =
+            evaluate_against_policy(&detected, Some(&policy(">=2.0.0"))).expect("below minimum");
         assert_eq!(warning.runtime, RuntimeKind::ClaudeCode);
         assert_eq!(warning.found_version, "1.9.0");
         assert!(warning.min_version.contains(">=2.0.0"));

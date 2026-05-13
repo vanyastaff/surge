@@ -38,6 +38,7 @@ pub mod artifact_contract;
 pub mod branch_config;
 pub mod bundled_flows;
 pub mod content_hash;
+pub mod doctor;
 pub mod edge;
 pub mod graph;
 pub mod hooks;
@@ -48,7 +49,6 @@ pub mod mcp_config;
 pub mod migrations;
 pub mod node;
 pub mod notify_config;
-pub mod doctor;
 pub mod predicate;
 pub mod profile;
 pub mod run_event;
@@ -99,6 +99,7 @@ pub use artifact_contract::{
 };
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
+pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
@@ -120,10 +121,7 @@ pub use run_event::{
 };
 pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
 pub use run_status::{ParseRunStatusError, RunStatus};
-pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
-pub use runtime::{
-    RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy,
-};
+pub use runtime::{RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy};
 pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};
 pub use sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow, default_matrix};
 pub use validation::{

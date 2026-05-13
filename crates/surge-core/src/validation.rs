@@ -1043,7 +1043,9 @@ fn validate_loop_static_cap(graph: &Graph, errors: &mut Vec<ValidationError>) {
 fn validate_sandbox_custom_on_agents(graph: &Graph, out: &mut Vec<ValidationError>) {
     use crate::sandbox::{SandboxValidationError, validate_custom};
 
-    let push = |node: &crate::node::Node, errs: Vec<SandboxValidationError>, out: &mut Vec<ValidationError>| {
+    let push = |node: &crate::node::Node,
+                errs: Vec<SandboxValidationError>,
+                out: &mut Vec<ValidationError>| {
         for e in errs {
             let loc = ErrorLocation::Node {
                 id: node.id.clone(),

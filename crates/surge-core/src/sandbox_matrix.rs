@@ -253,8 +253,7 @@ mod tests {
             rows: original.rows().to_vec(),
         };
         let serialized = toml::to_string(&doc).expect("serialize matrix");
-        let parsed: BundledMatrixDocument =
-            toml::from_str(&serialized).expect("re-parse matrix");
+        let parsed: BundledMatrixDocument = toml::from_str(&serialized).expect("re-parse matrix");
         assert_eq!(original.rows(), parsed.rows.as_slice());
     }
 

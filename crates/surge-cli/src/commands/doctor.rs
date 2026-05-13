@@ -14,9 +14,7 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 use surge_acp::Registry;
-use surge_core::doctor::{
-    DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus,
-};
+use surge_core::doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 use surge_core::runtime::{RuntimeKind, RuntimeVersionPolicy, version_policy};
 use surge_core::sandbox::SandboxMode;
 use surge_core::sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow};
@@ -265,8 +263,8 @@ fn render(report: &DoctorReport, format: DoctorFormat) -> Result<()> {
             println!("{s}");
         },
         DoctorFormat::Toml => {
-            let s = toml::to_string(report)
-                .map_err(|e| anyhow::anyhow!("toml render failed: {e}"))?;
+            let s =
+                toml::to_string(report).map_err(|e| anyhow::anyhow!("toml render failed: {e}"))?;
             println!("{s}");
         },
     }
@@ -300,7 +298,10 @@ fn render_report_text(report: &DoctorReport) {
         if let Some(p) = &entry.policy {
             println!("  declared minimum:  {}", p.min_version);
         }
-        println!("  status:            {}", format_version_status(entry.version_status));
+        println!(
+            "  status:            {}",
+            format_version_status(entry.version_status)
+        );
         if !entry.matrix.is_empty() {
             println!("  sandbox matrix:");
             for cell in &entry.matrix {

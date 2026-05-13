@@ -580,15 +580,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 options,
                 ..
             } => {
-                handle_permission_request(
-                    &p,
-                    session_id,
-                    request_id,
-                    tool,
-                    capability,
-                    options,
-                )
-                .await?;
+                handle_permission_request(&p, session_id, request_id, tool, capability, options)
+                    .await?;
             },
             BridgeEvent::SessionEnded { reason, .. } => {
                 let disposition = match &reason {

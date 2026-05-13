@@ -209,10 +209,7 @@ mod tests {
     fn schema_version_too_old_is_rejected() {
         // MIN_SUPPORTED_VERSION is 1, so version 0 is too old.
         let err = migrate_payload(0, b"{}").unwrap_err();
-        assert!(matches!(
-            err,
-            SurgeError::SchemaTooOld { found: 0, min: 1 }
-        ));
+        assert!(matches!(err, SurgeError::SchemaTooOld { found: 0, min: 1 }));
     }
 
     #[test]

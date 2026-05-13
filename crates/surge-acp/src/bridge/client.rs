@@ -101,9 +101,7 @@ impl BridgeClient {
         {
             let mut state = self.state.borrow_mut();
             let pending_count = state.pending_permissions.len() + 1;
-            state
-                .pending_permissions
-                .insert(request_id.clone(), tx);
+            state.pending_permissions.insert(request_id.clone(), tx);
             if pending_count >= PENDING_PERMISSION_WARN_THRESHOLD {
                 warn!(
                     target: "surge_acp.bridge.client",
@@ -233,9 +231,7 @@ impl Client for BridgeClient {
                     &req, "deny",
                 ))),
             )),
-            SandboxDecision::Elevate { capability } => {
-                self.await_elevation(req, capability).await
-            },
+            SandboxDecision::Elevate { capability } => self.await_elevation(req, capability).await,
         }
     }
 

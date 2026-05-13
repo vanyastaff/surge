@@ -627,10 +627,7 @@ mod tests {
         // New writes always go out at MAX_SUPPORTED_VERSION (bumped to 2 in
         // the schema v2 migration that introduced SandboxElevationTimedOut +
         // RuntimeVersionWarning).
-        assert_eq!(
-            v.schema_version(),
-            crate::migrations::MAX_SUPPORTED_VERSION,
-        );
+        assert_eq!(v.schema_version(), crate::migrations::MAX_SUPPORTED_VERSION,);
         assert_eq!(v.payload(), &inner);
     }
 

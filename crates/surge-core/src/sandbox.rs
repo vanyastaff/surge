@@ -190,11 +190,7 @@ mod tests {
         assert_eq!(original, parsed);
     }
 
-    fn custom_with(
-        writable: Vec<&str>,
-        network: Vec<&str>,
-        shell: Vec<&str>,
-    ) -> SandboxConfig {
+    fn custom_with(writable: Vec<&str>, network: Vec<&str>, shell: Vec<&str>) -> SandboxConfig {
         SandboxConfig {
             mode: SandboxMode::Custom,
             writable_roots: writable.into_iter().map(PathBuf::from).collect(),
@@ -242,10 +238,7 @@ mod tests {
             custom_with(vec![], vec![], vec!["cargo"]),
         ];
         for cfg in cases {
-            assert!(
-                validate_custom(&cfg).is_empty(),
-                "expected ok for {cfg:?}",
-            );
+            assert!(validate_custom(&cfg).is_empty(), "expected ok for {cfg:?}",);
         }
     }
 
@@ -262,9 +255,10 @@ mod tests {
     fn validate_custom_flags_writable_root_escape_windows_separator() {
         let cfg = custom_with(vec![r"C:\work\..\etc"], vec![], vec![]);
         let errs = validate_custom(&cfg);
-        assert!(errs.iter().any(
-            |e| matches!(e, SandboxValidationError::WritableRootEscape { .. })
-        ));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, SandboxValidationError::WritableRootEscape { .. }))
+        );
     }
 
     #[test]
@@ -322,11 +316,7 @@ mod tests {
 
     #[test]
     fn validate_custom_accumulates_multiple_errors() {
-        let cfg = custom_with(
-            vec!["/tmp/../etc"],
-            vec!["bad host"],
-            vec!["cargo;ls"],
-        );
+        let cfg = custom_with(vec!["/tmp/../etc"], vec!["bad host"], vec!["cargo;ls"]);
         let errs = validate_custom(&cfg);
         assert_eq!(
             errs.len(),

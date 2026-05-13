@@ -47,7 +47,9 @@ pub enum SandboxResolveError {
     /// The matrix declares the row but `verified = false` — surge has not
     /// tested it against the live runtime. Production runs refuse; `surge
     /// doctor` lets the row through so operators can investigate.
-    #[error("runtime {runtime:?} is declared-unverified for mode {mode:?}; only `surge doctor` may use it")]
+    #[error(
+        "runtime {runtime:?} is declared-unverified for mode {mode:?}; only `surge doctor` may use it"
+    )]
     UnverifiedRuntime {
         /// Runtime that was requested.
         runtime: RuntimeKind,
@@ -178,11 +180,7 @@ mod tests {
         RuntimeSandboxMatrix::from_rows(rows)
     }
 
-    fn verified_row(
-        runtime: RuntimeKind,
-        mode: SandboxMode,
-        flags: &[&str],
-    ) -> RuntimeSandboxRow {
+    fn verified_row(runtime: RuntimeKind, mode: SandboxMode, flags: &[&str]) -> RuntimeSandboxRow {
         RuntimeSandboxRow::new(runtime, mode)
             .with_flags(flags.iter().copied())
             .verified()
@@ -248,10 +246,7 @@ mod tests {
             ResolveContext::Run,
         )
         .unwrap_err();
-        assert!(matches!(
-            err,
-            SandboxResolveError::UnverifiedRuntime { .. }
-        ));
+        assert!(matches!(err, SandboxResolveError::UnverifiedRuntime { .. }));
     }
 
     #[test]
@@ -277,13 +272,8 @@ mod tests {
         let m = matrix_with(vec![]);
         let mut c = cfg(SandboxMode::Custom);
         c.writable_roots = vec![PathBuf::from("/tmp/work")];
-        let flags = resolve_launch_flags(
-            RuntimeKind::ClaudeCode,
-            &c,
-            &m,
-            ResolveContext::Run,
-        )
-        .expect("valid custom should resolve");
+        let flags = resolve_launch_flags(RuntimeKind::ClaudeCode, &c, &m, ResolveContext::Run)
+            .expect("valid custom should resolve");
         assert!(flags.is_empty());
     }
 

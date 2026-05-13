@@ -33,8 +33,8 @@ fn examples_dir() -> PathBuf {
 
 fn load_flow() -> Graph {
     let path = examples_dir().join("flow_elevation_demo.toml");
-    let s = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let s =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     toml::from_str(&s).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
@@ -43,7 +43,10 @@ fn flow_elevation_demo_parses_and_validates() {
     let graph = load_flow();
     let warnings = validate(&graph).expect("flow_elevation_demo passes graph validation");
     // The flow declares only required fields; no warnings expected.
-    assert!(warnings.is_empty(), "unexpected validation warnings: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "unexpected validation warnings: {warnings:?}"
+    );
 }
 
 #[test]

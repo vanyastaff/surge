@@ -530,14 +530,14 @@ fn builtin_agents() -> Vec<RegistryEntry> {
                     runtime = ?rt,
                     "registry entry loaded with runtime",
                 );
-            }
+            },
             None => {
                 tracing::warn!(
                     target: "surge_acp.registry",
                     agent = %entry.id,
                     "registry entry missing `runtime` field; sandbox matrix lookup will be skipped",
                 );
-            }
+            },
         }
     }
     entries

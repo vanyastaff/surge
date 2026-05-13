@@ -69,8 +69,9 @@ fn elevation_decided_payload_shape() {
     assert_eq!(inner["decision"].as_str().unwrap(), "allow");
     assert_eq!(inner["remember"], false);
 
-    let allowed: std::collections::BTreeSet<&str> =
-        ["type", "node", "decision", "remember"].into_iter().collect();
+    let allowed: std::collections::BTreeSet<&str> = ["type", "node", "decision", "remember"]
+        .into_iter()
+        .collect();
     for key in inner.keys() {
         assert!(
             allowed.contains(key.as_str()),
@@ -96,7 +97,9 @@ fn elevation_timed_out_payload_shape() {
     assert_eq!(inner["elapsed_seconds"], 86_400);
 
     let allowed: std::collections::BTreeSet<&str> =
-        ["type", "node", "capability", "elapsed_seconds"].into_iter().collect();
+        ["type", "node", "capability", "elapsed_seconds"]
+            .into_iter()
+            .collect();
     for key in inner.keys() {
         assert!(
             allowed.contains(key.as_str()),

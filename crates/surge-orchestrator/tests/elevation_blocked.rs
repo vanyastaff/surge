@@ -42,7 +42,12 @@ async fn resolve_elevation_returns_run_not_found_for_unknown_run() {
 
     let unknown_run = RunId::new();
     let result = engine
-        .resolve_elevation(unknown_run, SessionId::new(), "req-1".into(), deny_decision())
+        .resolve_elevation(
+            unknown_run,
+            SessionId::new(),
+            "req-1".into(),
+            deny_decision(),
+        )
         .await;
     assert!(matches!(result, Err(EngineError::RunNotFound(_))));
 }
@@ -104,8 +109,6 @@ async fn pending_elevations_resolve_after_timeout_returns_unknown() {
     let late = reg.resolve(session, "req-1", deny_decision()).await;
     assert!(matches!(
         late,
-        Err(
-            surge_orchestrator::engine::elevation::ResolveElevationError::Unknown { .. }
-        ),
+        Err(surge_orchestrator::engine::elevation::ResolveElevationError::Unknown { .. }),
     ));
 }

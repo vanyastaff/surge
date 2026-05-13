@@ -175,13 +175,10 @@ impl PendingElevations {
     /// Cancel and remove a pending entry without firing the sender. Used by
     /// the agent stage on timeout or session-end to release the registry
     /// slot before posting the resulting event.
-    pub async fn cancel(
-        &self,
-        session: SessionId,
-        request_id: &str,
-    ) -> Option<PendingElevation> {
+    pub async fn cancel(&self, session: SessionId, request_id: &str) -> Option<PendingElevation> {
         let mut map = self.inner.lock().await;
-        map.remove(&(session, request_id.to_string())).map(|s| s.metadata)
+        map.remove(&(session, request_id.to_string()))
+            .map(|s| s.metadata)
     }
 
     /// Current registry size (for tests and observability snapshots).
@@ -236,7 +233,10 @@ mod tests {
         let s = SessionId::new();
         let (rx, size) = reg.register(pending(s, "r1")).await;
         assert_eq!(size, 1);
-        let metadata = reg.resolve(s, "r1", allow_decision()).await.expect("resolves");
+        let metadata = reg
+            .resolve(s, "r1", allow_decision())
+            .await
+            .expect("resolves");
         assert_eq!(metadata.request_id, "r1");
         let routed = rx.await.expect("receiver wakes");
         assert_eq!(routed.decision, ElevationDecision::Allow);
@@ -247,7 +247,10 @@ mod tests {
     async fn resolve_returns_unknown_for_missing_entry() {
         let reg = PendingElevations::new();
         let s = SessionId::new();
-        let err = reg.resolve(s, "missing", allow_decision()).await.unwrap_err();
+        let err = reg
+            .resolve(s, "missing", allow_decision())
+            .await
+            .unwrap_err();
         assert!(matches!(err, ResolveElevationError::Unknown { .. }));
     }
 

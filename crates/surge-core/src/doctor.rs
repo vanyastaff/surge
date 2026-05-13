@@ -165,7 +165,10 @@ impl DoctorReport {
             matches!(
                 e.version_status,
                 VersionStatus::Ok | VersionStatus::NotApplicable,
-            ) && e.matrix.iter().all(|c| c.status == MatrixCellStatus::Verified)
+            ) && e
+                .matrix
+                .iter()
+                .all(|c| c.status == MatrixCellStatus::Verified)
         })
     }
 }
@@ -200,7 +203,10 @@ mod tests {
                 detected_version: Some("1.9.0".into()),
                 policy: None,
                 version_status: VersionStatus::BelowMinimum,
-                matrix: vec![cell(SandboxMode::WorkspaceWrite, MatrixCellStatus::Verified)],
+                matrix: vec![cell(
+                    SandboxMode::WorkspaceWrite,
+                    MatrixCellStatus::Verified,
+                )],
             }],
         };
         assert!(!r.is_clean());
