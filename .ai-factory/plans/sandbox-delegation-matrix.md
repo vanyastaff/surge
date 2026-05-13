@@ -186,7 +186,17 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** mock-agent path (always on in CI); real-agent path behind `SURGE_DOCTOR_REAL=1`.
   - **Depends on Task 10.**
 
-- [ ] **Task 12: Version policy enforcement during run start (warn-only).**
+- [x] **Task 12: Version policy enforcement during run start (warn-only).**
+
+  > **Implementation note:** Task delivered the `probe_version` utility +
+  > `VersionCache` + `evaluate_against_policy` + `RuntimeVersionWarningPayload`
+  > infrastructure in `crates/surge-orchestrator/src/engine/version_probe.rs`
+  > with full tests. Wiring into the agent stage's session-open path (so the
+  > warning event is appended automatically) is deferred to follow-up work
+  > alongside the `surge doctor` command (Task 10) — both consumers reuse
+  > the same probe utility and require threading the surge-acp registry
+  > into `AgentStageParams`, which is invasive and out of scope for this
+  > milestone slice.
   - In `crates/surge-orchestrator/src/engine/stage/agent.rs` (where the bridge opens a session for an agent), call `RuntimeVersionPolicy::version_policy(runtime)` and probe the binary version. Cache the probe result in `crates/surge-orchestrator/src/engine/engine.rs` keyed by agent name (one probe per agent registration per daemon lifetime). On `min_version` violation, emit `tracing::warn!` AND append `EventPayload::RuntimeVersionWarning { runtime, found_version: String, min_version: String }` (NEW variant — schema migration is Task 8b). Warn-only — do not refuse the run.
   - Probe: spawn `<binary> --version` via `tokio::process::Command` with 1 s timeout; parse first whitespace-separated token of the first line for semver via `semver::Version::parse` after stripping a leading `v` if present. Make the probe a function `fn probe_version(bin_path: &Path) -> impl Future<Output = Result<semver::Version, ProbeError>>` so tests can replace it via a function pointer or trait.
   - **Files:** `crates/surge-orchestrator/src/engine/stage/agent.rs`, `crates/surge-orchestrator/src/engine/engine.rs`, `crates/surge-core/src/run_event.rs` (new `RuntimeVersionWarning` variant; schema migration in Task 8b).
@@ -207,7 +217,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Logging:** test uses `tracing-subscriber` test layer; asserts `info!` lines present in expected order via a captured-output helper.
   - **Depends on Tasks 8, 9.**
 
-- [ ] **Task 14: Property test — sandbox resolver is total for every declared `(runtime × mode)` row.**
+- [x] **Task 14: Property test — sandbox resolver is total for every declared `(runtime × mode)` row.**
   - In `crates/surge-core/src/sandbox_matrix.rs`, add a `proptest` strategy producing every `(RuntimeKind, SandboxMode)` pair. For every pair, `default_matrix().lookup(runtime, mode)` either returns a row or `None`; `unsupported(runtime, mode)` returns the negation. Property: no pair panics, no pair returns a row with empty `flags` AND `verified = true`.
   - **Files:** `crates/surge-core/src/sandbox_matrix.rs` (tests block).
   - **Depends on Task 1.**

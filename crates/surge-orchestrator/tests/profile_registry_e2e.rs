@@ -248,6 +248,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
             fixtures::mock_bridge::RecordedCall::OpenSession => "open",
             fixtures::mock_bridge::RecordedCall::SendMessage { .. } => "send",
             fixtures::mock_bridge::RecordedCall::ReplyToTool { .. } => "reply",
+            fixtures::mock_bridge::RecordedCall::ReplyToPermission { .. } => "reply_perm",
             fixtures::mock_bridge::RecordedCall::SessionState { .. } => "state",
             fixtures::mock_bridge::RecordedCall::CloseSession(_) => "close",
             fixtures::mock_bridge::RecordedCall::Subscribe => "subscribe",

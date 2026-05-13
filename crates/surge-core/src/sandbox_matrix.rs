@@ -284,6 +284,77 @@ mod tests {
         assert_eq!(m.rows(), rows.as_slice());
     }
 
+    // ── Property tests: resolver totality ────────────────────────────────────
+    //
+    // The default matrix must be **total** over every `(RuntimeKind, SandboxMode)`
+    // pair the system knows about. "Total" here means three rules:
+    //   1. `lookup` never panics.
+    //   2. `unsupported` is the logical negation of `lookup`.
+    //   3. No row claims `verified = true` while shipping empty `flags`.
+    //
+    // Encoded as proptest so any future variant additions (new RuntimeKind /
+    // SandboxMode) automatically widen the property space.
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 256,
+            ..Default::default()
+        })]
+
+        #[test]
+        fn lookup_is_total_for_every_pair(
+            runtime in proptest::sample::select(&[
+                RuntimeKind::ClaudeCode,
+                RuntimeKind::Codex,
+                RuntimeKind::Gemini,
+                RuntimeKind::CursorCli,
+                RuntimeKind::CopilotCli,
+                RuntimeKind::OpenCode,
+                RuntimeKind::Goose,
+            ][..]),
+            mode in proptest::sample::select(&[
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::WorkspaceNetwork,
+                SandboxMode::FullAccess,
+                SandboxMode::Custom,
+            ][..]),
+        ) {
+            let matrix = default_matrix();
+            let row = matrix.lookup(runtime, mode);
+            // Rule 2: unsupported ↔ lookup is None.
+            assert_eq!(row.is_none(), matrix.unsupported(runtime, mode));
+            // Rule 3: verified rows always carry concrete flags.
+            if let Some(r) = row {
+                assert!(
+                    !(r.verified && r.flags.is_empty()),
+                    "row {:?}/{:?} is verified but empty",
+                    r.runtime,
+                    r.mode,
+                );
+            }
+        }
+
+        #[test]
+        fn lookup_is_idempotent(
+            runtime in proptest::sample::select(&[
+                RuntimeKind::ClaudeCode,
+                RuntimeKind::Codex,
+                RuntimeKind::Gemini,
+            ][..]),
+            mode in proptest::sample::select(&[
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::WorkspaceNetwork,
+                SandboxMode::FullAccess,
+            ][..]),
+        ) {
+            let matrix = default_matrix();
+            // Two consecutive lookups produce identical results.
+            assert_eq!(matrix.lookup(runtime, mode), matrix.lookup(runtime, mode));
+        }
+    }
+
     #[test]
     fn verified_only_filters() {
         let rows = vec![

@@ -87,6 +87,29 @@ pub struct RuntimeVersionPolicy {
     pub note: String,
 }
 
+impl RuntimeVersionPolicy {
+    /// Constructor for tests and callers outside this crate.
+    ///
+    /// Struct-literal syntax does not compile across crate boundaries
+    /// because the type is `#[non_exhaustive]`; this builder lets callers
+    /// set the required fields and defaults the rest.
+    #[must_use]
+    pub fn new(runtime: RuntimeKind, min_version: semver::VersionReq) -> Self {
+        Self {
+            runtime,
+            min_version,
+            note: String::new(),
+        }
+    }
+
+    /// Builder: attach an explanatory note.
+    #[must_use]
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = note.into();
+        self
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct BundledVersionsDocument {
     policies: Vec<RuntimeVersionPolicy>,

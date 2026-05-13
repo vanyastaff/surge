@@ -47,6 +47,7 @@ pub mod snapshot;
 pub mod stage;
 pub mod tools;
 pub mod validate;
+pub mod version_probe;
 
 pub use config::{EngineConfig, EngineRunConfig, SnapshotPolicy};
 pub use daemon_facade::{DaemonClient, DaemonEngineFacade};
