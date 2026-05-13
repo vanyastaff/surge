@@ -99,6 +99,21 @@ pub fn revoke(conn: &Connection, chat_id: i64, now_ms: i64) -> Result<(), Pairin
     Ok(())
 }
 
+/// Count currently active (non-revoked) pairings. Used by `surge doctor`
+/// — cheaper than [`list_active`] when only the count is needed.
+///
+/// # Errors
+///
+/// Returns [`PairingsError::Sqlite`] if the query fails.
+pub fn count_active(conn: &Connection) -> Result<i64, PairingsError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM telegram_pairings WHERE revoked_at IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(n)
+}
+
 /// List all currently active (non-revoked) pairings, ordered by `paired_at`
 /// ascending (oldest first).
 ///

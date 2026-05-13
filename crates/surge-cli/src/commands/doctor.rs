@@ -97,7 +97,96 @@ async fn run_report(format: DoctorFormat) -> Result<()> {
     }
 
     render(&report, format)?;
+
+    if matches!(format, DoctorFormat::Text) {
+        render_telegram_section();
+    }
     Ok(())
+}
+
+/// Render the `telegram-cockpit` block of the doctor report. Text-only —
+/// JSON/TOML render paths read from the central `DoctorReport` struct and
+/// would need a typed field on it; the structured surface is left for a
+/// follow-up.
+///
+/// Errors from registry access are logged and surfaced as a single
+/// "(unavailable)" line so a missing `~/.surge/` directory does not
+/// abort the rest of the report.
+fn render_telegram_section() {
+    println!();
+    println!("─── telegram-cockpit ───");
+    match collect_telegram_health() {
+        Ok(health) => {
+            let bot = if health.bot_token_configured { "✅ yes" } else { "❌ no" };
+            println!("  bot token configured:        {bot}");
+            println!("  active pairings:             {n}", n = health.active_pairings);
+            println!("  open cards:                  {n}", n = health.open_cards);
+            let last_api = match health.last_bot_api_at_ms {
+                Some(ms) => format_unix_ms(ms),
+                None => "(never)".to_owned(),
+            };
+            println!("  last Bot API call (approx):  {last_api}");
+        },
+        Err(err) => {
+            warn!(
+                target: "surge_cli.doctor",
+                error = %err,
+                "telegram health probe failed"
+            );
+            println!("  (unavailable — open ~/.surge/db/registry.sqlite failed)");
+        },
+    }
+}
+
+/// Aggregate counts the doctor report cares about. No bot-token value is
+/// captured here — only presence.
+struct TelegramHealth {
+    bot_token_configured: bool,
+    active_pairings: i64,
+    open_cards: i64,
+    last_bot_api_at_ms: Option<i64>,
+}
+
+fn collect_telegram_health() -> Result<TelegramHealth> {
+    use surge_persistence::secrets::{TELEGRAM_BOT_TOKEN_KEY, has_secret};
+    use surge_persistence::telegram::{cards, pairings};
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
+        .join(".surge");
+    let db_path = home.join("db").join("registry.sqlite");
+    if !db_path.exists() {
+        return Ok(TelegramHealth {
+            bot_token_configured: false,
+            active_pairings: 0,
+            open_cards: 0,
+            last_bot_api_at_ms: None,
+        });
+    }
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| anyhow::anyhow!("open registry: {e}"))?;
+
+    let bot_token_configured = has_secret(&conn, TELEGRAM_BOT_TOKEN_KEY)
+        .map_err(|e| anyhow::anyhow!("query secret: {e}"))?;
+    let active_pairings = pairings::count_active(&conn)
+        .map_err(|e| anyhow::anyhow!("count active pairings: {e}"))?;
+    let open_cards = cards::count_open(&conn)
+        .map_err(|e| anyhow::anyhow!("count open cards: {e}"))?;
+    let last_bot_api_at_ms = cards::latest_updated_at_ms(&conn)
+        .map_err(|e| anyhow::anyhow!("latest card updated_at: {e}"))?;
+
+    Ok(TelegramHealth {
+        bot_token_configured,
+        active_pairings,
+        open_cards,
+        last_bot_api_at_ms,
+    })
+}
+
+/// Pretty-print a Unix epoch ms value as a UTC RFC 3339 timestamp.
+fn format_unix_ms(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map_or_else(|| format!("{ms} ms"), |dt| dt.to_rfc3339())
 }
 
 fn run_matrix(format: DoctorFormat) -> Result<()> {

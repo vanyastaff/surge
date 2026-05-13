@@ -209,6 +209,40 @@ pub fn find_by_id(conn: &Connection, card_id: &str) -> Result<Option<Card>, Card
     Ok(card)
 }
 
+/// Count currently open cards. Used by `surge doctor` — cheaper than
+/// [`find_open`] when only the count is needed.
+///
+/// # Errors
+///
+/// Returns [`CardsError::Sqlite`] on storage failure.
+pub fn count_open(conn: &Connection) -> Result<i64, CardsError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM telegram_cards WHERE closed_at IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(n)
+}
+
+/// Latest `updated_at` across all cards, or `None` if the table is empty.
+/// Approximates "last successful Bot API call timestamp" for
+/// `surge doctor`.
+///
+/// # Errors
+///
+/// Returns [`CardsError::Sqlite`] on storage failure.
+pub fn latest_updated_at_ms(conn: &Connection) -> Result<Option<i64>, CardsError> {
+    let row: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(updated_at) FROM telegram_cards",
+            [],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(row)
+}
+
 /// Return every open (non-closed) card. Used by the cockpit's startup
 /// reconcile pass to refresh content against the current run-event state.
 ///
