@@ -15,6 +15,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Hooks](hooks.md) | `pre_tool_use` / `post_tool_use` / `on_outcome` / `on_error` lifecycle, matcher, failure modes |
 | [Artifact Conventions](conventions/README.md) | Canonical generated artifact names, schemas, validators, and examples |
 | [Archetypes](archetypes.md) | Bundled `flow.toml` archetypes with mermaid diagrams |
+| [Migrate `.spec.toml` → `flow.toml`](migrate-spec-to-flow.md) | Auto-translator (`surge migrate-spec`) reference and manual-edit guidance for the legacy pipeline retirement |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 
 > **Documentation convention.** **Current** means implemented enough to try from the repository. **Target** means product direction; command names may still change while the CLI is being aligned.

@@ -139,7 +139,7 @@ Out:
 
 ### Phase 3 — Migration Guide Documentation
 
-#### Task 3.1: `docs/migrate-spec-to-flow.md`
+#### Task 3.1: `docs/migrate-spec-to-flow.md` ✅
 
 - **Deliverable:** Standalone guide.
 - **Sections:**
@@ -153,7 +153,7 @@ Out:
 - **Logging:** n/a.
 - **Acceptance:** all referenced files link back to the guide; the guide compiles without broken links (manual review).
 
-#### Task 3.2: Deprecation Banner on `docs/conventions/spec.md`
+#### Task 3.2: Deprecation Banner on `docs/conventions/spec.md` ✅
 
 - **Deliverable:** keep file (preserve backlinks); prepend deprecation banner; collapse original content under `<details><summary>Historical reference</summary>…</details>`.
 - **Files (modify):** `docs/conventions/spec.md`.
