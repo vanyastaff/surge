@@ -136,7 +136,7 @@
   - Documentation cleanup: remove `surge-spec` mentions from `docs/ARCHITECTURE.md`, `DESCRIPTION.md`, `CLAUDE.md`, `.ai-factory/ARCHITECTURE.md`
   - Final acceptance: `cargo tree | grep surge-spec` empty; `cargo build --workspace` clean; zero deprecation warnings
 
-- [ ] **Sandbox delegation matrix** — `SandboxIntent` mapped to every supported runtime (touches `surge-acp`, `surge-core`, `surge-orchestrator`, `surge-cli`)
+- [x] **Sandbox delegation matrix** — `SandboxIntent` mapped to every supported runtime (touches `surge-acp`, `surge-core`, `surge-orchestrator`, `surge-cli`)
   - Map `read-only` to native flags on Claude Code, Codex CLI, Gemini CLI
   - Map `workspace-write` to native flags on all 3 runtimes
   - Map `workspace+network` to native flags on all 3 runtimes
@@ -266,3 +266,4 @@
 | Project initialization & stable context | 2026-05-10 |
 | Artifact format & convention library | 2026-05-11 |
 | Roadmap amendments via `surge feature` | 2026-05-11 |
+| Sandbox delegation matrix | 2026-05-13 |

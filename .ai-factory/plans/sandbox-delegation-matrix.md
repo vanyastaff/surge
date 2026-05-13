@@ -239,7 +239,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
 
 <!-- Commit checkpoint: tasks 13-15 → "test(surge): integration tests for sandbox refusal, elevation, doctor" -->
 
-- [ ] **Task 16: Documentation — sandbox matrix table and elevation runbook.**
+- [x] **Task 16: Documentation — sandbox matrix table and elevation runbook.**
   - Add `docs/sandbox-matrix.md`: full table generated from `default_matrix()` (consider a small `xtask` to render, or hand-write and add a CI lint that compares the table to the bundled matrix — pick the smaller diff). Columns: runtime, mode, verified, flags, min_version, note.
   - Add `docs/elevation-runbook.md`: explains the lifecycle (`RequestPermissionRequest` → `SandboxElevationRequested` → notify card → `ApprovalDecided` → `SandboxElevationDecided` → `RequestPermissionResponse`), the timeout/deny default, the `AllowAndRemember` session-scoped allowlist, and the audit-trail story.
   - Update `docs/ARCHITECTURE.md` and `CLAUDE.md` to mention the new `surge doctor` command and link the two new docs.
