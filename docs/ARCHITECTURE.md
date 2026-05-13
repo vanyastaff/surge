@@ -282,17 +282,18 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 
 ## 12. Crate layout
 
+> **Retired in v0.1: structured-spec pipeline.** The original `surge-spec` crate (parsing, builder, dependency graph, templates, validation) and the parallel-execution pipeline inside `surge-orchestrator` (pipeline / planner / executor / qa / gates / retry / circuit_breaker / parallel / schedule / phases / budget / context / project / conflict) were removed as part of the Legacy pipeline retirement milestone. Existing `.spec.toml` files can be auto-translated via `surge migrate-spec` — see [`migrate-spec-to-flow.md`](migrate-spec-to-flow.md) and [`legacy-parity-checklist.md`](legacy-parity-checklist.md).
+
 | Crate | Responsibility |
 |---|---|
 | `surge-core` | Graph, profile, event, sandbox, approval, validation types. No I/O. |
-| `surge-spec` | Legacy structured-spec format and validation (kept while the new flow path stabilizes). |
 | `surge-acp` | ACP bridge, agent pool, agent registry, discovery, health, mock agent. |
-| `surge-orchestrator` | Engine: legacy spec pipeline + the graph executor. |
+| `surge-orchestrator` | Graph executor (`engine/`), bootstrap chain, project context, roadmap-amendment surfaces. |
 | `surge-persistence` | SQLite stores, event log, materialized views, memory, analytics. |
 | `surge-git` | Worktree and branch lifecycle. |
 | `surge-intake` | Issue-tracker sources (`TaskSource` trait + Linear / GitHub Issues impls). |
 | `surge-daemon` | Long-running local engine host over Unix sockets / Windows named pipes. |
-| `surge-cli` | `surge` binary: agents, specs, worktrees, engine, daemon, registry, memory, analytics. |
+| `surge-cli` | `surge` binary: agents, profiles, worktrees, engine, daemon, registry, memory, analytics. |
 | `surge-notify` | Notification delivery: desktop, webhook, Slack, email, Telegram. |
 | `surge-mcp` | stdio MCP server lifecycle and tool delegation. |
 | `surge-ui` | GPUI desktop shell. |
@@ -313,7 +314,7 @@ Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge
 
 > This is where we will record what we want to build next, in our own words. Everything above is the architecture as it stands today; everything below is the conversation about where it should go.
 
-- The exact sandcastle-like ergonomics we want at the CLI surface — should `surge run "<prompt>"` map to a default `flow.toml` template, or always go through full bootstrap?
+- The exact sandcastle-like ergonomics we want at the CLI surface — should `surge engine run "<prompt>"` map to a default `flow.toml` template, or always go through full bootstrap? Should `surge engine run` be renamed back to `surge run` as the single execution entry point?
 - How template authorship should feel — single TOML, or split prompt + flow?
 - The story for shared profiles across projects (registry vs git-tracked).
 - AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping?

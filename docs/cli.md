@@ -13,12 +13,11 @@ surge init              create or update project-level surge.toml
 surge project describe  create or refresh stable project.md context
 surge agent ...         manage configured agents
 surge registry ...      inspect built-in/remote ACP agent registry
-surge spec ...          manage legacy specs
-surge run ...           execute the legacy spec pipeline
 surge bootstrap ...     generate an adaptive flow from a free-form prompt
 surge engine ...        execute flow.toml graphs
 surge feature ...       draft, approve, list, show, or reject roadmap amendments
 surge artifact ...      validate generated artifacts against Surge contracts
+surge migrate-spec ...  translate a legacy .spec.toml into a flow.toml
 surge daemon ...        manage the long-running local engine host
 surge clean             clean up orphaned worktrees and merged branches
 surge worktrees         list active worktrees
@@ -27,19 +26,10 @@ surge analytics ...     view token/cost analytics
 
 ## Two Execution Surfaces
 
-Two execution paths coexist while the new graph engine stabilizes:
-
-- **Legacy spec pipeline:** `surge spec ...` + `surge run <spec_id>`. Creates static task plans from templates and runs them through planner / coder / reviewer-style stages.
 - **Bootstrap path:** `surge bootstrap "<prompt>"`. Runs Description Author → Roadmap Planner → Flow Generator, asks for console approvals, then starts the materialized follow-up graph.
 - **Graph engine:** `surge engine run <flow.toml>` or `surge engine run --template <name>`. Executes an already-authored or bundled workflow graph with explicit nodes, declared outcomes, and edges.
 
-The legacy pipeline is preserved while the flow engine catches up; new work targets the graph engine.
-
-## Current Spec Templates
-
-`surge spec create` ships these templates today:
-
-`feature`, `bugfix`, `refactor`, `performance`, `security`, `docs`, `migration`.
+The structured-spec pipeline (`surge spec`, `surge run <spec_id>`, etc.) was retired in v0.1 — see [`migrate-spec-to-flow.md`](migrate-spec-to-flow.md) for the auto-translator and the [`legacy-parity-checklist`](legacy-parity-checklist.md) for the module-by-module replacement mapping.
 
 ## Current → Target Mapping
 
@@ -72,12 +62,11 @@ Generated role artifacts can be validated directly:
 ```text
 surge artifact validate --kind description description.md
 surge artifact validate --kind roadmap roadmap.toml
-surge artifact validate --kind spec spec.toml
 surge artifact validate --kind flow flow.toml
 ```
 
 Use `--format json` for structured diagnostics. The same validator surface is
-used by bundled profile `on_outcome` hooks for description, roadmap, and spec
+used by bundled profile `on_outcome` hooks for description and roadmap
 artifacts. See [Artifact Conventions](conventions/README.md) for every
 canonical path and minimal example.
 

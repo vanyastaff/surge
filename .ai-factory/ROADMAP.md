@@ -116,7 +116,7 @@
   - Regression tests cover malformed patch rejection, duplicate idempotency, running conflicts, follow-up request creation, CLI mirrors, replay/snapshot views, and notification rendering
   - Documentation: amendment lifecycle and command reference live in `docs/workflow.md`, `docs/cli.md`, and `docs/conventions/roadmap.md`
 
-- [ ] **Legacy pipeline retirement** — remove `surge-spec` crate and the parallel-execution path in `surge-orchestrator` (touches `surge-spec`, `surge-orchestrator`, `surge-cli`, workspace root)
+- [x] **Legacy pipeline retirement** — remove `surge-spec` crate and the parallel-execution path in `surge-orchestrator` (touches `surge-spec`, `surge-orchestrator`, `surge-cli`, workspace root)
   - **Parity checklist** completed before any deletion: every behavior of the legacy pipeline has a verified equivalent in the graph executor
   - `surge-spec/graph.rs` `DependencyGraph::topological_batches` → graph executor `Loop` over a `Subtask` collection with declared dependencies
   - `surge-orchestrator/qa.rs` checks → `Verifier` profile + `on_outcome` validation hook
@@ -267,3 +267,4 @@
 | Artifact format & convention library | 2026-05-11 |
 | Roadmap amendments via `surge feature` | 2026-05-11 |
 | Sandbox delegation matrix | 2026-05-13 |
+| Legacy pipeline retirement | 2026-05-13 |

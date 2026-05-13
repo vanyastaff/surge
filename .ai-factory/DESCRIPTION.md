@@ -73,9 +73,8 @@ See `.ai-factory/ARCHITECTURE.md` for the AI-context architecture guidelines (pa
 | Crate | Responsibility |
 |---|---|
 | `surge-core` | Graph, profile, event, sandbox, approval, validation types. No I/O. |
-| `surge-spec` | Legacy structured-spec format and validation (kept while the new flow path stabilizes). |
 | `surge-acp` | ACP bridge, agent pool, agent registry, discovery, health, mock agent. |
-| `surge-orchestrator` | Engine: legacy spec pipeline, graph executor, bootstrap driver, and stable project-context generation/seeding. |
+| `surge-orchestrator` | Graph executor (`engine/`), bootstrap driver, stable project-context generation/seeding, roadmap-amendment surfaces. |
 | `surge-persistence` | SQLite stores, event log, materialized views, memory, analytics. |
 | `surge-git` | Worktree and branch lifecycle. |
 | `surge-intake` | Issue-tracker sources (`TaskSource` trait + Linear / GitHub Issues impls). |

@@ -306,7 +306,7 @@ Out:
 
 ### Phase 8 — Restructure Remaining Helpers
 
-#### Task 8.1: Audit Surviving Root Modules in surge-orchestrator
+#### Task 8.1: Audit Surviving Root Modules in surge-orchestrator ✅
 
 - **Deliverable:** decision per file documented inline in `lib.rs` (one-line `//` comment per module declaration).
 - **Approach:** list `crates/surge-orchestrator/src/*.rs` after Phase 6 and for each module decide:
@@ -316,7 +316,12 @@ Out:
 - **Logging:** n/a (structural).
 - **Acceptance:** `lib.rs` enumerates surviving modules with one-line rationale.
 
-#### Task 8.2: Collapse Engine-Only Helpers into `engine/`
+#### Task 8.2: Collapse Engine-Only Helpers into `engine/` ✅ (no-op)
+
+- **Decision:** After auditing every surviving root module, all ten of them (`archetype_registry`, `bootstrap`, `bootstrap_driver`, `feature_driver`, `flow_amendment`, `profile_loader`, `project_context`, `prompt`, `roadmap_amendment`, `roadmap_document`, `roadmap_target`, `triage`) are consumed by `surge-cli`, `surge-daemon`, or integration tests — never by `engine/` alone. Moving them would force every consumer to add an `engine::` prefix without any architectural benefit, so they stay at the crate root. The decision is documented inline in `lib.rs`.
+- **Acceptance:** ✅ no files moved; `cargo build --workspace` clean.
+
+(Original Task 8.2 deliverable below preserved for reference.)
 
 - **Deliverable:** modules marked in Task 8.1 moved under `engine/`.
 - **Files:** moves per Task 8.1 decisions. Update all imports.
@@ -330,14 +335,14 @@ Out:
 
 ### Phase 9 — Documentation Cleanup
 
-#### Task 9.1: Update `docs/ARCHITECTURE.md`
+#### Task 9.1: Update `docs/ARCHITECTURE.md` ✅
 
 - **Deliverable:** zero surge-spec mentions; "Legacy spec pipeline" section deleted.
 - **Files:** `docs/ARCHITECTURE.md`.
 - **Decision (decide-or-defer):** preserve a single short paragraph titled "Retired in v0.1: structured-spec pipeline" pointing at `docs/migrate-spec-to-flow.md` — useful for readers landing from older commits; do not preserve any other historical detail.
 - **Acceptance:** `Select-String "surge-spec\b|legacy spec pipeline|spec\.toml" docs/ARCHITECTURE.md` returns only the new retirement note.
 
-#### Task 9.2: Update CLI / Workflow / Bootstrap / Getting-Started Docs
+#### Task 9.2: Update CLI / Workflow / Bootstrap / Getting-Started Docs ✅
 
 - **Files (modify):**
   - `docs/cli.md` (lines 16, 32, 38, 75) — drop "manage legacy specs"; remove the legacy-pipeline row from the execution-surfaces table; remove `surge spec` examples.
@@ -347,7 +352,7 @@ Out:
   - `docs/README.md` — update CLI section to remove links to the deprecated spec conventions.
 - **Acceptance:** `Select-String -Pattern "surge[ -]spec|spec\.toml|surge spec\b" docs/` returns only the deprecation banner in `docs/conventions/spec.md`, the migration guide, and the `legacy-parity-checklist.md` (intentional).
 
-#### Task 9.3: Update Project Context Files
+#### Task 9.3: Update Project Context Files ✅
 
 - **Files (modify):**
   - `.ai-factory/DESCRIPTION.md` (lines 76, 78) — remove the `surge-spec` row from the crate-layout table; update the `surge-orchestrator` description to drop "legacy spec pipeline".
@@ -356,7 +361,7 @@ Out:
   - root `README.md` (line 21) — update the surge-orchestrator description.
 - **Acceptance:** `Select-String "surge-spec\b|\bsurge spec\b" .ai-factory/*.md CLAUDE.md README.md` empty.
 
-#### Task 9.4: Mark Milestone Complete in ROADMAP
+#### Task 9.4: Mark Milestone Complete in ROADMAP ✅
 
 - **Deliverable:** roadmap reflects completion.
 - **Files:** `.ai-factory/ROADMAP.md` (lines 119, 270).

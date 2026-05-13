@@ -53,6 +53,11 @@
 #![allow(clippy::manual_string_new)]
 #![allow(clippy::match_wildcard_for_single_variants)]
 
+// After the Legacy pipeline retirement milestone, every surviving root
+// module is a cross-cutting surface consumed by surge-cli, surge-daemon,
+// or integration tests — none of them is engine-only. Folding them under
+// `engine/` would force every consumer to add an `engine::` prefix without
+// any architectural benefit, so they stay at the crate root.
 pub mod archetype_registry;
 pub mod bootstrap;
 pub mod bootstrap_driver;
