@@ -131,7 +131,7 @@ Derived from the Decisions section (1–7) and ROADMAP acceptance criteria (line
   - On `Completed`: lookup policy via `ticket_index`; if `Auto { merge_when_clean: true }` AND PR has all-checks-green AND review-approved, post merge action; otherwise post `merge-blocked` comment with reason.
   - Idempotency via `intake_emit_log` (`merge_proposed` / `merge_blocked`).
 
-- [ ] **Task 8 — `surge intake list` CLI** (ROADMAP §201, milestone wires #5)
+- [x] **Task 8 — `surge intake list` CLI** (ROADMAP §201, milestone wires #5)
   - New subcommand reading `ticket_index JOIN runs`, rendering `Tracker | Ticket | Tier | State | Run ID | Started`.
   - `--format json|table` (default table), optional `--tracker <id>`.
   - In-memory DB integration test.

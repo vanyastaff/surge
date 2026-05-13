@@ -11,6 +11,7 @@ pub mod format;
 pub mod git;
 pub mod init;
 pub mod insights;
+pub mod intake;
 pub mod memory;
 pub mod migrate_spec;
 pub mod profile;

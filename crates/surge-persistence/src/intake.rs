@@ -355,6 +355,90 @@ impl<'a> IntakeRepo<'a> {
         }))
     }
 
+    /// List ticket rows in descending `last_seen` order, optionally
+    /// filtered by `source_id`. `limit` caps the result set
+    /// (recommended ≤ 1000 for CLI rendering).
+    ///
+    /// Used by `surge intake list`. The rows include `state` and
+    /// `run_id` — the caller may join with the `runs` table for
+    /// per-run timestamps.
+    pub fn list_all(
+        &self,
+        source_filter: Option<&str>,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<IntakeRow>> {
+        let mut sql = String::from(
+            "SELECT task_id, source_id, provider, run_id, triage_decision, duplicate_of, \
+                    priority, state, first_seen, last_seen, snooze_until, \
+                    callback_token, tg_chat_id, tg_message_id \
+             FROM ticket_index",
+        );
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(s) = source_filter {
+            sql.push_str(" WHERE source_id = ?1");
+            params.push(Box::new(s.to_owned()));
+        }
+        sql.push_str(" ORDER BY last_seen DESC LIMIT ");
+        sql.push_str(&limit.to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(std::convert::AsRef::as_ref).collect();
+        let mut rows = stmt.query(params_refs.as_slice())?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let state_str: String = r.get(7)?;
+            let state: TicketState = state_str.parse().map_err(|e: String| {
+                rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, e.into())
+            })?;
+            let first_seen: String = r.get(8)?;
+            let last_seen: String = r.get(9)?;
+            let snooze_until: Option<String> = r.get(10)?;
+            out.push(IntakeRow {
+                task_id: r.get(0)?,
+                source_id: r.get(1)?,
+                provider: r.get(2)?,
+                run_id: r.get(3)?,
+                triage_decision: r.get(4)?,
+                duplicate_of: r.get(5)?,
+                priority: r.get(6)?,
+                state,
+                first_seen: DateTime::parse_from_rfc3339(&first_seen)
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            8,
+                            rusqlite::types::Type::Text,
+                            e.to_string().into(),
+                        )
+                    })?
+                    .with_timezone(&Utc),
+                last_seen: DateTime::parse_from_rfc3339(&last_seen)
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            9,
+                            rusqlite::types::Type::Text,
+                            e.to_string().into(),
+                        )
+                    })?
+                    .with_timezone(&Utc),
+                snooze_until: snooze_until
+                    .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
+                    .transpose()
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            10,
+                            rusqlite::types::Type::Text,
+                            e.to_string().into(),
+                        )
+                    })?,
+                callback_token: r.get(11)?,
+                tg_chat_id: r.get(12)?,
+                tg_message_id: r.get(13)?,
+            });
+        }
+        Ok(out)
+    }
+
     /// Returns the `run_id` of an active duplicate run for the given task,
     /// if one exists. Used by Tier-1 PreFilter.
     pub fn lookup_active_run(&self, task_id: &str) -> rusqlite::Result<Option<String>> {
@@ -684,6 +768,58 @@ mod repo_tests {
         let fetched = repo.fetch("linear:wsp1/ABC-1").unwrap().unwrap();
         assert_eq!(fetched.state, TicketState::Seen);
         assert_eq!(fetched.task_id, "linear:wsp1/ABC-1");
+    }
+
+    #[test]
+    fn list_all_returns_rows_in_descending_last_seen_order() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let mut older = sample_row("linear:wsp1/A-1", TicketState::Seen);
+        older.last_seen = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut newer = sample_row("linear:wsp1/A-2", TicketState::Triaged);
+        newer.last_seen = chrono::DateTime::parse_from_rfc3339("2026-05-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        repo.insert(&older).unwrap();
+        repo.insert(&newer).unwrap();
+        let listed = repo.list_all(None, 100).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].task_id, "linear:wsp1/A-2");
+        assert_eq!(listed[1].task_id, "linear:wsp1/A-1");
+    }
+
+    #[test]
+    fn list_all_filters_by_source() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        let mut a = sample_row("linear:wsp1/A-1", TicketState::Seen);
+        a.source_id = "alpha".into();
+        let mut b = sample_row("linear:wsp1/B-1", TicketState::Seen);
+        b.source_id = "beta".into();
+        repo.insert(&a).unwrap();
+        repo.insert(&b).unwrap();
+        let alpha_only = repo.list_all(Some("alpha"), 100).unwrap();
+        assert_eq!(alpha_only.len(), 1);
+        assert_eq!(alpha_only[0].source_id, "alpha");
+        let none = repo.list_all(Some("zeta"), 100).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn list_all_respects_limit() {
+        let conn = db_with_schema();
+        let repo = IntakeRepo::new(&conn);
+        for i in 0..5 {
+            repo.insert(&sample_row(
+                &format!("linear:wsp1/L-{i}"),
+                TicketState::Seen,
+            ))
+            .unwrap();
+        }
+        let listed = repo.list_all(None, 3).unwrap();
+        assert_eq!(listed.len(), 3);
     }
 
     #[test]

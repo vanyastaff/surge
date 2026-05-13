@@ -131,6 +131,12 @@ enum Commands {
         cmd: TrackerCommand,
     },
 
+    /// Inspect tracker-intake state (ticket index, run linkage).
+    Intake {
+        #[command(subcommand)]
+        command: commands::intake::IntakeCommand,
+    },
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -289,6 +295,7 @@ async fn main() -> Result<()> {
             | Commands::Artifact { .. }
             | Commands::MigrateSpec(_)
             | Commands::Tracker { .. }
+            | Commands::Intake { .. }
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
             | Commands::Profile { .. }
@@ -458,6 +465,10 @@ async fn run_command(command: Commands) -> Result<()> {
         Commands::Tracker { cmd } => {
             let config = SurgeConfig::load_or_default()?;
             commands::tracker::run(cmd, config).await?;
+        },
+
+        Commands::Intake { command } => {
+            commands::intake::run(command)?;
         },
 
         Commands::Daemon { command } => {
