@@ -5,7 +5,8 @@
 use std::str::FromStr;
 use surge_acp::bridge::acp_bridge::AcpBridge;
 use surge_acp::bridge::error::{
-    BridgeError, CloseSessionError, OpenSessionError, ReplyToToolError, SendMessageError,
+    BridgeError, CloseSessionError, OpenSessionError, ReplyToPermissionError, ReplyToToolError,
+    SendMessageError,
 };
 use surge_acp::bridge::event::{BridgeEvent, ToolResultPayload};
 use surge_acp::bridge::facade::BridgeFacade;
@@ -34,6 +35,14 @@ impl BridgeFacade for MinimalMock {
         _: String,
         _: ToolResultPayload,
     ) -> Result<(), ReplyToToolError> {
+        Ok(())
+    }
+    async fn reply_to_permission(
+        &self,
+        _: SessionId,
+        _: String,
+        _: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), ReplyToPermissionError> {
         Ok(())
     }
     async fn session_state(&self, _: SessionId) -> Result<SessionState, BridgeError> {

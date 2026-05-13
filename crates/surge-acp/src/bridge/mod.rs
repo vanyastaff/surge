@@ -46,6 +46,13 @@ pub use sandbox::{AlwaysAllowSandbox, DenyListSandbox, Sandbox, SandboxDecision}
 pub mod sandbox_resolver;
 pub use sandbox_resolver::{ResolveContext, SandboxResolveError, resolve_launch_flags};
 
+// Re-exports from the ACP SDK that downstream callers (engine, doctor,
+// tests) need to construct `reply_to_permission` arguments.
+pub use agent_client_protocol::{
+    PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
+    SelectedPermissionOutcome,
+};
+
 pub mod tools;
 pub use tools::{ToolCategory, ToolDef};
 

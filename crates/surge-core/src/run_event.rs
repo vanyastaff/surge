@@ -34,10 +34,15 @@ pub struct VersionedEventPayload {
 }
 
 impl VersionedEventPayload {
+    /// Wrap a payload with the current schema version
+    /// ([`crate::migrations::MAX_SUPPORTED_VERSION`]).
+    ///
+    /// New writes always go out at the latest schema version. The migration
+    /// chain handles older versions on read.
     #[must_use]
     pub fn new(payload: EventPayload) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: crate::migrations::MAX_SUPPORTED_VERSION,
             payload,
         }
     }
@@ -268,6 +273,29 @@ pub enum EventPayload {
         decision: ElevationDecision,
         remember: bool,
     },
+    /// Operator failed to respond to an elevation within
+    /// [`crate::approvals::ApprovalConfig::resolved_elevation_timeout`]. The
+    /// engine implicitly denied the request and replied `Cancelled` to the
+    /// agent. Always paired with a `SandboxElevationDecided` with
+    /// `decision: Deny, remember: false` so `surge replay` keeps a single
+    /// canonical decision shape.
+    ///
+    /// Schema v2.
+    SandboxElevationTimedOut {
+        node: NodeKey,
+        capability: String,
+        elapsed_seconds: u32,
+    },
+    /// The detected runtime binary version is below the declared
+    /// [`crate::runtime::RuntimeVersionPolicy::min_version`]. Warn-only —
+    /// surge proceeds with the run.
+    ///
+    /// Schema v2.
+    RuntimeVersionWarning {
+        runtime: crate::runtime::RuntimeKind,
+        found_version: String,
+        min_version: String,
+    },
     HookExecuted {
         hook_id: String,
         exit_status: i32,
@@ -422,6 +450,8 @@ impl EventPayload {
             Self::ApprovalDecided { .. } => "ApprovalDecided",
             Self::SandboxElevationRequested { .. } => "SandboxElevationRequested",
             Self::SandboxElevationDecided { .. } => "SandboxElevationDecided",
+            Self::SandboxElevationTimedOut { .. } => "SandboxElevationTimedOut",
+            Self::RuntimeVersionWarning { .. } => "RuntimeVersionWarning",
             Self::HookExecuted { .. } => "HookExecuted",
             Self::OutcomeRejectedByHook { .. } => "OutcomeRejectedByHook",
             Self::TokensConsumed { .. } => "TokensConsumed",
@@ -594,7 +624,13 @@ mod tests {
             terminal_node: NodeKey::try_from("end").unwrap(),
         };
         let v = VersionedEventPayload::new(inner.clone());
-        assert_eq!(v.schema_version(), 1);
+        // New writes always go out at MAX_SUPPORTED_VERSION (bumped to 2 in
+        // the schema v2 migration that introduced SandboxElevationTimedOut +
+        // RuntimeVersionWarning).
+        assert_eq!(
+            v.schema_version(),
+            crate::migrations::MAX_SUPPORTED_VERSION,
+        );
         assert_eq!(v.payload(), &inner);
     }
 

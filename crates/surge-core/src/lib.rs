@@ -103,7 +103,7 @@ pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
-pub use migrations::{IdentityV1, MigrationChain, migrate_payload};
+pub use migrations::{IdentityV1, IdentityV2, MigrationChain, migrate_payload};
 pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;
 pub use profile::bundled::{BUNDLED_COUNT, BundledRegistry};

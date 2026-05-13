@@ -145,6 +145,17 @@ impl BridgeFacade for RealAcpBridge {
         self.inner.reply_to_tool(session, call_id, payload).await
     }
 
+    async fn reply_to_permission(
+        &self,
+        session: SessionId,
+        request_id: String,
+        response: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        self.inner
+            .reply_to_permission(session, request_id, response)
+            .await
+    }
+
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
         self.inner.subscribe()
     }

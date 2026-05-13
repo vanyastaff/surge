@@ -138,7 +138,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** integration test against the existing mock ACP agent (`crates/surge-acp/src/bin/mock_acp_agent.rs`) — emit `RequestPermissionRequest`, assert `SandboxElevationRequested` appears in the event log at a deterministic seq.
   - **Depends on Task 4.**
 
-- [ ] **Task 8: Route elevation decisions through `surge-notify` and back to ACP.**
+- [x] **Task 8: Route elevation decisions through `surge-notify` and back to ACP.**
   - `crates/surge-orchestrator/src/engine/elevation.rs` dispatches a notification via the existing `NotificationChannel` trait, one per declared `elevation_channels` in `ApprovalConfig` (lives in `crates/surge-core/src/approvals.rs:5-22`; already has `elevation: bool` defaulted to `true` and `elevation_channels: Vec<ApprovalChannel>` fields). REUSE existing card/template surface — do **not** add a new notify trait.
   - ADD to `ApprovalConfig`: `pub elevation_timeout: Option<humantime_serde::Serde<Duration>>` with default 24h (use existing `humantime-serde` workspace dep).
   - On approval decision: append `EventPayload::SandboxElevationDecided { node, decision: ElevationDecision::*, remember }` (existing payload shape — see run_event.rs:266-270) and fulfil the `PendingElevation` oneshot with `RequestPermissionResponse { outcome: Selected { option_id } | Cancelled, meta: None }`.
@@ -149,7 +149,7 @@ Open questions deferred (out of scope for this milestone, captured in follow-up)
   - **Tests:** integration test driving the full loop (mock ACP request → mock notify channel → injected decision → assert agent receives `RequestPermissionResponse` with the expected outcome). Timeout test using `tokio::time::pause()` + `advance()`.
   - **Depends on Task 7.**
 
-- [ ] **Task 8b: Schema migration v1 → v2 for new event variants.**
+- [x] **Task 8b: Schema migration v1 → v2 for new event variants.**
   - Tasks 8 and 12 introduce two new `EventPayload` variants (`SandboxElevationTimedOut` and `RuntimeVersionWarning`). Bump `MAX_SUPPORTED_VERSION` to 2 in `crates/surge-core/src/migrations/mod.rs` and add a `MigrationV1ToV2` impl of the `Migration` trait that defers to the v1 identity decoder (additive change — old persisted bytes never contained the new variants, so they parse cleanly).
   - Update `MigrationChain::new()` to register `MigrationV1ToV2`. Update `VersionedEventPayload::new(payload)` to write `schema_version: 2` by default.
   - **Files:** `crates/surge-core/src/migrations/mod.rs`, `crates/surge-core/src/run_event.rs`.

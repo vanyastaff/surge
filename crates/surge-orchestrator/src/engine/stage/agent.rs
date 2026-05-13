@@ -580,43 +580,15 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 options,
                 ..
             } => {
-                tracing::info!(
-                    target: "surge_orch.elevation",
-                    session = ?session_id,
-                    request_id = %request_id,
-                    capability = %capability,
-                    tool = %tool,
-                    "elevation requested by agent — appending SandboxElevationRequested",
-                );
-                p.writer
-                    .append_event(VersionedEventPayload::new(
-                        EventPayload::SandboxElevationRequested {
-                            node: p.node.clone(),
-                            capability: capability.clone(),
-                        },
-                    ))
-                    .await
-                    .map_err(|e| StageError::Storage(e.to_string()))?;
-
-                let pending_count = p
-                    .pending_elevations
-                    .register(crate::engine::elevation::PendingElevation {
-                        session: session_id,
-                        request_id: request_id.clone(),
-                        node: p.node.clone(),
-                        capability,
-                        tool,
-                        options,
-                        requested_at: chrono::Utc::now(),
-                    })
-                    .await;
-                if pending_count >= crate::engine::elevation::PENDING_REGISTRY_WARN_THRESHOLD {
-                    tracing::warn!(
-                        target: "surge_orch.elevation",
-                        pending_count,
-                        "engine pending-elevation registry growing — approval channels may be slow",
-                    );
-                }
+                handle_permission_request(
+                    &p,
+                    session_id,
+                    request_id,
+                    tool,
+                    capability,
+                    options,
+                )
+                .await?;
             },
             BridgeEvent::SessionEnded { reason, .. } => {
                 let disposition = match &reason {
@@ -1273,6 +1245,183 @@ fn safe_declared_artifact_path(declared_path: &str) -> Option<PathBuf> {
     }
 
     has_normal_component.then(|| path.to_path_buf())
+}
+
+/// Inline handler for `BridgeEvent::PermissionRequested` that:
+///   1. appends `SandboxElevationRequested` to the event log,
+///   2. registers the request in `PendingElevations`,
+///   3. `select!`s between the operator's decision and `elevation_timeout`,
+///   4. appends `SandboxElevationDecided` (and `SandboxElevationTimedOut` on
+///      the timeout path),
+///   5. calls `AcpBridge::reply_to_permission` to release the agent.
+///
+/// Holding the agent stage on this handler matches ACP semantics: the agent
+/// itself is blocked on its `request_permission` call until surge replies,
+/// so there is no concurrent agent activity to drain.
+#[allow(clippy::too_many_lines)]
+async fn handle_permission_request(
+    p: &AgentStageParams<'_>,
+    session_id: surge_core::id::SessionId,
+    request_id: String,
+    tool: String,
+    capability: String,
+    options: Vec<String>,
+) -> Result<(), StageError> {
+    use agent_client_protocol::{
+        PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse,
+        SelectedPermissionOutcome,
+    };
+    use surge_core::run_event::ElevationDecision;
+    use tokio::time::sleep;
+
+    tracing::info!(
+        target: "surge_orch.elevation",
+        session = ?session_id,
+        request_id = %request_id,
+        capability = %capability,
+        tool = %tool,
+        "elevation requested by agent — appending SandboxElevationRequested",
+    );
+    p.writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::SandboxElevationRequested {
+                node: p.node.clone(),
+                capability: capability.clone(),
+            },
+        ))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+
+    let (rx, pending_count) = p
+        .pending_elevations
+        .register(crate::engine::elevation::PendingElevation {
+            session: session_id,
+            request_id: request_id.clone(),
+            node: p.node.clone(),
+            capability: capability.clone(),
+            tool: tool.clone(),
+            options: options.clone(),
+            requested_at: chrono::Utc::now(),
+        })
+        .await;
+    if pending_count >= crate::engine::elevation::PENDING_REGISTRY_WARN_THRESHOLD {
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            pending_count,
+            "engine pending-elevation registry growing — approval channels may be slow",
+        );
+    }
+
+    // Resolve the per-stage elevation timeout. The ACP `approvals_override`
+    // takes precedence; otherwise we fall back to the configured default
+    // (24 h, per ApprovalConfig::resolved_elevation_timeout).
+    let approval_cfg = p
+        .agent_config
+        .approvals_override
+        .clone()
+        .unwrap_or_default();
+    let timeout = approval_cfg.resolved_elevation_timeout();
+
+    tracing::debug!(
+        target: "surge_orch.elevation",
+        session = ?session_id,
+        request_id = %request_id,
+        timeout_secs = timeout.as_secs(),
+        "awaiting operator decision",
+    );
+
+    let outcome = tokio::select! {
+        result = rx => result.ok(),
+        () = sleep(timeout) => None,
+    };
+
+    let response = if let Some(decision) = outcome {
+        tracing::info!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            decision = ?decision.decision,
+            remember = decision.remember,
+            "elevation decided by operator",
+        );
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationDecided {
+                    node: p.node.clone(),
+                    decision: decision.decision,
+                    remember: decision.remember,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+
+        match decision.decision {
+            ElevationDecision::Allow | ElevationDecision::AllowAndRemember => {
+                RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                    SelectedPermissionOutcome::new(PermissionOptionId::new(
+                        decision.option_id.clone(),
+                    )),
+                ))
+            },
+            ElevationDecision::Deny => RequestPermissionResponse::new(
+                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                    PermissionOptionId::new(decision.option_id.clone()),
+                )),
+            ),
+        }
+    } else {
+        // Timeout path. Remove the pending entry so a late
+        // `Engine::resolve_elevation` cannot fire into the void.
+        let _ = p.pending_elevations.cancel(session_id, &request_id).await;
+        let elapsed_seconds = u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX);
+        tracing::warn!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            elapsed_seconds,
+            "elevation timed out — denying by default",
+        );
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationTimedOut {
+                    node: p.node.clone(),
+                    capability: capability.clone(),
+                    elapsed_seconds,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        p.writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::SandboxElevationDecided {
+                    node: p.node.clone(),
+                    decision: ElevationDecision::Deny,
+                    remember: false,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+    };
+
+    if let Err(err) = p
+        .bridge
+        .reply_to_permission(session_id, request_id.clone(), response)
+        .await
+    {
+        // The bridge rejection is non-fatal to the stage: the agent is
+        // already gone (SessionGone) or the request_id is unknown (already
+        // resolved). Log and continue — the OutcomeReported / SessionEnded
+        // path will pick up the stage status.
+        tracing::error!(
+            target: "surge_orch.elevation",
+            session = ?session_id,
+            request_id = %request_id,
+            error = ?err,
+            "bridge.reply_to_permission failed; agent may have already disconnected",
+        );
+    }
+    Ok(())
 }
 
 fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {

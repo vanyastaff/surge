@@ -17,7 +17,14 @@ use crate::run_event::{EventPayload, VersionedEventPayload};
 pub const MIN_SUPPORTED_VERSION: u32 = 1;
 
 /// Maximum schema version this build understands.
-pub const MAX_SUPPORTED_VERSION: u32 = 1;
+///
+/// **v2 (introduced 2026-05):** adds [`EventPayload::SandboxElevationTimedOut`]
+/// and [`EventPayload::RuntimeVersionWarning`] variants. Purely additive — old
+/// v1 payloads parse cleanly through the v2 decoder (they simply never
+/// contain the new variants), but the wrapper's `schema_version` is bumped
+/// from 1 to 2 for new writes so downstream readers know the variants are in
+/// scope.
+pub const MAX_SUPPORTED_VERSION: u32 = 2;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -48,17 +55,37 @@ impl Migration for IdentityV1 {
     }
 }
 
+/// Identity migration for v2 — the schema bump that introduced
+/// `SandboxElevationTimedOut` and `RuntimeVersionWarning`. The wire shape is
+/// unchanged from v1 (same JSON-encoded [`VersionedEventPayload`] wrapper),
+/// so decoding is identical; the wrapper's `schema_version` field is the
+/// only signal that distinguishes v1 and v2 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV2;
+
+impl Migration for IdentityV2 {
+    fn version(&self) -> u32 {
+        2
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v2 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
 }
 
 impl MigrationChain {
-    /// Build the default chain. Contains [`IdentityV1`].
+    /// Build the default chain. Contains [`IdentityV1`] and [`IdentityV2`].
     #[must_use]
     pub fn new() -> Self {
         Self {
-            migrations: vec![Box::new(IdentityV1)],
+            migrations: vec![Box::new(IdentityV1), Box::new(IdentityV2)],
         }
     }
 
@@ -111,4 +138,94 @@ impl Default for MigrationChain {
 /// See [`MigrationChain::migrate`].
 pub fn migrate_payload(version: u32, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
     MigrationChain::new().migrate(version, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::NodeKey;
+    use crate::run_event::EventPayload;
+
+    fn make_v1_bytes(payload: EventPayload) -> Vec<u8> {
+        // Manually craft a v1-shape wrapper so the migration is exercised with
+        // realistic on-disk bytes (rather than re-using the writer that now
+        // emits v2 by default).
+        let wrapper = serde_json::json!({
+            "schema_version": 1,
+            "payload": payload,
+        });
+        serde_json::to_vec(&wrapper).expect("serialize v1 wrapper")
+    }
+
+    fn make_v2_bytes(payload: EventPayload) -> Vec<u8> {
+        let wrapper = VersionedEventPayload::new(payload);
+        serde_json::to_vec(&wrapper).expect("serialize v2 wrapper")
+    }
+
+    #[test]
+    fn v1_bytes_round_trip_through_chain() {
+        let payload = EventPayload::SandboxElevationRequested {
+            node: NodeKey::try_from("impl_1").unwrap(),
+            capability: "fs-write:./src".into(),
+        };
+        let bytes = make_v1_bytes(payload.clone());
+        let migrated = migrate_payload(1, &bytes).expect("v1 migrates");
+        assert_eq!(migrated, payload);
+    }
+
+    #[test]
+    fn v2_bytes_round_trip_through_chain() {
+        let payload = EventPayload::SandboxElevationTimedOut {
+            node: NodeKey::try_from("impl_1").unwrap(),
+            capability: "network:api.example.com".into(),
+            elapsed_seconds: 86_400,
+        };
+        let bytes = make_v2_bytes(payload.clone());
+        let migrated = migrate_payload(2, &bytes).expect("v2 migrates");
+        assert_eq!(migrated, payload);
+    }
+
+    #[test]
+    fn writer_emits_max_supported_version() {
+        let wrapper = VersionedEventPayload::new(EventPayload::SandboxElevationTimedOut {
+            node: NodeKey::try_from("impl_1").unwrap(),
+            capability: "shell:bash".into(),
+            elapsed_seconds: 30,
+        });
+        assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
+        assert_eq!(wrapper.schema_version, 2);
+    }
+
+    #[test]
+    fn schema_version_too_new_is_rejected() {
+        let err = migrate_payload(99, b"{}").unwrap_err();
+        assert!(matches!(
+            err,
+            SurgeError::SchemaTooNew { found: 99, max: 2 }
+        ));
+    }
+
+    #[test]
+    fn schema_version_too_old_is_rejected() {
+        // MIN_SUPPORTED_VERSION is 1, so version 0 is too old.
+        let err = migrate_payload(0, b"{}").unwrap_err();
+        assert!(matches!(
+            err,
+            SurgeError::SchemaTooOld { found: 0, min: 1 }
+        ));
+    }
+
+    #[test]
+    fn v1_bytes_handle_runtime_version_warning_as_unknown_variant() {
+        // RuntimeVersionWarning was introduced in v2. Old v1 bytes will never
+        // serialize it, so we only need to verify the v2 path round-trips.
+        let payload = EventPayload::RuntimeVersionWarning {
+            runtime: crate::runtime::RuntimeKind::ClaudeCode,
+            found_version: "1.9.0".into(),
+            min_version: ">=2.0.0".into(),
+        };
+        let bytes = make_v2_bytes(payload.clone());
+        let migrated = migrate_payload(2, &bytes).expect("v2 migrates");
+        assert_eq!(migrated, payload);
+    }
 }

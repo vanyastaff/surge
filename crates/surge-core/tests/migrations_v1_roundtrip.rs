@@ -45,7 +45,7 @@ fn schema_v999_returns_schema_too_new() {
     match migrate_payload(999, &bytes) {
         Err(SurgeError::SchemaTooNew { found, max }) => {
             assert_eq!(found, 999);
-            assert_eq!(max, 1);
+            assert_eq!(max, surge_core::migrations::MAX_SUPPORTED_VERSION);
         },
         other => panic!("expected SchemaTooNew for v999, got {other:?}"),
     }

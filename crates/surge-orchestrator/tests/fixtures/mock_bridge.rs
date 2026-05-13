@@ -144,6 +144,15 @@ impl BridgeFacade for MockBridge {
         Ok(())
     }
 
+    async fn reply_to_permission(
+        &self,
+        _session: SessionId,
+        _request_id: String,
+        _response: agent_client_protocol::RequestPermissionResponse,
+    ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        Ok(())
+    }
+
     async fn session_state(&self, session: SessionId) -> Result<SessionState, BridgeError> {
         self.recorded_calls
             .lock()

@@ -1,6 +1,12 @@
 //! Approval policy and delivery channel types.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// Default timeout surge uses when the operator has not declared their own.
+/// Long because elevation requests legitimately span human-scale time
+/// (overnight, business-day boundaries).
+pub const DEFAULT_ELEVATION_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ApprovalConfig {
@@ -19,6 +25,13 @@ pub struct ApprovalConfig {
     /// Distinct from `HumanGateConfig::delivery_channels` (gate-explicit prompts).
     #[serde(default)]
     pub elevation_channels: Vec<ApprovalChannel>,
+    /// Timeout for ACP `request_permission` elevations. When the operator
+    /// fails to respond within this window the engine appends
+    /// `SandboxElevationTimedOut`, denies the request, and replies
+    /// `Cancelled` to the agent. `None` falls back to
+    /// [`DEFAULT_ELEVATION_TIMEOUT_SECS`].
+    #[serde(default, with = "humantime_serde::option")]
+    pub elevation_timeout: Option<Duration>,
 }
 
 impl Default for ApprovalConfig {
@@ -31,7 +44,18 @@ impl Default for ApprovalConfig {
             skill_approval: false,
             elevation: true,
             elevation_channels: Vec::new(),
+            elevation_timeout: None,
         }
+    }
+}
+
+impl ApprovalConfig {
+    /// Resolved elevation timeout: configured value or
+    /// [`DEFAULT_ELEVATION_TIMEOUT_SECS`].
+    #[must_use]
+    pub fn resolved_elevation_timeout(&self) -> Duration {
+        self.elevation_timeout
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_ELEVATION_TIMEOUT_SECS))
     }
 }
 
@@ -150,6 +174,7 @@ mod tests {
             elevation_channels: vec![ApprovalChannel::Telegram {
                 chat_id_ref: "$DEFAULT".into(),
             }],
+            elevation_timeout: Some(Duration::from_secs(3_600)),
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: ApprovalConfig = toml::from_str(&toml_s).unwrap();

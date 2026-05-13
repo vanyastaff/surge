@@ -130,6 +130,15 @@ impl BridgeFacade for AutoOutcomeBridge {
         Ok(())
     }
 
+    async fn reply_to_permission(
+        &self,
+        _session: SessionId,
+        _request_id: String,
+        _response: surge_acp::bridge::RequestPermissionResponse,
+    ) -> Result<(), surge_acp::bridge::ReplyToPermissionError> {
+        Ok(())
+    }
+
     fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
         self.tx.subscribe()
     }
