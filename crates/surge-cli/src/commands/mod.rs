@@ -18,29 +18,29 @@ pub mod project;
 pub mod registry;
 pub mod tracker;
 
-// Fuzzy-resolve a spec id (full ULID, prefix, or filename) to a `SpecFile`
-// loaded from `.surge/specs/`. Used by analytics/insights/memory subcommands
-// that still query historical data tagged with the legacy spec_id.
+// Fuzzy-resolve a spec id (full ULID, prefix, or filename) to a
+// `LegacySpecFile` loaded from `.surge/specs/`. Used by analytics /
+// insights / memory subcommands that still query historical persistence
+// data tagged with the legacy spec id.
 //
-// TODO: Phase 7 — when surge-spec is deleted, these analytics queries must
-// migrate to run_id (engine path) or be retired alongside it.
-#[allow(deprecated)]
-pub fn load_spec_by_id(id: &str) -> anyhow::Result<surge_spec::SpecFile> {
+// When those queries migrate to `run_id` (engine path), this helper and
+// the surrounding `crate::legacy_spec` module can be retired.
+pub fn load_spec_by_id(id: &str) -> anyhow::Result<crate::legacy_spec::LegacySpecFile> {
     let path = std::path::Path::new(id);
     if path.exists() {
-        return Ok(surge_spec::SpecFile::load(path)?);
+        return crate::legacy_spec::LegacySpecFile::load(path);
     }
 
-    let specs_dir = surge_spec::SpecFile::specs_dir()?;
+    let specs_dir = crate::legacy_spec::LegacySpecFile::specs_dir()?;
     let with_ext = specs_dir.join(format!("{id}.toml"));
     if with_ext.exists() {
-        return Ok(surge_spec::SpecFile::load(&with_ext)?);
+        return crate::legacy_spec::LegacySpecFile::load(&with_ext);
     }
 
-    let specs = surge_spec::SpecFile::list_all()?;
+    let specs = crate::legacy_spec::LegacySpecFile::list_all()?;
     for (spec_path, spec_file) in specs {
         if spec_file.spec.id.to_string().contains(id) {
-            return Ok(surge_spec::SpecFile::load(&spec_path)?);
+            return crate::legacy_spec::LegacySpecFile::load(&spec_path);
         }
     }
 

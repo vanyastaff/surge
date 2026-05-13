@@ -18,6 +18,7 @@ use clap::Args;
 use tracing::{debug, info, warn};
 
 use super::mapping::{MappingResult, MappingWarning, map_spec_to_flow};
+use crate::legacy_spec::LegacySpecFile;
 
 const EXIT_CODE_WARNINGS: i32 = 2;
 
@@ -80,9 +81,8 @@ pub fn run(args: MigrateSpecArgs) -> Result<()> {
     Ok(())
 }
 
-#[allow(deprecated)]
-fn load_legacy_spec(path: &std::path::Path) -> Result<surge_spec::SpecFile> {
-    surge_spec::SpecFile::load(path).with_context(|| {
+fn load_legacy_spec(path: &std::path::Path) -> Result<LegacySpecFile> {
+    LegacySpecFile::load(path).with_context(|| {
         format!("migrate-spec: failed to read legacy spec at {}", path.display())
     })
 }

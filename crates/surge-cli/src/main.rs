@@ -13,6 +13,7 @@ use surge_core::SurgeConfig;
 use tokio::signal;
 
 mod commands;
+mod legacy_spec;
 
 use commands::{
     agent::AgentCommands, analytics::AnalyticsCommands, bootstrap::BootstrapArgs,

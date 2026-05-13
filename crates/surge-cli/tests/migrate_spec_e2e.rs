@@ -1,24 +1,31 @@
 //! End-to-end tests for `surge migrate-spec`.
 //!
 //! Each test builds a legacy `Spec` programmatically, persists it as a
-//! `.spec.toml` via the deprecated [`surge_spec::SpecFile::save`], runs the
-//! `surge` binary against it, and snapshots the resulting `flow.toml` via
-//! `insta`. The mapping reassigns subtask IDs to `sN`, so output is
-//! deterministic regardless of the input ULIDs.
-
-#![allow(deprecated)]
+//! `.spec.toml` via a local DTO that mirrors the on-disk shape the
+//! `surge-spec` crate used to own, runs the `surge` binary against it, and
+//! snapshots the resulting `flow.toml` via `insta`. The mapping reassigns
+//! subtask IDs to `sN`, so output is deterministic regardless of the input
+//! ULIDs.
 
 use std::path::Path;
 
 use assert_cmd::Command;
+use serde::Serialize;
 use surge_core::spec::{AcceptanceCriteria, Complexity, Spec, Subtask};
 use surge_core::id::SubtaskId;
-use surge_spec::SpecFile;
 use tempfile::TempDir;
+
+/// Minimal serializer for the legacy `.spec.toml` shape — duplicated here
+/// because the binary's `legacy_spec` module is not exported.
+#[derive(Serialize)]
+struct LegacySpecFile {
+    spec: Spec,
+}
 
 fn write_spec(dir: &TempDir, name: &str, spec: Spec) -> std::path::PathBuf {
     let path = dir.path().join(format!("{name}.spec.toml"));
-    SpecFile { spec, path: None }.save(&path).unwrap();
+    let content = toml::to_string_pretty(&LegacySpecFile { spec }).unwrap();
+    std::fs::write(&path, content).unwrap();
     path
 }
 

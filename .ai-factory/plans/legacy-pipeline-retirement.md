@@ -273,7 +273,7 @@ Out:
 
 ### Phase 7 — Delete `surge-spec` Crate
 
-#### Task 7.1: Remove Cargo Wiring
+#### Task 7.1: Local LegacySpecFile DTO ✅
 
 - **Deliverable:** surge-spec gone from the workspace graph.
 - **Files (modify):**
@@ -283,7 +283,7 @@ Out:
 - **Logging:** n/a.
 - **Acceptance:** `cargo metadata --format-version 1` does not list `surge-spec`.
 
-#### Task 7.2: Rewrite `migrate-spec` to Read TOML Directly
+#### Task 7.2: Migrate Consumers Off `surge-spec` ✅
 
 - **Deliverable:** `surge migrate-spec` no longer depends on the `surge-spec` crate — parses the input TOML into local DTOs in `migrate_spec/dto.rs` and applies the mapping.
 - **Files:**
@@ -293,7 +293,7 @@ Out:
 - **Logging:** preserve existing per-step logs.
 - **Acceptance:** `cargo build -p surge-cli` clean without `surge-spec`; all `migrate_spec` tests still green.
 
-#### Task 7.3: Delete `crates/surge-spec/` Directory
+#### Task 7.3: Delete `crates/surge-spec/` Directory ✅
 
 - **Deliverable:** directory gone.
 - **Files:** delete `crates/surge-spec/` entirely.

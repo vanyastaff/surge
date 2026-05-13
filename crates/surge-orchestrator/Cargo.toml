@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 surge-core = { workspace = true }
 surge-acp = { workspace = true }
-surge-spec = { workspace = true }
 surge-git = { workspace = true }
 surge-notify = { workspace = true }
 surge-persistence = { workspace = true }
