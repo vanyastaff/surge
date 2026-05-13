@@ -16,6 +16,8 @@ tokio = { workspace = true }
 tracing.workspace = true
 
 teloxide.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
 
 surge-core.workspace = true
 surge-notify.workspace = true

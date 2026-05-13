@@ -7478,6 +7478,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
  "hex",
  "serde",
  "serde_json",
@@ -7490,6 +7491,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "ulid",
  "wiremock",

@@ -8,6 +8,7 @@
 pub mod callback;
 pub mod dispatch;
 pub mod recover;
+pub mod run;
 
 pub use callback::{
     Admission, CallbackCtx, CallbackOutcome, CallbackParseError, CallbackVerb, EngineResolver,
@@ -15,3 +16,4 @@ pub use callback::{
 };
 pub use dispatch::{CockpitCtx, DispatchOutcome, dispatch};
 pub use recover::{ReconcileReport, reconcile_open_cards};
+pub use run::{CockpitRuntime, UpdateRoutes, drive_tap_loop, drive_update_loop, run_cockpit};
