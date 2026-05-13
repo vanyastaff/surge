@@ -11,6 +11,7 @@
 
 pub mod card;
 pub mod cockpit;
+pub mod commands;
 pub mod error;
 
 pub use card::{
