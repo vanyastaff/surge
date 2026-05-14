@@ -1,7 +1,7 @@
 //! Test utilities for `surge-intake`. Always compiled (not feature-gated)
 //! so consumer crates can use `MockTaskSource` in their integration tests.
 
-use crate::source::TaskSource;
+use crate::source::{MergeReadiness, TaskSource};
 use crate::types::{TaskDetails, TaskEvent, TaskId, TaskSummary};
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ pub struct MockTaskSource {
     posted_comments: Mutex<Vec<(TaskId, String)>>,
     recorded_labels: Mutex<Vec<(TaskId, String, bool)>>,
     fail_post_comment: Mutex<bool>,
+    merge_readiness_override: Mutex<Option<MergeReadiness>>,
 }
 
 impl MockTaskSource {
@@ -37,7 +38,14 @@ impl MockTaskSource {
             posted_comments: Mutex::new(Vec::new()),
             recorded_labels: Mutex::new(Vec::new()),
             fail_post_comment: Mutex::new(false),
+            merge_readiness_override: Mutex::new(None),
         }
+    }
+
+    /// Force [`TaskSource::check_merge_readiness`] to return the given
+    /// verdict (instead of the default `Blocked` from the trait).
+    pub async fn arm_merge_readiness(&self, readiness: MergeReadiness) {
+        *self.merge_readiness_override.lock().await = Some(readiness);
     }
 
     /// Queue an event to be emitted by `watch_for_tasks`.
@@ -155,6 +163,15 @@ impl TaskSource for MockTaskSource {
             .map(|d| d.labels.clone())
             .unwrap_or_default())
     }
+
+    async fn check_merge_readiness(&self, _id: &TaskId) -> Result<MergeReadiness> {
+        if let Some(r) = self.merge_readiness_override.lock().await.clone() {
+            return Ok(r);
+        }
+        Ok(MergeReadiness::Blocked(
+            "mock: no readiness override armed".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -211,5 +228,27 @@ mod tests {
         let labels = src.recorded_labels().await;
         assert_eq!(labels.len(), 1);
         assert!(labels[0].2);
+    }
+
+    #[tokio::test]
+    async fn mock_merge_readiness_defaults_to_blocked() {
+        let src = MockTaskSource::new("mock:test", "mock");
+        let id = TaskId::try_new("mock:test#1").unwrap();
+        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        assert!(matches!(verdict, MergeReadiness::Blocked(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_merge_readiness_returns_armed_value() {
+        let src = MockTaskSource::new("mock:test", "mock");
+        let id = TaskId::try_new("mock:test#1").unwrap();
+        src.arm_merge_readiness(MergeReadiness::Ready).await;
+        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        assert_eq!(verdict, MergeReadiness::Ready);
+
+        src.arm_merge_readiness(MergeReadiness::Blocked("custom reason".into()))
+            .await;
+        let verdict = src.check_merge_readiness(&id).await.unwrap();
+        assert_eq!(verdict, MergeReadiness::Blocked("custom reason".into()));
     }
 }

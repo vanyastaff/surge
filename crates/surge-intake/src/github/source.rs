@@ -1,13 +1,13 @@
 //! `GitHubIssuesTaskSource` — `TaskSource` impl backed by GitHub REST.
 
 use crate::github::client::GitHubClient;
-use crate::source::TaskSource;
+use crate::source::{MergeReadiness, TaskSource};
 use crate::types::{TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary};
 use crate::{Error, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::{self, BoxStream};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -429,6 +429,165 @@ impl TaskSource for GitHubIssuesTaskSource {
     async fn read_labels(&self, id: &TaskId) -> Result<Vec<String>> {
         Ok(self.fetch_task(id).await?.labels)
     }
+
+    /// Evaluate whether the PR linked to this issue is ready to auto-merge.
+    ///
+    /// **MVP assumption:** the PR number equals the issue number. This is
+    /// the common GitHub workflow where Surge creates one PR per ticket
+    /// in the same numbering sequence. Multi-PR or branch-linked workflows
+    /// will need an explicit PR-to-issue mapping; tracked as a follow-up.
+    ///
+    /// Logical "not ready" outcomes (failing checks, missing approval,
+    /// PR not found, draft, merged) are returned as
+    /// [`MergeReadiness::Blocked`] with a human-readable reason. Transport
+    /// failures (network, auth, rate-limit) propagate as [`Error`].
+    async fn check_merge_readiness(&self, id: &TaskId) -> Result<MergeReadiness> {
+        let number = parse_issue_number(id.as_str())?;
+        let pulls = self
+            .client
+            .octocrab
+            .pulls(&self.client.owner, &self.client.repo);
+
+        // 1. Resolve the PR. A 404 here means the issue number is not
+        // backed by a PR — surface that as a clear blocked reason.
+        let pr = match pulls.get(number).await {
+            Ok(p) => p,
+            Err(octocrab::Error::GitHub { source, .. })
+                if source.message.to_lowercase().contains("not found") =>
+            {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "no pull request found for #{number} (Surge assumes PR# == issue#)"
+                )));
+            },
+            Err(e) => return Err(Self::map_octocrab_error(&e)),
+        };
+
+        // 2. Fast-fail on terminal PR states.
+        if pr.merged_at.is_some() {
+            return Ok(MergeReadiness::Blocked(format!(
+                "PR #{number} is already merged"
+            )));
+        }
+        if matches!(pr.draft, Some(true)) {
+            return Ok(MergeReadiness::Blocked(format!(
+                "PR #{number} is in draft state"
+            )));
+        }
+        if !matches!(pr.state, Some(octocrab::models::IssueState::Open)) {
+            return Ok(MergeReadiness::Blocked(format!(
+                "PR #{number} is not open"
+            )));
+        }
+
+        // 3. Inspect mergeable_state — only `Clean` and `HasHooks` proceed.
+        // See octocrab::models::pulls::MergeableState for canonical values.
+        use octocrab::models::pulls::MergeableState;
+        match pr.mergeable_state {
+            Some(MergeableState::Clean) | Some(MergeableState::HasHooks) => {
+                // proceed to review check
+            },
+            Some(MergeableState::Behind) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} is behind the base branch — rebase or merge upstream"
+                )));
+            },
+            Some(MergeableState::Blocked) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} is blocked by required checks or missing review"
+                )));
+            },
+            Some(MergeableState::Dirty) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} has merge conflicts"
+                )));
+            },
+            Some(MergeableState::Unstable) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} has non-required checks failing"
+                )));
+            },
+            Some(MergeableState::Draft) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} is in draft state"
+                )));
+            },
+            Some(MergeableState::Unknown) | None => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} mergeable_state not yet computed by GitHub"
+                )));
+            },
+            Some(other) => {
+                return Ok(MergeReadiness::Blocked(format!(
+                    "PR #{number} mergeable_state unrecognised ({other:?})"
+                )));
+            },
+        }
+
+        // 4. Reviews — need at least one APPROVED, no later CHANGES_REQUESTED.
+        let reviews_page = pulls
+            .list_reviews(number)
+            .per_page(100)
+            .send()
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
+
+        Ok(evaluate_reviews(number, &reviews_page.items))
+    }
+}
+
+/// Reduce a list of reviews to a Ready/Blocked verdict.
+///
+/// For each author we keep only their **latest** non-comment review
+/// (Approved / ChangesRequested / Dismissed). Comments and pending
+/// reviews don't count. A current `ChangesRequested` blocks; otherwise
+/// at least one current `Approved` is required.
+fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review]) -> MergeReadiness {
+    let mut latest_per_author: HashMap<String, &octocrab::models::pulls::Review> = HashMap::new();
+    for review in reviews {
+        // Reviews are listed in chronological order; later writes win.
+        let Some(state) = &review.state else {
+            continue;
+        };
+        if matches!(
+            state,
+            octocrab::models::pulls::ReviewState::Commented
+                | octocrab::models::pulls::ReviewState::Pending
+        ) {
+            continue;
+        }
+        let author = review
+            .user
+            .as_ref()
+            .map(|u| u.login.clone())
+            .unwrap_or_default();
+        latest_per_author.insert(author, review);
+    }
+
+    let has_changes_requested = latest_per_author.values().any(|r| {
+        matches!(
+            r.state,
+            Some(octocrab::models::pulls::ReviewState::ChangesRequested)
+        )
+    });
+    let approved_count = latest_per_author
+        .values()
+        .filter(|r| {
+            matches!(
+                r.state,
+                Some(octocrab::models::pulls::ReviewState::Approved)
+            )
+        })
+        .count();
+
+    if has_changes_requested {
+        return MergeReadiness::Blocked(format!(
+            "PR #{pr_number} has reviewers requesting changes"
+        ));
+    }
+    if approved_count == 0 {
+        return MergeReadiness::Blocked(format!("PR #{pr_number} has no approving reviews"));
+    }
+    MergeReadiness::Ready
 }
 
 fn parse_issue_number(task_id: &str) -> Result<u64> {

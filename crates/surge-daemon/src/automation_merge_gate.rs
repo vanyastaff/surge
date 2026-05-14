@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 use surge_intake::types::TaskId;
-use surge_intake::{AutomationPolicy, TaskSource, resolve_policy};
+use surge_intake::{AutomationPolicy, MergeReadiness, TaskSource, resolve_policy};
 use surge_orchestrator::engine::handle::RunOutcome;
 use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 use surge_persistence::intake::IntakeRepo;
@@ -32,16 +32,6 @@ use surge_persistence::intake_emit_log::{EmitEventKind, EmitKey, has, record};
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
-
-/// Result of a merge-readiness check against an external PR.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MergeReadiness {
-    /// All required checks are green and the PR has an approved review.
-    Ready,
-    /// One or more requirements failed; the human-readable reason is
-    /// posted to the tracker.
-    Blocked(String),
-}
 
 /// Stable label literals applied to the tracker ticket on each
 /// decision. Public for the docs renderer.
@@ -325,32 +315,32 @@ async fn apply_merge_decision(
     );
 }
 
-/// Decide whether an external PR is ready to auto-merge.
+/// Delegate the merge-readiness decision to the provider's
+/// [`TaskSource::check_merge_readiness`] implementation.
 ///
-/// **Currently stubbed** — the implementation always returns
-/// [`MergeReadiness::Blocked`] with a "not implemented" reason. Real
-/// readiness requires querying:
+/// Providers without a PR concept (Linear) return the default
+/// `Blocked("provider does not implement merge readiness checks")`,
+/// which is surfaced as a `merge-blocked` comment on the ticket so L3
+/// runs never silently fall through. GitHub queries the PR state and
+/// approving reviews; see `surge_intake::github::source`.
 ///
-/// - GitHub: `pull_request.merge_state_status == "clean"` plus the
-///   `check_runs` API for required checks plus `reviews` API for
-///   approval (via `octocrab`).
-/// - Linear: PR linkage is informational; merge intent flows through
-///   GitHub regardless.
-///
-/// A follow-up milestone adds a real `MergeReadinessCheck` plug-point.
-/// Until then the gate produces explicit `merge-blocked` comments so
-/// L3 runs never silently fall through.
-///
-/// The function is `async` so the real implementation can issue HTTP
-/// calls without changing the call site.
-#[allow(clippy::unused_async)]
-async fn check_merge_readiness(_source: &Arc<dyn TaskSource>, _task_id: &TaskId) -> MergeReadiness {
-    MergeReadiness::Blocked(
-        "PR readiness check is not implemented yet — \
-         this is a stub default that lands the L3 gate plumbing. \
-         Merge manually after verifying checks + review."
-            .into(),
-    )
+/// Transport failures (network, auth) are converted to a blocked
+/// reason — the gate retries on the next `RunFinished` because the
+/// `intake_emit_log` row is only written after both side-effects
+/// succeed.
+async fn check_merge_readiness(source: &Arc<dyn TaskSource>, task_id: &TaskId) -> MergeReadiness {
+    match source.check_merge_readiness(task_id).await {
+        Ok(verdict) => verdict,
+        Err(e) => {
+            warn!(
+                target: "intake::merge_gate",
+                error = %e,
+                task_id = %task_id,
+                "check_merge_readiness call failed — surfacing as blocked"
+            );
+            MergeReadiness::Blocked(format!("merge readiness check errored: {e}"))
+        },
+    }
 }
 
 #[cfg(test)]

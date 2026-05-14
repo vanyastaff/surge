@@ -94,10 +94,10 @@ must survive daemon restarts records into this table; retries no-op.
    `merge-proposed` or `merge-blocked` comment on the tracker; the actual
    PR-merge call is deferred. This separates "is this PR ready?" (a
    policy decision) from "perform a merge against GitHub's REST API" (an
-   integration surface). A future ADR plumbs the merge call through; until
-   then the gate produces explicit `merge-blocked` comments with a "PR
-   readiness check is not implemented yet" reason, so L3 runs never
-   silently fall through.
+   integration surface). A future ADR plumbs the merge call through.
+   Readiness itself is now real: `TaskSource::check_merge_readiness` has
+   a default `Blocked` impl for PR-less trackers (Linear) and a concrete
+   GitHub implementation (`mergeable_state` + reviews via `octocrab`).
 6. **External state changes reflect into the FSM.** When a tracker closes a
    ticket externally or adds `surge:disabled` mid-run, the `TaskRouter`
    forwards the event as `RouterOutput::ExternalUpdate`; the daemon calls
@@ -141,10 +141,10 @@ follow-up ADR with explicit per-provider semantics.
   - `surge-daemon::automation_merge_gate` (L3 gate consumer).
 - One new CLI subcommand: `surge intake list` (table + JSON outputs).
 - `RouterOutput` becomes `#[non_exhaustive]` and gains `ExternalUpdate`.
-- The L3 PR-readiness check is currently stubbed to return
-  `Blocked("not implemented yet")`. Operators see explicit
-  `merge-blocked` comments on every L3 run; the real check is the next
-  milestone's responsibility.
+- `TaskSource::check_merge_readiness` is part of the public trait, with
+  a default `Blocked` impl so non-GitHub providers degrade gracefully.
+  GitHub queries `mergeable_state` plus reviews; the actual
+  `octocrab.pulls().merge()` call remains deferred per rationale #5.
 - The `CadenceController` ships its algorithm + tests but is not yet wired
   into source poll loops. Doing so requires either a
   `TaskSource::set_poll_interval` method or a wrapping stream — both

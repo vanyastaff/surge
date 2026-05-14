@@ -130,11 +130,30 @@ consumer:
    `surge:merge-blocked` label.
 7. Records the side-effect in `intake_emit_log` so retries no-op.
 
-> **Current limitation.** The readiness check is stubbed to always return
-> `Blocked` with a "PR readiness check is not implemented yet" reason. The
-> gate plumbing is complete and visible (`surge:merge-blocked` lands on every
-> L3 run), but the actual GitHub-checks/review query is the next milestone's
-> responsibility. Merge manually after verifying.
+### GitHub readiness check
+
+`TaskSource::check_merge_readiness` is implemented for GitHub via
+[`octocrab`](https://docs.rs/octocrab/0.42). For an L3 ticket the gate:
+
+1. Resolves the PR (MVP assumption: PR number equals issue number — the
+   default surge workflow creates one PR per ticket in the same numbering
+   sequence; multi-PR or branch-linked workflows are a follow-up).
+2. Rejects terminal states up front: already merged, draft, or not open.
+3. Inspects `mergeable_state`: only `Clean` and `HasHooks` proceed.
+   `Behind`, `Blocked`, `Dirty`, `Unstable`, `Draft`, and `Unknown` each
+   produce a specific `Blocked(reason)`.
+4. Lists reviews and keeps the latest non-comment review per author.
+   At least one current `APPROVED` is required; any current
+   `CHANGES_REQUESTED` blocks.
+
+Linear (and any other PR-less provider) inherits the trait default that
+returns `Blocked("provider does not implement merge readiness checks")`,
+so L3 runs against them never silently fall through.
+
+> **Out of scope (next milestone).** The gate stops at posting
+> `merge-proposed` — the actual `octocrab.pulls().merge()` call is
+> deferred per ADR 0013 §5 so per-provider merge semantics (squash vs.
+> rebase vs. merge commit) can be opted into explicitly.
 
 ## Priority labels
 

@@ -8,6 +8,19 @@ use crate::types::{TaskDetails, TaskEvent, TaskId, TaskSummary};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
+/// Result of a merge-readiness check against an external PR.
+///
+/// Returned by [`TaskSource::check_merge_readiness`] and consumed by the
+/// L3 auto-merge gate (`surge-daemon::automation_merge_gate`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeReadiness {
+    /// All required checks are green and the PR has an approved review.
+    Ready,
+    /// One or more requirements failed; the human-readable reason is
+    /// posted to the tracker as part of the `merge-blocked` comment.
+    Blocked(String),
+}
+
 /// Adapter to an external task tracker (Linear, GitHub Issues, future Discord/Jira/...).
 ///
 /// `TaskSource` exposes only the operations that respect the
@@ -49,6 +62,26 @@ pub trait TaskSource: Send + Sync {
 
     /// Read the current labels on the task.
     async fn read_labels(&self, id: &TaskId) -> Result<Vec<String>>;
+
+    /// Evaluate whether the PR linked to this task is ready to auto-merge.
+    ///
+    /// Default implementation returns `MergeReadiness::Blocked` —
+    /// providers that have a PR concept (e.g. GitHub) override this to
+    /// inspect required checks and review approvals. Linear and other
+    /// PR-less trackers keep the default; the L3 gate then surfaces an
+    /// explicit "provider does not support merge readiness" comment on
+    /// the ticket rather than silently no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error if the underlying API call fails.
+    /// Logical "not ready" outcomes are returned as
+    /// [`MergeReadiness::Blocked`], not errors.
+    async fn check_merge_readiness(&self, _id: &TaskId) -> Result<MergeReadiness> {
+        Ok(MergeReadiness::Blocked(
+            "provider does not implement merge readiness checks".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
