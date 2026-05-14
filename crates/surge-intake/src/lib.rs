@@ -22,7 +22,7 @@ pub use error::{Error, Result};
 pub use policy::{
     AutomationPolicy, TRIAGE_DECISION_EXTERNALLY_CLOSED, TRIAGE_DECISION_L0, resolve_policy,
 };
-pub use source::TaskSource;
+pub use source::{MergeReadiness, TaskSource};
 pub use types::{
     Priority, TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary, Tier1Decision,
     TriageDecision,

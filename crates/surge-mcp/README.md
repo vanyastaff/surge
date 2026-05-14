@@ -23,12 +23,33 @@ The crate is fully wired into the surge engine via M7 PR 5 + PR 6:
   `ToolOverride::mcp_add` allowlist + sandbox heuristic +
   per-server `allowed_tools` whitelist.
 
-**Caveat — no user-facing config loader yet.** As of M7, the CLI
-(`surge engine run --daemon`) does NOT read MCP server config from a
-file. The `EngineRunConfig::mcp_servers` field is populated by
-programmatic callers; user-facing config (`--mcp-config <file>`,
-`~/.surge/config.toml`) is M8+ scope. Until then, MCP delegation
-exercises through tests + library-level callers.
+## Configuring MCP servers via `surge.toml`
+
+Add `[[mcp_servers]]` entries to your `surge.toml`. The CLI
+(`surge engine run`, `surge engine run --daemon`, and the daemon-side
+ticket launcher used by L1/L2/L3 automation) reads them on every run
+and threads them into `EngineRunConfig::mcp_servers`. The engine
+then builds the `Arc<McpRegistry>` itself — no programmatic glue
+needed.
+
+```toml
+[[mcp_servers]]
+name = "playwright"
+transport = { kind = "stdio", command = "/usr/local/bin/mcp-playwright", args = ["--headless"] }
+allowed_tools = ["browser_navigate", "browser_screenshot"]
+call_timeout = "120s"
+restart_on_crash = false
+
+[[mcp_servers]]
+name = "github"
+transport = { kind = "stdio", command = "npx", args = ["@github/mcp-server"] }
+# allowed_tools omitted → all tools advertised by the server are exposed
+# call_timeout defaults to 60s; restart_on_crash defaults to true.
+```
+
+Per-stage `tool_overrides.mcp_add` selects which of these servers
+each agent stage actually sees — entries not in any allowlist remain
+configured but unused (cheap, no child spawned until first call).
 
 ## Configuring an MCP server (programmatic)
 

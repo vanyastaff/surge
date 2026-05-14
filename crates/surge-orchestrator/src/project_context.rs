@@ -404,17 +404,32 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
     Ok(candidate)
 }
 
-/// Attach `project_context` to a run config when a configured `project.md` exists.
+/// Seed every config-derived field on an [`EngineRunConfig`].
+///
+/// Currently covers two seeds, both unconditionally needed on every run
+/// regardless of entry point (CLI in-process, daemon IPC server,
+/// daemon-side ticket launcher):
+///
+/// - **`project_context`** — read from the configured `project.md` when
+///   `init.project_context_auto_seed` is enabled and the run config
+///   does not already carry one.
+/// - **`mcp_servers`** — cloned from `SurgeConfig::mcp_servers` so the
+///   engine can build its `Arc<McpRegistry>` per run. This is a
+///   structural copy (no I/O), but keeping it next to the file-backed
+///   project-context seed prevents the two from drifting at individual
+///   call sites — every entry point now goes through the same helper.
 #[must_use]
 pub fn with_project_context_seed(
     mut run_config: EngineRunConfig,
     project_root: &Path,
     config: &surge_core::SurgeConfig,
 ) -> EngineRunConfig {
-    if run_config.project_context.is_some() || !config.init.project_context_auto_seed {
-        return run_config;
+    if run_config.project_context.is_none() && config.init.project_context_auto_seed {
+        run_config.project_context = load_project_context_seed(project_root, config);
     }
-    run_config.project_context = load_project_context_seed(project_root, config);
+    if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
+        run_config.mcp_servers = config.mcp_servers.clone();
+    }
     run_config
 }
 
