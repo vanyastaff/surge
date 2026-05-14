@@ -168,8 +168,12 @@ impl TaskSource for MockTaskSource {
         if let Some(r) = self.merge_readiness_override.lock().await.clone() {
             return Ok(r);
         }
+        // When no override is armed, return the same reason the trait's
+        // default impl produces so integration tests that exercise the
+        // "PR-less provider" path see exactly what a real Linear/etc.
+        // would surface.
         Ok(MergeReadiness::Blocked(
-            "mock: no readiness override armed".into(),
+            "provider does not implement merge readiness checks".into(),
         ))
     }
 }

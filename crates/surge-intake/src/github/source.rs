@@ -448,12 +448,15 @@ impl TaskSource for GitHubIssuesTaskSource {
             .octocrab
             .pulls(&self.client.owner, &self.client.repo);
 
-        // 1. Resolve the PR. A 404 here means the issue number is not
-        // backed by a PR — surface that as a clear blocked reason.
+        // 1. Resolve the PR. Match on the structured HTTP status code so
+        // a permission-denied 404 (e.g., private repo + insufficient
+        // token scope) does not get misreported as "no PR found" — only
+        // a genuine "not a PR" 404 maps to Blocked here; everything else
+        // propagates as a transport error for the gate to surface.
         let pr = match pulls.get(number).await {
             Ok(p) => p,
             Err(octocrab::Error::GitHub { source, .. })
-                if source.message.to_lowercase().contains("not found") =>
+                if source.status_code.as_u16() == 404 =>
             {
                 return Ok(MergeReadiness::Blocked(format!(
                     "no pull request found for #{number} (Surge assumes PR# == issue#)"
