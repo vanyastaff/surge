@@ -1569,8 +1569,9 @@ fn spawn_telegram_cockpit(
         }
     });
 
-    let updates: Box<dyn futures::Stream<Item = teloxide::types::Update> + Send + Unpin> =
-        Box::new(tokio_stream::wrappers::UnboundedReceiverStream::new(update_rx));
+    let updates: Box<dyn futures::Stream<Item = teloxide::types::Update> + Send + Unpin> = Box::new(
+        tokio_stream::wrappers::UnboundedReceiverStream::new(update_rx),
+    );
     tracing::info!(
         target: "daemon::cockpit",
         "live polling listener active"

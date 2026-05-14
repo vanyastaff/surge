@@ -458,11 +458,9 @@ impl crate::commands::CockpitSnoozeWriter for PersistenceCockpitSnoozeWriter {
             .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
         let wake_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(wake_at_ms)
             .unwrap_or_else(chrono::Utc::now);
-        surge_persistence::inbox_queue::append_cockpit_snooze(
-            &conn, card_id, "telegram", wake_at,
-        )
-        .map(|_| ())
-        .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))
+        surge_persistence::inbox_queue::append_cockpit_snooze(&conn, card_id, "telegram", wake_at)
+            .map(|_| ())
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))
     }
 }
 
