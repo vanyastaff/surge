@@ -455,9 +455,7 @@ impl TaskSource for GitHubIssuesTaskSource {
         // propagates as a transport error for the gate to surface.
         let pr = match pulls.get(number).await {
             Ok(p) => p,
-            Err(octocrab::Error::GitHub { source, .. })
-                if source.status_code.as_u16() == 404 =>
-            {
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 404 => {
                 return Ok(MergeReadiness::Blocked(format!(
                     "no pull request found for #{number} (Surge assumes PR# == issue#)"
                 )));
@@ -568,11 +566,14 @@ fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review])
         ) {
             continue;
         }
-        let author = review
-            .user
-            .as_ref()
-            .map(|u| u.login.clone())
-            .unwrap_or_default();
+        // Reviews without a user can't be attributed; skipping them is
+        // safer than collapsing every anonymous review under the empty
+        // string and silently overwriting one another. In practice
+        // GitHub always populates `user` for review actions, but the
+        // octocrab type allows `None` so we guard.
+        let Some(author) = review.user.as_ref().map(|u| u.login.clone()) else {
+            continue;
+        };
         latest_per_author.insert(author, review);
     }
 
