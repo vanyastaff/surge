@@ -105,7 +105,7 @@ lineark-sdk = "3"
 octocrab = "0.42"
 
 # Telegram bot framework (surge-daemon inbox, surge-telegram cockpit)
-teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler"] }
+teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler", "native-tls"] }
 
 # Notification channels (surge-notify)
 notify-rust = "4"

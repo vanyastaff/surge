@@ -233,6 +233,12 @@ pub async fn drive_update_loop<S, T, P, R>(
                     );
                     return;
                 };
+                debug!(
+                    target: "telegram::cockpit::update",
+                    update_id = update.id.0,
+                    kind = ?std::mem::discriminant(&update.kind),
+                    "received update",
+                );
                 route_update(&runtime, update).await;
             }
         }

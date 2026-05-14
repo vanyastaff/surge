@@ -87,7 +87,10 @@ where
         return Ok(DispatchOutcome::Ignored { event_kind });
     };
 
-    let rendered = render_for_action(&run_id_str, &action);
+    // First render with a placeholder card_id — its content_hash drives the
+    // INSERT OR IGNORE in `upsert`. The real card_id only exists after the
+    // upsert returns (it is generated server-side as a ULID).
+    let pre_rendered = render_for_action("00000000000000000000000000", &tap.run_id, &action);
 
     let card_id = ctx
         .emitter
@@ -96,12 +99,19 @@ where
             &run_id_str,
             action.node_key,
             action.attempt_index,
-            rendered.kind.as_str(),
+            pre_rendered.kind.as_str(),
             ctx.admin_chat_id,
-            &rendered.content_hash,
+            &pre_rendered.content_hash,
             now_ms,
         )
         .await?;
+
+    // Second render with the real card_id — this is what actually gets
+    // sent to Telegram, so the inline-keyboard callback_data carries the
+    // correct `cockpit:<verb>:<card_id>` payload. The `emit` path
+    // recognises the content_hash change and switches to `editMessageText`
+    // when a message_id is already known, or `sendMessage` for a fresh row.
+    let rendered = render_for_action(&card_id, &tap.run_id, &action);
 
     let emit = ctx.emitter.emit(&card_id, &rendered, now_ms).await?;
     let kind = rendered.kind;
@@ -231,29 +241,19 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
 /// because the renderer bakes the id into `callback_data`; the cockpit
 /// upserts to learn the real id and renders again, which is acceptable for
 /// MVP — the content_hash will end up reflecting the real id either way.
-fn render_for_action(_run_id: &str, action: &CardAction) -> RenderedCard {
-    let placeholder_card_id = "00000000000000000000000000";
+fn render_for_action(
+    card_id: &str,
+    run_id: &surge_core::id::RunId,
+    action: &CardAction,
+) -> RenderedCard {
     match &action.payload {
-        ActionPayload::HumanGate { prompt } => render_human_gate(placeholder_card_id, prompt),
-        ActionPayload::Bootstrap { stage, summary } => {
-            render_bootstrap(placeholder_card_id, *stage, summary)
-        },
+        ActionPayload::HumanGate { prompt } => render_human_gate(card_id, prompt),
+        ActionPayload::Bootstrap { stage, summary } => render_bootstrap(card_id, *stage, summary),
         ActionPayload::Completion { terminal_node } => {
-            // RunId is not directly available in the renderer signature, so
-            // we use a synthetic placeholder for the body text — the
-            // production wiring threads the real RunId through.
-            render_completion(
-                placeholder_card_id,
-                &surge_core::id::RunId::nil(),
-                terminal_node,
-            )
+            render_completion(card_id, run_id, terminal_node)
         },
-        ActionPayload::Failure { error } => {
-            render_failure(placeholder_card_id, &surge_core::id::RunId::nil(), error)
-        },
-        ActionPayload::Escalation { stage, reason } => {
-            render_escalation(placeholder_card_id, *stage, reason)
-        },
+        ActionPayload::Failure { error } => render_failure(card_id, run_id, error),
+        ActionPayload::Escalation { stage, reason } => render_escalation(card_id, *stage, reason),
     }
 }
 

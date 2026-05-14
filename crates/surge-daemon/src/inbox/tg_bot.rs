@@ -32,6 +32,15 @@ impl TgInboxBot {
     }
 
     /// Drive both legs (outgoing + incoming) until cancellation.
+    ///
+    /// **Deprecated for cockpit deployments**: spawning a teloxide
+    /// `Dispatcher` here issues its own `getUpdates` call against the
+    /// same bot token the cockpit polls, which Telegram rejects with
+    /// `Conflict: terminated by other getUpdates request`. Callers that
+    /// also run the cockpit must use [`Self::run_outgoing_only`] and
+    /// route inbox `inbox:*` callbacks through the cockpit's shared
+    /// update stream instead. This method stays for callers that run
+    /// inbox **without** the cockpit (legacy single-bot deployments).
     pub async fn run(self, shutdown: CancellationToken) {
         let outgoing = {
             let bot = self.bot.clone();
@@ -50,6 +59,31 @@ impl TgInboxBot {
             }
             _ = outgoing => {}
             _ = incoming => {}
+        }
+    }
+
+    /// Drive only the outgoing delivery loop. Skips the teloxide
+    /// `Dispatcher`-based incoming callback loop so it can coexist with
+    /// the cockpit's polling listener on the same bot token (running
+    /// both produces a `getUpdates` conflict on Telegram's side).
+    ///
+    /// Inbox `inbox:*` callbacks are intended to land in the cockpit's
+    /// shared update router as a follow-up; until that lands, callbacks
+    /// from inbox cards stay unprocessed under this path. The outgoing
+    /// delivery (sending tracker inbox cards to Telegram) is unaffected.
+    pub async fn run_outgoing_only(self, shutdown: CancellationToken) {
+        let outgoing_shutdown = shutdown.clone();
+        let outgoing = tokio::spawn(outgoing_loop(
+            self.bot,
+            self.chat_id,
+            self.storage,
+            outgoing_shutdown,
+        ));
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                info!("TgInboxBot: shutdown signalled (outgoing-only)");
+            }
+            _ = outgoing => {}
         }
     }
 }

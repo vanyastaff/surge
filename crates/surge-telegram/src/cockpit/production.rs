@@ -157,7 +157,6 @@ impl TelegramApi for TeloxideTelegramApi {
         let msg = self
             .bot
             .send_message(teloxide::types::ChatId(chat_id), body_md)
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
             .reply_markup(markup)
             .await?;
         Ok(i64::from(msg.id.0))
@@ -180,7 +179,6 @@ impl TelegramApi for TeloxideTelegramApi {
                 teloxide::types::MessageId(message_id_i32),
                 body_md,
             )
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
             .reply_markup(markup)
             .await?;
         Ok(())
@@ -332,6 +330,140 @@ impl Admission for PairingsAdmission {
     }
 }
 
+/// `PairingTokenConsumer` backed by `surge_persistence::telegram::pairing`.
+#[derive(Clone)]
+pub struct PersistencePairingConsumer {
+    /// Shared storage handle.
+    pub storage: Arc<Storage>,
+}
+
+#[async_trait]
+impl crate::commands::PairingTokenConsumer for PersistencePairingConsumer {
+    async fn consume(&self, token: &str, now_ms: i64) -> Result<String> {
+        use surge_persistence::telegram::pairing::{PairingError, consume_pairing_token};
+        let conn = self
+            .storage
+            .acquire_registry_conn()
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        match consume_pairing_token(&conn, token, now_ms) {
+            Ok(label) => Ok(label),
+            Err(PairingError::NotFound) => Err(TelegramCockpitError::PairingTokenInvalid),
+            Err(PairingError::Expired) | Err(PairingError::AlreadyConsumed) => {
+                Err(TelegramCockpitError::PairingTokenExpired)
+            },
+            Err(other) => Err(TelegramCockpitError::Persistence(other.to_string())),
+        }
+    }
+}
+
+/// `PairingWriter` backed by `surge_persistence::telegram::pairings::pair`.
+#[derive(Clone)]
+pub struct PersistencePairingWriter {
+    /// Shared storage handle.
+    pub storage: Arc<Storage>,
+}
+
+#[async_trait]
+impl crate::commands::PairingWriter for PersistencePairingWriter {
+    async fn pair(&self, chat_id: i64, user_label: &str, now_ms: i64) -> Result<()> {
+        let conn = self
+            .storage
+            .acquire_registry_conn()
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        surge_persistence::telegram::pairings::pair(&conn, chat_id, user_label, now_ms)
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))
+    }
+}
+
+/// `RunListProvider` backed by `surge_persistence::runs::registry::list_runs`.
+#[derive(Clone)]
+pub struct PersistenceRunList {
+    /// Shared storage handle.
+    pub storage: Arc<Storage>,
+}
+
+#[async_trait]
+impl crate::commands::RunListProvider for PersistenceRunList {
+    async fn list_recent(&self, limit: u32) -> Result<Vec<crate::commands::RunRow>> {
+        let filter = surge_persistence::runs::registry::RunFilter {
+            limit: Some(limit as usize),
+            ..Default::default()
+        };
+        let summaries = self
+            .storage
+            .list_runs(filter)
+            .await
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        Ok(summaries
+            .into_iter()
+            .map(|s| crate::commands::RunRow {
+                run_id: s.id.to_string(),
+                status: format!("{:?}", s.status),
+                started_at_ms: s.started_at_ms,
+            })
+            .collect())
+    }
+}
+
+/// `RunAborter` backed by `EngineFacade::stop_run`.
+#[derive(Clone)]
+pub struct EngineFacadeAborter {
+    /// Engine facade.
+    pub engine: Arc<dyn EngineFacade>,
+}
+
+#[async_trait]
+impl crate::commands::RunAborter for EngineFacadeAborter {
+    async fn abort_run(&self, run_id: &str, reason: &str) -> Result<()> {
+        let parsed = run_id
+            .parse::<RunId>()
+            .map_err(|e| TelegramCockpitError::Persistence(format!("invalid run_id: {e}")))?;
+        self.engine
+            .stop_run(parsed, reason.to_owned())
+            .await
+            .map_err(TelegramCockpitError::EngineResolve)
+    }
+}
+
+/// `RunStarter` stub — full archetype resolution + start_run wiring is
+/// tracked in a follow-up that requires plumbing `ArchetypeRegistry`
+/// through `CockpitWiring`. For now this surfaces a recoverable
+/// "deferred" reply so operators see the gap explicitly.
+#[derive(Clone)]
+pub struct DeferredRunStarter;
+
+#[async_trait]
+impl crate::commands::RunStarter for DeferredRunStarter {
+    async fn start_run(&self, _archetype_or_path: &str) -> Result<String> {
+        Err(TelegramCockpitError::Persistence(
+            "/run via Telegram is not yet wired — use `surge engine run` from the CLI for now"
+                .into(),
+        ))
+    }
+}
+
+/// `CockpitSnoozeWriter` backed by `inbox_queue::append_cockpit_snooze`.
+#[derive(Clone)]
+pub struct PersistenceCockpitSnoozeWriter {
+    /// Shared storage handle.
+    pub storage: Arc<Storage>,
+}
+
+#[async_trait]
+impl crate::commands::CockpitSnoozeWriter for PersistenceCockpitSnoozeWriter {
+    async fn snooze(&self, card_id: &str, wake_at_ms: i64) -> Result<()> {
+        let conn = self
+            .storage
+            .acquire_registry_conn()
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))?;
+        let wake_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(wake_at_ms)
+            .unwrap_or_else(chrono::Utc::now);
+        surge_persistence::inbox_queue::append_cockpit_snooze(&conn, card_id, "telegram", wake_at)
+            .map(|_| ())
+            .map_err(|e| TelegramCockpitError::Persistence(e.to_string()))
+    }
+}
+
 /// Production routing surface — dispatches Telegram updates to the
 /// existing handler functions, gating commands on the pairings
 /// allowlist. Forced-reply messages currently log + drop; the
@@ -344,6 +476,22 @@ pub struct ProductionRoutes {
     pub engine: EngineFacadeResolver,
     /// Card store used by the callback router for lookups.
     pub store: SqliteCardStore,
+    /// teloxide bot handle for sending text replies to commands.
+    pub bot: teloxide::Bot,
+    /// Pairing token consumer (for `/pair`).
+    pub pairing_consumer: PersistencePairingConsumer,
+    /// Pairing writer (for `/pair`).
+    pub pairing_writer: PersistencePairingWriter,
+    /// Run-status snapshot provider (for `/status`).
+    pub snapshots: PersistenceSnapshots,
+    /// Run list provider (for `/runs`).
+    pub run_list: PersistenceRunList,
+    /// Run aborter (for `/abort`).
+    pub run_aborter: EngineFacadeAborter,
+    /// Run starter (for `/run` — currently a stub; see [`DeferredRunStarter`]).
+    pub run_starter: DeferredRunStarter,
+    /// Cockpit snooze writer (for `/snooze` as a reply).
+    pub snooze_writer: PersistenceCockpitSnoozeWriter,
 }
 
 impl ProductionRoutes {
@@ -390,52 +538,104 @@ impl UpdateRoutes for ProductionRoutes {
     }
 
     async fn handle_command(&self, chat_id: i64, text: &str) {
-        let (cmd, args) = split_command(text);
+        let (cmd_raw, args) = split_command(text);
+        // Strip an optional `@botname` suffix (group commands), then
+        // also collapse trailing whitespace.
+        let cmd = match cmd_raw.find('@') {
+            Some(i) => &cmd_raw[..i],
+            None => cmd_raw,
+        };
+
         // `/pair` is the only command available to UNPAIRED chats.
         if cmd != "/pair" && !self.admit(chat_id).await {
             // Silently drop — admission denial is INFO-logged inside admit().
             return;
         }
-        warn!(
-            target: "telegram::cmd",
-            %chat_id,
-            cmd = %cmd,
-            args_len = args.len(),
-            "command dispatched but server-side handlers not yet wired in production — \
-             /pair, /status, /runs, /run, /abort, /snooze, /feedback do nothing yet"
-        );
-        // Server-side wiring is gated on TWO follow-ups that must
-        // land together:
-        //   1. The live `polling_default(bot)` update stream (today
-        //      `spawn_telegram_cockpit` passes `stream::empty()`), so
-        //      this method is currently dead code in production — no
-        //      Telegram update ever reaches it.
-        //   2. Bot-reply integration: each handler in
-        //      `crate::commands::*` returns a `CommandReply` that
-        //      needs `bot.send_message(chat_id, reply.text)`. That
-        //      requires `ProductionRoutes` to carry the
-        //      `teloxide::Bot` (today only the dispatch context's
-        //      `TelegramApi` adapter does, and it is owned by the
-        //      emitter).
-        // Until both land, every command path is a deliberate no-op
-        // with a WARN so an operator who configured the cockpit but
-        // sees nothing happen knows where to look. Unit tests in
-        // `commands::*` exercise each handler with fake deps; the
-        // e2e tests in `tests/cockpit_e2e.rs` exercise the routing
-        // surface end-to-end on the callback path.
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let reply_res: crate::error::Result<crate::commands::CommandReply> = match cmd {
+            "/pair" => {
+                crate::commands::handle_pair(
+                    chat_id,
+                    args,
+                    &self.pairing_consumer,
+                    &self.pairing_writer,
+                    now_ms,
+                )
+                .await
+            },
+            "/status" => crate::commands::handle_status(chat_id, args, &self.snapshots).await,
+            "/runs" => crate::commands::handle_runs(chat_id, args, &self.run_list).await,
+            "/run" => crate::commands::handle_run(chat_id, args, &self.run_starter).await,
+            "/abort" => crate::commands::handle_abort(chat_id, args, &self.run_aborter).await,
+            "/feedback" => crate::commands::handle_feedback(chat_id, args, &self.engine).await,
+            "/snooze" => Ok(crate::commands::CommandReply::new(
+                "ℹ `/snooze <duration>` works only as a *reply* to a cockpit card — reply to the card you want to defer.",
+            )),
+            other => Ok(crate::commands::CommandReply::new(format!(
+                "❓ Unknown command `{other}`. Available: /pair, /status, /runs, /run, /abort, /feedback, /snooze (reply)."
+            ))),
+        };
+
+        match reply_res {
+            Ok(reply) => {
+                self.send_reply(chat_id, &reply.text).await;
+            },
+            Err(err) => {
+                warn!(
+                    target: "telegram::cmd",
+                    %chat_id,
+                    cmd = %cmd,
+                    error = %err,
+                    "command handler failed; sending generic error reply"
+                );
+                self.send_reply(
+                    chat_id,
+                    &format!("❌ Internal error while handling `{cmd}`. Check daemon logs."),
+                )
+                .await;
+            },
+        }
     }
 
     async fn handle_reply(&self, chat_id: i64, reply_to_message_id: i64, text: &str) {
         if !self.admit(chat_id).await {
             return;
         }
+        // Forced-reply paths (snooze-by-reply for cards, edit-feedback
+        // forced-reply) require a `CardStore::find_by_chat_message`
+        // lookup that has not been added yet — tracked as a follow-up
+        // alongside the snooze-by-card and Edit-prompt features. For
+        // now we INFO-log the reply and point the operator at the
+        // command equivalents.
         info!(
             target: "telegram::cmd::reply",
             %chat_id,
-            reply_to_message_id = reply_to_message_id,
+            reply_to_message_id,
             text_len = text.len(),
-            "forced-reply text received; use /feedback or /snooze for the live wiring",
+            "free-text reply received; use /feedback <run_id> <text> or /snooze (deferred)",
         );
+    }
+}
+
+impl ProductionRoutes {
+    /// Send a plain-text reply to the originating chat. No `parse_mode`
+    /// is set (text rendering uses literal Markdown that we keep as-is;
+    /// MarkdownV2 would require pervasive escaping of operator content).
+    async fn send_reply(&self, chat_id: i64, text: &str) {
+        use teloxide::prelude::Requester as _;
+        if let Err(err) = self
+            .bot
+            .send_message(teloxide::types::ChatId(chat_id), text)
+            .await
+        {
+            warn!(
+                target: "telegram::cmd::reply",
+                %chat_id,
+                error = %err,
+                "bot.send_message reply failed",
+            );
+        }
     }
 }
 
@@ -498,6 +698,7 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
     let card_store = SqliteCardStore {
         storage: Arc::clone(&storage),
     };
+    let bot_for_routes = bot.clone();
     let bot_api = TeloxideTelegramApi { bot };
     let snapshots = PersistenceSnapshots {
         storage: Arc::clone(&storage),
@@ -508,7 +709,24 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
     let admission = PairingsAdmission {
         storage: Arc::clone(&storage),
     };
-    let engine_resolver = EngineFacadeResolver { engine };
+    let engine_resolver = EngineFacadeResolver {
+        engine: Arc::clone(&engine),
+    };
+    let pairing_consumer = PersistencePairingConsumer {
+        storage: Arc::clone(&storage),
+    };
+    let pairing_writer = PersistencePairingWriter {
+        storage: Arc::clone(&storage),
+    };
+    let run_list = PersistenceRunList {
+        storage: Arc::clone(&storage),
+    };
+    let run_aborter = EngineFacadeAborter {
+        engine: Arc::clone(&engine),
+    };
+    let snooze_writer = PersistenceCockpitSnoozeWriter {
+        storage: Arc::clone(&storage),
+    };
 
     let emitter = crate::card::emit::CardEmitter::new(card_store.clone(), bot_api.clone());
     let dispatch_ctx = crate::cockpit::dispatch::CockpitCtx {
@@ -519,6 +737,14 @@ pub fn spawn_cockpit(wiring: CockpitWiring, shutdown: CancellationToken) -> Cock
         admission,
         engine: engine_resolver,
         store: card_store.clone(),
+        bot: bot_for_routes,
+        pairing_consumer,
+        pairing_writer,
+        snapshots: snapshots.clone(),
+        run_list,
+        run_aborter,
+        run_starter: DeferredRunStarter,
+        snooze_writer,
     };
     let runtime = Arc::new(crate::cockpit::run::CockpitRuntime {
         dispatch_ctx,

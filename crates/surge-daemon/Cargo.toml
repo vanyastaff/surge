@@ -43,6 +43,7 @@ teloxide.workspace = true
 reqwest.workspace = true
 ulid.workspace = true
 futures = "0.3"
+tokio-stream = { workspace = true }
 
 # Unix signal handling
 [target.'cfg(unix)'.dependencies]
