@@ -522,14 +522,26 @@ impl TaskSource for GitHubIssuesTaskSource {
         }
 
         // 4. Reviews — need at least one APPROVED, no later CHANGES_REQUESTED.
-        let reviews_page = pulls
+        //
+        // GitHub returns reviews oldest-first with no sort parameters, and
+        // `evaluate_reviews` relies on "later writes win per author" — so a
+        // single 100-entry page would silently drop newer reviews on PRs
+        // with heavy review traffic. Use `all_pages` to follow the Link
+        // headers until exhausted.
+        let first_page = pulls
             .list_reviews(number)
             .per_page(100)
             .send()
             .await
             .map_err(|e| Self::map_octocrab_error(&e))?;
+        let all_reviews = self
+            .client
+            .octocrab
+            .all_pages(first_page)
+            .await
+            .map_err(|e| Self::map_octocrab_error(&e))?;
 
-        Ok(evaluate_reviews(number, &reviews_page.items))
+        Ok(evaluate_reviews(number, &all_reviews))
     }
 }
 

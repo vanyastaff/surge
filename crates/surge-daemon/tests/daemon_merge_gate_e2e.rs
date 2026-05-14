@@ -148,11 +148,25 @@ async fn wait_for_comments(
     }
 }
 
-/// Wait briefly to ensure the gate has had a chance to observe an event
-/// it should ignore. Used by no-op assertions where we need to confirm
-/// "nothing happened" rather than "something happened".
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(200)).await;
+/// Assert that no new comments arrive over `window`, polling for the
+/// full duration. Stronger than a fixed sleep because a delayed
+/// side-effect lands as a count change anywhere in the window and
+/// fails the test immediately, instead of slipping past a one-shot
+/// check at the end.
+async fn assert_no_new_comments_for(src: &Arc<MockTaskSource>, window: Duration) {
+    let baseline = src.posted_comments().await.len();
+    let deadline = std::time::Instant::now() + window;
+    loop {
+        let current = src.posted_comments().await.len();
+        assert_eq!(
+            current, baseline,
+            "unexpected merge-gate comment observed; baseline={baseline}, now={current}"
+        );
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
@@ -319,11 +333,7 @@ async fn non_l3_task_is_a_no_op() {
     })
     .unwrap();
 
-    settle().await;
-    assert!(
-        src.posted_comments().await.is_empty(),
-        "non-L3 must not post merge gate comments"
-    );
+    assert_no_new_comments_for(&src, Duration::from_millis(400)).await;
     let labels = src.recorded_labels().await;
     assert!(
         labels.iter().all(
@@ -364,14 +374,9 @@ async fn repeated_run_finished_is_idempotent() {
     tx.send(event.clone()).unwrap();
     let _ = wait_for_comments(&src, 1).await;
     tx.send(event).unwrap();
-    settle().await;
-
-    let comments = src.posted_comments().await;
-    assert_eq!(
-        comments.len(),
-        1,
-        "intake_emit_log dedup must prevent duplicate merge comments, got {comments:?}"
-    );
+    // baseline is 1 from the first event; the helper fails if the
+    // re-fired event slips past intake_emit_log dedup and adds another.
+    assert_no_new_comments_for(&src, Duration::from_millis(400)).await;
 }
 
 #[tokio::test]
@@ -403,9 +408,5 @@ async fn failed_run_outcome_does_not_trigger_gate() {
     })
     .unwrap();
 
-    settle().await;
-    assert!(
-        src.posted_comments().await.is_empty(),
-        "failed runs must not be auto-merged"
-    );
+    assert_no_new_comments_for(&src, Duration::from_millis(400)).await;
 }

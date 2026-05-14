@@ -205,12 +205,11 @@ async fn run_command(
 
     let app_config =
         SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
-    let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
+    let run_config = surge_orchestrator::project_context::with_project_context_seed(
         EngineRunConfig::default(),
         &worktree_path,
         &app_config,
     );
-    run_config.mcp_servers = app_config.mcp_servers.clone();
 
     let handle = facade
         .start_run(run_id, graph, worktree_path, run_config)
