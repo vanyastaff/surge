@@ -194,10 +194,9 @@ async fn l3_ready_posts_merge_proposed_comment_and_label() {
 
     let labels = src.recorded_labels().await;
     assert!(
-        labels
-            .iter()
-            .any(|(_, label, present)| label == automation_merge_gate::labels::MERGE_PROPOSED
-                && *present),
+        labels.iter().any(|(_, label, present)| label
+            == automation_merge_gate::labels::MERGE_PROPOSED
+            && *present),
         "expected merge-proposed label to be applied, recorded: {labels:?}"
     );
 }
@@ -213,10 +212,8 @@ async fn l3_blocked_posts_merge_blocked_comment_and_label() {
     } = make_setup();
     let task_id_str = "mock:test#43";
     seed_l3_task(&src, task_id_str).await;
-    src.arm_merge_readiness(MergeReadiness::Blocked(
-        "PR has merge conflicts".into(),
-    ))
-    .await;
+    src.arm_merge_readiness(MergeReadiness::Blocked("PR has merge conflicts".into()))
+        .await;
 
     let run_id = RunId::new();
     {
@@ -244,10 +241,9 @@ async fn l3_blocked_posts_merge_blocked_comment_and_label() {
 
     let labels = src.recorded_labels().await;
     assert!(
-        labels
-            .iter()
-            .any(|(_, label, present)| label == automation_merge_gate::labels::MERGE_BLOCKED
-                && *present),
+        labels.iter().any(|(_, label, present)| label
+            == automation_merge_gate::labels::MERGE_BLOCKED
+            && *present),
         "expected merge-blocked label, recorded: {labels:?}"
     );
 }
@@ -330,9 +326,10 @@ async fn non_l3_task_is_a_no_op() {
     );
     let labels = src.recorded_labels().await;
     assert!(
-        labels.iter().all(|(_, label, _)| label
-            != automation_merge_gate::labels::MERGE_PROPOSED
-            && label != automation_merge_gate::labels::MERGE_BLOCKED),
+        labels.iter().all(
+            |(_, label, _)| label != automation_merge_gate::labels::MERGE_PROPOSED
+                && label != automation_merge_gate::labels::MERGE_BLOCKED
+        ),
         "non-L3 must not apply merge gate labels, got: {labels:?}"
     );
 }

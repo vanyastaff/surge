@@ -474,9 +474,7 @@ impl TaskSource for GitHubIssuesTaskSource {
             )));
         }
         if !matches!(pr.state, Some(octocrab::models::IssueState::Open)) {
-            return Ok(MergeReadiness::Blocked(format!(
-                "PR #{number} is not open"
-            )));
+            return Ok(MergeReadiness::Blocked(format!("PR #{number} is not open")));
         }
 
         // 3. Inspect mergeable_state — only `Clean` and `HasHooks` proceed.

@@ -2425,10 +2425,12 @@ transport = { kind = "stdio", command = "npx", args = ["@github/mcp-server"] }
         assert_eq!(first.name, "playwright");
         assert_eq!(
             first.allowed_tools.as_deref(),
-            Some(&[
-                "browser_navigate".to_string(),
-                "browser_screenshot".to_string(),
-            ][..])
+            Some(
+                &[
+                    "browser_navigate".to_string(),
+                    "browser_screenshot".to_string(),
+                ][..]
+            )
         );
         assert_eq!(first.call_timeout, std::time::Duration::from_secs(120));
         assert!(!first.restart_on_crash);
