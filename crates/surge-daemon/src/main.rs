@@ -1393,11 +1393,29 @@ async fn spawn_inbox_subsystems(
         });
         match (chat_id, token) {
             (Some(chat_id), Some(token)) => {
-                let bot = teloxide::Bot::new(token.clone());
-                let tg =
-                    TgInboxBot::new(bot, teloxide::types::ChatId(chat_id), Arc::clone(&storage));
+                // Two subsystems share the bot:
+                //  1. `TgInboxBot` — tracker-inbox card delivery. Its
+                //     outgoing loop posts pending inbox cards every
+                //     500ms; the legacy incoming loop runs its own
+                //     `getUpdates` via teloxide's `Dispatcher`.
+                //  2. The cockpit (`spawn_telegram_cockpit`) — its
+                //     polling adapter also calls `getUpdates`.
+                //
+                // Telegram rejects two concurrent `getUpdates` requests
+                // with `Conflict: terminated by other getUpdates`. We
+                // therefore run TgInboxBot in outgoing-only mode so it
+                // keeps delivering inbox cards while the cockpit owns
+                // the single bot poll. Inbox `inbox:*` callbacks will
+                // be routed through the cockpit's shared update stream
+                // in a follow-up.
+                let bot_for_inbox = teloxide::Bot::new(token.clone());
+                let tg = TgInboxBot::new(
+                    bot_for_inbox,
+                    teloxide::types::ChatId(chat_id),
+                    Arc::clone(&storage),
+                );
                 let shutdown_for_tg = shutdown.clone();
-                tokio::spawn(tg.run(shutdown_for_tg));
+                tokio::spawn(tg.run_outgoing_only(shutdown_for_tg));
 
                 spawn_telegram_cockpit(
                     &token,
@@ -1469,22 +1487,93 @@ fn spawn_telegram_cockpit(
 ) {
     let bot = teloxide::Bot::new(token.to_owned());
 
-    // Production update stream is deferred — the live
-    // `teloxide::update_listeners::polling_default` wiring (which
-    // requires adapting the `UpdateListener` into a
-    // `Stream<Item = Update>`) lands in a follow-up. For now the
-    // cockpit runs with the engine-tap loop active and the callback
-    // path dormant; the snooze rescheduler still drives via its
-    // direct interval ticker. The cockpit's `dispatch_ctx` correctly
-    // sends cards into Telegram on every tap event, so operators
-    // already see card emission; only inline-button callbacks need
-    // the production update stream.
-    use futures::StreamExt as _;
+    // Live long-poll listener. Teloxide's Polling exposes its update
+    // stream via `AsUpdateStream::as_stream(&'a mut self)` — the stream is
+    // borrowed from `&mut Polling` (GAT workaround), so we cannot hand it
+    // back as a `'static Stream` directly. Bridge via an mpsc channel: a
+    // dedicated task owns the `Polling` value and forwards each update
+    // into the channel; the cockpit consumes the receiver side as a
+    // `Stream<Item = Update>`.
+    let (update_tx, update_rx) = tokio::sync::mpsc::unbounded_channel::<teloxide::types::Update>();
+    let bot_for_polling = bot.clone();
+    let shutdown_for_polling = shutdown.clone();
+    tokio::spawn(async move {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+        use teloxide::types::AllowedUpdate;
+        use teloxide::update_listeners::{AsUpdateStream, Polling};
+        // Explicit `allowed_updates` is required: previous `TgInboxBot`
+        // sessions register `[callback_query]` server-side via teloxide's
+        // `Dispatcher`, and `polling_default` does not override it.
+        // Without this list, Telegram silently drops every text message
+        // — including `/pair`, `/status`, `/runs`, etc.
+        let mut listener = Polling::builder(bot_for_polling)
+            .timeout(Duration::from_secs(10))
+            .allowed_updates(vec![
+                AllowedUpdate::Message,
+                AllowedUpdate::EditedMessage,
+                AllowedUpdate::CallbackQuery,
+                AllowedUpdate::ChannelPost,
+                AllowedUpdate::EditedChannelPost,
+            ])
+            .delete_webhook()
+            .await
+            .build();
+        tracing::debug!(
+            target: "daemon::cockpit",
+            "polling listener built, entering stream loop"
+        );
+        let stream = listener.as_stream();
+        tokio::pin!(stream);
+        loop {
+            tokio::select! {
+                biased;
+                () = shutdown_for_polling.cancelled() => {
+                    tracing::info!(
+                        target: "daemon::cockpit",
+                        "polling listener shutting down"
+                    );
+                    break;
+                }
+                next = stream.next() => match next {
+                    Some(Ok(update)) => {
+                        tracing::debug!(
+                            target: "daemon::cockpit",
+                            update_id = update.id.0,
+                            "polling bridge: forwarding update"
+                        );
+                        if update_tx.send(update).is_err() {
+                            tracing::warn!(
+                                target: "daemon::cockpit",
+                                "polling bridge: receiver dropped, exiting"
+                            );
+                            break;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            target: "daemon::cockpit",
+                            error = %e,
+                            "polling error; teloxide backoff will retry"
+                        );
+                    }
+                    None => {
+                        tracing::info!(
+                            target: "daemon::cockpit",
+                            "polling listener stream exhausted"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     let updates: Box<dyn futures::Stream<Item = teloxide::types::Update> + Send + Unpin> =
-        Box::new(futures::stream::empty().boxed());
-    tracing::warn!(
+        Box::new(tokio_stream::wrappers::UnboundedReceiverStream::new(update_rx));
+    tracing::info!(
         target: "daemon::cockpit",
-        "live polling listener deferred — engine-tap emission active, callbacks dormant"
+        "live polling listener active"
     );
 
     let wiring = surge_telegram::cockpit::production::CockpitWiring {
