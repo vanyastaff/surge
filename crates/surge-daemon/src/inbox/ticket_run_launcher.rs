@@ -221,11 +221,12 @@ impl TicketRunLauncher {
             .await?;
 
         // Start the run with project-context seed applied.
-        let run_config = surge_orchestrator::project_context::with_project_context_seed(
+        let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
             EngineRunConfig::default(),
             &self.project_root,
             &self.config,
         );
+        run_config.mcp_servers = self.config.mcp_servers.clone();
         let handle = self
             .engine
             .start_run(run_id, graph, worktree, run_config)

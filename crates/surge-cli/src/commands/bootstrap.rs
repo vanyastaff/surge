@@ -128,19 +128,21 @@ async fn start_followup_run(
 ) -> Result<RunOutcome> {
     let followup_run_id = RunId::new();
     println!("followup_run_id={followup_run_id}");
+    let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
+        EngineRunConfig {
+            bootstrap_parent: Some(materialized.bootstrap_run_id),
+            ..EngineRunConfig::default()
+        },
+        &project_root,
+        &config,
+    );
+    run_config.mcp_servers = config.mcp_servers.clone();
     let handle = engine
         .start_run(
             followup_run_id,
             materialized.materialized_graph,
             worktree.clone(),
-            surge_orchestrator::project_context::with_project_context_seed(
-                EngineRunConfig {
-                    bootstrap_parent: Some(materialized.bootstrap_run_id),
-                    ..EngineRunConfig::default()
-                },
-                &project_root,
-                &config,
-            ),
+            run_config,
         )
         .await?;
     drive_run_handle(engine, handle).await
