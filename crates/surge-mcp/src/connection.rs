@@ -10,7 +10,9 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -25,6 +27,21 @@ const MAX_RESTART_ATTEMPTS: u32 = 5;
 const BACKOFF_BASE: Duration = Duration::from_millis(500);
 const BACKOFF_FACTOR: u32 = 2;
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
+
+/// Health-monitor cadence. The interval MUST be `>= BACKOFF_CAP` so a
+/// monitor-driven `ensure_connected` can never out-pace the restart
+/// backoff (the no-hot-loop guarantee — U2's fast-return assumes
+/// rate-limited callers). 60s comfortably exceeds the 30s cap.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(60);
+/// Consecutive failed probes before the connection is marked unhealthy
+/// and handed to the restart policy.
+const HEALTH_FAIL_THRESHOLD: u32 = 3;
+
+// Compile-time guard for the no-hot-loop invariant.
+const _: () = assert!(
+    HEALTH_INTERVAL.as_secs() >= BACKOFF_CAP.as_secs(),
+    "health probe interval must be >= backoff cap (no-hot-loop invariant)"
+);
 
 /// Exponential backoff for the Nth (1-based) consecutive failed
 /// reconnect attempt: `min(BASE * FACTOR^(n-1), CAP)`. Pure and
@@ -174,6 +191,11 @@ pub struct McpServerConnection {
     /// diagnostic probes (they inherit no run cwd).
     cwd: Option<PathBuf>,
     state: Mutex<ConnState>,
+    /// Set by the U11 health monitor after `HEALTH_FAIL_THRESHOLD`
+    /// consecutive failed probes while `Running`; cleared on a
+    /// successful probe or (re)connect. Surfaced as
+    /// [`McpHealth::Unhealthy`]. Operational only — not event-sourced.
+    unhealthy: AtomicBool,
 }
 
 impl McpServerConnection {
@@ -189,6 +211,7 @@ impl McpServerConnection {
             config,
             cwd,
             state: Mutex::new(ConnState::Disconnected),
+            unhealthy: AtomicBool::new(false),
         }
     }
 
@@ -253,6 +276,8 @@ impl McpServerConnection {
             Ok(service) => {
                 let rs = Arc::new(service);
                 *state = ConnState::Running(rs.clone());
+                // A fresh connection is healthy until proven otherwise.
+                self.unhealthy.store(false, Ordering::Relaxed);
                 Ok(rs)
             },
             Err(e) => {
@@ -447,10 +472,96 @@ impl McpServerConnection {
     pub async fn status(&self) -> McpHealth {
         match &*self.state.lock().await {
             ConnState::Disconnected => McpHealth::Disconnected,
-            ConnState::Running(_) => McpHealth::Healthy,
+            ConnState::Running(_) => {
+                if self.unhealthy.load(Ordering::Relaxed) {
+                    McpHealth::Unhealthy
+                } else {
+                    McpHealth::Healthy
+                }
+            },
             ConnState::Crashed { .. } => McpHealth::Crashed,
             ConnState::Exhausted { .. } => McpHealth::Exhausted,
         }
+    }
+
+    /// Spawn the U11 periodic health monitor for this connection.
+    ///
+    /// Probes only while `Running` (cheap `is_closed()` check, then an
+    /// active single-page `tools/list`). `HEALTH_FAIL_THRESHOLD`
+    /// consecutive transport-class failures mark the connection
+    /// `Unhealthy` and hand it to the U2 restart policy
+    /// (`mark_crashed` + a backoff-gated `ensure_connected`). Bound to
+    /// the registry `CancellationToken` (the U3 seam) so it exits on
+    /// run teardown — it is sequenced after U3 and is never born
+    /// without a cancellation source. `HEALTH_INTERVAL >= BACKOFF_CAP`
+    /// guarantees the monitor cannot become the hot-loop U2 assumes
+    /// away.
+    pub fn spawn_health_monitor(
+        self: &Arc<Self>,
+        token: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut consecutive_failures: u32 = 0;
+            let mut ticker = tokio::time::interval(HEALTH_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Consume the immediate first tick so we don't probe before
+            // the connection has had a chance to come up.
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => break,
+                    _ = ticker.tick() => {
+                        // Snapshot the running service without holding
+                        // the state lock across the probe RPC.
+                        let rs = match &*me.state.lock().await {
+                            ConnState::Running(rs) => Some(rs.clone()),
+                            _ => None,
+                        };
+                        let Some(rs) = rs else {
+                            consecutive_failures = 0;
+                            continue;
+                        };
+                        let probe_ok = if rs.is_closed() {
+                            false
+                        } else {
+                            match rs.list_tools(None).await {
+                                Ok(_) => true,
+                                // A service-level error means the server
+                                // answered — it is alive, just rejected
+                                // the call; only transport death counts.
+                                Err(e) => !matches!(
+                                    classify_service_error(&e),
+                                    ErrorClass::Transport
+                                ),
+                            }
+                        };
+                        if probe_ok {
+                            consecutive_failures = 0;
+                            me.unhealthy.store(false, Ordering::Relaxed);
+                        } else {
+                            consecutive_failures += 1;
+                            if consecutive_failures >= HEALTH_FAIL_THRESHOLD {
+                                me.unhealthy.store(true, Ordering::Relaxed);
+                                tracing::warn!(
+                                    target: "mcp::supervisor",
+                                    server = %me.config.name,
+                                    failures = consecutive_failures,
+                                    "MCP health probe failed repeatedly; \
+                                     handing to restart policy"
+                                );
+                                me.mark_crashed(None).await;
+                                // Proactively recover under backoff.
+                                // interval >= backoff cap ⇒ no hot-loop.
+                                let _ = me.ensure_connected().await;
+                                consecutive_failures = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        })
     }
 
     /// Deterministically tear the connection down.
@@ -648,6 +759,29 @@ mod tests {
             elapsed < Duration::from_millis(100),
             "fast-return must not spawn (took {elapsed:?})"
         );
+    }
+
+    #[tokio::test]
+    async fn health_monitor_exits_promptly_on_token_cancel() {
+        // The monitor must never outlive the run: cancelling the U3
+        // registry token makes the `biased` select break immediately,
+        // well before the 60s probe interval — no orphaned task.
+        let conn = Arc::new(McpServerConnection::new(fake_server_ref(), None));
+        let token = CancellationToken::new();
+        let handle = conn.spawn_health_monitor(token.clone());
+        token.cancel();
+        let joined = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(
+            joined.is_ok(),
+            "health monitor did not exit within 2s of cancellation"
+        );
+        joined.unwrap().expect("monitor task panicked");
+    }
+
+    #[tokio::test]
+    async fn disconnected_connection_reports_disconnected_not_unhealthy() {
+        let conn = McpServerConnection::new(fake_server_ref(), None);
+        assert_eq!(conn.status().await, McpHealth::Disconnected);
     }
 
     #[test]

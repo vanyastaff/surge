@@ -5,6 +5,7 @@ use crate::error::McpError;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use surge_core::mcp_config::McpServerRef;
 
@@ -81,6 +82,10 @@ pub struct McpRegistry {
     /// run terminates — the seam exists from U3 so the monitor task is
     /// never born without a cancellation source.
     cancel_token: tokio_util::sync::CancellationToken,
+    /// Guards one-time lazy spawn of the U11 health monitors (started on
+    /// first async use, when a Tokio runtime is guaranteed present —
+    /// `from_config` is sync and may be called outside a runtime).
+    monitors_started: AtomicBool,
 }
 
 impl McpRegistry {
@@ -107,6 +112,23 @@ impl McpRegistry {
         Self {
             servers,
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            monitors_started: AtomicBool::new(false),
+        }
+    }
+
+    /// Lazily spawn the U11 health monitors exactly once, bound to the
+    /// registry cancellation token (the U3 seam). Called from the async
+    /// entry points (`list_all_tools` / `call_tool`) so a Tokio runtime
+    /// is guaranteed present; idempotent.
+    fn ensure_monitors_started(&self) {
+        if self
+            .monitors_started
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        for conn in self.servers.values() {
+            conn.spawn_health_monitor(self.cancel_token.clone());
         }
     }
 
@@ -168,6 +190,7 @@ impl McpRegistry {
     /// deterministic output regardless of `HashMap` iteration order or
     /// per-server `tools/list` ordering.
     pub async fn list_all_tools(&self) -> Result<Vec<McpToolEntry>, McpError> {
+        self.ensure_monitors_started();
         let mut out = Vec::new();
         // Iterate servers in sorted order for deterministic output.
         let mut server_names: Vec<&String> = self.servers.keys().collect();
@@ -215,6 +238,7 @@ impl McpRegistry {
         arguments: serde_json::Value,
         timeout: Duration,
     ) -> Result<McpToolResult, McpError> {
+        self.ensure_monitors_started();
         let conn = self
             .servers
             .get(server)
