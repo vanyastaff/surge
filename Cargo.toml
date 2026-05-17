@@ -125,6 +125,7 @@ r2d2_sqlite = "0.25"  # must match rusqlite 0.32 — bump together
 fd-lock = "4"
 async-stream = "0.3"
 tokio-stream = "0.1"
+tokio-util = "0.7"
 tempfile = "3"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 

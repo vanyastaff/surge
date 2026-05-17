@@ -66,6 +66,7 @@ pub enum CardsError {
 ///
 /// Returns [`CardsError::Sqlite`] on storage failure.
 #[allow(clippy::too_many_arguments)]
+#[must_use = "the canonical card_id must be used to address the row"]
 pub fn upsert(
     conn: &Connection,
     run_id: &str,

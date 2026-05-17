@@ -682,6 +682,30 @@ pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
 async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, path: PathBuf) {
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
+        // Owner-only capture dir. Daemon-scoped probes write under
+        // `temp_dir()/surge-mcp-stderr/`, which would otherwise inherit
+        // a world-readable umask default — and even redacted child
+        // stderr can carry hostnames, paths, and short tokens that slip
+        // past redaction (ADR-0014 decision 6). Run-scoped paths live
+        // under the user-owned worktree, so 0700 is harmless there too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                    .await;
+        }
+    }
+    // Pre-create the capture file 0600 so the per-line rewrites below
+    // (truncate-in-place) keep owner-only permissions for its lifetime.
+    #[cfg(unix)]
+    {
+        let _ = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .await;
     }
     let mut lines = BufReader::new(stderr).lines();
     let mut ring: VecDeque<String> = VecDeque::with_capacity(MAX_STDERR_LINES);
