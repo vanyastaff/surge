@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::card::emit::CardStore;
-use crate::error::{Result, TelegramCockpitError};
+use crate::error::Result;
 
 /// Verb extracted from the `cockpit:<verb>:<card_id>` callback prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -192,11 +192,21 @@ pub enum EventPayload {
         session: SessionId,
         tool: String,
         args_redacted: ContentHash,
+        /// Serving MCP server when the call routed through an MCP
+        /// server; `None` for engine-built-in tools. Additive,
+        /// `#[serde(default)]` so pre-existing v1/v2 logs decode as
+        /// `None` (replay parity — schema bumped to v3).
+        #[serde(default)]
+        mcp_server: Option<String>,
     },
     ToolResultReceived {
         session: SessionId,
         success: bool,
         result: ContentHash,
+        /// Serving MCP server, mirrored from the paired `ToolCalled`
+        /// for replay attribution. `None` for engine tools.
+        #[serde(default)]
+        mcp_server: Option<String>,
     },
     ArtifactProduced {
         node: NodeKey,
@@ -1105,6 +1115,7 @@ mod tests {
                 allowed_tools: None,
                 call_timeout: Duration::from_secs(60),
                 restart_on_crash: true,
+                sandbox: None,
             }],
         };
         let payload = EventPayload::RunStarted {

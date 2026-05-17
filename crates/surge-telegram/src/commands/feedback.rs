@@ -8,6 +8,9 @@
 //! "..."}` JSON the callback router produces and forwards it through
 //! the shared [`EngineResolver`] trait.
 
+// Used by `#[async_trait]` impls under `cfg(test)`; the lib-only build
+// sees it as unused, so silence that config-specific lint here.
+#[allow(unused_imports)]
 use async_trait::async_trait;
 use serde_json::json;
 

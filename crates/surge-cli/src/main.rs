@@ -149,6 +149,12 @@ enum Commands {
         command: commands::doctor::DoctorCommands,
     },
 
+    /// Inspect and validate configured MCP servers.
+    Mcp {
+        #[command(subcommand)]
+        command: commands::mcp::McpCommands,
+    },
+
     /// List, show, validate, or scaffold profiles.
     Profile {
         #[command(subcommand)]
@@ -298,6 +304,7 @@ async fn main() -> Result<()> {
             | Commands::Intake { .. }
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
+            | Commands::Mcp { .. }
             | Commands::Profile { .. }
             | Commands::Project { .. }
     );
@@ -477,6 +484,9 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Doctor { command } => {
             commands::doctor::run(command).await?;
+        },
+        Commands::Mcp { command } => {
+            commands::mcp::run(command).await?;
         },
 
         Commands::Profile { command } => {

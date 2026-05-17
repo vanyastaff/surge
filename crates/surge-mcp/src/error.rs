@@ -35,6 +35,16 @@ pub enum McpError {
         /// Server name from the configuration.
         server: String,
     },
+    /// The restart policy exhausted its capped attempt budget. The
+    /// connection will not re-spawn again until reset; the engine
+    /// surfaces this as an operator-attention escalation.
+    #[error("server '{server}' restart policy exhausted after {attempts} attempts")]
+    RestartExhausted {
+        /// Server name from the configuration.
+        server: String,
+        /// Number of consecutive failed (re)connect attempts.
+        attempts: u32,
+    },
     /// The server reported the requested tool name in `tools/list`
     /// once but it has since gone away (rare; usually a server bug).
     #[error("server '{server}' tool '{tool}' not found")]

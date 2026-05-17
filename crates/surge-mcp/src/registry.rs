@@ -3,7 +3,9 @@
 use crate::connection::McpServerConnection;
 use crate::error::McpError;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use surge_core::mcp_config::McpServerRef;
 
@@ -75,6 +77,15 @@ impl McpToolEntry {
 /// triggers the spawn.
 pub struct McpRegistry {
     servers: HashMap<String, Arc<McpServerConnection>>,
+    /// Cancelled by [`shutdown`](Self::shutdown). The U11 per-connection
+    /// health monitors bind to a clone of this so they stop when the
+    /// run terminates — the seam exists from U3 so the monitor task is
+    /// never born without a cancellation source.
+    cancel_token: tokio_util::sync::CancellationToken,
+    /// Guards one-time lazy spawn of the U11 health monitors (started on
+    /// first async use, when a Tokio runtime is guaranteed present —
+    /// `from_config` is sync and may be called outside a runtime).
+    monitors_started: AtomicBool,
 }
 
 impl McpRegistry {
@@ -82,16 +93,99 @@ impl McpRegistry {
     /// are not eagerly opened — first use of each server triggers
     /// the spawn via [`McpServerConnection::list_tools`] /
     /// [`McpServerConnection::call_tool`].
+    ///
+    /// `cwd` pins every child process's working directory and roots its
+    /// captured-stderr file. Run-scoped callers pass the run worktree;
+    /// daemon diagnostic probes pass `None`.
     #[must_use]
-    pub fn from_config(refs: &[McpServerRef]) -> Self {
+    pub fn from_config(refs: &[McpServerRef], cwd: Option<&Path>) -> Self {
         let mut servers = HashMap::new();
         for r in refs {
             servers.insert(
                 r.name.clone(),
-                Arc::new(McpServerConnection::new(r.clone())),
+                Arc::new(McpServerConnection::new(
+                    r.clone(),
+                    cwd.map(Path::to_path_buf),
+                )),
             );
         }
-        Self { servers }
+        Self {
+            servers,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            monitors_started: AtomicBool::new(false),
+        }
+    }
+
+    /// Lazily spawn the U11 health monitors exactly once, bound to the
+    /// registry cancellation token (the U3 seam). Called from the async
+    /// entry points (`list_all_tools` / `call_tool`) so a Tokio runtime
+    /// is guaranteed present; idempotent.
+    fn ensure_monitors_started(&self) {
+        if self.monitors_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for conn in self.servers.values() {
+            // Fire-and-forget by design: the task is cancelled via the
+            // registry CancellationToken on shutdown, not by holding
+            // the handle (a `let _ =` here would trip
+            // clippy::let_underscore_future on the JoinHandle).
+            conn.spawn_health_monitor(self.cancel_token.clone());
+        }
+    }
+
+    /// A clone of the registry-lifetime cancellation token. U11's
+    /// health monitors `select!` on this so they exit when
+    /// [`shutdown`](Self::shutdown) is called.
+    #[must_use]
+    pub fn cancel_token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    /// Per-server health snapshot, sorted by server name for
+    /// deterministic output (`surge mcp list`, daemon status).
+    pub async fn statuses(&self) -> Vec<(String, crate::McpHealth)> {
+        let mut names: Vec<&String> = self.servers.keys().collect();
+        names.sort();
+        let mut out = Vec::with_capacity(names.len());
+        for n in names {
+            let conn = self.servers.get(n).expect("just collected from this map");
+            out.push((n.clone(), conn.status().await));
+        }
+        out
+    }
+
+    /// Deterministically tear down every connection and cancel the
+    /// health-monitor token. Called by the engine on run terminal
+    /// outcome (before the `Arc<McpRegistry>` drops) so no MCP child is
+    /// orphaned. Each connection's teardown is time-bounded so a hung
+    /// child cannot wedge the registry; idempotent.
+    pub async fn shutdown(&self) {
+        // Stop U11 health monitors first so they don't race a reconnect
+        // against the teardown.
+        self.cancel_token.cancel();
+        let per_conn = Duration::from_secs(5);
+        let mut handles = Vec::with_capacity(self.servers.len());
+        for conn in self.servers.values() {
+            let c = conn.clone();
+            handles.push(tokio::spawn(async move {
+                if tokio::time::timeout(per_conn, c.shutdown()).await.is_err() {
+                    tracing::warn!(
+                        target: "mcp::supervisor",
+                        server = %c.name(),
+                        "mcp shutdown exceeded per-connection budget; abandoning child to RAII"
+                    );
+                }
+            }));
+        }
+        for h in handles {
+            if let Err(e) = h.await {
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    error = %e,
+                    "MCP per-connection shutdown task panicked"
+                );
+            }
+        }
     }
 
     /// Combined `tools/list` across all configured servers. Used by
@@ -103,6 +197,7 @@ impl McpRegistry {
     /// deterministic output regardless of `HashMap` iteration order or
     /// per-server `tools/list` ordering.
     pub async fn list_all_tools(&self) -> Result<Vec<McpToolEntry>, McpError> {
+        self.ensure_monitors_started();
         let mut out = Vec::new();
         // Iterate servers in sorted order for deterministic output.
         let mut server_names: Vec<&String> = self.servers.keys().collect();
@@ -150,6 +245,7 @@ impl McpRegistry {
         arguments: serde_json::Value,
         timeout: Duration,
     ) -> Result<McpToolResult, McpError> {
+        self.ensure_monitors_started();
         let conn = self
             .servers
             .get(server)
@@ -188,7 +284,7 @@ mod tests {
 
     #[test]
     fn empty_registry_is_empty() {
-        let r = McpRegistry::from_config(&[]);
+        let r = McpRegistry::from_config(&[], None);
         assert!(r.servers.is_empty());
     }
 
@@ -205,7 +301,7 @@ mod tests {
             Duration::from_secs(60),
             true,
         )];
-        let r = McpRegistry::from_config(&refs);
+        let r = McpRegistry::from_config(&refs, None);
         assert_eq!(r.servers.len(), 1);
         assert!(r.servers.contains_key("echo"));
     }

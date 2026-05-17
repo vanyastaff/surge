@@ -314,13 +314,31 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
                 .collect();
 
+            // Resolve the canonical MCP spawn policy once per server
+            // (not per tool): a `Denied` server is hidden entirely, and
+            // the unconstrained-intent operator WARN fires at most once
+            // per server rather than once per tool.
+            let mcp_denied_servers: std::collections::HashSet<&str> = p
+                .mcp_servers
+                .iter()
+                .filter(|s| allowed_servers.contains(s.name.as_str()))
+                .filter_map(|s| {
+                    let effective = s.sandbox.unwrap_or(sandbox_cfg.mode);
+                    warn_if_unconstrained_mcp(&s.name, effective);
+                    match mcp_spawn_policy(sandbox_cfg.mode, s.sandbox) {
+                        McpSpawnPolicy::Allowed => None,
+                        McpSpawnPolicy::Denied => Some(s.name.as_str()),
+                    }
+                })
+                .collect();
+
             let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
                 .into_iter()
                 .filter(|t| {
                     if !allowed_servers.contains(t.server.as_str()) {
                         return false;
                     }
-                    if !sandbox_allows_mcp_tool(&sandbox_cfg, &t.server, &t.tool) {
+                    if mcp_denied_servers.contains(t.server.as_str()) {
                         return false;
                     }
                     // Per-server allowed_tools whitelist: outer Some = entry
@@ -710,6 +728,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     continue;
                 }
 
+                // Resolve which MCP server (if any) serves this tool so
+                // delegation is attributable per server in the replay
+                // log. Engine-built-in tools resolve to `None`.
+                let mcp_server = session_dispatcher.resolved_origin(&tool);
+
                 let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Persist ToolCalled + ToolResultReceived.
@@ -719,9 +742,37 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         session: session_id,
                         tool: tool.clone(),
                         args_redacted: args_redacted_hash,
+                        mcp_server: mcp_server.clone(),
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                // Surface MCP restart-exhaustion as a replay-safe
+                // `EscalationRequested` (fold pass-through). Emitted
+                // BEFORE the fallible `ToolResultReceived` append: if
+                // that storage write fails, the `?` returns and the
+                // escalation would otherwise be silently dropped —
+                // making permanent MCP failure invisible to the AFK
+                // operator (the cockpit only renders give-up from this
+                // event). Relative event-seq order vs `ToolResultReceived`
+                // is immaterial (both are fold pass-throughs). Only the
+                // stable give-up fact is recorded — the non-deterministic
+                // attempt count is in the message, not a folded field.
+                for esc in session_dispatcher.drain_mcp_escalations() {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::EscalationRequested {
+                                stage: None,
+                                reason: format!(
+                                    "MCP server '{}' restart policy exhausted after {} attempts; \
+                                     calls to it fail until the run is restarted",
+                                    esc.server, esc.attempts
+                                ),
+                            },
+                        ))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                }
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {
@@ -740,6 +791,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             session: session_id,
                             success,
                             result: result_hash,
+                            mcp_server,
                         },
                     ))
                     .await
@@ -1626,42 +1678,105 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
     Ok(kind)
 }
 
-/// Conservative M7 heuristic for whether a sandbox tier permits an
-/// MCP server's tool. Will be replaced by M4 (sandbox milestone)
-/// proper enforcement.
-#[allow(clippy::needless_pass_by_value)]
-fn sandbox_allows_mcp_tool(
-    sandbox: &surge_core::sandbox::SandboxConfig,
-    _server: &str,
-    _tool: &str,
-) -> bool {
+/// Whether an MCP server may be spawned/exposed for a stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum McpSpawnPolicy {
+    /// MCP tools from this server are exposed to the agent stage.
+    Allowed,
+    /// MCP is denied — the server is not spawned and its tools are
+    /// hidden from the catalog.
+    Denied,
+}
+
+/// Canonical, single-site resolver for whether MCP is permitted under
+/// a sandbox intent. Replaces the former `sandbox_allows_mcp_tool`
+/// stopgap. The effective mode is the per-server override when set,
+/// otherwise the run's mode (an explicit per-server setting wins).
+///
+/// `ReadOnly` denies MCP entirely (parity with the retired heuristic).
+/// `SandboxMode` is `#[non_exhaustive]`; the catch-all **fails closed**
+/// so a future stricter tier cannot silently leak MCP access. Deeper
+/// OS-level enforcement of the spawned child is delegated to the agent
+/// runtime per ADR-0006 (see ADR-0014) — surge configures intent and
+/// applies portable hygiene (env/cwd, U1), it does not police syscalls.
+pub(crate) fn mcp_spawn_policy(
+    run_mode: surge_core::sandbox::SandboxMode,
+    server_override: Option<surge_core::sandbox::SandboxMode>,
+) -> McpSpawnPolicy {
     use surge_core::sandbox::SandboxMode;
-    // SandboxMode is `#[non_exhaustive]`. **Fail closed** for unknown
-    // variants: a future capability tier introduced as a *stricter* mode
-    // than today (for example a `WorkspaceWriteIsolated` that doesn't
-    // permit MCP) would silently leak MCP access if the default were
-    // permissive. The four explicit `true` arms below stay the source of
-    // truth — adding a new variant requires touching this match.
-    match sandbox.mode {
-        SandboxMode::ReadOnly => false,
+    let effective = server_override.unwrap_or(run_mode);
+    match effective {
         SandboxMode::WorkspaceWrite
         | SandboxMode::WorkspaceNetwork
         | SandboxMode::FullAccess
-        | SandboxMode::Custom => true,
-        _ => {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                mode = ?sandbox.mode,
-                "unknown SandboxMode in sandbox_allows_mcp_tool; failing closed (MCP denied)"
-            );
-            false
-        },
+        | SandboxMode::Custom => McpSpawnPolicy::Allowed,
+        // `ReadOnly` denies MCP; the `_` arm is the fail-closed default
+        // for future stricter `#[non_exhaustive]` tiers.
+        _ => McpSpawnPolicy::Denied,
+    }
+}
+
+/// Emit a one-time operator-visibility WARN when an MCP server runs
+/// under an unconstrained intent (`FullAccess`/`WorkspaceNetwork`):
+/// surge delegates OS-level enforcement to the runtime per ADR-0006,
+/// so the operator must only configure trusted binaries for these.
+fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::SandboxMode) {
+    use surge_core::sandbox::SandboxMode;
+    if matches!(
+        effective,
+        SandboxMode::FullAccess | SandboxMode::WorkspaceNetwork
+    ) {
+        tracing::warn!(
+            target: "mcp::supervisor",
+            server = %server,
+            mode = ?effective,
+            "MCP server runs with an unconstrained sandbox intent; OS-level \
+             enforcement is delegated to the runtime (ADR-0006) — configure \
+             only trusted binaries for this mode"
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_spawn_policy_read_only_denies_writable_allows() {
+        use surge_core::sandbox::SandboxMode;
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::ReadOnly, None),
+            McpSpawnPolicy::Denied
+        );
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::WorkspaceWrite, None),
+            McpSpawnPolicy::Allowed
+        );
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::FullAccess, None),
+            McpSpawnPolicy::Allowed
+        );
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::Custom, None),
+            McpSpawnPolicy::Allowed
+        );
+    }
+
+    #[test]
+    fn mcp_spawn_policy_server_override_wins() {
+        use surge_core::sandbox::SandboxMode;
+        // Restrictive per-server override beats a permissive run mode.
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::FullAccess, Some(SandboxMode::ReadOnly)),
+            McpSpawnPolicy::Denied
+        );
+        // And a permissive override is honored over a stricter run.
+        assert_eq!(
+            mcp_spawn_policy(SandboxMode::ReadOnly, Some(SandboxMode::WorkspaceWrite)),
+            McpSpawnPolicy::Allowed
+        );
+    }
+
     use surge_core::approvals::ApprovalConfig;
     use surge_core::edge::EdgeKind;
     use surge_core::hooks::{HookFailureMode, HookInheritance, MatcherSpec};

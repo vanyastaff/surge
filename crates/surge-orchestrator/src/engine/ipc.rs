@@ -163,6 +163,30 @@ pub enum DaemonRequest {
         /// Client-assigned identifier echoed in the response.
         request_id: RequestId,
     },
+    /// Request-scoped MCP config validation: spawn → handshake →
+    /// `tools/list` → tear down, per configured server. No persistent
+    /// daemon-resident session is created (ADR-0014). `name = None`
+    /// probes every configured server (`surge mcp list`); `Some`
+    /// probes one (`surge mcp start <name>`).
+    McpProbe {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Server to probe, or `None` for all configured servers.
+        name: Option<String>,
+    },
+    /// Tail the bounded, redacted, daemon-probe-scoped captured stderr
+    /// file for `name` (`surge mcp logs <name>`). Run-scoped tailing is
+    /// deferred in v0.1 (it needs the run worktree, which `RunSummary`
+    /// does not expose — see ADR-0014); run stderr lives under the run
+    /// worktree's `.surge/mcp-stderr/`.
+    McpLogs {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Configured MCP server name.
+        name: String,
+        /// Max trailing lines to return; `None` = server default.
+        tail: Option<usize>,
+    },
 }
 
 impl DaemonRequest {
@@ -181,7 +205,44 @@ impl DaemonRequest {
             | Self::Unsubscribe { request_id, .. }
             | Self::SubscribeGlobal { request_id }
             | Self::UnsubscribeGlobal { request_id }
-            | Self::Shutdown { request_id } => *request_id,
+            | Self::Shutdown { request_id }
+            | Self::McpProbe { request_id, .. }
+            | Self::McpLogs { request_id, .. } => *request_id,
+        }
+    }
+}
+
+/// Per-server result of a [`DaemonRequest::McpProbe`]. `status` is the
+/// rendered [`surge_mcp::McpHealth`] (string, to keep the wire format
+/// decoupled from the enum's `#[non_exhaustive]` shape).
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpProbeReport {
+    /// Configured server name.
+    pub name: String,
+    /// Rendered health after the probe (e.g. `"healthy"`, `"crashed"`).
+    pub status: String,
+    /// Tool count advertised via `tools/list`, when the probe connected.
+    pub tool_count: Option<usize>,
+    /// Failure reason when the probe could not validate the server.
+    pub error: Option<String>,
+}
+
+impl McpProbeReport {
+    /// Construct a report. Provided so the daemon (a different crate)
+    /// can build instances despite `#[non_exhaustive]`.
+    #[must_use]
+    pub fn new(
+        name: String,
+        status: String,
+        tool_count: Option<usize>,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            name,
+            status,
+            tool_count,
+            error,
         }
     }
 }
@@ -269,6 +330,24 @@ pub enum DaemonResponse {
         /// Echoed `request_id` from the originating [`DaemonRequest::Shutdown`].
         request_id: RequestId,
     },
+    /// Reply to [`DaemonRequest::McpProbe`].
+    McpProbeOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// One entry per probed server, sorted by name.
+        servers: Vec<McpProbeReport>,
+    },
+    /// Reply to [`DaemonRequest::McpLogs`].
+    McpLogsOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Configured server name the lines belong to.
+        server: String,
+        /// Scope the stderr was read from (always `"probe"` in v0.1).
+        scope: String,
+        /// Trailing captured (already-redacted) stderr lines.
+        lines: Vec<String>,
+    },
     /// Generic error response. `code` is stable enough for clients
     /// to react programmatically; `message` is operator-facing.
     Error {
@@ -299,6 +378,8 @@ impl DaemonResponse {
             | Self::SubscribeGlobalOk { request_id }
             | Self::UnsubscribeGlobalOk { request_id }
             | Self::ShutdownOk { request_id }
+            | Self::McpProbeOk { request_id, .. }
+            | Self::McpLogsOk { request_id, .. }
             | Self::Error { request_id, .. } => *request_id,
         }
     }

@@ -26,8 +26,6 @@
 //!   per-chat rate-limit sub-test is covered in the `rate_limiter`
 //!   unit tests because the limiter is a pure module without a
 //!   cross-module seam to integrate against.)
-
-use std::sync::Arc;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -394,7 +392,7 @@ async fn t28a_stale_tap_on_closed_card_does_not_call_engine() {
 
 #[tokio::test]
 async fn t28b_unpaired_chat_is_denied_at_admission() {
-    let store = (FakeCards::with(sample_card("CARD-E", "run-5", true)));
+    let store = FakeCards::with(sample_card("CARD-E", "run-5", true));
     let ctx = CallbackCtx {
         store,
         // Note: chat 99 is NOT in the paired list (which holds 42 only).

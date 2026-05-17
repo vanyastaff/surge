@@ -33,6 +33,7 @@ rusqlite.workspace = true
 
 surge-core.workspace = true
 surge-orchestrator.workspace = true
+surge-mcp.workspace = true
 surge-acp.workspace = true
 surge-persistence.workspace = true
 surge-notify.workspace = true

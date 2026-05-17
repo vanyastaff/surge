@@ -22,6 +22,7 @@ surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
 surge telegram ...      configure cockpit bot token / pairings / revoke
+surge mcp ...           list/start/stop/logs configured MCP servers
 surge clean             clean up orphaned worktrees and merged branches
 surge worktrees         list active worktrees
 surge analytics ...     view token/cost analytics
@@ -148,9 +149,28 @@ their personal chat to enter the `telegram_pairings` allowlist.
 Full reference: [telegram.md](telegram.md) — setup, command list,
 card kinds, snooze, recovery, troubleshooting.
 
+## MCP Servers
+
+`surge mcp` is a request-scoped operator surface over the daemon for the
+servers configured in `surge.toml` `[[mcp_servers]]` (requires a running
+daemon — `surge daemon start`):
+
+```text
+surge mcp list [--format json]   probe every configured server; print health + tool count
+surge mcp start <name>           probe one server to validate its config
+surge mcp logs <name> [--tail N] tail the redacted captured stderr for <name>
+surge mcp stop <name>            no-op idempotent ack (per-run isolation — no persistent child)
+```
+
+`list`/`start` spawn → handshake → `tools/list` → tear down (no persistent
+daemon session). `stop` does nothing by design: MCP servers are per-run
+scoped; to halt MCP activity in a live run, abort the run. Full reference:
+[mcp.md](mcp.md) — config, lifecycle, sandbox boundary, redaction.
+
 ## See Also
 
 - [Getting Started](getting-started.md) — install Surge and run the first flow
+- [MCP server lifecycle](mcp.md) — `[[mcp_servers]]`, lifecycle, sandbox, `surge mcp`
 - [Tracker automation](tracker-automation.md) — tier labels (L0–L3) and intake inspection
 - [Telegram cockpit](telegram.md) — bot setup, pairing, commands, card lifecycle
 - [Artifact Conventions](conventions/README.md) — generated artifact contracts and validator examples

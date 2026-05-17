@@ -5,13 +5,23 @@
 //! construction time from the merged tool catalog.
 
 use crate::engine::tools::{
-    DeclaredTool, ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
+    DeclaredTool, McpEscalation, ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use surge_mcp::{McpContent, McpRegistry, McpToolEntry};
+use surge_mcp::{McpContent, McpError, McpRegistry, McpToolEntry};
+
+/// Surge-injected tool names that are added separately by the ACP
+/// bridge (not via any `ToolDispatcher::declared_tools`) and dispatched
+/// upstream of this router. They are reserved: an MCP server must never
+/// shadow them in the agent's tool catalog or routing table. This is
+/// the **single canonical arbitration site** for injected-tool name
+/// precedence — see ADR-0006 (uniform injected-tool surface) and
+/// ADR-0014. The regression test asserts no second list exists.
+pub(crate) const RESERVED_INJECTED_TOOLS: [&str; 2] =
+    ["report_stage_outcome", "request_human_input"];
 
 /// One row in the routing table — where a given tool name lives.
 #[derive(Clone, Debug)]
@@ -30,6 +40,9 @@ pub struct RoutingToolDispatcher {
     mcp_registry: Arc<McpRegistry>,
     routing_table: HashMap<String, ToolOrigin>,
     declared: Vec<DeclaredTool>,
+    /// MCP restart-exhaustion escalations observed during dispatch,
+    /// drained by the agent stage into `EscalationRequested` events.
+    escalations: Mutex<Vec<McpEscalation>>,
 }
 
 impl RoutingToolDispatcher {
@@ -96,11 +109,32 @@ impl RoutingToolDispatcher {
         declared.retain(|d| !engine_names.contains(d.name.as_str()));
         declared.extend(engine_tools);
 
+        // Reserved-name guard (single canonical arbitration site):
+        // surge-injected tools are dispatched by the ACP bridge before
+        // this router ever sees them, so an MCP tool of the same name
+        // would shadow the catalog while being unreachable. Drop any
+        // such MCP entry from the routing table and the declared
+        // catalog, warning once per collision (ADR-0006 / ADR-0014).
+        for reserved in RESERVED_INJECTED_TOOLS {
+            if let Some(ToolOrigin::Mcp { server, .. }) = table.get(reserved) {
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    tool = reserved,
+                    server = %server,
+                    "MCP server advertises a surge-injected tool name; \
+                     dropping it — injected tools win (ADR-0006)"
+                );
+                table.remove(reserved);
+            }
+            declared.retain(|d| d.name != reserved);
+        }
+
         Self {
             engine_dispatcher,
             mcp_registry,
             routing_table: table,
             declared,
+            escalations: Mutex::new(Vec::new()),
         }
     }
 }
@@ -129,8 +163,21 @@ impl ToolDispatcher for RoutingToolDispatcher {
                             .collect::<Vec<_>>()
                             .join("\n"),
                     },
-                    Err(e) => ToolResultPayload::Error {
-                        message: format!("MCP error: {e}"),
+                    Err(e) => {
+                        // Type-safe escalation capture (no string
+                        // sniffing): a restart-exhausted server is a
+                        // permanent failure the AFK operator must see.
+                        if let McpError::RestartExhausted { server, attempts } = &e
+                            && let Ok(mut q) = self.escalations.lock()
+                        {
+                            q.push(McpEscalation {
+                                server: server.clone(),
+                                attempts: *attempts,
+                            });
+                        }
+                        ToolResultPayload::Error {
+                            message: format!("MCP error: {e}"),
+                        }
                     },
                 }
             },
@@ -142,6 +189,21 @@ impl ToolDispatcher for RoutingToolDispatcher {
 
     fn declared_tools(&self) -> Vec<DeclaredTool> {
         self.declared.clone()
+    }
+
+    fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
+        self.escalations
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default()
+    }
+
+    fn resolved_origin(&self, tool: &str) -> Option<String> {
+        match self.routing_table.get(tool) {
+            Some(ToolOrigin::Mcp { server, .. }) => Some(server.clone()),
+            // Engine-built-in or unknown → no MCP attribution.
+            _ => None,
+        }
     }
 }
 
@@ -172,6 +234,20 @@ mod tests {
     use super::*;
     use crate::engine::tools::{ToolCall, ToolDispatcher, ToolResultPayload};
 
+    /// Single-arbitration-site guard: the reserved injected-tool list
+    /// is defined exactly once, here. If this breaks, a second list was
+    /// introduced or a name changed without updating the contract —
+    /// re-derive against the ACP bridge's injected tools (ADR-0006).
+    #[test]
+    fn reserved_injected_tools_is_the_canonical_pair() {
+        assert_eq!(
+            RESERVED_INJECTED_TOOLS,
+            ["report_stage_outcome", "request_human_input"],
+            "reserved injected-tool contract changed; this const is the \
+             single source of truth — verify against the ACP bridge"
+        );
+    }
+
     /// Stub engine dispatcher that returns a marker payload echoing the
     /// requested tool name and declares one tool (`"shell_exec"`) so we
     /// can verify collision resolution.
@@ -199,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_tool_wins_collision() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         let mcp_tools = vec![McpToolEntry::new(
             "fake".into(),
             "shell_exec".into(), // colliding name
@@ -229,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_mcp_collision_first_wins_by_server() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         // Two servers that both expose "shared". "a_server" sorts before
         // "z_server", so "a_server"'s entry should win.
         let mcp_tools = vec![
@@ -263,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_is_unsupported() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &[], &HashMap::new());
         let ctx = ToolDispatchContext {
             run_id: surge_core::id::RunId::new(),

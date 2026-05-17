@@ -142,6 +142,7 @@ struct CardAction {
     /// Stable string discriminator for logs and tests.
     event_kind: &'static str,
     /// Card kind to be produced.
+    #[allow(dead_code)]
     kind: CardKind,
     /// Node key the card is keyed against. For run-level cards (status,
     /// completion, failure, escalation) this is a synthetic per-kind key so
