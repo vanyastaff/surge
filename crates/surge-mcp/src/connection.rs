@@ -12,10 +12,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tokio_util::sync::CancellationToken;
 use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 /// Max stderr lines retained per connection in the bounded tee file.
 /// Documented default; not configurable in v0.1 (decide-or-defer).
@@ -121,7 +121,7 @@ pub(crate) fn classify_service_error(e: &ServiceError) -> ErrorClass {
                 "unclassified rmcp ServiceError; treating as service-level (not marking crashed)"
             );
             ErrorClass::Service
-        }
+        },
     }
 }
 
@@ -663,7 +663,13 @@ fn minimal_child_env() -> Vec<(String, String)> {
 pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
     let safe: String = server
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let base = match cwd {
         Some(dir) => dir.join(".surge").join("mcp-stderr"),

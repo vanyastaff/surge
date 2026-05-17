@@ -111,8 +111,8 @@ pub fn redact_line(line: &str) -> String {
 fn mask_key_value(core: &str, lowered: &str) -> Option<String> {
     let delim = lowered.find(['=', ':'])?;
     let (key_raw, rest) = core.split_at(delim);
-    let key = lowered[..delim]
-        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+    let key =
+        lowered[..delim].trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
     if key.is_empty() || !SENSITIVE_KEYS.contains(&key) {
         return None;
     }

@@ -89,7 +89,10 @@ async fn reserved_injected_tool_names_are_never_shadowed_by_mcp() {
         !names.contains(&"report_stage_outcome".to_string()),
         "reserved name leaked into catalog: {names:?}"
     );
-    assert!(names.contains(&"echo".to_string()), "non-reserved MCP tool dropped");
+    assert!(
+        names.contains(&"echo".to_string()),
+        "non-reserved MCP tool dropped"
+    );
 
     // A reserved name is not routed to MCP — it falls through as
     // Unsupported here (the bridge handles the real injected tool).

@@ -121,10 +121,7 @@ impl McpRegistry {
     /// entry points (`list_all_tools` / `call_tool`) so a Tokio runtime
     /// is guaranteed present; idempotent.
     fn ensure_monitors_started(&self) {
-        if self
-            .monitors_started
-            .swap(true, Ordering::AcqRel)
-        {
+        if self.monitors_started.swap(true, Ordering::AcqRel) {
             return;
         }
         for conn in self.servers.values() {

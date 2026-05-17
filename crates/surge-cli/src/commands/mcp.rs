@@ -127,9 +127,9 @@ pub async fn run(cmd: McpCommands) -> Result<()> {
 async fn connect() -> Result<DaemonEngineFacade> {
     let socket_path = surge_daemon::pidfile::socket_path()
         .map_err(|e| anyhow!("could not resolve daemon socket path: {e}"))?;
-    DaemonEngineFacade::connect(socket_path).await.map_err(|_| {
-        anyhow!("daemon not reachable — start it with `surge daemon start`")
-    })
+    DaemonEngineFacade::connect(socket_path)
+        .await
+        .map_err(|_| anyhow!("daemon not reachable — start it with `surge daemon start`"))
 }
 
 fn render_probe_text(servers: &[surge_orchestrator::engine::ipc::McpProbeReport]) {
@@ -137,8 +137,16 @@ fn render_probe_text(servers: &[surge_orchestrator::engine::ipc::McpProbeReport]
         println!("no MCP servers configured in surge.toml [[mcp_servers]]");
         return;
     }
-    let name_w = servers.iter().map(|s| s.name.len()).max().unwrap_or(4).max(4);
-    println!("{:<name_w$}  {:<12}  {:<6}  DETAIL", "NAME", "STATUS", "TOOLS");
+    let name_w = servers
+        .iter()
+        .map(|s| s.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    println!(
+        "{:<name_w$}  {:<12}  {:<6}  DETAIL",
+        "NAME", "STATUS", "TOOLS"
+    );
     for s in servers {
         let tools = s
             .tool_count

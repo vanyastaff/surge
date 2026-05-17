@@ -73,7 +73,10 @@ async fn filesystem_mcp_lists_tools_reads_a_file_and_shuts_down_cleanly() {
         true,
     );
 
-    let registry = Arc::new(McpRegistry::from_config(std::slice::from_ref(&server), None));
+    let registry = Arc::new(McpRegistry::from_config(
+        std::slice::from_ref(&server),
+        None,
+    ));
 
     let tools = registry
         .list_all_tools()
