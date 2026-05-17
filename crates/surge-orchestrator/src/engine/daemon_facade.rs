@@ -13,7 +13,7 @@ use crate::engine::facade::EngineFacade;
 use crate::engine::handle::{EngineRunEvent, RunHandle, RunOutcome, RunSummary};
 use crate::engine::ipc::{
     DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, InboundServerFrame,
-    RequestId, read_inbound_server_frame, write_frame,
+    McpProbeReport, RequestId, read_inbound_server_frame, write_frame,
 };
 use crate::roadmap_amendment::ActiveRunAmendmentOutcome;
 use async_trait::async_trait;
@@ -196,6 +196,58 @@ impl DaemonEngineFacade {
         Ok(Self {
             inner: DaemonClient::connect(socket_path).await?,
         })
+    }
+
+    /// Request-scoped MCP config validation (`surge mcp list|start`).
+    /// `name = None` probes every configured server; `Some` probes one.
+    pub async fn mcp_probe(
+        &self,
+        name: Option<String>,
+    ) -> Result<Vec<McpProbeReport>, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::McpProbe { request_id, name })
+            .await?
+        {
+            DaemonResponse::McpProbeOk { servers, .. } => Ok(servers),
+            DaemonResponse::Error { code, message, .. } => {
+                Err(EngineError::Internal(format!("{code:?}: {message}")))
+            },
+            other => Err(EngineError::Internal(format!(
+                "unexpected response to McpProbe: {other:?}"
+            ))),
+        }
+    }
+
+    /// Tail the daemon-probe-scoped captured MCP stderr for `name`
+    /// (`surge mcp logs`). Returns `(server, scope, lines)`.
+    pub async fn mcp_logs(
+        &self,
+        name: String,
+        tail: Option<usize>,
+    ) -> Result<(String, String, Vec<String>), EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::McpLogs {
+                request_id,
+                name,
+                tail,
+            })
+            .await?
+        {
+            DaemonResponse::McpLogsOk {
+                server,
+                scope,
+                lines,
+                ..
+            } => Ok((server, scope, lines)),
+            DaemonResponse::Error { code, message, .. } => {
+                Err(EngineError::Internal(format!("{code:?}: {message}")))
+            },
+            other => Err(EngineError::Internal(format!(
+                "unexpected response to McpLogs: {other:?}"
+            ))),
+        }
     }
 }
 
