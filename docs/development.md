@@ -57,6 +57,16 @@ SURGE_REAL_ACP_PROFILE=implementer@1.0 \
 
 The harness infers `claude-code`, `codex`, or `gemini-cli` launch mode from the binary name. Set `SURGE_REAL_ACP_KIND=claude-code|codex|gemini-cli|custom` to override that, and `SURGE_REAL_ACP_ARGS="--flag value"` for extra ACP process args. When the required env vars are missing the test prints a `SKIPPED` banner and exits successfully — CI's deterministic green path stays covered by the mock-ACP suite.
 
+### Optional: real filesystem-MCP smoke test
+
+`crates/surge-mcp/tests/filesystem_mcp_e2e.rs` exercises the real `@modelcontextprotocol/server-filesystem` MCP server end-to-end (list tools → read a file → deterministic shutdown). It is doubly gated — `#[ignore]` plus `SURGE_MCP_REAL=1` — so the default and `--ignored` CI paths stay mock-only. Needs `npx` on `PATH` (resolved Windows-safely via rmcp's `which_command`); the server package is fetched on first run:
+
+```bash
+SURGE_MCP_REAL=1 cargo test -p surge-mcp --test filesystem_mcp_e2e -- --ignored --nocapture
+```
+
+When `SURGE_MCP_REAL` is unset (or `npx` is absent) the test prints a `SKIPPED` banner and exits successfully.
+
 ## Performance Bench
 
 `cargo bench --bench stage_transition` measures per-stage transition latency for a synchronous Branch node. The CI gate runs a quick smoke; a full baseline is recorded locally:
