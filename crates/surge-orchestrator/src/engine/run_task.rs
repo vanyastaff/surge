@@ -107,7 +107,31 @@ pub(crate) struct RunTaskParams {
     pub profile_registry: Option<Arc<crate::profile_loader::ProfileRegistry>>,
 }
 
-pub(crate) async fn execute(mut params: RunTaskParams) -> RunOutcome {
+pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
+    // Capture the per-run MCP registry so it is torn down on *every*
+    // terminal path (completed / failed / aborted), not just the
+    // happy one — rmcp's Drop is async best-effort and can orphan
+    // children. Time-bounded so a hung MCP child cannot wedge run
+    // completion.
+    let mcp_registry = params.mcp_registry.clone();
+    // Box the large inner future so `execute`'s own future stays small
+    // at the spawn site (clippy::large_futures; also keeps stack use
+    // bounded for the per-run task).
+    let outcome = Box::pin(execute_inner(params)).await;
+    if let Some(reg) = mcp_registry {
+        let budget = std::time::Duration::from_secs(20);
+        if tokio::time::timeout(budget, reg.shutdown()).await.is_err() {
+            tracing::warn!(
+                target: "mcp::supervisor",
+                "MCP registry shutdown exceeded budget on run teardown; \
+                 abandoning remaining children to RAII"
+            );
+        }
+    }
+    outcome
+}
+
+async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
     let mut state = match initial_execution_state(&params).await {
         Ok(state) => state,
         Err(error) => return failed(&params, error).await,

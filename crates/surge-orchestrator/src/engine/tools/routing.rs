@@ -5,13 +5,13 @@
 //! construction time from the merged tool catalog.
 
 use crate::engine::tools::{
-    DeclaredTool, ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
+    DeclaredTool, McpEscalation, ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use surge_mcp::{McpContent, McpRegistry, McpToolEntry};
+use surge_mcp::{McpContent, McpError, McpRegistry, McpToolEntry};
 
 /// One row in the routing table — where a given tool name lives.
 #[derive(Clone, Debug)]
@@ -30,6 +30,9 @@ pub struct RoutingToolDispatcher {
     mcp_registry: Arc<McpRegistry>,
     routing_table: HashMap<String, ToolOrigin>,
     declared: Vec<DeclaredTool>,
+    /// MCP restart-exhaustion escalations observed during dispatch,
+    /// drained by the agent stage into `EscalationRequested` events.
+    escalations: Mutex<Vec<McpEscalation>>,
 }
 
 impl RoutingToolDispatcher {
@@ -101,6 +104,7 @@ impl RoutingToolDispatcher {
             mcp_registry,
             routing_table: table,
             declared,
+            escalations: Mutex::new(Vec::new()),
         }
     }
 }
@@ -129,8 +133,21 @@ impl ToolDispatcher for RoutingToolDispatcher {
                             .collect::<Vec<_>>()
                             .join("\n"),
                     },
-                    Err(e) => ToolResultPayload::Error {
-                        message: format!("MCP error: {e}"),
+                    Err(e) => {
+                        // Type-safe escalation capture (no string
+                        // sniffing): a restart-exhausted server is a
+                        // permanent failure the AFK operator must see.
+                        if let McpError::RestartExhausted { server, attempts } = &e
+                            && let Ok(mut q) = self.escalations.lock()
+                        {
+                            q.push(McpEscalation {
+                                server: server.clone(),
+                                attempts: *attempts,
+                            });
+                        }
+                        ToolResultPayload::Error {
+                            message: format!("MCP error: {e}"),
+                        }
                     },
                 }
             },
@@ -142,6 +159,13 @@ impl ToolDispatcher for RoutingToolDispatcher {
 
     fn declared_tools(&self) -> Vec<DeclaredTool> {
         self.declared.clone()
+    }
+
+    fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
+        self.escalations
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default()
     }
 }
 

@@ -13,7 +13,7 @@
 
 // Modules added incrementally in Phase 7+.
 pub mod connection;
-pub use connection::McpServerConnection;
+pub use connection::{McpHealth, McpServerConnection};
 
 pub mod error;
 pub use error::McpError;

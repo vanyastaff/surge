@@ -85,6 +85,20 @@ impl DeclaredTool {
     }
 }
 
+/// An MCP server whose restart policy gave up while serving a stage's
+/// tool calls. The agent stage drains these and appends a replay-safe
+/// `EscalationRequested` event so AFK surfaces (Telegram cockpit, notify
+/// multiplexer) see permanent MCP failure. Type-safe — not derived from
+/// stringified error messages.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpEscalation {
+    /// Configured MCP server name that exhausted its restart budget.
+    pub server: String,
+    /// Consecutive failed (re)connect attempts when it gave up.
+    pub attempts: u32,
+}
+
 /// Routes non-special ACP tool calls to implementations. Engine calls
 /// `dispatch` for every `ToolCall` whose name is not `report_stage_outcome`
 /// or `request_human_input` (those are engine-handled).
@@ -99,6 +113,14 @@ pub trait ToolDispatcher: Send + Sync {
     /// etc.). Used by `RoutingToolDispatcher` to assemble the
     /// session-level tool list.
     fn declared_tools(&self) -> Vec<DeclaredTool> {
+        Vec::new()
+    }
+
+    /// Drain MCP restart-exhaustion escalations accumulated since the
+    /// last call. Default empty (engine dispatcher never escalates);
+    /// `RoutingToolDispatcher` overrides. The agent stage drains after
+    /// each tool dispatch and appends `EscalationRequested`.
+    fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
         Vec::new()
     }
 }

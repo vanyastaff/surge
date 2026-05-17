@@ -108,6 +108,28 @@ pub(crate) fn classify_service_error(e: &ServiceError) -> ErrorClass {
     }
 }
 
+/// Coarse, externally-observable health of a connection. Returned by
+/// [`McpServerConnection::status`] and surfaced by `surge mcp` and the
+/// daemon. Operational telemetry only — never event-sourced.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpHealth {
+    /// Never connected, or fully shut down.
+    Disconnected,
+    /// A connection attempt is in progress (rarely observable —
+    /// `ensure_connected` holds the state lock during connect).
+    Connecting,
+    /// rmcp service is alive.
+    Healthy,
+    /// Reachable but failing health probes (set by the U11 monitor
+    /// before the restart policy kicks in).
+    Unhealthy,
+    /// Child died; awaiting backoff before the next reconnect.
+    Crashed,
+    /// Restart policy exhausted; will not re-spawn until reset.
+    Exhausted,
+}
+
 /// State of a single MCP server connection.
 #[derive(Debug)]
 enum ConnState {
@@ -416,6 +438,57 @@ impl McpServerConnection {
             attempts,
             next_retry_at: None,
         };
+    }
+
+    /// Coarse, non-mutating health snapshot for `surge mcp` / daemon
+    /// status. (`Connecting`/`Unhealthy` are produced elsewhere —
+    /// `Connecting` is unobservable under the held state lock,
+    /// `Unhealthy` is set by the U11 health monitor.)
+    pub async fn status(&self) -> McpHealth {
+        match &*self.state.lock().await {
+            ConnState::Disconnected => McpHealth::Disconnected,
+            ConnState::Running(_) => McpHealth::Healthy,
+            ConnState::Crashed { .. } => McpHealth::Crashed,
+            ConnState::Exhausted { .. } => McpHealth::Exhausted,
+        }
+    }
+
+    /// Deterministically tear the connection down.
+    ///
+    /// rmcp's `Drop` is async best-effort and can orphan the child if
+    /// the runtime is shutting down; an explicit `cancel().await`
+    /// guarantees the child is reaped. Idempotent: a `Disconnected`
+    /// connection is a no-op. After this the connection is
+    /// `Disconnected` (restart bookkeeping reset — reuse is allowed).
+    pub async fn shutdown(&self) {
+        let taken = {
+            let mut g = self.state.lock().await;
+            std::mem::replace(&mut *g, ConnState::Disconnected)
+        };
+        if let ConnState::Running(arc) = taken {
+            match Arc::into_inner(arc) {
+                Some(svc) => {
+                    if let Err(e) = svc.cancel().await {
+                        tracing::warn!(
+                            target: "mcp::supervisor",
+                            server = %self.config.name,
+                            error = %e,
+                            "mcp shutdown: join error while cancelling service"
+                        );
+                    }
+                },
+                None => {
+                    // An in-flight call still holds a clone. We cannot
+                    // consume the service to cancel it; fall back to
+                    // rmcp's best-effort Drop when the last clone drops.
+                    tracing::warn!(
+                        target: "mcp::supervisor",
+                        server = %self.config.name,
+                        "mcp shutdown: outstanding in-flight handle; relying on Drop"
+                    );
+                },
+            }
+        }
     }
 }
 

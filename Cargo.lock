@@ -3075,7 +3075,7 @@ dependencies = [
  "tendril",
  "unicase",
  "walkdir",
- "which",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -6272,6 +6272,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "which 8.0.2",
 ]
 
 [[package]]
@@ -7349,7 +7350,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "tracing",
  "tracing-subscriber",
- "which",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -7467,6 +7468,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -7524,7 +7526,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "ulid",
- "which",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -9165,6 +9167,15 @@ dependencies = [
  "home",
  "rustix 0.38.44",
  "winsafe",
+]
+
+[[package]]
+name = "which"
+version = "8.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81995fafaaaf6ae47a7d0cc83c67caf92aeb7e5331650ae6ff856f7c0c60c459"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

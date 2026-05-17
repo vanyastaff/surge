@@ -76,6 +76,11 @@ impl McpToolEntry {
 /// triggers the spawn.
 pub struct McpRegistry {
     servers: HashMap<String, Arc<McpServerConnection>>,
+    /// Cancelled by [`shutdown`](Self::shutdown). The U11 per-connection
+    /// health monitors bind to a clone of this so they stop when the
+    /// run terminates — the seam exists from U3 so the monitor task is
+    /// never born without a cancellation source.
+    cancel_token: tokio_util::sync::CancellationToken,
 }
 
 impl McpRegistry {
@@ -99,7 +104,59 @@ impl McpRegistry {
                 )),
             );
         }
-        Self { servers }
+        Self {
+            servers,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// A clone of the registry-lifetime cancellation token. U11's
+    /// health monitors `select!` on this so they exit when
+    /// [`shutdown`](Self::shutdown) is called.
+    #[must_use]
+    pub fn cancel_token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    /// Per-server health snapshot, sorted by server name for
+    /// deterministic output (`surge mcp list`, daemon status).
+    pub async fn statuses(&self) -> Vec<(String, crate::McpHealth)> {
+        let mut names: Vec<&String> = self.servers.keys().collect();
+        names.sort();
+        let mut out = Vec::with_capacity(names.len());
+        for n in names {
+            let conn = self.servers.get(n).expect("just collected from this map");
+            out.push((n.clone(), conn.status().await));
+        }
+        out
+    }
+
+    /// Deterministically tear down every connection and cancel the
+    /// health-monitor token. Called by the engine on run terminal
+    /// outcome (before the `Arc<McpRegistry>` drops) so no MCP child is
+    /// orphaned. Each connection's teardown is time-bounded so a hung
+    /// child cannot wedge the registry; idempotent.
+    pub async fn shutdown(&self) {
+        // Stop U11 health monitors first so they don't race a reconnect
+        // against the teardown.
+        self.cancel_token.cancel();
+        let per_conn = Duration::from_secs(5);
+        let mut handles = Vec::with_capacity(self.servers.len());
+        for conn in self.servers.values() {
+            let c = conn.clone();
+            handles.push(tokio::spawn(async move {
+                if tokio::time::timeout(per_conn, c.shutdown()).await.is_err() {
+                    tracing::warn!(
+                        target: "mcp::supervisor",
+                        server = %c.name(),
+                        "mcp shutdown exceeded per-connection budget; abandoning child to RAII"
+                    );
+                }
+            }));
+        }
+        for h in handles {
+            let _ = h.await;
+        }
     }
 
     /// Combined `tools/list` across all configured servers. Used by
