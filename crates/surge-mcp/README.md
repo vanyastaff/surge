@@ -4,12 +4,16 @@ MCP (Model Context Protocol) integration for surge. Wraps the
 official [`rmcp`](https://docs.rs/rmcp) crate (`>=1.6, <2.0`) with
 surge-flavoured config, registry, restart policy, and crash detection.
 
-M7 supports stdio child-process transport only; HTTP/SSE deferred to
-M7+ when there's a real driver.
+Stdio child-process transport only; HTTP/SSE deferred to a future
+milestone. Production lifecycle (structured crash detection, backoff
+restart policy, health monitor, deterministic teardown, replay
+attribution, sandbox plumbing, `surge mcp`) landed in the **MCP server
+lifecycle** milestone — see [`docs/mcp.md`](../../docs/mcp.md) and
+[ADR-0014](../../docs/adr/0014-mcp-server-lifecycle.md).
 
 ## Status
 
-The crate is fully wired into the surge engine via M7 PR 5 + PR 6:
+The crate is fully wired into the surge engine:
 
 - `surge_core::mcp_config::McpServerRef` / `McpTransportConfig` —
   serde-able config types.
@@ -106,7 +110,8 @@ through its `allowed_tools` whitelist if specified).
 | `transport` | `McpTransportConfig` | required | How surge reaches the server |
 | `allowed_tools` | `Option<Vec<String>>` | None (all exposed) | Per-server tool whitelist |
 | `call_timeout` | Duration | 60s | Max time for a single `tools/call` |
-| `restart_on_crash` | bool | true | Re-spawn on child exit |
+| `restart_on_crash` | bool | true | Re-spawn on transport-class failure |
+| `sandbox` | `Option<SandboxMode>` | None (inherit run) | Per-server sandbox-intent override (`read-only` denies MCP) |
 
 `McpTransportConfig::Stdio`:
 
@@ -118,39 +123,39 @@ through its `allowed_tools` whitelist if specified).
 
 ## Lifecycle
 
-Connections are constructed in `Disconnected` state. First `call_tool`
-or `list_tools` triggers `ensure_connected`:
+Connections are lazy (`Disconnected`); the first `call_tool` /
+`list_tools` triggers `ensure_connected` (spawn child + rmcp handshake
+bounded by `call_timeout` → `Running`).
 
-1. Spawn child via `tokio::process::Command` + `TokioChildProcess`.
-2. Run rmcp handshake bounded by `call_timeout`.
-3. Transition to `Running`; cache the `Arc<RunningService>`.
-
-On error (transport-like — broken pipe, EOF, channel closed):
-- Mark connection `Crashed`.
-- Next call: if `restart_on_crash = true`, reconnect; else return
+- **Crash detection is structural**: `rmcp::ServiceError::{TransportClosed,
+  TransportSend}` mark the connection `Crashed`; service-level errors
+  (`McpError`, bad params) leave it `Running`. There is **no display-string
+  heuristic** — `ServiceError` is matched directly.
+- **Restart policy**: a `Crashed` connection reconnects under exponential
+  backoff (`500ms · 2^(n-1)`, capped `30s`), max **5** attempts. Calls
+  during backoff fast-return without spawning. After the cap the
+  connection is `Exhausted` and returns `McpError::RestartExhausted`; the
+  orchestrator surfaces this as a replay-safe `EscalationRequested` event
+  (cockpit-visible). `restart_on_crash = false` short-circuits to
   `McpError::ServerNotRunning`.
+- **Health monitor**: a per-connection task probes every 60s
+  (≥ backoff cap); 3 consecutive transport-class failures mark it
+  `Unhealthy` and hand it to the restart policy. Bound to the run's
+  cancellation token; exits on teardown.
+- **Deterministic teardown**: `McpRegistry::shutdown()` `cancel().await`s
+  every connection on run terminal outcome — no orphaned children
+  (rmcp's `Drop` alone is async best-effort).
 
-On error (service-like — bad params, tool not found, server policy
-rejection):
-- Connection stays `Running` (server is alive; the call failed).
-- Caller gets `McpError::Service`.
-
-The transport-vs-service distinction uses a string-match heuristic on
-the rmcp error message — `"connection"`, `"transport"`, `"broken
-pipe"`, `"channel closed"`, `"i/o"`, `"unexpected end"`, `"disconnected"`,
-`"eof"` mark transport.
+Full reference: [`docs/mcp.md`](../../docs/mcp.md).
 
 ## Lifetime — per-run
 
-MCP server child processes are scoped to a single run. M7's
-`Engine::start_run` builds an `Arc<McpRegistry>` per run from
-`run_config.mcp_servers`. When the run terminates the registry is
-dropped and the child processes exit.
-
-This trades startup cost for isolation: a `playwright` server's
-browser state for run A is not visible to run B. M9+ may add an
-optional shared-server mode (`McpServerRef::isolation = Shared`)
-when warmth across runs becomes important.
+MCP child processes are scoped to a single run: `Engine::start_run`
+builds an `Arc<McpRegistry>` per run and `shutdown()`s it on terminal
+outcome. A server's state for run A is not visible to run B. A future
+milestone may add an optional shared-server mode
+(`McpServerRef::isolation = Shared`); see
+[ADR-0014](../../docs/adr/0014-mcp-server-lifecycle.md).
 
 ## Common server installs
 
@@ -176,10 +181,15 @@ The call exceeded `call_timeout`. Either the server is genuinely slow
 (raise the timeout) or it deadlocked on a tool implementation bug
 (check the server's logs).
 
-**`McpError::ServerCrashed`**
-The child process exited mid-call. With `restart_on_crash = true`,
-the next call re-spawns. With `false`, you'll see
-`McpError::ServerNotRunning` — restart the run.
+**`McpError::RestartExhausted`**
+The restart policy hit its capped attempt budget (5 consecutive failed
+reconnects). The connection will not re-spawn until the run restarts;
+an `EscalationRequested` event is emitted (visible in the Telegram
+cockpit). Inspect captured stderr with `surge mcp logs <name>`.
+
+**`McpError::ServerNotRunning`**
+The connection is `Crashed` and `restart_on_crash = false`. Restart
+the run, or set `restart_on_crash = true`.
 
 **`McpError::ServerNotConfigured`**
 The agent stage's `mcp_add = ["foo"]` references a server name not in

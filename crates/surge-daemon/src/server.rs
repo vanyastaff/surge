@@ -848,7 +848,7 @@ async fn dispatch(
             let mut selected: Vec<&surge_core::mcp_config::McpServerRef> = config
                 .mcp_servers
                 .iter()
-                .filter(|s| name.as_deref().map_or(true, |n| n == s.name.as_str()))
+                .filter(|s| name.as_deref().is_none_or(|n| n == s.name.as_str()))
                 .collect();
             selected.sort_by(|a, b| a.name.cmp(&b.name));
 

@@ -308,7 +308,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 | `surge-daemon` | Long-running local engine host over Unix sockets / Windows named pipes. |
 | `surge-cli` | `surge` binary: agents, profiles, worktrees, engine, daemon, registry, memory, analytics. |
 | `surge-notify` | Notification delivery: desktop, webhook, Slack, email, Telegram. |
-| `surge-mcp` | stdio MCP server lifecycle and tool delegation. |
+| `surge-mcp` | Production stdio MCP server lifecycle: structured crash detection, backoff restart policy + escalation, health monitor, deterministic per-run teardown, redacted stderr capture. See [`docs/mcp.md`](mcp.md) / [ADR-0014](adr/0014-mcp-server-lifecycle.md). |
 | `surge-ui` | GPUI desktop shell. |
 
 Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge-cli`, `surge-daemon`, `surge-ui`) depend on the workspace and on each other only through stable trait surfaces.

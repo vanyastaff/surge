@@ -17,6 +17,7 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Archetypes](archetypes.md) | Bundled `flow.toml` archetypes with mermaid diagrams |
 | [Tracker automation](tracker-automation.md) | Tier labels (L0/L1/L2/L3), idempotency, `surge intake list`, external state reflection |
 | [Telegram cockpit](telegram.md) | Setup, pairing, command reference, card lifecycle, snooze re-emission, recovery |
+| [MCP server lifecycle](mcp.md) | `[[mcp_servers]]` config, connection/restart/health lifecycle, stderr redaction, sandbox boundary, `surge mcp` |
 | [Migrate `.spec.toml` → `flow.toml`](migrate-spec-to-flow.md) | Auto-translator (`surge migrate-spec`) reference and manual-edit guidance for the legacy pipeline retirement |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 

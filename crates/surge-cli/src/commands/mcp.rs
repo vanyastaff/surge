@@ -132,6 +132,26 @@ async fn connect() -> Result<DaemonEngineFacade> {
     })
 }
 
+fn render_probe_text(servers: &[surge_orchestrator::engine::ipc::McpProbeReport]) {
+    if servers.is_empty() {
+        println!("no MCP servers configured in surge.toml [[mcp_servers]]");
+        return;
+    }
+    let name_w = servers.iter().map(|s| s.name.len()).max().unwrap_or(4).max(4);
+    println!("{:<name_w$}  {:<12}  {:<6}  DETAIL", "NAME", "STATUS", "TOOLS");
+    for s in servers {
+        let tools = s
+            .tool_count
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".into());
+        let detail = s.error.as_deref().unwrap_or("");
+        println!(
+            "{:<name_w$}  {:<12}  {:<6}  {}",
+            s.name, s.status, tools, detail
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,25 +206,5 @@ mod tests {
             McpCommands::Stop { name } => assert_eq!(name, "fs"),
             other => panic!("expected Stop, got {other:?}"),
         }
-    }
-}
-
-fn render_probe_text(servers: &[surge_orchestrator::engine::ipc::McpProbeReport]) {
-    if servers.is_empty() {
-        println!("no MCP servers configured in surge.toml [[mcp_servers]]");
-        return;
-    }
-    let name_w = servers.iter().map(|s| s.name.len()).max().unwrap_or(4).max(4);
-    println!("{:<name_w$}  {:<12}  {:<6}  DETAIL", "NAME", "STATUS", "TOOLS");
-    for s in servers {
-        let tools = s
-            .tool_count
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "-".into());
-        let detail = s.error.as_deref().unwrap_or("");
-        println!(
-            "{:<name_w$}  {:<12}  {:<6}  {}",
-            s.name, s.status, tools, detail
-        );
     }
 }

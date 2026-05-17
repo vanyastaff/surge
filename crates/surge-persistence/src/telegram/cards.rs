@@ -65,6 +65,7 @@ pub enum CardsError {
 /// # Errors
 ///
 /// Returns [`CardsError::Sqlite`] on storage failure.
+#[allow(clippy::too_many_arguments)]
 pub fn upsert(
     conn: &Connection,
     run_id: &str,

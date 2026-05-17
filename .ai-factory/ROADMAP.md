@@ -152,7 +152,7 @@
   - Documentation: sandbox capability matrix table in `docs/`
   - Audit logging: every elevation request + decision recorded with command summary
 
-- [ ] **MCP server lifecycle** — production-grade `surge-mcp` (current crate is skeleton — touches `surge-mcp`, `surge-orchestrator`, `surge-cli`)
+- [x] **MCP server lifecycle** — production-grade `surge-mcp` (touches `surge-mcp`, `surge-orchestrator`, `surge-cli`, `surge-daemon`) — landed via plan `docs/plans/2026-05-17-001-feat-mcp-server-lifecycle-plan.md`, see [ADR 0014](../docs/adr/0014-mcp-server-lifecycle.md). Structured `ServiceError` crash detection, redacted bounded stderr capture, exponential-backoff restart policy with capped attempts + `EscalationRequested` give-up (cockpit-visible), periodic health monitor, deterministic per-run teardown, per-server replay attribution (schema v3), reserved injected-tool names, sandbox-intent plumbing, and `surge mcp list/start/stop/logs`. Deferred with rationale (ADR-0014): `surge mcp stop` is an explicit idempotent ack under per-run isolation (live-run halt is `surge run abort`); OS-level sandboxing of MCP children is delegated to the runtime per ADR-0006 (`FullAccess`/`WorkspaceNetwork` MCP binaries run unconstrained — operator-trusted only); persistent shared servers (`McpServerRef::isolation = Shared`) and run-scoped `surge mcp logs` deferred to a future shared-server milestone; supervisor extraction across inbox/cockpit/MCP deferred.
   - `rmcp` stdio child-process transport wired end-to-end
   - Registry-driven launch: `mcp.toml` lists servers with command, args, env, sandbox intent
   - Daemon starts MCP children with run lifecycle; stops on terminal outcome
@@ -268,3 +268,4 @@
 | Roadmap amendments via `surge feature` | 2026-05-11 |
 | Sandbox delegation matrix | 2026-05-13 |
 | Legacy pipeline retirement | 2026-05-13 |
+| MCP server lifecycle | 2026-05-17 |
