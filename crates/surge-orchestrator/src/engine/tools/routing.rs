@@ -13,6 +13,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use surge_mcp::{McpContent, McpError, McpRegistry, McpToolEntry};
 
+/// Surge-injected tool names that are added separately by the ACP
+/// bridge (not via any `ToolDispatcher::declared_tools`) and dispatched
+/// upstream of this router. They are reserved: an MCP server must never
+/// shadow them in the agent's tool catalog or routing table. This is
+/// the **single canonical arbitration site** for injected-tool name
+/// precedence — see ADR-0006 (uniform injected-tool surface) and
+/// ADR-0014. The regression test asserts no second list exists.
+pub(crate) const RESERVED_INJECTED_TOOLS: [&str; 2] =
+    ["report_stage_outcome", "request_human_input"];
+
 /// One row in the routing table — where a given tool name lives.
 #[derive(Clone, Debug)]
 enum ToolOrigin {
@@ -98,6 +108,26 @@ impl RoutingToolDispatcher {
             engine_tools.iter().map(|t| t.name.as_str()).collect();
         declared.retain(|d| !engine_names.contains(d.name.as_str()));
         declared.extend(engine_tools);
+
+        // Reserved-name guard (single canonical arbitration site):
+        // surge-injected tools are dispatched by the ACP bridge before
+        // this router ever sees them, so an MCP tool of the same name
+        // would shadow the catalog while being unreachable. Drop any
+        // such MCP entry from the routing table and the declared
+        // catalog, warning once per collision (ADR-0006 / ADR-0014).
+        for reserved in RESERVED_INJECTED_TOOLS {
+            if let Some(ToolOrigin::Mcp { server, .. }) = table.get(reserved) {
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    tool = reserved,
+                    server = %server,
+                    "MCP server advertises a surge-injected tool name; \
+                     dropping it — injected tools win (ADR-0006)"
+                );
+                table.remove(reserved);
+            }
+            declared.retain(|d| d.name != reserved);
+        }
 
         Self {
             engine_dispatcher,
@@ -203,6 +233,20 @@ fn content_to_string(c: McpContent) -> String {
 mod tests {
     use super::*;
     use crate::engine::tools::{ToolCall, ToolDispatcher, ToolResultPayload};
+
+    /// Single-arbitration-site guard: the reserved injected-tool list
+    /// is defined exactly once, here. If this breaks, a second list was
+    /// introduced or a name changed without updating the contract —
+    /// re-derive against the ACP bridge's injected tools (ADR-0006).
+    #[test]
+    fn reserved_injected_tools_is_the_canonical_pair() {
+        assert_eq!(
+            RESERVED_INJECTED_TOOLS,
+            ["report_stage_outcome", "request_human_input"],
+            "reserved injected-tool contract changed; this const is the \
+             single source of truth — verify against the ACP bridge"
+        );
+    }
 
     /// Stub engine dispatcher that returns a marker payload echoing the
     /// requested tool name and declares one tool (`"shell_exec"`) so we
