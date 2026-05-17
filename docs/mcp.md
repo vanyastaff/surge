@@ -38,7 +38,7 @@ sandbox = "workspace-write"                             # optional per-server ov
 Connections are lazy: the child process spawns on first tool use, not at
 config load. State machine (runtime-only — never event-sourced):
 
-```
+```text
 Disconnected → Connecting → Running ──(transport-dead)──▶ Crashed
                                  ▲                            │ backoff(attempt)
                                  └──── reconnect ◀────────────┘

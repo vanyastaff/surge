@@ -8,7 +8,7 @@ use crate::engine::tools::{
     DeclaredTool, McpEscalation, ToolCall, ToolDispatchContext, ToolDispatcher, ToolResultPayload,
 };
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use surge_mcp::{McpContent, McpError, McpRegistry, McpToolEntry};
@@ -32,6 +32,17 @@ enum ToolOrigin {
     Mcp { server: String, timeout: Duration },
 }
 
+/// Restart-exhaustion escalation accumulator. `pending` is drained by
+/// the agent stage into `EscalationRequested` events; `seen` records
+/// every server already escalated so a single permanent outage emits
+/// exactly one card instead of one per subsequent tool call — the
+/// give-up fact is stable (see `engine::stage::agent`).
+#[derive(Default)]
+struct EscalationState {
+    pending: Vec<McpEscalation>,
+    seen: HashSet<String>,
+}
+
 /// `ToolDispatcher` impl that routes between engine + MCP. Constructed
 /// once per engine session (per agent stage), with the routing table
 /// precomputed from the merged catalog.
@@ -42,7 +53,9 @@ pub struct RoutingToolDispatcher {
     declared: Vec<DeclaredTool>,
     /// MCP restart-exhaustion escalations observed during dispatch,
     /// drained by the agent stage into `EscalationRequested` events.
-    escalations: Mutex<Vec<McpEscalation>>,
+    /// De-duplicated per server so one outage cannot spam the
+    /// operator surface.
+    escalations: Mutex<EscalationState>,
 }
 
 impl RoutingToolDispatcher {
@@ -134,7 +147,29 @@ impl RoutingToolDispatcher {
             mcp_registry,
             routing_table: table,
             declared,
-            escalations: Mutex::new(Vec::new()),
+            escalations: Mutex::new(EscalationState::default()),
+        }
+    }
+
+    /// Record a restart-exhaustion escalation, de-duplicated per
+    /// server: the first exhaustion of `server` is queued for the
+    /// stage to escalate; later ones (every subsequent tool call hits
+    /// the already-`Exhausted` connection) are dropped so one outage
+    /// cannot spam the AFK/operator surface. Lock poisoning is
+    /// swallowed — an escalation is best-effort telemetry, not
+    /// load-bearing control flow.
+    fn record_escalation(&self, server: &str, attempts: u32) {
+        // Hot path (server already exhausted, hit by every later tool
+        // call) does a borrow-keyed lookup with no allocation; only a
+        // newly-seen server allocates.
+        if let Ok(mut st) = self.escalations.lock()
+            && !st.seen.contains(server)
+        {
+            st.seen.insert(server.to_owned());
+            st.pending.push(McpEscalation {
+                server: server.to_owned(),
+                attempts,
+            });
         }
     }
 }
@@ -167,13 +202,10 @@ impl ToolDispatcher for RoutingToolDispatcher {
                         // Type-safe escalation capture (no string
                         // sniffing): a restart-exhausted server is a
                         // permanent failure the AFK operator must see.
-                        if let McpError::RestartExhausted { server, attempts } = &e
-                            && let Ok(mut q) = self.escalations.lock()
-                        {
-                            q.push(McpEscalation {
-                                server: server.clone(),
-                                attempts: *attempts,
-                            });
+                        // De-duplicated per server inside
+                        // `record_escalation`.
+                        if let McpError::RestartExhausted { server, attempts } = &e {
+                            self.record_escalation(server, *attempts);
                         }
                         ToolResultPayload::Error {
                             message: format!("MCP error: {e}"),
@@ -194,7 +226,7 @@ impl ToolDispatcher for RoutingToolDispatcher {
     fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
         self.escalations
             .lock()
-            .map(|mut q| std::mem::take(&mut *q))
+            .map(|mut st| std::mem::take(&mut st.pending))
             .unwrap_or_default()
     }
 
@@ -334,6 +366,30 @@ mod tests {
                 .description
                 .as_deref(),
             Some("from a")
+        );
+    }
+
+    #[test]
+    fn escalations_dedupe_per_server() {
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
+        let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &[], &HashMap::new());
+        // A permanently-exhausted server is hit by every later tool
+        // call — only the first must escalate.
+        r.record_escalation("flaky", 5);
+        r.record_escalation("flaky", 5);
+        r.record_escalation("other", 5);
+        let drained = r.drain_mcp_escalations();
+        assert_eq!(
+            drained.len(),
+            2,
+            "one escalation per server, got {drained:?}"
+        );
+        // A post-drain repeat of an already-escalated server stays
+        // suppressed: the give-up fact is recorded once per run.
+        r.record_escalation("flaky", 5);
+        assert!(
+            r.drain_mcp_escalations().is_empty(),
+            "re-escalation after drain must stay suppressed"
         );
     }
 

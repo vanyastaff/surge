@@ -39,6 +39,12 @@ const SENSITIVE_KEYS: &[&str] = &[
     "password",
     "passwd",
     "token",
+    // Connection strings routinely embed `user:pass@host` — mask the
+    // whole value when it arrives under one of these keys.
+    "database_url",
+    "database-url",
+    "dsn",
+    "connection_string",
 ];
 
 /// Lowercased standalone keywords that mark the *next whitespace token*
@@ -74,8 +80,25 @@ pub fn redact_line(line: &str) -> String {
             continue;
         }
 
-        // `key=value` / `key:value` where key is sensitive.
-        if let Some(masked) = mask_key_value(core, &lowered) {
+        // `key=value` / `key:value` where key is sensitive. The flag
+        // marks the masked value as itself a credential-scheme keyword:
+        // `Authorization:Bearer <tok>` packs key+scheme+delimiter into
+        // one whitespace token, so the real secret is the *next* token
+        // and must also be redacted (else it leaks — the compact form
+        // of `Authorization: Bearer <tok>`).
+        if let Some((masked, redact_next)) = mask_key_value(core, &lowered) {
+            out.push_str(&masked);
+            out.push_str(ws);
+            if redact_next {
+                redact_next_token = true;
+            }
+            continue;
+        }
+
+        // Connection-string URLs carry credentials inline
+        // (`postgres://user:pass@host`); mask just the userinfo and
+        // keep the scheme/host so the line stays useful for debugging.
+        if let Some(masked) = mask_url_userinfo(core) {
             out.push_str(&masked);
             out.push_str(ws);
             continue;
@@ -107,8 +130,11 @@ pub fn redact_line(line: &str) -> String {
 }
 
 /// If `core` is `<sensitive-key><delim><value>`, return the masked form
-/// `<sensitive-key><delim><redacted>`. Otherwise `None`.
-fn mask_key_value(core: &str, lowered: &str) -> Option<String> {
+/// `<sensitive-key><delim><redacted>` and a flag: when the value is
+/// itself a credential-scheme keyword (`bearer`/`token`/`basic`) the
+/// real secret is the *next* whitespace token, so the caller must
+/// redact that too. Returns `None` when the key is not sensitive.
+fn mask_key_value(core: &str, lowered: &str) -> Option<(String, bool)> {
     let delim = lowered.find(['=', ':'])?;
     let (key_raw, rest) = core.split_at(delim);
     let key =
@@ -117,8 +143,31 @@ fn mask_key_value(core: &str, lowered: &str) -> Option<String> {
         return None;
     }
     // `rest` starts with the delimiter char; keep it, mask the value.
+    // `delim` indexes an ASCII `=`/`:`, so `delim + 1` is a char boundary.
     let delim_char = &rest[..1];
-    Some(format!("{key_raw}{delim_char}{MASK}"))
+    let value_lc = lowered[delim + 1..].trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+    let redact_next = SENSITIVE_PREFIXES.contains(&value_lc);
+    Some((format!("{key_raw}{delim_char}{MASK}"), redact_next))
+}
+
+/// Mask the `user:pass@` userinfo of a connection-string-style URL
+/// (`scheme://user:pass@host/...`), preserving scheme and host so the
+/// line stays diagnostically useful. Returns `None` when `core` has no
+/// URL authority with userinfo (ordinary `https://host/path` URLs and
+/// scp-style `git@host:path` refs are left untouched).
+fn mask_url_userinfo(core: &str) -> Option<String> {
+    let scheme_end = core.find("://")?;
+    let after = scheme_end + 3;
+    // The authority ends at the first '/', '?', or '#'.
+    let authority_end = core[after..]
+        .find(['/', '?', '#'])
+        .map_or(core.len(), |i| after + i);
+    let at = after + core[after..authority_end].find('@')?;
+    if at == after {
+        // Empty userinfo ("scheme://@host") — nothing to mask.
+        return None;
+    }
+    Some(format!("{}://{}{}", &core[..scheme_end], MASK, &core[at..]))
 }
 
 /// Heuristic: a long run of base64 / hex / url-safe characters with no
@@ -189,5 +238,44 @@ mod tests {
     fn preserves_blank_and_whitespace() {
         assert_eq!(redact_line(""), "");
         assert_eq!(redact_line("   "), "   ");
+    }
+
+    #[test]
+    fn masks_compact_authorization_bearer() {
+        // No space between the key and `Bearer`: the scheme keyword is
+        // packed into the key token, the secret is the next token.
+        let r = redact_line("INFO Authorization:Bearer abc123def456ghi789tok");
+        assert!(
+            !r.contains("abc123def456ghi789tok"),
+            "compact bearer token leaked: {r}"
+        );
+        assert!(r.contains("Authorization:"), "structure lost: {r}");
+    }
+
+    #[test]
+    fn masks_connection_string_userinfo() {
+        let r = redact_line("INFO connecting postgres://admin:s3cr3tpw@db.internal:5432/app");
+        assert!(!r.contains("s3cr3tpw"), "db password leaked: {r}");
+        assert!(!r.contains("admin:s3cr3tpw"), "userinfo leaked: {r}");
+        assert!(r.contains("postgres://"), "scheme lost: {r}");
+        assert!(r.contains("db.internal"), "host lost (debuggability): {r}");
+    }
+
+    #[test]
+    fn masks_database_url_env_assignment() {
+        let r = redact_line("DATABASE_URL=postgres://u:p@h:5432/db starting");
+        assert!(
+            !r.contains("postgres://u:p@h"),
+            "DATABASE_URL value leaked: {r}"
+        );
+        assert!(r.contains("DATABASE_URL="), "key preserved: {r}");
+        assert!(r.contains("starting"), "trailing context preserved: {r}");
+    }
+
+    #[test]
+    fn ordinary_url_without_userinfo_passes_through() {
+        // No credentials in the authority — keep it readable.
+        let line = "fetched https://example.com/path?q=1 ok";
+        assert_eq!(redact_line(line), line);
     }
 }

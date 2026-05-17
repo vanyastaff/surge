@@ -903,7 +903,18 @@ async fn dispatch(
                         .map(|s| (*s).to_string())
                         .collect()
                 },
-                Err(_) => Vec::new(),
+                // No capture file yet is a legitimate "no logs" state.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                // Permission / IO / encoding failures must surface as an
+                // error, not masquerade as an empty tail — masking them
+                // makes operator diagnostics actively misleading.
+                Err(e) => {
+                    return Some(DaemonResponse::Error {
+                        request_id,
+                        code: ErrorCode::EngineError,
+                        message: format!("failed to read MCP stderr capture for '{name}': {e}"),
+                    });
+                },
             };
             Some(DaemonResponse::McpLogsOk {
                 request_id,
