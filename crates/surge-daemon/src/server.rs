@@ -18,8 +18,8 @@ use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::EngineRunEvent;
 use surge_orchestrator::engine::ipc::{
-    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
-    read_request_frame, write_frame,
+    DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, McpProbeReport,
+    RequestId, read_request_frame, write_frame,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -121,6 +121,27 @@ pub async fn run_with_registry(
         .name(name)
         .create_tokio()
         .map_err(DaemonError::Io)?;
+
+    // S3 / ADR-0014: the control socket is the authz boundary —
+    // `surge mcp logs` exposes captured MCP stderr only over it, with
+    // no per-verb authz. Restrict access to the daemon's OS user.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&cfg.socket_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(&cfg.socket_path, perms) {
+                tracing::warn!(
+                    error = %e,
+                    "failed to set 0600 on daemon socket; access may be broader than intended"
+                );
+            }
+        }
+    }
+    // On Windows the named pipe is not a filesystem object; interprocess
+    // creates it with the default DACL (creating user + Administrators),
+    // which already excludes other local users (documented in ADR-0014).
 
     tracing::info!(socket = %cfg.socket_path.display(), "daemon listening");
 
@@ -818,6 +839,80 @@ async fn dispatch(
             Some(DaemonResponse::ShutdownOk { request_id })
         },
 
+        DaemonRequest::McpProbe { request_id, name } => {
+            // Request-scoped validate-drop (ADR-0014): per server, build
+            // a transient isolated registry, list its tools, capture
+            // health, tear it down in the same request. No persistent
+            // daemon-resident session is created.
+            let config = SurgeConfig::discover().unwrap_or_default();
+            let mut selected: Vec<&surge_core::mcp_config::McpServerRef> = config
+                .mcp_servers
+                .iter()
+                .filter(|s| name.as_deref().map_or(true, |n| n == s.name.as_str()))
+                .collect();
+            selected.sort_by(|a, b| a.name.cmp(&b.name));
+
+            let mut servers = Vec::with_capacity(selected.len());
+            for srv in selected {
+                // Per-server isolation: one bad server must not mask the
+                // others in a config-validation report.
+                let reg = surge_mcp::McpRegistry::from_config(std::slice::from_ref(srv), None);
+                let probe = reg.list_all_tools().await;
+                let status = reg
+                    .statuses()
+                    .await
+                    .into_iter()
+                    .find(|(n, _)| n == &srv.name)
+                    .map_or("unknown", |(_, h)| mcp_health_label(h));
+                let (tool_count, error) = match probe {
+                    Ok(tools) => (
+                        Some(tools.iter().filter(|t| t.server == srv.name).count()),
+                        None,
+                    ),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                reg.shutdown().await;
+                servers.push(McpProbeReport::new(
+                    srv.name.clone(),
+                    status.to_string(),
+                    tool_count,
+                    error,
+                ));
+            }
+            Some(DaemonResponse::McpProbeOk {
+                request_id,
+                servers,
+            })
+        },
+
+        DaemonRequest::McpLogs {
+            request_id,
+            name,
+            tail,
+        } => {
+            // Probe-scoped, leak-safe: this path is written only by
+            // operator-initiated McpProbe of `name` and is distinct
+            // from any run's `<worktree>/.surge/mcp-stderr/` (ADR-0014).
+            let path = surge_mcp::stderr_log_path(None, &name);
+            let lines = match tokio::fs::read_to_string(&path).await {
+                Ok(body) => {
+                    let all: Vec<&str> = body.lines().collect();
+                    let take = tail.unwrap_or(200).min(all.len());
+                    all[all.len() - take..]
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect()
+                },
+                Err(_) => Vec::new(),
+            };
+            Some(DaemonResponse::McpLogsOk {
+                request_id,
+                server: name,
+                scope: "probe".into(),
+                lines,
+            })
+        },
+
         // `DaemonRequest` is #[non_exhaustive]; new variants added in
         // future milestones will fall here with a generic error until
         // this server is updated.
@@ -829,6 +924,22 @@ async fn dispatch(
                 message: "unsupported request method".into(),
             })
         },
+    }
+}
+
+/// Render [`surge_mcp::McpHealth`] as a stable wire label for
+/// `McpProbeReport.status`. `McpHealth` is `#[non_exhaustive]`; the
+/// catch-all keeps a future variant from breaking the build.
+fn mcp_health_label(h: surge_mcp::McpHealth) -> &'static str {
+    use surge_mcp::McpHealth;
+    match h {
+        McpHealth::Disconnected => "disconnected",
+        McpHealth::Connecting => "connecting",
+        McpHealth::Healthy => "healthy",
+        McpHealth::Unhealthy => "unhealthy",
+        McpHealth::Crashed => "crashed",
+        McpHealth::Exhausted => "exhausted",
+        _ => "unknown",
     }
 }
 

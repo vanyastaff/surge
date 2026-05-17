@@ -332,7 +332,7 @@ impl McpServerConnection {
         // exit / shutdown); it holds no handle to the connection.
         if let Some(stderr) = stderr {
             let server = self.config.name.clone();
-            let path = stderr_file_path(self.cwd.as_deref(), &server);
+            let path = stderr_log_path(self.cwd.as_deref(), &server);
             tokio::spawn(stderr_forwarder(stderr, server, path));
         }
 
@@ -528,8 +528,10 @@ fn minimal_child_env() -> Vec<(String, String)> {
 ///
 /// Run-scoped connections write under the run worktree
 /// (`<cwd>/.surge/mcp-stderr/<server>.log`); daemon diagnostic probes
-/// (`cwd == None`) fall back to a daemon-scoped temp directory.
-fn stderr_file_path(cwd: Option<&Path>, server: &str) -> PathBuf {
+/// (`cwd == None`) fall back to a daemon-scoped temp directory. Public
+/// so `surge mcp logs` (the daemon) resolves the identical path.
+#[must_use]
+pub fn stderr_log_path(cwd: Option<&Path>, server: &str) -> PathBuf {
     let safe: String = server
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
@@ -672,14 +674,14 @@ mod tests {
 
     #[test]
     fn stderr_path_is_run_scoped_when_cwd_present() {
-        let p = stderr_file_path(Some(Path::new("/work/tree")), "play/wright");
+        let p = stderr_log_path(Some(Path::new("/work/tree")), "play/wright");
         assert!(p.ends_with("play_wright.log"));
         assert!(p.to_string_lossy().contains("mcp-stderr"));
     }
 
     #[test]
     fn stderr_path_falls_back_to_temp_for_daemon_probe() {
-        let p = stderr_file_path(None, "github");
+        let p = stderr_log_path(None, "github");
         assert!(p.ends_with("github.log"));
         assert!(p.starts_with(std::env::temp_dir()));
     }

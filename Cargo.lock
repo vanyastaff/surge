@@ -7397,6 +7397,7 @@ dependencies = [
  "surge-acp",
  "surge-core",
  "surge-intake",
+ "surge-mcp",
  "surge-notify",
  "surge-orchestrator",
  "surge-persistence",
