@@ -199,7 +199,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_tool_wins_collision() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         let mcp_tools = vec![McpToolEntry::new(
             "fake".into(),
             "shell_exec".into(), // colliding name
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_mcp_collision_first_wins_by_server() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         // Two servers that both expose "shared". "a_server" sorts before
         // "z_server", so "a_server"'s entry should win.
         let mcp_tools = vec![
@@ -263,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_is_unsupported() {
-        let mcp = Arc::new(McpRegistry::from_config(&[]));
+        let mcp = Arc::new(McpRegistry::from_config(&[], None));
         let r = RoutingToolDispatcher::new(Arc::new(EngineStub), mcp, &[], &HashMap::new());
         let ctx = ToolDispatchContext {
             run_id: surge_core::id::RunId::new(),

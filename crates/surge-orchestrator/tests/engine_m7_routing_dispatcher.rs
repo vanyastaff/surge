@@ -32,7 +32,7 @@ impl ToolDispatcher for EngineStub {
 
 #[tokio::test]
 async fn merged_catalog_engine_wins() {
-    let registry = Arc::new(McpRegistry::from_config(&[]));
+    let registry = Arc::new(McpRegistry::from_config(&[], None));
     let mcp_tools = vec![
         McpToolEntry::new(
             "mock".into(),
@@ -59,7 +59,7 @@ async fn merged_catalog_engine_wins() {
 
 #[tokio::test]
 async fn engine_route_is_taken_when_collision() {
-    let registry = Arc::new(McpRegistry::from_config(&[]));
+    let registry = Arc::new(McpRegistry::from_config(&[], None));
     let mcp_tools = vec![McpToolEntry::new(
         "mock".into(),
         "shell_exec".into(),

@@ -286,6 +286,7 @@ impl Engine {
         } else {
             Some(Arc::new(surge_mcp::McpRegistry::from_config(
                 &run_config.mcp_servers,
+                Some(worktree_path.as_path()),
             )))
         };
         let mcp_servers_clone = run_config.mcp_servers.clone();
@@ -624,6 +625,7 @@ impl Engine {
         } else {
             Some(Arc::new(surge_mcp::McpRegistry::from_config(
                 &resume_run_config.mcp_servers,
+                Some(worktree_path.as_path()),
             )))
         };
         let mcp_servers_for_resume = resume_run_config.mcp_servers.clone();

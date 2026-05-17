@@ -52,7 +52,7 @@ fn server_ref(restart: bool) -> McpServerRef {
 #[tokio::test]
 #[ignore = "requires `cargo build --example mock_mcp_server --features mock-server` first"]
 async fn list_tools_includes_echo_and_crash_now() {
-    let c = McpServerConnection::new(server_ref(true));
+    let c = McpServerConnection::new(server_ref(true), None);
     let tools = c.list_tools().await.expect("list_tools");
     let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
     assert!(
@@ -68,7 +68,7 @@ async fn list_tools_includes_echo_and_crash_now() {
 #[tokio::test]
 #[ignore = "requires mock_mcp_server example built"]
 async fn call_echo_round_trips() {
-    let c = McpServerConnection::new(server_ref(true));
+    let c = McpServerConnection::new(server_ref(true), None);
     let result = c
         .call_tool("echo", serde_json::json!({"text": "hello"}))
         .await

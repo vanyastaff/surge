@@ -3,6 +3,7 @@
 use crate::connection::McpServerConnection;
 use crate::error::McpError;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use surge_core::mcp_config::McpServerRef;
@@ -82,13 +83,20 @@ impl McpRegistry {
     /// are not eagerly opened — first use of each server triggers
     /// the spawn via [`McpServerConnection::list_tools`] /
     /// [`McpServerConnection::call_tool`].
+    ///
+    /// `cwd` pins every child process's working directory and roots its
+    /// captured-stderr file. Run-scoped callers pass the run worktree;
+    /// daemon diagnostic probes pass `None`.
     #[must_use]
-    pub fn from_config(refs: &[McpServerRef]) -> Self {
+    pub fn from_config(refs: &[McpServerRef], cwd: Option<&Path>) -> Self {
         let mut servers = HashMap::new();
         for r in refs {
             servers.insert(
                 r.name.clone(),
-                Arc::new(McpServerConnection::new(r.clone())),
+                Arc::new(McpServerConnection::new(
+                    r.clone(),
+                    cwd.map(Path::to_path_buf),
+                )),
             );
         }
         Self { servers }
@@ -188,7 +196,7 @@ mod tests {
 
     #[test]
     fn empty_registry_is_empty() {
-        let r = McpRegistry::from_config(&[]);
+        let r = McpRegistry::from_config(&[], None);
         assert!(r.servers.is_empty());
     }
 
@@ -205,7 +213,7 @@ mod tests {
             Duration::from_secs(60),
             true,
         )];
-        let r = McpRegistry::from_config(&refs);
+        let r = McpRegistry::from_config(&refs, None);
         assert_eq!(r.servers.len(), 1);
         assert!(r.servers.contains_key("echo"));
     }
