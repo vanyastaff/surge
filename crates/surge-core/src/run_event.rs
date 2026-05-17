@@ -1115,6 +1115,7 @@ mod tests {
                 allowed_tools: None,
                 call_timeout: Duration::from_secs(60),
                 restart_on_crash: true,
+                sandbox: None,
             }],
         };
         let payload = EventPayload::RunStarted {
