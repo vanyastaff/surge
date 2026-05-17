@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use surge_core::mcp_config::{McpServerRef, McpTransportConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -17,6 +18,55 @@ use tokio::sync::Mutex;
 /// Max stderr lines retained per connection in the bounded tee file.
 /// Documented default; not configurable in v0.1 (decide-or-defer).
 const MAX_STDERR_LINES: usize = 500;
+
+/// Restart policy constants. Documented defaults; not configurable in
+/// v0.1 (decide-or-defer per the plan's Operational Notes).
+const MAX_RESTART_ATTEMPTS: u32 = 5;
+const BACKOFF_BASE: Duration = Duration::from_millis(500);
+const BACKOFF_FACTOR: u32 = 2;
+const BACKOFF_CAP: Duration = Duration::from_secs(30);
+
+/// Exponential backoff for the Nth (1-based) consecutive failed
+/// reconnect attempt: `min(BASE * FACTOR^(n-1), CAP)`. Pure and
+/// deterministic so it is unit-testable without a live server.
+#[must_use]
+pub(crate) fn backoff_delay(attempt: u32) -> Duration {
+    if attempt == 0 {
+        return Duration::ZERO;
+    }
+    let exp = attempt.saturating_sub(1);
+    // Saturating power so a large attempt count cannot overflow.
+    let mult = BACKOFF_FACTOR.checked_pow(exp).unwrap_or(u32::MAX);
+    BACKOFF_BASE
+        .checked_mul(mult)
+        .unwrap_or(BACKOFF_CAP)
+        .min(BACKOFF_CAP)
+}
+
+/// Outcome of advancing the restart policy after a failed reconnect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestartDecision {
+    /// Stay crashed; retry no earlier than `delay` from now.
+    Backoff { attempts: u32, delay: Duration },
+    /// Capped budget exhausted; do not spawn again until reset.
+    Exhausted { attempts: u32 },
+}
+
+/// Pure restart-policy transition: given the prior consecutive-failure
+/// count, decide whether to back off (and for how long) or to give up.
+/// Deterministic and timing-free so the policy is unit-testable.
+#[must_use]
+pub(crate) fn restart_decision(prior_attempts: u32) -> RestartDecision {
+    let attempts = prior_attempts.saturating_add(1);
+    if attempts > MAX_RESTART_ATTEMPTS {
+        RestartDecision::Exhausted { attempts }
+    } else {
+        RestartDecision::Backoff {
+            attempts,
+            delay: backoff_delay(attempts),
+        }
+    }
+}
 
 /// Internal classification of an rmcp [`ServiceError`] for deciding
 /// whether the connection should be marked crashed (and later
@@ -66,11 +116,25 @@ enum ConnState {
     /// rmcp service is alive; can dispatch calls.
     Running(Arc<RunningService<RoleClient, ()>>),
     /// Server died; the next `ensure_connected` attempts a re-spawn
-    /// (subject to `restart_on_crash` and, in U2, the backoff policy).
+    /// subject to `restart_on_crash` and the exponential-backoff
+    /// policy. `attempts`/`next_retry_at` are runtime-only — never
+    /// persisted, never in any event payload (replay determinism).
     Crashed {
         /// Last observed exit code, if known.
         #[allow(dead_code)]
         last_exit: Option<i32>,
+        /// Consecutive failed (re)connect attempts so far.
+        attempts: u32,
+        /// Earliest instant the next reconnect may be attempted.
+        /// `None` means "retry immediately" (first crash).
+        next_retry_at: Option<Instant>,
+    },
+    /// The restart policy exhausted its capped attempt budget. The
+    /// connection will not spawn again until reset. The ERROR
+    /// escalation line is emitted exactly once, on entry to this state.
+    Exhausted {
+        /// Total consecutive failed attempts when the budget ran out.
+        attempts: u32,
     },
 }
 
@@ -128,16 +192,82 @@ impl McpServerConnection {
     /// out of scope for this milestone).
     async fn ensure_connected(&self) -> Result<Arc<RunningService<RoleClient, ()>>, McpError> {
         let mut state = self.state.lock().await;
-        match &*state {
+        let prior_attempts = match &*state {
             ConnState::Running(rs) => return Ok(rs.clone()),
+            ConnState::Exhausted { attempts } => {
+                return Err(McpError::RestartExhausted {
+                    server: self.config.name.clone(),
+                    attempts: *attempts,
+                });
+            },
             ConnState::Crashed { .. } if !self.config.restart_on_crash => {
                 return Err(McpError::ServerNotRunning {
                     server: self.config.name.clone(),
                 });
             },
-            _ => {},
-        }
+            ConnState::Crashed {
+                attempts,
+                next_retry_at,
+                ..
+            } => {
+                // Fast-return while still in backoff: no spawn, no
+                // attempt-count change. The no-hot-loop guarantee
+                // depends on rate-limited callers (agent stage; U11
+                // monitor with interval >= backoff cap).
+                if let Some(t) = next_retry_at
+                    && Instant::now() < *t
+                {
+                    return Err(McpError::Transport(format!(
+                        "server '{}' in restart backoff (attempt {}/{})",
+                        self.config.name, attempts, MAX_RESTART_ATTEMPTS
+                    )));
+                }
+                *attempts
+            },
+            ConnState::Disconnected => 0,
+        };
 
+        match self.spawn_and_serve().await {
+            Ok(service) => {
+                let rs = Arc::new(service);
+                *state = ConnState::Running(rs.clone());
+                Ok(rs)
+            },
+            Err(e) => {
+                match restart_decision(prior_attempts) {
+                    RestartDecision::Backoff { attempts, delay } => {
+                        *state = ConnState::Crashed {
+                            last_exit: None,
+                            attempts,
+                            next_retry_at: Some(Instant::now() + delay),
+                        };
+                    },
+                    RestartDecision::Exhausted { attempts } => {
+                        *state = ConnState::Exhausted { attempts };
+                        // Single-site escalation: emitted exactly once,
+                        // on entry to `Exhausted` (subsequent calls hit
+                        // the early-return above and do not re-log).
+                        tracing::error!(
+                            target: "mcp::supervisor",
+                            server = %self.config.name,
+                            attempts,
+                            "mcp_supervisor_gave_up"
+                        );
+                        return Err(McpError::RestartExhausted {
+                            server: self.config.name.clone(),
+                            attempts,
+                        });
+                    },
+                }
+                Err(e)
+            },
+        }
+    }
+
+    /// Spawn the child + complete the rmcp handshake. Does not touch
+    /// connection state — `ensure_connected` owns the state machine and
+    /// the backoff policy.
+    async fn spawn_and_serve(&self) -> Result<RunningService<RoleClient, ()>, McpError> {
         // Build the child command with env / cwd hygiene, then spawn via
         // the stderr-capturing builder.
         let (transport, stderr) = match &self.config.transport {
@@ -203,9 +333,7 @@ impl McpServerConnection {
             },
         };
 
-        let rs = Arc::new(service);
-        *state = ConnState::Running(rs.clone());
-        Ok(rs)
+        Ok(service)
     }
 
     /// List all tools the server reports via the MCP `tools/list` verb.
@@ -272,12 +400,21 @@ impl McpServerConnection {
         }
     }
 
-    /// Transition to `Crashed` so the next `ensure_connected` attempts
-    /// a re-spawn (subject to `restart_on_crash` / the U2 backoff).
+    /// Transition to `Crashed` after a transport-class failure on a
+    /// live connection. The first reconnect is immediate
+    /// (`next_retry_at: None`); backoff accrues only on *failed*
+    /// reconnect attempts. An already-`Crashed`/`Exhausted` connection
+    /// keeps its accrued attempt count.
     async fn mark_crashed(&self, exit_code: Option<i32>) {
         let mut state = self.state.lock().await;
+        let attempts = match &*state {
+            ConnState::Crashed { attempts, .. } | ConnState::Exhausted { attempts } => *attempts,
+            _ => 0,
+        };
         *state = ConnState::Crashed {
             last_exit: exit_code,
+            attempts,
+            next_retry_at: None,
         };
     }
 }
@@ -372,6 +509,70 @@ mod tests {
             Duration::from_millis(100),
             true,
         )
+    }
+
+    #[test]
+    fn backoff_delay_monotonic_and_capped() {
+        let mut prev = Duration::ZERO;
+        for n in 1..=12u32 {
+            let d = backoff_delay(n);
+            assert!(d >= prev, "backoff must be non-decreasing at {n}");
+            assert!(d <= BACKOFF_CAP, "backoff must clamp at cap at {n}");
+            prev = d;
+        }
+        assert_eq!(backoff_delay(0), Duration::ZERO);
+        assert_eq!(backoff_delay(1), BACKOFF_BASE);
+        // Large attempt counts saturate to the cap, never overflow.
+        assert_eq!(backoff_delay(u32::MAX), BACKOFF_CAP);
+    }
+
+    #[test]
+    fn restart_decision_backs_off_then_exhausts() {
+        for prior in 0..MAX_RESTART_ATTEMPTS {
+            match restart_decision(prior) {
+                RestartDecision::Backoff { attempts, delay } => {
+                    assert_eq!(attempts, prior + 1);
+                    assert_eq!(delay, backoff_delay(prior + 1));
+                },
+                RestartDecision::Exhausted { .. } => {
+                    panic!("attempt {} should still back off", prior + 1)
+                },
+            }
+        }
+        // The (MAX+1)th consecutive failure gives up.
+        match restart_decision(MAX_RESTART_ATTEMPTS) {
+            RestartDecision::Exhausted { attempts } => {
+                assert_eq!(attempts, MAX_RESTART_ATTEMPTS + 1);
+            },
+            RestartDecision::Backoff { .. } => panic!("should be exhausted"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fast_returns_during_backoff_without_respawning() {
+        let c = McpServerConnection::new(fake_server_ref(), None);
+        // First call: spawn of a missing binary fails → StartFailed,
+        // state transitions to Crashed with a future next_retry_at.
+        match c.call_tool("t", serde_json::Value::Null).await {
+            Err(McpError::StartFailed { .. }) => {},
+            other => panic!("expected StartFailed, got {other:?}"),
+        }
+        // Second call (immediately): must fast-return the backoff error
+        // without attempting another spawn — and quickly.
+        let start = Instant::now();
+        let r = c.call_tool("t", serde_json::Value::Null).await;
+        let elapsed = start.elapsed();
+        match r {
+            Err(McpError::Transport(msg)) => {
+                assert!(msg.contains("restart backoff"), "got: {msg}");
+                assert!(msg.contains("attempt 1/"), "attempt count preserved: {msg}");
+            },
+            other => panic!("expected Transport backoff, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "fast-return must not spawn (took {elapsed:?})"
+        );
     }
 
     #[test]
