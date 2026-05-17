@@ -145,8 +145,7 @@ fn mask_key_value(core: &str, lowered: &str) -> Option<(String, bool)> {
     // `rest` starts with the delimiter char; keep it, mask the value.
     // `delim` indexes an ASCII `=`/`:`, so `delim + 1` is a char boundary.
     let delim_char = &rest[..1];
-    let value_lc =
-        lowered[delim + 1..].trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+    let value_lc = lowered[delim + 1..].trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
     let redact_next = SENSITIVE_PREFIXES.contains(&value_lc);
     Some((format!("{key_raw}{delim_char}{MASK}"), redact_next))
 }

@@ -159,9 +159,13 @@ impl RoutingToolDispatcher {
     /// swallowed — an escalation is best-effort telemetry, not
     /// load-bearing control flow.
     fn record_escalation(&self, server: &str, attempts: u32) {
+        // Hot path (server already exhausted, hit by every later tool
+        // call) does a borrow-keyed lookup with no allocation; only a
+        // newly-seen server allocates.
         if let Ok(mut st) = self.escalations.lock()
-            && st.seen.insert(server.to_owned())
+            && !st.seen.contains(server)
         {
+            st.seen.insert(server.to_owned());
             st.pending.push(McpEscalation {
                 server: server.to_owned(),
                 attempts,
@@ -375,7 +379,11 @@ mod tests {
         r.record_escalation("flaky", 5);
         r.record_escalation("other", 5);
         let drained = r.drain_mcp_escalations();
-        assert_eq!(drained.len(), 2, "one escalation per server, got {drained:?}");
+        assert_eq!(
+            drained.len(),
+            2,
+            "one escalation per server, got {drained:?}"
+        );
         // A post-drain repeat of an already-escalated server stays
         // suppressed: the give-up fact is recorded once per run.
         r.record_escalation("flaky", 5);

@@ -692,20 +692,26 @@ async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, p
         {
             use std::os::unix::fs::PermissionsExt;
             let _ =
-                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-                    .await;
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
         }
     }
-    // Pre-create the capture file 0600 so the per-line rewrites below
-    // (truncate-in-place) keep owner-only permissions for its lifetime.
+    // Capture file must be owner-only for its whole lifetime. Create
+    // it 0600 (atomic for a fresh file), then also tighten an
+    // already-existing one: a prior probe/run may have left it with a
+    // broader umask default, and `mode()` only applies on creation.
     #[cfg(unix)]
     {
-        let _ = tokio::fs::OpenOptions::new()
+        use std::os::unix::fs::PermissionsExt;
+        if tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .mode(0o600)
             .open(&path)
-            .await;
+            .await
+            .is_ok()
+        {
+            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await;
+        }
     }
     let mut lines = BufReader::new(stderr).lines();
     let mut ring: VecDeque<String> = VecDeque::with_capacity(MAX_STDERR_LINES);

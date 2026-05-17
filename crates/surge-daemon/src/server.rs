@@ -912,9 +912,7 @@ async fn dispatch(
                     return Some(DaemonResponse::Error {
                         request_id,
                         code: ErrorCode::EngineError,
-                        message: format!(
-                            "failed to read MCP stderr capture for '{name}': {e}"
-                        ),
+                        message: format!("failed to read MCP stderr capture for '{name}': {e}"),
                     });
                 },
             };
