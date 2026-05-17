@@ -167,6 +167,14 @@ impl ToolDispatcher for RoutingToolDispatcher {
             .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default()
     }
+
+    fn resolved_origin(&self, tool: &str) -> Option<String> {
+        match self.routing_table.get(tool) {
+            Some(ToolOrigin::Mcp { server, .. }) => Some(server.clone()),
+            // Engine-built-in or unknown → no MCP attribution.
+            _ => None,
+        }
+    }
 }
 
 fn content_to_json(c: McpContent) -> serde_json::Value {

@@ -123,6 +123,16 @@ pub trait ToolDispatcher: Send + Sync {
     fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
         Vec::new()
     }
+
+    /// Resolve which MCP server (if any) serves `tool`. Returns `None`
+    /// for engine-built-in tools — so engine-only dispatchers fall back
+    /// to `None` for free. `RoutingToolDispatcher` overrides it from
+    /// its (private) routing table. The agent stage calls this when
+    /// emitting `ToolCalled` / `ToolResultReceived` so MCP delegation
+    /// is attributable per server in the replay log.
+    fn resolved_origin(&self, _tool: &str) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

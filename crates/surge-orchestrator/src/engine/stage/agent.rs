@@ -710,6 +710,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     continue;
                 }
 
+                // Resolve which MCP server (if any) serves this tool so
+                // delegation is attributable per server in the replay
+                // log. Engine-built-in tools resolve to `None`.
+                let mcp_server = session_dispatcher.resolved_origin(&tool);
+
                 let engine_result = session_dispatcher.dispatch(&ctx, &call).await;
 
                 // Persist ToolCalled + ToolResultReceived.
@@ -719,6 +724,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         session: session_id,
                         tool: tool.clone(),
                         args_redacted: args_redacted_hash,
+                        mcp_server: mcp_server.clone(),
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
@@ -740,6 +746,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             session: session_id,
                             success,
                             result: result_hash,
+                            mcp_server,
                         },
                     ))
                     .await

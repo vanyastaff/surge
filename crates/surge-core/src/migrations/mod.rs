@@ -24,7 +24,14 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// contain the new variants), but the wrapper's `schema_version` is bumped
 /// from 1 to 2 for new writes so downstream readers know the variants are in
 /// scope.
-pub const MAX_SUPPORTED_VERSION: u32 = 2;
+///
+/// **v3 (introduced 2026-05):** adds the `#[serde(default)] mcp_server`
+/// attribution field to [`EventPayload::ToolCalled`] /
+/// [`EventPayload::ToolResultReceived`] (MCP replay parity). The wire shape is
+/// unchanged (same JSON wrapper); old v1/v2 payloads decode cleanly with
+/// `mcp_server: None`. Per the v2 precedent the version is still bumped so
+/// readers know per-server attribution is in scope.
+pub const MAX_SUPPORTED_VERSION: u32 = 3;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -75,17 +82,43 @@ impl Migration for IdentityV2 {
     }
 }
 
+/// Identity migration for v3 — the schema bump that introduced the
+/// `mcp_server` attribution field on `ToolCalled` / `ToolResultReceived`.
+/// The wire shape is unchanged (same JSON-encoded
+/// [`VersionedEventPayload`] wrapper); `#[serde(default)]` lets older
+/// payloads decode with `mcp_server: None`. The `schema_version` field
+/// is the only signal that distinguishes v1/v2 from v3 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV3;
+
+impl Migration for IdentityV3 {
+    fn version(&self) -> u32 {
+        3
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v3 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
 }
 
 impl MigrationChain {
-    /// Build the default chain. Contains [`IdentityV1`] and [`IdentityV2`].
+    /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
+    /// and [`IdentityV3`].
     #[must_use]
     pub fn new() -> Self {
         Self {
-            migrations: vec![Box::new(IdentityV1), Box::new(IdentityV2)],
+            migrations: vec![
+                Box::new(IdentityV1),
+                Box::new(IdentityV2),
+                Box::new(IdentityV3),
+            ],
         }
     }
 
@@ -193,7 +226,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 2);
+        assert_eq!(wrapper.schema_version, 3);
     }
 
     #[test]
@@ -201,8 +234,58 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 2 }
+            SurgeError::SchemaTooNew { found: 99, max: 3 }
         ));
+    }
+
+    #[test]
+    fn legacy_tool_events_decode_as_none_through_every_version() {
+        use crate::content_hash::ContentHash;
+        use crate::id::SessionId;
+
+        // Build a current ToolCalled, then strip the new `mcp_server`
+        // key to simulate a payload written before the attribution
+        // field existed. It must decode cleanly (mcp_server: None)
+        // under v1, v2, and v3 — replay parity across the bump.
+        let wrapper = VersionedEventPayload::new(EventPayload::ToolCalled {
+            session: SessionId::nil(),
+            tool: "read_file".into(),
+            args_redacted: ContentHash::compute(b"args"),
+            mcp_server: Some("dropped".into()),
+        });
+        let mut json = serde_json::to_value(&wrapper).unwrap();
+        json["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mcp_server");
+        let legacy = serde_json::to_vec(&json).unwrap();
+
+        for v in [1u32, 2, 3] {
+            let decoded = migrate_payload(v, &legacy)
+                .unwrap_or_else(|e| panic!("legacy ToolCalled must decode under v{v}: {e}"));
+            match decoded {
+                EventPayload::ToolCalled { mcp_server, .. } => {
+                    assert_eq!(mcp_server, None, "missing field defaults to None (v{v})");
+                },
+                other => panic!("expected ToolCalled, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn v3_attributed_tool_event_round_trips() {
+        use crate::content_hash::ContentHash;
+        use crate::id::SessionId;
+
+        let payload = EventPayload::ToolResultReceived {
+            session: SessionId::nil(),
+            success: true,
+            result: ContentHash::compute(b"ok"),
+            mcp_server: Some("filesystem".into()),
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 
     #[test]
