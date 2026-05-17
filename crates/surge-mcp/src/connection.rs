@@ -388,12 +388,19 @@ impl McpServerConnection {
     /// Triggers a lazy connect on first call. On failure, classifies
     /// the error structurally: transport failures mark the connection
     /// crashed (so the next call reconnects); service-level errors
-    /// leave the connection alive.
+    /// leave the connection alive. The RPC is bounded by `call_timeout`
+    /// (mirroring [`call_tool`](Self::call_tool)) so a slow `tools/list`
+    /// cannot hang the session-open catalog build or a health probe.
+    /// (No `#[must_use]`: the `async fn` future is already `#[must_use]`,
+    /// so the result cannot be silently dropped — adding the attribute
+    /// trips `clippy::double_must_use`.)
     pub async fn list_tools(&self) -> Result<Vec<rmcp::model::Tool>, McpError> {
         let rs = self.ensure_connected().await?;
-        match rs.list_all_tools().await {
-            Ok(tools) => Ok(tools),
-            Err(e) => Err(self.handle_service_error(e).await),
+        let timeout = self.config.call_timeout;
+        match tokio::time::timeout(timeout, rs.list_all_tools()).await {
+            Ok(Ok(tools)) => Ok(tools),
+            Ok(Err(e)) => Err(self.handle_service_error(e).await),
+            Err(_elapsed) => Err(McpError::Timeout(timeout)),
         }
     }
 
@@ -526,15 +533,26 @@ impl McpServerConnection {
                         let probe_ok = if rs.is_closed() {
                             false
                         } else {
-                            match rs.list_tools(None).await {
-                                Ok(_) => true,
+                            // Bound the probe RPC by call_timeout so a
+                            // slow-but-not-dead server cannot wedge the
+                            // monitor's select loop (it could otherwise
+                            // never re-check the cancel token). A probe
+                            // timeout counts as a failed probe.
+                            match tokio::time::timeout(
+                                me.config.call_timeout,
+                                rs.list_tools(None),
+                            )
+                            .await
+                            {
+                                Ok(Ok(_)) => true,
                                 // A service-level error means the server
                                 // answered — it is alive, just rejected
                                 // the call; only transport death counts.
-                                Err(e) => !matches!(
+                                Ok(Err(e)) => !matches!(
                                     classify_service_error(&e),
                                     ErrorClass::Transport
                                 ),
+                                Err(_elapsed) => false,
                             }
                         };
                         if probe_ok {

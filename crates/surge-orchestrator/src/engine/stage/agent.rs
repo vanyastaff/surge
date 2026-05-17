@@ -747,6 +747,33 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
 
+                // Surface MCP restart-exhaustion as a replay-safe
+                // `EscalationRequested` (fold pass-through). Emitted
+                // BEFORE the fallible `ToolResultReceived` append: if
+                // that storage write fails, the `?` returns and the
+                // escalation would otherwise be silently dropped —
+                // making permanent MCP failure invisible to the AFK
+                // operator (the cockpit only renders give-up from this
+                // event). Relative event-seq order vs `ToolResultReceived`
+                // is immaterial (both are fold pass-throughs). Only the
+                // stable give-up fact is recorded — the non-deterministic
+                // attempt count is in the message, not a folded field.
+                for esc in session_dispatcher.drain_mcp_escalations() {
+                    p.writer
+                        .append_event(VersionedEventPayload::new(
+                            EventPayload::EscalationRequested {
+                                stage: None,
+                                reason: format!(
+                                    "MCP server '{}' restart policy exhausted after {} attempts; \
+                                     calls to it fail until the run is restarted",
+                                    esc.server, esc.attempts
+                                ),
+                            },
+                        ))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                }
+
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {
                     EngineResultPayload::Ok { content } => {
@@ -769,29 +796,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     ))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
-
-                // Surface MCP restart-exhaustion as a replay-safe
-                // `EscalationRequested` (fold pass-through). This is the
-                // only vehicle the Telegram cockpit renders give-up
-                // from; a notify-only path would be invisible to AFK
-                // surfaces. Only the stable give-up fact is recorded —
-                // the non-deterministic attempt count is in the message,
-                // not a folded field.
-                for esc in session_dispatcher.drain_mcp_escalations() {
-                    p.writer
-                        .append_event(VersionedEventPayload::new(
-                            EventPayload::EscalationRequested {
-                                stage: None,
-                                reason: format!(
-                                    "MCP server '{}' restart policy exhausted after {} attempts; \
-                                     calls to it fail until the run is restarted",
-                                    esc.server, esc.attempts
-                                ),
-                            },
-                        ))
-                        .await
-                        .map_err(|e| StageError::Storage(e.to_string()))?;
-                }
 
                 // Convert engine payload → ACP payload and reply.
                 let acp_result = match engine_result {

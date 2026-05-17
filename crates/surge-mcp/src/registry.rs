@@ -128,6 +128,10 @@ impl McpRegistry {
             return;
         }
         for conn in self.servers.values() {
+            // Fire-and-forget by design: the task is cancelled via the
+            // registry CancellationToken on shutdown, not by holding
+            // the handle (a `let _ =` here would trip
+            // clippy::let_underscore_future on the JoinHandle).
             conn.spawn_health_monitor(self.cancel_token.clone());
         }
     }
@@ -177,7 +181,13 @@ impl McpRegistry {
             }));
         }
         for h in handles {
-            let _ = h.await;
+            if let Err(e) = h.await {
+                tracing::warn!(
+                    target: "mcp::supervisor",
+                    error = %e,
+                    "MCP per-connection shutdown task panicked"
+                );
+            }
         }
     }
 
