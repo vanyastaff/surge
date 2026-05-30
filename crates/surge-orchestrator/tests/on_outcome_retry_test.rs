@@ -44,31 +44,6 @@ impl ToolDispatcher for UnusedDispatcher {
     }
 }
 
-/// Wait until the engine's `bridge.subscribe()` has been recorded, so the
-/// broadcast receiver exists before scripted events are pumped.
-///
-/// Replaces a blind `sleep(50ms)` that raced the engine reaching
-/// `subscribe()` (`agent.rs`): on a slow runner (observed hanging on
-/// Windows CI) the pump could fire first, `tx.send` would reach zero
-/// receivers, the scripted outcomes would be dropped, and the stage's
-/// event loop would block forever. Bounded to ~2s so a genuinely
-/// non-subscribing engine fails fast instead of hanging.
-async fn wait_for_subscribe(mock: &MockBridge) {
-    for _ in 0..200 {
-        let subscribed = mock
-            .recorded_calls
-            .lock()
-            .await
-            .iter()
-            .any(|c| matches!(c, fixtures::mock_bridge::RecordedCall::Subscribe));
-        if subscribed {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("engine never subscribed to the bridge within 2s");
-}
-
 fn agent_cfg(hooks: Vec<Hook>, max_retries: u32) -> AgentConfig {
     agent_cfg_with_profile("implementer@1.0", hooks, max_retries)
 }
@@ -180,10 +155,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        // Pump only after the engine's receiver exists, so no scripted
-        // event is sent into the void (see `wait_for_subscribe`).
-        wait_for_subscribe(&mock_for_pump).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -285,10 +257,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        // Pump only after the engine's receiver exists, so no scripted
-        // event is sent into the void (see `wait_for_subscribe`).
-        wait_for_subscribe(&mock_for_pump).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -369,10 +338,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        // Pump only after the engine's receiver exists, so no scripted
-        // event is sent into the void (see `wait_for_subscribe`).
-        wait_for_subscribe(&mock_for_pump).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);

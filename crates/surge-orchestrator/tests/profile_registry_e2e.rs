@@ -187,9 +187,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        // Yield so the stage subscribes before the pump fires.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -298,8 +296,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);

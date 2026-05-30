@@ -89,8 +89,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -228,8 +227,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -337,8 +335,7 @@ subtasks = [
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -439,8 +436,7 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -546,8 +542,7 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);

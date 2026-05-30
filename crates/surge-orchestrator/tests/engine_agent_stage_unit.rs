@@ -4,7 +4,6 @@ mod fixtures;
 
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::AgentConfig;
@@ -68,9 +67,7 @@ async fn agent_stage_loops_until_outcome_reported() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        // Yield to let stage subscribe before pumping.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);

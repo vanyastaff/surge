@@ -100,6 +100,40 @@ impl MockBridge {
             let _ = self.tx.send(ev);
         }
     }
+
+    /// Wait until at least `expected` `subscribe()` calls have been recorded.
+    ///
+    /// The broadcast channel drops events sent before any receiver exists, so
+    /// pumping must not race the engine reaching `bridge.subscribe()`. Tests
+    /// use this in place of a blind `sleep` before [`pump_scripted_events`].
+    /// Bounded to ~3s so a non-subscribing engine fails fast instead of
+    /// hanging the run.
+    #[allow(dead_code)] // not exercised by every test binary sharing the fixture
+    pub async fn wait_for_subscribe_count(&self, expected: usize) {
+        for _ in 0..300 {
+            let count = self
+                .recorded_calls
+                .lock()
+                .await
+                .iter()
+                .filter(|c| matches!(c, RecordedCall::Subscribe))
+                .count();
+            if count >= expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("MockBridge: timed out waiting for {expected} subscriber(s)");
+    }
+
+    /// Wait for `expected` subscriber(s), then drain + broadcast the scripted
+    /// queue. Convenience wrapper over [`Self::wait_for_subscribe_count`] +
+    /// [`Self::pump_scripted_events`] for the common single-stage case.
+    #[allow(dead_code)] // not exercised by every test binary sharing the fixture
+    pub async fn pump_after_subscribe(&self, expected: usize) {
+        self.wait_for_subscribe_count(expected).await;
+        self.pump_scripted_events().await;
+    }
 }
 
 impl Default for MockBridge {
