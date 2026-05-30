@@ -248,7 +248,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // project-level mode is pinned, and an existing project file is never
     // clobbered. No-op for non-Claude runtimes.
     if let Some(rp) = resolved_profile.as_ref() {
-        seed_headless_runtime_settings(rp.profile.runtime.agent_id.as_str(), p.worktree_path);
+        seed_headless_runtime_settings(rp.profile.runtime.agent_id.as_str(), p.worktree_path).await;
     }
 
     // Derive declared outcomes from the node's OutcomeDecl list.
@@ -1726,7 +1726,12 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
 /// settings still apply. An existing project file is left untouched (the
 /// operator's explicit choice wins). No-op for non-Claude runtimes or when
 /// the agent id is unknown.
-fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
+///
+/// Async on purpose: this runs on the agent-launch path, so it uses
+/// `tokio::fs` to avoid blocking the executor (matching the rest of this
+/// stage). The work is one small `create_dir_all` + atomic create, so the
+/// cost is negligible regardless.
+async fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
     let registry = surge_acp::Registry::builtin();
     let is_claude = registry
         .normalize_agent_id(agent_id)
@@ -1742,20 +1747,38 @@ fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
     let dir = worktree.join(".claude");
     let settings = dir.join("settings.json");
 
+    // Refuse to follow a repo-provided `.claude` symlink (or a non-directory
+    // entry): a crafted checkout could otherwise redirect the write outside
+    // the worktree. `symlink_metadata` does not traverse the final component,
+    // so a symlink is reported as a symlink rather than its target.
+    if let Ok(md) = tokio::fs::symlink_metadata(&dir).await
+        && (md.file_type().is_symlink() || !md.is_dir())
+    {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            worktree = %worktree.display(),
+            "skipping headless settings seed: .claude exists but is not a real directory (symlink or file); refusing to write through it"
+        );
+        return;
+    }
+
     // Create atomically with `create_new` (O_EXCL / CREATE_NEW) rather than an
     // `exists()`-then-`write` pair: the latter has a TOCTOU window where a
     // concurrent creator (another stage in the same worktree, or the operator)
     // could be clobbered. An already-present file is the operator's explicit
     // choice and is left untouched — `AlreadyExists` is a benign no-op.
-    use std::io::Write as _;
+    use tokio::io::AsyncWriteExt as _;
     let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
-    let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
-        let mut file = std::fs::OpenOptions::new()
+    let write_result = async {
+        tokio::fs::create_dir_all(&dir).await?;
+        let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&settings)?;
-        file.write_all(body.as_bytes())
-    });
+            .open(&settings)
+            .await?;
+        file.write_all(body.as_bytes()).await
+    }
+    .await;
     match write_result {
         Ok(()) => tracing::debug!(
             target: "engine::stage::agent",
@@ -1835,10 +1858,10 @@ fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::Sandb
 mod tests {
     use super::*;
 
-    #[test]
-    fn seed_headless_settings_writes_default_mode_for_claude() {
+    #[tokio::test]
+    async fn seed_headless_settings_writes_default_mode_for_claude() {
         let tmp = tempfile::tempdir().unwrap();
-        seed_headless_runtime_settings("claude-code", tmp.path());
+        seed_headless_runtime_settings("claude-code", tmp.path()).await;
         let settings = tmp.path().join(".claude").join("settings.json");
         let body = std::fs::read_to_string(&settings).expect("settings.json written");
         assert!(
@@ -1847,14 +1870,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seed_headless_settings_does_not_clobber_existing() {
+    #[tokio::test]
+    async fn seed_headless_settings_does_not_clobber_existing() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(".claude");
         std::fs::create_dir_all(&dir).unwrap();
         let settings = dir.join("settings.json");
         std::fs::write(&settings, "{ \"keep\": true }").unwrap();
-        seed_headless_runtime_settings("claude-code", tmp.path());
+        seed_headless_runtime_settings("claude-code", tmp.path()).await;
         assert_eq!(
             std::fs::read_to_string(&settings).unwrap(),
             "{ \"keep\": true }",
@@ -1862,13 +1885,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seed_headless_settings_noop_for_non_claude_runtime() {
+    #[tokio::test]
+    async fn seed_headless_settings_noop_for_non_claude_runtime() {
         let tmp = tempfile::tempdir().unwrap();
-        seed_headless_runtime_settings("mock", tmp.path());
+        seed_headless_runtime_settings("mock", tmp.path()).await;
         assert!(
             !tmp.path().join(".claude").exists(),
             "non-Claude runtime must not seed .claude/"
+        );
+    }
+
+    // A repo-provided `.claude` symlink must not be followed (the write could
+    // otherwise escape the worktree). Unix-only: creating symlinks on Windows
+    // requires elevated privileges or Developer Mode.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn seed_headless_settings_refuses_symlinked_claude_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // `<worktree>/.claude` -> some directory outside the worktree.
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".claude")).unwrap();
+        seed_headless_runtime_settings("claude-code", tmp.path()).await;
+        assert!(
+            !outside.path().join("settings.json").exists(),
+            "must not write settings.json through a .claude symlink target"
         );
     }
 
