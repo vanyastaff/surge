@@ -1237,8 +1237,8 @@ mod tests {
         // exercises PATHEXT — the std `Command::new("npx")` gap this guards).
         let resolved = resolve_program(Path::new("cargo"));
         assert!(
-            resolved.is_absolute() || resolved.exists(),
-            "cargo should resolve to a concrete path, got {resolved:?}"
+            resolved.exists(),
+            "cargo should resolve to an existing path, got {resolved:?}"
         );
     }
 

@@ -29,7 +29,9 @@ rand = { workspace = true }
 chrono = { workspace = true }
 # Resolve agent launch binaries via PATH + PATHEXT so `.cmd`/`.bat` shims
 # (e.g. `npx` on Windows) are found when spawning ACP agent subprocesses.
-which = "6"
+# Pinned to 8 to unify with the transitive `which` rmcp already pulls in
+# (avoids a duplicate version in the lock).
+which = "8"
 
 # Process tracking
 [target.'cfg(unix)'.dependencies]

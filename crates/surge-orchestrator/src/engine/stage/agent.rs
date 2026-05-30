@@ -1629,6 +1629,18 @@ fn derive_agent_kind(
 /// Pulled out so [`execute_agent_stage`] can call it directly when the
 /// caller already resolved the profile and just needs the id translated.
 fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentKind, StageError> {
+    // Debug-only test seam: force the in-process mock agent regardless of the
+    // profile's runtime, so CLI/plumbing smoke tests can start runs without
+    // spawning (and then having to tear down) a real ACP subprocess. Gated on
+    // `debug_assertions` so release builds never honor it.
+    if cfg!(debug_assertions) && std::env::var_os("SURGE_FORCE_AGENT_MOCK").is_some() {
+        tracing::debug!(
+            target: "engine::stage::agent",
+            profile = %profile_str,
+            "SURGE_FORCE_AGENT_MOCK set (debug build); using AgentKind::Mock"
+        );
+        return Ok(AgentKind::Mock { args: vec![] });
+    }
     if agent_id.is_empty() {
         return Err(StageError::Internal(format!(
             "profile {profile_str:?} has empty runtime.agent_id"
