@@ -1187,7 +1187,10 @@ async fn prompt(
 /// - HTTP 401 status code
 /// - "Unauthorized" or "authentication failed"
 /// - API key errors
-fn is_auth_failure(error_msg: &str) -> bool {
+///
+/// Shared with the bridge worker, which uses it to map a failed
+/// `connection.prompt(...)` into a dedicated auth-error variant.
+pub(crate) fn is_auth_failure(error_msg: &str) -> bool {
     let msg_lower = error_msg.to_lowercase();
     msg_lower.contains("401")
         || msg_lower.contains("unauthorized")

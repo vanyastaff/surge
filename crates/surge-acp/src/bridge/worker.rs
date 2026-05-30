@@ -1087,13 +1087,34 @@ pub(crate) async fn send_message_impl(
             })?;
 
     connection.prompt(req).await.map_err(|e| {
-        warn!(session = %session, error = %e, "ACP prompt dispatch failed");
-        super::error::SendMessageError::Bridge(super::error::BridgeError::CommandSendFailed(
-            e.to_string(),
-        ))
+        let details = e.to_string();
+        if crate::pool::is_auth_failure(&details) {
+            warn!(session = %session, error = %details, "ACP prompt dispatch failed: agent authentication error");
+        } else {
+            warn!(session = %session, error = %details, "ACP prompt dispatch failed");
+        }
+        classify_prompt_dispatch_error(details)
     })?;
 
     Ok(())
+}
+
+/// Map a failed `connection.prompt(...)` error into the most accurate
+/// `SendMessageError`.
+///
+/// An authentication failure (HTTP 401 / `authentication_error`) becomes the
+/// dedicated [`super::error::SendMessageError::AgentAuthenticationFailed`]
+/// variant, which carries operator-facing guidance — the agent runtime is
+/// almost certainly not logged in. Every other failure stays a generic bridge
+/// transport error, preserving the previous behaviour.
+pub(crate) fn classify_prompt_dispatch_error(details: String) -> super::error::SendMessageError {
+    if crate::pool::is_auth_failure(&details) {
+        super::error::SendMessageError::AgentAuthenticationFailed { details }
+    } else {
+        super::error::SendMessageError::Bridge(super::error::BridgeError::CommandSendFailed(
+            details,
+        ))
+    }
 }
 
 /// Close a session gracefully.
@@ -1229,6 +1250,44 @@ mod tests {
     use crate::bridge::sandbox::DenyListSandbox;
     use crate::bridge::tools::{ToolCategory, ToolDef};
     use serde_json::json;
+
+    #[test]
+    fn classify_prompt_error_maps_401_to_agent_auth_failed() {
+        let details = "Internal error: Failed to authenticate. API Error: 401 {\"type\":\"error\",\
+             \"error\":{\"type\":\"authentication_error\"}}"
+            .to_string();
+        let err = classify_prompt_dispatch_error(details.clone());
+        assert!(
+            matches!(
+                err,
+                super::super::error::SendMessageError::AgentAuthenticationFailed { .. }
+            ),
+            "401 prompt error should map to AgentAuthenticationFailed, got: {err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("failed to authenticate") && rendered.contains("logged in"),
+            "auth error should carry actionable guidance, got: {rendered}"
+        );
+        assert!(
+            rendered.contains(&details),
+            "auth error should preserve the raw details for debugging, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn classify_prompt_error_keeps_non_auth_as_bridge_error() {
+        let err = classify_prompt_dispatch_error("connection reset by peer".to_string());
+        assert!(
+            matches!(
+                err,
+                super::super::error::SendMessageError::Bridge(
+                    super::super::error::BridgeError::CommandSendFailed(_)
+                )
+            ),
+            "non-auth prompt error should stay a bridge transport error, got: {err:?}"
+        );
+    }
 
     #[test]
     fn resolve_program_finds_path_extension_shim() {

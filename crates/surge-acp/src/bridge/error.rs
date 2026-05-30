@@ -83,6 +83,21 @@ pub enum SendMessageError {
         reason: SessionEndReason,
     },
 
+    /// The agent rejected the prompt because it could not authenticate
+    /// (e.g. HTTP 401 / `authentication_error`). This is almost always an
+    /// operator/environment problem — the agent runtime is not logged in or
+    /// its credentials are invalid — rather than a bridge transport failure,
+    /// so it gets a dedicated, actionable message instead of being buried in
+    /// a generic `Bridge` error.
+    #[error(
+        "agent failed to authenticate — verify the agent runtime is logged in \
+         (run the agent's own login, or set its API key); details: {details}"
+    )]
+    AgentAuthenticationFailed {
+        /// Raw error text from the agent/ACP layer, kept for debugging.
+        details: String,
+    },
+
     /// Bridge worker communication failed.
     #[error("bridge: {0}")]
     Bridge(#[source] BridgeError),
