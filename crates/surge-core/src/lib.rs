@@ -36,6 +36,7 @@ pub mod approvals;
 pub mod archetype;
 pub mod artifact_contract;
 pub mod branch_config;
+pub mod budget;
 pub mod bundled_flows;
 pub mod content_hash;
 pub mod doctor;
