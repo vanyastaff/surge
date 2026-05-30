@@ -1103,10 +1103,10 @@ pub(crate) async fn send_message_impl(
 /// `SendMessageError`.
 ///
 /// An authentication failure (HTTP 401 / `authentication_error`) becomes the
-/// dedicated [`SendMessageError::AgentAuthenticationFailed`] variant, which
-/// carries operator-facing guidance — the agent runtime is almost certainly
-/// not logged in. Every other failure stays a generic bridge transport error,
-/// preserving the previous behaviour.
+/// dedicated [`super::error::SendMessageError::AgentAuthenticationFailed`]
+/// variant, which carries operator-facing guidance — the agent runtime is
+/// almost certainly not logged in. Every other failure stays a generic bridge
+/// transport error, preserving the previous behaviour.
 pub(crate) fn classify_prompt_dispatch_error(details: String) -> super::error::SendMessageError {
     if crate::pool::is_auth_failure(&details) {
         super::error::SendMessageError::AgentAuthenticationFailed { details }
