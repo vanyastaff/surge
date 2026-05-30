@@ -27,7 +27,7 @@ Surge is **agent-agnostic via ACP** (any ACP-conformant agent: Claude Code, Code
 
 ## Tech Stack
 
-- **Language:** Rust 2024 edition (MSRV 1.85)
+- **Language:** Rust 2024 edition (MSRV 1.96)
 - **Async runtime:** `tokio`
 - **Agent protocol:** `agent-client-protocol` (ACP, with `unstable_session_usage`)
 - **Serialization:** `serde`, `serde_json`, `toml`, `toml_edit` (edit-aware writes), `bincode` (binary event payloads)

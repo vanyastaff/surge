@@ -357,6 +357,52 @@ impl Storage {
         }
         Ok(())
     }
+
+    /// Set the registry status (and optional `ended_at` ms) for a run.
+    ///
+    /// Used by crash recovery to mark un-resumable runs `Failed` or to
+    /// reconcile a run whose event log reached a terminal state that the
+    /// registry never recorded. Thin wrapper over
+    /// [`registry::update_status`].
+    pub async fn set_run_status(
+        &self,
+        run_id: &RunId,
+        status: RunStatus,
+        ended_at_ms: Option<i64>,
+    ) -> Result<(), crate::runs::error::StorageError> {
+        registry::update_status(&self.registry_pool, run_id, status, ended_at_ms)
+    }
+}
+
+#[cfg(test)]
+mod set_run_status_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_run_status_updates_registry() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run_id = RunId::new();
+        let _writer = storage
+            .create_run(run_id.clone(), "/proj", None)
+            .await
+            .unwrap();
+
+        // Freshly created run is Bootstrapping.
+        let before = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(before.status, RunStatus::Bootstrapping);
+
+        storage
+            .set_run_status(&run_id, RunStatus::Failed, Some(1_700_000_000_500))
+            .await
+            .unwrap();
+
+        let after = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(after.status, RunStatus::Failed);
+        assert_eq!(after.ended_at_ms, Some(1_700_000_000_500));
+    }
 }
 
 #[cfg(test)]

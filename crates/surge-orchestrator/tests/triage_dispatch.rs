@@ -49,7 +49,10 @@ async fn drive_one_attempt(
     decision_json: &'static str,
     summary_md: &'static str,
 ) {
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // try_one_attempt calls bridge.subscribe() first thing; waiting for the
+    // subscriber both guarantees the broadcast receiver exists before we pump
+    // and that the dispatcher has progressed past scratch-dir creation.
+    bridge.wait_for_subscribe_count(1).await;
     let scratch = std::fs::read_dir(&scratch_root)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -84,10 +87,11 @@ async fn drive_n_attempts(
 ) {
     assert_eq!(sessions.len(), outcomes_and_artifacts.len());
     for (i, (outcome_key, decision_json)) in outcomes_and_artifacts.iter().enumerate() {
-        // Wait for the dispatcher to (re)create scratch and (re)open session.
-        // First attempt: dispatcher creates the per-call scratch sub-dir.
-        // Later attempts: scratch dir already exists, dispatcher opens new session.
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Each attempt re-subscribes (try_one_attempt calls bridge.subscribe()
+        // at its start), so wait for the (i+1)-th subscriber before pumping
+        // this attempt's outcome. This also guarantees the dispatcher has
+        // (re)opened the session and the scratch sub-dir exists.
+        bridge.wait_for_subscribe_count(i + 1).await;
         let scratch = std::fs::read_dir(&scratch_root)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -382,7 +386,7 @@ async fn agent_crashed_yields_unclear() {
     let drive = {
         let bridge = Arc::clone(&bridge);
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            bridge.wait_for_subscribe_count(1).await;
             bridge
                 .enqueue_event(BridgeEvent::SessionEnded {
                     session: s,

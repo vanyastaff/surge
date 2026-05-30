@@ -8,7 +8,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 
 ## Tech Stack
 
-- **Language:** Rust 2024 edition (MSRV 1.85)
+- **Language:** Rust 2024 edition (MSRV 1.96)
 - **Async runtime:** `tokio`
 - **Agent protocol:** `agent-client-protocol` (ACP)
 - **Database:** SQLite via `rusqlite` + `r2d2` pool

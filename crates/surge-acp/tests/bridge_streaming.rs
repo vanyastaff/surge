@@ -49,10 +49,9 @@ async fn inner_test() {
     while tokio::time::Instant::now() < deadline && chunks < 20 {
         if let Ok(Ok(BridgeEvent::AgentMessage { session, .. })) =
             timeout(Duration::from_millis(500), events.recv()).await
+            && session == sid
         {
-            if session == sid {
-                chunks += 1;
-            }
+            chunks += 1;
         }
     }
     assert!(chunks >= 20, "expected at least 20 chunks, got {chunks}");

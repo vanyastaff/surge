@@ -1,0 +1,17 @@
+# cargo-nextest configuration.
+#
+# Safety net against hung tests: the mock-bridge test fixture uses a
+# `subscribe()`-then-`pump_scripted_events()` handshake, and a test that
+# pumps before the engine subscribes can otherwise block forever waiting
+# on a broadcast event that was sent to zero receivers. `terminate-after`
+# turns such a hang into a bounded failure with a clear timeout instead of
+# stalling CI for many minutes. The ceiling is generous (30s × 4 = 120s) so
+# legitimately slow integration tests are unaffected; the slowest tests in
+# this workspace run in single-digit seconds.
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# CI runs the same default profile (see .github/workflows/ci.yml), so the
+# ceiling applies there too.
+[profile.ci]
+slow-timeout = { period = "30s", terminate-after = 4 }

@@ -123,7 +123,13 @@ impl BootstrapHarness {
     }
 
     async fn resolve_next_gate(&self, outcome: &str, comment: &str) {
-        for _ in 0..100 {
+        // 500 * 10ms = 5s, matching `wait_for_subscribe_count`. The gap
+        // between an agent outcome being pumped and the engine reaching a
+        // resolvable HumanGate (validate + materialize + enter gate) can
+        // exceed the prior 1s budget under heavy parallel-test CPU
+        // contention, which surfaced as a low-frequency flake
+        // ("timed out waiting for pending bootstrap HumanGate").
+        for _ in 0..500 {
             let result = self
                 .engine
                 .resolve_human_input(

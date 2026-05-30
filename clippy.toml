@@ -5,7 +5,10 @@
 # nebula monorepo (e.g. via a worktree) or against a standalone checkout
 # of just the surge crate (which is what CI does — see .github/workflows/ci.yml).
 
-msrv = "1.85"
+# Matches the build MSRV in Cargo.toml so clippy applies the same
+# language-version-gated lints CI enforces (e.g. let-chain `collapsible_if`).
+# Keep these two in sync on every MSRV bump.
+msrv = "1.96"
 
 # ── Test ergonomics ────────────────────────────────────────────────────────
 # Tests may panic / unwrap / dbg / print liberally — production code may not.

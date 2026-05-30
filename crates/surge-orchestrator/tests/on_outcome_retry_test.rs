@@ -155,8 +155,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -258,8 +257,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
@@ -340,8 +338,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);

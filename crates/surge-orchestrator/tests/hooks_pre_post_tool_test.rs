@@ -110,8 +110,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -218,8 +217,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
 
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        mock_for_pump.pump_scripted_events().await;
+        mock_for_pump.pump_after_subscribe(1).await;
     });
 
     let dispatched: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

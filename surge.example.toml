@@ -1,6 +1,10 @@
 # Surge configuration
 # Copy to your project root as `surge.toml`
 
+# Config schema version. Frozen at 1 for v0.1; optional (defaults to 1 when
+# omitted). See docs/schema-versioning.md before bumping.
+schema_version = 1
+
 default_agent = "claude"
 
 # Example 1: Basic agent configuration (local installation)

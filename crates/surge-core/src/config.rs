@@ -101,12 +101,25 @@ fn default_default_agent() -> String {
     "claude-acp".to_string()
 }
 
+/// Current `surge.toml` schema version. Frozen at `1` for v0.1; bump only
+/// alongside a documented migration (see `docs/schema-versioning.md`).
+pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+
+fn default_config_schema_version() -> u32 {
+    CONFIG_SCHEMA_VERSION
+}
+
 /// Top-level Surge configuration, loaded from `surge.toml`.
 ///
 /// Controls agent routing, pipeline behaviour, resilience policies,
 /// cleanup strategy, and analytics. Validated on load via [`SurgeConfig::validate`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurgeConfig {
+    /// `surge.toml` schema version. Defaults to [`CONFIG_SCHEMA_VERSION`]
+    /// when absent (existing configs predate the field). Frozen at 1 for
+    /// v0.1; [`SurgeConfig::validate`] rejects any other value.
+    #[serde(default = "default_config_schema_version")]
+    pub schema_version: u32,
     #[serde(default = "default_default_agent")]
     pub default_agent: String,
     #[serde(default)]
@@ -911,6 +924,7 @@ fn default_reconnect_initial_delay_ms() -> u64 {
 impl Default for SurgeConfig {
     fn default() -> Self {
         Self {
+            schema_version: CONFIG_SCHEMA_VERSION,
             default_agent: "claude-acp".to_string(),
             agents: HashMap::new(),
             pipeline: PipelineConfig::default(),
@@ -944,6 +958,16 @@ impl SurgeConfig {
 
     /// Validate the configuration and return helpful error messages.
     pub fn validate(&self) -> Result<(), crate::SurgeError> {
+        // Schema gate first: a config from a newer surge must not be
+        // silently misread by an older binary.
+        if self.schema_version != CONFIG_SCHEMA_VERSION {
+            return Err(crate::SurgeError::Config(format!(
+                "unsupported surge.toml schema_version {} (this build supports {}). \
+                 Upgrade surge, or migrate the config — see docs/schema-versioning.md.",
+                self.schema_version, CONFIG_SCHEMA_VERSION
+            )));
+        }
+
         // Validate default_agent exists in agents map (when agents are configured)
         if !self.agents.is_empty() && !self.agents.contains_key(&self.default_agent) {
             return Err(crate::SurgeError::Config(format!(
@@ -2441,5 +2465,37 @@ transport = { kind = "stdio", command = "npx", args = ["@github/mcp-server"] }
         assert!(second.allowed_tools.is_none());
         assert_eq!(second.call_timeout, std::time::Duration::from_secs(60));
         assert!(second.restart_on_crash);
+    }
+}
+
+#[cfg(test)]
+mod config_schema_version_tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_schema_version_one() {
+        assert_eq!(CONFIG_SCHEMA_VERSION, 1);
+        assert_eq!(SurgeConfig::default().schema_version, CONFIG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn config_without_schema_version_defaults_to_one() {
+        // Existing surge.toml files predate the field; they must still parse
+        // and be treated as schema 1.
+        let cfg: SurgeConfig = toml::from_str("default_agent = \"a\"\n").unwrap();
+        assert_eq!(cfg.schema_version, 1);
+    }
+
+    #[test]
+    fn future_schema_version_is_rejected_with_migration_hint() {
+        // A config written by a newer surge must not be silently misread by
+        // an older binary — reject with an actionable message.
+        let cfg: SurgeConfig = toml::from_str("schema_version = 2\n").unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("schema_version"), "got: {err}");
+        assert!(
+            err.contains('2'),
+            "should name the unsupported version; got: {err}"
+        );
     }
 }

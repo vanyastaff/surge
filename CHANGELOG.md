@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Crash recovery (v0.1 blocker)
+
+- **New `surge-daemon::recovery` module** — daemon startup brings runs the
+  registry left non-terminal back to life from the event log. A pure
+  `decide_action` policy (skip-active / skip-terminal / reconcile-terminal /
+  mark-failed-worktree-lost / flag-stuck / resume), a read-only
+  `plan_recovery` registry scan, and an `execute_recovery` executor behind a
+  `RecoveryEffects` trait. Model + decision table in
+  [docs/crash-recovery.md](docs/crash-recovery.md).
+- **Resumes share the live machinery** — recovered runs flow through the
+  daemon's admission controller and broadcast registry via the new
+  `server::resume_run_tracked` seam, so they publish `RunFinished` globally
+  (tracker-completion comments and the L3 merge gate keep working). The
+  admission controller is now created in `main.rs` and passed into
+  `run_with_registry`.
+- **`surge daemon recover [--dry-run]`** — read-only inspector by default;
+  the plain form applies registry-safe reconciliations only while the daemon
+  is stopped and reports resumes as pending the next `surge daemon start`.
+- **`Storage::set_run_status`** for failed/terminal reconciliation.
+- **Stuck-run detection** (>24h idle → human-attention card), **worktree
+  consistency check** (lost worktree → `Failed`), per-stage recovery
+  telemetry, and idempotent re-runs.
+
+### Added — v0.1 release hardening
+
+- **`surge --version`** embeds the git short SHA + commit date
+  (`surge 0.1.0 (<sha>, <date>)`) via a new `surge-cli` build script.
+- **Panic crash-report hook** — prints version + issue URL before the
+  backtrace.
+- **Schema freeze at v1** — `surge.toml` gains an optional `schema_version`
+  (defaults to 1; `validate()` rejects other versions with a migration
+  hint); `flow.toml` and event payloads were already at v1. Documented in
+  [docs/schema-versioning.md](docs/schema-versioning.md).
+- **License compliance** — `deny.toml` allow-list + `cargo deny` job in
+  `security.yml`; [THIRD_PARTY.md](THIRD_PARTY.md) inventory.
+- **CI MSRV (1.85) job** added to `ci.yml`.
+- **v0.1 release notes draft** ([docs/release-notes-v0.1.md](docs/release-notes-v0.1.md))
+  incl. zero-by-default telemetry posture.
+
+### Added — Replay CLI mirror
+
+- **`surge engine replay <run_id> --seq <N>`** folds the event log to seq
+  `N` and prints the run state — CLI mirror of the replay scrubber over the
+  same `aggregate_status` primitive.
+
+### Fixed
+
+- **Open-ended `RunReader::read_events`** — `EventSeq(u64::MAX)` was cast to
+  `-1` for the SQLite bind, so `seq < -1` returned zero rows. Every
+  open-ended read silently came back empty, which also degraded
+  `current_status` (cockpit `/status`) and crash-recovery stuck/reconcile
+  detection. Bounds are now clamped with `i64::try_from(..).unwrap_or(i64::MAX)`.
+
 ### Added — Telegram cockpit production-ready
 
 - **New `surge-telegram` crate** — owns the long-running Telegram cockpit:

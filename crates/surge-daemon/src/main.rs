@@ -232,7 +232,57 @@ fn main() -> std::process::ExitCode {
         // consumer (RFC-0010 acceptance #5) can subscribe to global events
         // alongside the wire-level subscribers handled by `run_with_registry`.
         let broadcast_registry = Arc::new(BroadcastRegistry::new());
+        // Subscribe BOTH global-event consumers (run-completion → tracker
+        // comment, and the L3 auto-merge gate) up front, BEFORE crash
+        // recovery runs. A crash-resumed run can reach a terminal state during
+        // startup and publish `RunFinished` before the consumer *tasks* are
+        // spawned (those need the TaskRouter's DB connection, which is created
+        // after recovery). Because these receivers already exist when recovery
+        // runs, the global broadcast (capacity 64) buffers such events until
+        // the consumer tasks drain them — so recovered runs still get
+        // tracker-completion comments and L3 merge handling.
         let completion_rx = broadcast_registry.subscribe_global();
+        let merge_gate_rx = broadcast_registry.subscribe_global();
+
+        let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
+
+        // Admission controller is created here (not inside the server) so
+        // crash recovery and the IPC server share one slot accounting:
+        // runs resumed at startup consume slots the server then respects.
+        let admission = Arc::new(surge_daemon::admission::AdmissionController::new(
+            args.max_active,
+            max_queue,
+        ));
+
+        // --- Crash recovery (v0.1 blocker) ---
+        // Run BEFORE any subsystem that can launch runs (the TaskRouter and
+        // the inbox action consumer below both poll immediately). Otherwise
+        // a freshly-launched run could be active in this process while the
+        // recovery scan still sees an empty active set, and recovery might
+        // try to resume or re-status a run that is already live. Resumes
+        // flow through the shared admission + broadcast registry so
+        // recovered runs publish RunFinished globally.
+        let worktrees_root = surge_runs_dir().join("worktrees");
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let recovery_outcome = surge_daemon::recovery::recover_on_startup(
+            &storage,
+            &facade,
+            &admission,
+            &broadcast_registry,
+            &notifier,
+            worktrees_root,
+            now_ms,
+        )
+        .await;
+        info!(
+            resumed = recovery_outcome.resumed,
+            reconciled = recovery_outcome.reconciled,
+            failed_worktree = recovery_outcome.failed_worktree,
+            flagged_stuck = recovery_outcome.flagged_stuck,
+            skipped = recovery_outcome.skipped,
+            errors = recovery_outcome.errors,
+            "crash recovery pass complete"
+        );
 
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
@@ -247,13 +297,12 @@ fn main() -> std::process::ExitCode {
             {
                 // Run-completion → tracker comment + ticket FSM transition.
                 intake_completion::spawn(completion_rx, Arc::clone(&source_map_arc), Arc::clone(&conn_arc));
-                // L3 auto-merge gate. Subscribes to the same global event
-                // stream via a separate receiver so the two consumers do
-                // not contend. The `JoinHandle` is intentionally dropped:
-                // shutdown is driven by the broadcast channel closing
-                // (when `BroadcastRegistry` is dropped), not by aborting
-                // the task explicitly.
-                let merge_gate_rx = broadcast_registry.subscribe_global();
+                // L3 auto-merge gate. Uses `merge_gate_rx`, subscribed before
+                // recovery (see above) so it cannot miss a `RunFinished`
+                // published while a crash-resumed run finished during startup.
+                // The `JoinHandle` is intentionally dropped: shutdown is driven
+                // by the broadcast channel closing (when `BroadcastRegistry` is
+                // dropped), not by aborting the task explicitly.
                 let _merge_gate_handle = surge_daemon::automation_merge_gate::spawn(
                     merge_gate_rx,
                     source_map_arc,
@@ -275,7 +324,6 @@ fn main() -> std::process::ExitCode {
             shutdown.clone(),
         ).await;
 
-        let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
         let server_cfg = ServerConfig {
             max_active: args.max_active,
             max_queue,
@@ -289,9 +337,11 @@ fn main() -> std::process::ExitCode {
             // waits forever holding the pid lock.
             let shutdown_for_cancel = shutdown.clone();
             let broadcast = Arc::clone(&broadcast_registry);
+            let admission = Arc::clone(&admission);
             async move {
                 if let Err(e) =
-                    run_with_registry(server_cfg, facade, broadcast, shutdown_for_server).await
+                    run_with_registry(server_cfg, facade, broadcast, admission, shutdown_for_server)
+                        .await
                 {
                     tracing::error!(err = %e, "server exited with error; cancelling shutdown token");
                     shutdown_for_cancel.cancel();

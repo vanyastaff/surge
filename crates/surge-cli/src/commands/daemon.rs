@@ -30,6 +30,19 @@ pub enum DaemonCommands {
     Status,
     /// Restart the daemon (stop + start).
     Restart,
+    /// Preview (or apply) crash-recovery decisions for non-terminal runs.
+    ///
+    /// Recovery also runs automatically when the daemon starts. This
+    /// command lets an operator inspect what recovery *would* do
+    /// (`--dry-run`) or apply the registry-safe reconciliations
+    /// (mark worktree-lost runs failed, reconcile log-terminal runs)
+    /// while the daemon is stopped. Resuming runs always happens via the
+    /// daemon — the command reports those as pending a `surge daemon start`.
+    Recover {
+        /// Only print the plan; perform no side effects.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Top-level dispatcher for `surge daemon` invocations.
@@ -49,7 +62,138 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             wait_for_daemon_exit(Duration::from_secs(10)).await?;
             start(true, 8).await
         },
+        DaemonCommands::Recover { dry_run } => recover(dry_run).await,
     }
+}
+
+/// `surge daemon recover [--dry-run]` — preview or apply crash-recovery
+/// decisions for runs the registry believes were in flight.
+async fn recover(dry_run: bool) -> Result<()> {
+    use surge_daemon::pidfile;
+    use surge_daemon::recovery::{
+        DEFAULT_STUCK_THRESHOLD, RecoveryAction, RecoveryOptions, plan_recovery,
+    };
+    use surge_persistence::runs::Storage;
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("home directory not found"))?
+        .join(".surge");
+    let storage = Storage::open(&home)
+        .await
+        .with_context(|| format!("open surge storage at {}", home.display()))?;
+
+    let worktrees_root = home.join("worktrees");
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let opts = RecoveryOptions {
+        stuck_threshold: DEFAULT_STUCK_THRESHOLD,
+        worktrees_root,
+        now_ms,
+    };
+
+    let report = plan_recovery(&storage, &opts, &std::collections::HashSet::new())
+        .await
+        .context("scan registry for recovery candidates")?;
+
+    if report.decisions.is_empty() {
+        println!("No non-terminal runs found; nothing to recover.");
+        return Ok(());
+    }
+
+    // Is a daemon already running? If so, recovery is its job — never
+    // mutate the registry out from under a live daemon.
+    let daemon_alive = pidfile::read_pid(&pidfile::pid_path()?)?.is_some_and(pidfile::is_alive);
+
+    let apply = !dry_run && !daemon_alive;
+    if dry_run {
+        println!("Recovery plan (dry-run — no changes will be made):\n");
+    } else if daemon_alive {
+        println!("Daemon is running; recovery is active there. Read-only preview:\n");
+    } else {
+        println!("Applying registry-safe recovery actions (daemon is stopped):\n");
+    }
+
+    println!("{:<28} {:<14} {:<16} {}", "RUN", "WAS", "STAGE", "ACTION");
+    let mut resume_pending = 0usize;
+    let mut applied = 0usize;
+    for d in &report.decisions {
+        let action_label = match &d.action {
+            RecoveryAction::Resume => {
+                resume_pending += 1;
+                "resume (pending daemon start)".to_string()
+            },
+            RecoveryAction::ReconcileTerminal { failed } => {
+                if *failed {
+                    "reconcile → failed".to_string()
+                } else {
+                    "reconcile → completed".to_string()
+                }
+            },
+            RecoveryAction::MarkFailedWorktreeLost => "mark failed (worktree lost)".to_string(),
+            RecoveryAction::FlagStuck { idle_ms } => {
+                format!("flag stuck (idle ~{}h)", idle_ms / 3_600_000)
+            },
+            RecoveryAction::SkipTerminal => "skip (terminal)".to_string(),
+            RecoveryAction::SkipAlreadyActive => "skip (active)".to_string(),
+        };
+        println!(
+            "{:<28} {:<14} {:<16} {}",
+            d.run_id.to_string(),
+            d.prior_status.as_str(),
+            d.active_node.as_deref().unwrap_or("-"),
+            action_label
+        );
+
+        // Apply registry-safe actions only (never resume from the CLI).
+        if apply {
+            match &d.action {
+                RecoveryAction::MarkFailedWorktreeLost => {
+                    // Append a terminal RunFailed to the log AND set the
+                    // registry status, so replay / current_status agree with
+                    // the recovery view.
+                    surge_daemon::recovery::fail_run_in_log_and_registry(
+                        &storage,
+                        d.run_id,
+                        "worktree lost; cannot resume",
+                        now_ms,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("mark {} failed: {e}", d.run_id))?;
+                    applied += 1;
+                },
+                RecoveryAction::ReconcileTerminal { failed } => {
+                    let status = if *failed {
+                        surge_core::RunStatus::Failed
+                    } else {
+                        surge_core::RunStatus::Completed
+                    };
+                    storage
+                        .set_run_status(&d.run_id, status, Some(now_ms))
+                        .await
+                        .with_context(|| format!("reconcile {}", d.run_id))?;
+                    applied += 1;
+                },
+                _ => {},
+            }
+        }
+    }
+
+    println!();
+    if apply {
+        println!("Applied {applied} registry reconciliation(s).");
+    }
+    if resume_pending > 0 {
+        println!(
+            "{resume_pending} run(s) will resume automatically when you run `surge daemon start`."
+        );
+    }
+    if dry_run {
+        println!("(dry-run: no changes made.)");
+    }
+
+    Ok(())
 }
 
 async fn start(detached: bool, max_active: usize) -> Result<()> {

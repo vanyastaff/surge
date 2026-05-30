@@ -6,7 +6,7 @@ This page walks through installing Surge from source, building the workspace, ru
 
 ## Requirements
 
-- Rust `1.85+`
+- Rust `1.96+`
 - Git
 - An ACP-compatible agent on `PATH` for any flow that contains an `Agent` node (Claude Code, Codex, Gemini, or a custom ACP-conformant binary)
 
