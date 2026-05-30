@@ -1741,17 +1741,28 @@ fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
 
     let dir = worktree.join(".claude");
     let settings = dir.join("settings.json");
-    if settings.exists() {
-        return;
-    }
 
+    // Create atomically with `create_new` (O_EXCL / CREATE_NEW) rather than an
+    // `exists()`-then-`write` pair: the latter has a TOCTOU window where a
+    // concurrent creator (another stage in the same worktree, or the operator)
+    // could be clobbered. An already-present file is the operator's explicit
+    // choice and is left untouched — `AlreadyExists` is a benign no-op.
+    use std::io::Write as _;
     let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
-    match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&settings, body)) {
+    let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&settings)?;
+        file.write_all(body.as_bytes())
+    });
+    match write_result {
         Ok(()) => tracing::debug!(
             target: "engine::stage::agent",
             worktree = %worktree.display(),
             "seeded headless .claude/settings.json (permissions.defaultMode=default)"
         ),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
         Err(e) => tracing::warn!(
             target: "engine::stage::agent",
             worktree = %worktree.display(),
