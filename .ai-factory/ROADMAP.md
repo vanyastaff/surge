@@ -284,7 +284,7 @@
 
 - [ ] **Durability proof — fault-injection harness** — recovery survives the worst case (touches `surge-daemon`, `surge-persistence`, test infra)
   - Harness that kills the daemon process (SIGKILL / simulated power-cut) at defined checkpoints mid-run, restarts, and asserts recovery resumes to the correct folded state
-  - WAL checkpoint behaviour verified: no event-log corruption, no lost committed events, no duplicate appends after restart
+  - WAL checkpoint behavior verified: no event-log corruption, no lost committed events, no duplicate appends after restart
   - Checkpoint matrix: mid-Agent-turn, pending-HumanGate, mid-Notify, pre-Terminal-append — each asserts the v0.1 recovery decision policy
   - Recovery idempotency under repeated kills (kill during recovery itself)
   - CI: harness runs on Linux (signals) with a Windows-named-pipe stale-handle variant
