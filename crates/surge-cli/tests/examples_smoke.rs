@@ -121,6 +121,10 @@ fn bundled_template_names_and_legacy_aliases_start_runs() {
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("SURGE_HOME", &surge_home)
+            // Force the in-process mock agent so this plumbing smoke test
+            // starts a run without spawning a real ACP subprocess (which
+            // would hang the CLI process on a live agent child).
+            .env("SURGE_FORCE_AGENT_MOCK", "1")
             .assert()
             .success()
             .stdout(contains("run-"));
@@ -173,6 +177,8 @@ members = []
         .current_dir(temp.path())
         .env("HOME", &home)
         .env("USERPROFILE", &home)
+        // Mock agent: start the run without spawning a real ACP subprocess.
+        .env("SURGE_FORCE_AGENT_MOCK", "1")
         .assert()
         .success()
         .stdout(contains("run-"));
