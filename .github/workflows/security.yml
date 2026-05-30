@@ -43,6 +43,28 @@ jobs:
         # vulnerability so weekly drift is caught at scheduled run time.
         run: cargo audit
 
+  deny:
+    name: cargo deny (licenses + supply chain)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo deny
+        # Enforces the license allow-list (dual MIT/Apache-2.0 compatible)
+        # and source/ban policy in deny.toml. License compliance is a v0.1
+        # release gate; `bans`/`sources` guard against unexpected registries
+        # and (warn-level) wildcard/duplicate drift.
+        run: cargo deny check licenses bans sources
+
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest

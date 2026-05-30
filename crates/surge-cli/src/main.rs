@@ -22,10 +22,21 @@ use commands::{
     registry::RegistryCommands, tracker::TrackerCommand,
 };
 
+/// Version string reported by `surge --version`: the crate version plus
+/// the git short SHA and commit date embedded by `build.rs`.
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("SURGE_GIT_SHA"),
+    ", ",
+    env!("SURGE_BUILD_DATE"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "surge",
-    version,
+    version = LONG_VERSION,
     about = "⚡ Any Agent. One Protocol. Pure Rust."
 )]
 struct Cli {
@@ -277,8 +288,24 @@ fn check_and_cleanup_orphans() -> Result<bool> {
     }
 }
 
+/// Install a panic hook that prints a crash-report hint (version + issue
+/// URL) before the default backtrace, so an unexpected panic gives the
+/// operator an actionable next step instead of a bare stack trace.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("\nsurge panicked — this is a bug, not your fault.");
+        eprintln!("  version: surge {LONG_VERSION}");
+        eprintln!("  please report it: https://github.com/vanyastaff/surge/issues/new");
+        eprintln!("  include the backtrace below (re-run with RUST_BACKTRACE=1 for full detail).\n");
+        default_hook(info);
+    }));
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_panic_hook();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

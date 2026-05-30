@@ -150,6 +150,35 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The workspace declares rust-version = "1.85". This job pins that
+      # toolchain and type-checks the whole workspace so an accidental use
+      # of a newer-than-MSRV std/language feature is caught at the gate.
+      # surge-ui is excluded (GPUI pulls bleeding-edge toolchain features
+      # and is not part of the MSRV contract), matching the test job.
+      - name: Install Rust 1.85
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo check (MSRV)
+        run: cargo check --workspace --exclude surge-ui --all-targets
+
   bench:
     name: Engine Bench (stage transition)
     # Linux-only — bench wall-clock numbers across runners are not comparable.
