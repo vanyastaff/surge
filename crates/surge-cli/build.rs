@@ -19,8 +19,8 @@ fn main() {
     let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=SURGE_GIT_SHA={sha}");
 
-    let commit_date =
-        git(&["log", "-1", "--format=%cd", "--date=short"]).unwrap_or_else(|| "unknown".to_string());
+    let commit_date = git(&["log", "-1", "--format=%cd", "--date=short"])
+        .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=SURGE_BUILD_DATE={commit_date}");
 }
 

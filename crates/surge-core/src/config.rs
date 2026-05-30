@@ -2493,6 +2493,9 @@ mod config_schema_version_tests {
         let cfg: SurgeConfig = toml::from_str("schema_version = 2\n").unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("schema_version"), "got: {err}");
-        assert!(err.contains('2'), "should name the unsupported version; got: {err}");
+        assert!(
+            err.contains('2'),
+            "should name the unsupported version; got: {err}"
+        );
     }
 }

@@ -9,12 +9,12 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use surge_core::RunStatus;
 use surge_core::approvals::ApprovalPolicy;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
-use surge_core::RunStatus;
 use surge_orchestrator::engine::EngineRunConfig;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::engine::handle::{EngineRunEvent, RunHandle, RunOutcome};
@@ -111,12 +111,18 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
 
     // Run A — worktree present → must be resumed.
     let run_a = RunId::new();
-    let _wa = storage.create_run(run_a.clone(), "/proj", None).await.unwrap();
+    let _wa = storage
+        .create_run(run_a.clone(), "/proj", None)
+        .await
+        .unwrap();
     std::fs::create_dir_all(worktrees_root.join(run_a.to_string())).unwrap();
 
     // Run B — worktree absent → must be marked Failed.
     let run_b = RunId::new();
-    let _wb = storage.create_run(run_b.clone(), "/proj", None).await.unwrap();
+    let _wb = storage
+        .create_run(run_b.clone(), "/proj", None)
+        .await
+        .unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();
@@ -162,7 +168,10 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     let worktrees_root = tmp.path().join("worktrees");
 
     let run_b = RunId::new();
-    let _wb = storage.create_run(run_b.clone(), "/proj", None).await.unwrap();
+    let _wb = storage
+        .create_run(run_b.clone(), "/proj", None)
+        .await
+        .unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();
@@ -173,19 +182,32 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     let now_ms = 1_700_000_000_000;
 
     let first = surge_daemon::recovery::recover_on_startup(
-        &storage, &facade, &admission, &broadcast, &notifier,
-        worktrees_root.clone(), now_ms,
+        &storage,
+        &facade,
+        &admission,
+        &broadcast,
+        &notifier,
+        worktrees_root.clone(),
+        now_ms,
     )
     .await;
     assert_eq!(first.failed_worktree, 1);
 
     // Second pass: run_b is now Failed (terminal) → not a candidate.
     let second = surge_daemon::recovery::recover_on_startup(
-        &storage, &facade, &admission, &broadcast, &notifier,
-        worktrees_root, now_ms,
+        &storage,
+        &facade,
+        &admission,
+        &broadcast,
+        &notifier,
+        worktrees_root,
+        now_ms,
     )
     .await;
-    assert_eq!(second.failed_worktree, 0, "Failed run must not be re-processed");
+    assert_eq!(
+        second.failed_worktree, 0,
+        "Failed run must not be re-processed"
+    );
     assert_eq!(second.resumed, 0);
     assert_eq!(second.skipped, 0, "terminal runs are filtered out entirely");
 }
@@ -247,14 +269,22 @@ async fn recover_reconciles_log_terminal_run() {
     let (admission, broadcast, notifier) = helpers();
 
     let outcome = surge_daemon::recovery::recover_on_startup(
-        &storage, &facade, &admission, &broadcast, &notifier,
-        worktrees_root, 1_700_000_000_000,
+        &storage,
+        &facade,
+        &admission,
+        &broadcast,
+        &notifier,
+        worktrees_root,
+        1_700_000_000_000,
     )
     .await;
 
     assert_eq!(outcome.reconciled, 1);
     assert_eq!(outcome.resumed, 0);
-    assert!(stub.resume_calls.lock().unwrap().is_empty(), "must not resume a finished run");
+    assert!(
+        stub.resume_calls.lock().unwrap().is_empty(),
+        "must not resume a finished run"
+    );
     assert_eq!(
         storage.get_run(&run).await.unwrap().unwrap().status,
         RunStatus::Completed
@@ -291,14 +321,22 @@ async fn recover_flags_stuck_run_instead_of_resuming() {
     // stuck threshold.
     let far_future = chrono::Utc::now().timestamp_millis() + 100 * 24 * 3_600_000;
     let outcome = surge_daemon::recovery::recover_on_startup(
-        &storage, &facade, &admission, &broadcast, &notifier,
-        worktrees_root, far_future,
+        &storage,
+        &facade,
+        &admission,
+        &broadcast,
+        &notifier,
+        worktrees_root,
+        far_future,
     )
     .await;
 
     assert_eq!(outcome.flagged_stuck, 1);
     assert_eq!(outcome.resumed, 0);
-    assert!(stub.resume_calls.lock().unwrap().is_empty(), "must not resume a stuck run");
+    assert!(
+        stub.resume_calls.lock().unwrap().is_empty(),
+        "must not resume a stuck run"
+    );
     // FlagStuck leaves the registry status untouched.
     assert_eq!(
         storage.get_run(&run).await.unwrap().unwrap().status,

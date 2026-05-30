@@ -151,19 +151,21 @@ jobs:
         run: cargo fmt --check
 
   msrv:
-    name: MSRV (1.85)
+    name: MSRV (1.91)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # The workspace declares rust-version = "1.85". This job pins that
-      # toolchain and type-checks the whole workspace so an accidental use
-      # of a newer-than-MSRV std/language feature is caught at the gate.
+      # The workspace declares rust-version = "1.91" (the real floor: the
+      # resolved dependency tree requires >=1.88, and surge-acp uses the
+      # `round_char_boundary` str methods stabilized in 1.91). This job pins
+      # that toolchain and type-checks the whole workspace so an accidental
+      # use of a newer-than-MSRV std/language feature is caught at the gate.
       # surge-ui is excluded (GPUI pulls bleeding-edge toolchain features
       # and is not part of the MSRV contract), matching the test job.
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install Rust 1.91
+        uses: dtolnay/rust-toolchain@1.91.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4

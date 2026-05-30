@@ -571,11 +571,7 @@ impl RecoveryEffects for DaemonRecoveryEffects {
             .map_err(|e| e.to_string())
     }
 
-    async fn flag_stuck(
-        &self,
-        run_id: &surge_core::id::RunId,
-        idle_ms: i64,
-    ) -> Result<(), String> {
+    async fn flag_stuck(&self, run_id: &surge_core::id::RunId, idle_ms: i64) -> Result<(), String> {
         let node = surge_core::keys::NodeKey::try_new("recovery")
             .map_err(|e| format!("bad recovery node key: {e}"))?;
         let idle_hours = idle_ms / 3_600_000;
@@ -595,7 +591,11 @@ impl RecoveryEffects for DaemonRecoveryEffects {
         };
         match self
             .notifier
-            .deliver(&ctx, &surge_core::notify_config::NotifyChannel::Desktop, &rendered)
+            .deliver(
+                &ctx,
+                &surge_core::notify_config::NotifyChannel::Desktop,
+                &rendered,
+            )
             .await
         {
             // Success, or no desktop channel configured (the stuck run is
@@ -820,16 +820,25 @@ mod plan_recovery_tests {
 
         // Run A — candidate with a present worktree → Resume.
         let run_a = RunId::new();
-        let _wa = storage.create_run(run_a.clone(), "/proj", None).await.unwrap();
+        let _wa = storage
+            .create_run(run_a.clone(), "/proj", None)
+            .await
+            .unwrap();
         std::fs::create_dir_all(wt_root.join(run_a.to_string())).unwrap();
 
         // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
         let run_b = RunId::new();
-        let _wb = storage.create_run(run_b.clone(), "/proj", None).await.unwrap();
+        let _wb = storage
+            .create_run(run_b.clone(), "/proj", None)
+            .await
+            .unwrap();
 
         // Run C — terminal (Completed) → not a candidate, no decision.
         let run_c = RunId::new();
-        let _wc = storage.create_run(run_c.clone(), "/proj", None).await.unwrap();
+        let _wc = storage
+            .create_run(run_c.clone(), "/proj", None)
+            .await
+            .unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
             conn.execute(
@@ -869,7 +878,10 @@ mod plan_recovery_tests {
         let wt_root = tmp.path().join("worktrees");
 
         let run = RunId::new();
-        let _w = storage.create_run(run.clone(), "/proj", None).await.unwrap();
+        let _w = storage
+            .create_run(run.clone(), "/proj", None)
+            .await
+            .unwrap();
         std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
 
         let mut active = HashSet::new();
@@ -879,7 +891,10 @@ mod plan_recovery_tests {
             .await
             .unwrap();
         assert_eq!(report.decisions.len(), 1);
-        assert_eq!(report.decisions[0].action, RecoveryAction::SkipAlreadyActive);
+        assert_eq!(
+            report.decisions[0].action,
+            RecoveryAction::SkipAlreadyActive
+        );
     }
 }
 
@@ -1016,9 +1031,6 @@ mod decide_action_tests {
             last_event_ms: None,
             ..healthy_crashed()
         };
-        assert_eq!(
-            decide_action(&facts, NOW, STUCK),
-            RecoveryAction::Resume
-        );
+        assert_eq!(decide_action(&facts, NOW, STUCK), RecoveryAction::Resume);
     }
 }

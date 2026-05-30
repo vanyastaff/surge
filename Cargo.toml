@@ -19,8 +19,12 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+# MSRV reflects the real floor of the resolved dependency tree (darling /
+# home / time / process-wrap require >=1.88) plus surge-acp's use of the
+# `round_char_boundary` str methods, stabilized in 1.91. Verified by the
+# `MSRV` CI job in .github/workflows/ci.yml.
 repository = "https://github.com/vanyastaff/surge"
-rust-version = "1.85"
+rust-version = "1.91"
 
 [workspace.dependencies]
 # ACP

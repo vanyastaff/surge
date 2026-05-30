@@ -38,7 +38,7 @@ one-liners at tag time.
 > Pending: `cargo publish` of the publishable crates and the Homebrew tap /
 > Scoop manifest. Until then, build from source.
 
-From source (stable Rust ≥ 1.85):
+From source (stable Rust ≥ 1.91):
 
 ```
 git clone https://github.com/vanyastaff/surge

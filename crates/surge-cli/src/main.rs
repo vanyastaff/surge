@@ -297,7 +297,9 @@ fn install_panic_hook() {
         eprintln!("\nsurge panicked — this is a bug, not your fault.");
         eprintln!("  version: surge {LONG_VERSION}");
         eprintln!("  please report it: https://github.com/vanyastaff/surge/issues/new");
-        eprintln!("  include the backtrace below (re-run with RUST_BACKTRACE=1 for full detail).\n");
+        eprintln!(
+            "  include the backtrace below (re-run with RUST_BACKTRACE=1 for full detail).\n"
+        );
         default_hook(info);
     }));
 }

@@ -70,7 +70,9 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
 /// decisions for runs the registry believes were in flight.
 async fn recover(dry_run: bool) -> Result<()> {
     use surge_daemon::pidfile;
-    use surge_daemon::recovery::{DEFAULT_STUCK_THRESHOLD, RecoveryAction, RecoveryOptions, plan_recovery};
+    use surge_daemon::recovery::{
+        DEFAULT_STUCK_THRESHOLD, RecoveryAction, RecoveryOptions, plan_recovery,
+    };
     use surge_persistence::runs::Storage;
 
     let home = dirs::home_dir()
@@ -102,8 +104,7 @@ async fn recover(dry_run: bool) -> Result<()> {
 
     // Is a daemon already running? If so, recovery is its job — never
     // mutate the registry out from under a live daemon.
-    let daemon_alive = pidfile::read_pid(&pidfile::pid_path()?)?
-        .is_some_and(pidfile::is_alive);
+    let daemon_alive = pidfile::read_pid(&pidfile::pid_path()?)?.is_some_and(pidfile::is_alive);
 
     let apply = !dry_run && !daemon_alive;
     if dry_run {

@@ -130,17 +130,16 @@ impl RunReader {
             // in i64).
             let start_bind = i64::try_from(range.start.0).unwrap_or(i64::MAX);
             let end_bind = i64::try_from(range.end.0).unwrap_or(i64::MAX);
-            let iter =
-                stmt.query_map(params![start_bind, end_bind], |row| {
-                    let blob: Vec<u8> = row.get(3)?;
-                    Ok((
-                        EventSeq(row.get::<_, i64>(0)? as u64),
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        blob,
-                        row.get::<_, i64>(4)? as u32,
-                    ))
-                })?;
+            let iter = stmt.query_map(params![start_bind, end_bind], |row| {
+                let blob: Vec<u8> = row.get(3)?;
+                Ok((
+                    EventSeq(row.get::<_, i64>(0)? as u64),
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    blob,
+                    row.get::<_, i64>(4)? as u32,
+                ))
+            })?;
             let mut out = Vec::new();
             for r in iter {
                 let (seq, ts, kind, blob, schema_version) = r?;

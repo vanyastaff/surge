@@ -385,7 +385,10 @@ mod set_run_status_tests {
         let storage = Storage::open(dir.path()).await.unwrap();
 
         let run_id = RunId::new();
-        let _writer = storage.create_run(run_id.clone(), "/proj", None).await.unwrap();
+        let _writer = storage
+            .create_run(run_id.clone(), "/proj", None)
+            .await
+            .unwrap();
 
         // Freshly created run is Bootstrapping.
         let before = storage.get_run(&run_id).await.unwrap().unwrap();
