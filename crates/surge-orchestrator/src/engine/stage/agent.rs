@@ -238,6 +238,27 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         None => derive_agent_kind(profile_str, None)?,
     };
 
+    // Headless-runtime insulation. For the Claude Code runtime, ensure the
+    // worktree carries a project-level `.claude/settings.json` that pins a
+    // valid, non-interactive `permissions.defaultMode`. Otherwise the agent
+    // inherits the operator's GLOBAL `~/.claude/settings.json` mode — which
+    // may be a value the claude-agent-acp adapter rejects at session setup
+    // (e.g. "auto" → "Invalid permissions.defaultMode"), breaking the run
+    // before any turn. Auth and other global settings still apply; only the
+    // project-level mode is pinned, and an existing project file is never
+    // clobbered. No-op for non-Claude runtimes.
+    if let Some(rp) = resolved_profile.as_ref() {
+        // Seed off the executor: `seed_headless_runtime_settings` does
+        // synchronous (durable) file I/O, so run it on the blocking pool to
+        // avoid stalling the async launch path.
+        let agent_id = rp.profile.runtime.agent_id.clone();
+        let worktree = p.worktree_path.to_path_buf();
+        let _ = tokio::task::spawn_blocking(move || {
+            seed_headless_runtime_settings(&agent_id, &worktree);
+        })
+        .await;
+    }
+
     // Derive declared outcomes from the node's OutcomeDecl list.
     // Fall back to ["done"] when the node has no declared_outcomes so the
     // session is always valid (SessionConfig::validate requires at least one).
@@ -1670,6 +1691,19 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
     })?;
     let binary = std::path::PathBuf::from(&entry.command);
     let extra_args = entry.default_args.clone();
+    // The builtin registry launches agents through an npx adapter
+    // (`command = "npx"`, `default_args = ["@vendor/pkg", ...]`), where
+    // `default_args` already encodes the COMPLETE invocation (including any
+    // `--acp` flag the adapter needs, e.g. gemini/copilot). Those registry
+    // ids ("claude-acp"/"codex-acp"/"gemini") deliberately fall through to
+    // `Custom`, which spawns `command + args` verbatim. The typed
+    // `ClaudeCode`/`Codex`/`GeminiCli` arms exist for the DIRECT-CLI launch
+    // model (e.g. `claude --acp`, exercised by the env-gated
+    // `real_acp_smoke` test), where `build_agent_command` injects the
+    // runtime's subcommand. Mapping the registry ids onto the typed arms
+    // would double/misplace `--acp` for the npx model and break the launch —
+    // so the runtime is tracked separately (registry `entry.runtime`, used
+    // by `seed_headless_runtime_settings`) rather than via the AgentKind.
     let kind = match entry.id.as_str() {
         "claude-code" => AgentKind::ClaudeCode { binary, extra_args },
         "codex" => AgentKind::Codex { binary, extra_args },
@@ -1688,6 +1722,85 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
         "derived AgentKind from profile registry"
     );
     Ok(kind)
+}
+
+/// Best-effort: pin a headless permission mode for the Claude Code runtime by
+/// seeding `<worktree>/.claude/settings.json` when absent.
+///
+/// The claude-agent-acp adapter reads `permissions.defaultMode` from Claude's
+/// settings cascade at ACP `new_session`; an operator's global value the
+/// adapter doesn't accept (e.g. `"auto"`) aborts the handshake. A project-
+/// level settings file overrides the global mode while auth and other global
+/// settings still apply. An existing project file is left untouched (the
+/// operator's explicit choice wins). No-op for non-Claude runtimes or when
+/// the agent id is unknown.
+///
+/// Synchronous std::fs by design: `std::fs::File::write_all` writes through to
+/// the OS (no userspace buffering), so the bytes are durable and immediately
+/// visible to a subsequent read once it returns — unlike a `tokio::fs::File`,
+/// whose buffered writes can be lost on drop without an explicit flush. The
+/// work is one tiny `create_dir_all` + atomic create; callers that run on the
+/// async agent-launch path wrap this in `spawn_blocking` so the executor is
+/// never blocked.
+fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
+    let registry = surge_acp::Registry::builtin();
+    let is_claude = registry
+        .normalize_agent_id(agent_id)
+        .and_then(|id| registry.find(&id).and_then(|e| e.runtime))
+        .map_or_else(
+            || matches!(agent_id, "claude-code" | "claude-acp"),
+            |rt| matches!(rt, surge_core::RuntimeKind::ClaudeCode),
+        );
+    if !is_claude {
+        return;
+    }
+
+    let dir = worktree.join(".claude");
+    let settings = dir.join("settings.json");
+
+    // Refuse to follow a repo-provided `.claude` symlink (or a non-directory
+    // entry): a crafted checkout could otherwise redirect the write outside
+    // the worktree. `symlink_metadata` does not traverse the final component,
+    // so a symlink is reported as a symlink rather than its target.
+    if let Ok(md) = std::fs::symlink_metadata(&dir)
+        && (md.file_type().is_symlink() || !md.is_dir())
+    {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            worktree = %worktree.display(),
+            "skipping headless settings seed: .claude exists but is not a real directory (symlink or file); refusing to write through it"
+        );
+        return;
+    }
+
+    // Create atomically with `create_new` (O_EXCL / CREATE_NEW) rather than an
+    // `exists()`-then-`write` pair: the latter has a TOCTOU window where a
+    // concurrent creator (another stage in the same worktree, or the operator)
+    // could be clobbered. An already-present file is the operator's explicit
+    // choice and is left untouched — `AlreadyExists` is a benign no-op.
+    use std::io::Write as _;
+    let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
+    let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&settings)?;
+        file.write_all(body.as_bytes())
+    });
+    match write_result {
+        Ok(()) => tracing::debug!(
+            target: "engine::stage::agent",
+            worktree = %worktree.display(),
+            "seeded headless .claude/settings.json (permissions.defaultMode=default)"
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(e) => tracing::warn!(
+            target: "engine::stage::agent",
+            worktree = %worktree.display(),
+            error = %e,
+            "failed to seed headless .claude/settings.json; agent may inherit the global permission mode"
+        ),
+    }
 }
 
 /// Whether an MCP server may be spawned/exposed for a stage.
@@ -1752,6 +1865,60 @@ fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::Sandb
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seed_headless_settings_writes_default_mode_for_claude() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_headless_runtime_settings("claude-code", tmp.path());
+        let settings = tmp.path().join(".claude").join("settings.json");
+        let body = std::fs::read_to_string(&settings).expect("settings.json written");
+        assert!(
+            body.contains("\"defaultMode\"") && body.contains("\"default\""),
+            "expected headless defaultMode, got: {body}"
+        );
+    }
+
+    #[test]
+    fn seed_headless_settings_does_not_clobber_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = dir.join("settings.json");
+        std::fs::write(&settings, "{ \"keep\": true }").unwrap();
+        seed_headless_runtime_settings("claude-code", tmp.path());
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            "{ \"keep\": true }",
+            "existing project settings must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn seed_headless_settings_noop_for_non_claude_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_headless_runtime_settings("mock", tmp.path());
+        assert!(
+            !tmp.path().join(".claude").exists(),
+            "non-Claude runtime must not seed .claude/"
+        );
+    }
+
+    // A repo-provided `.claude` symlink must not be followed (the write could
+    // otherwise escape the worktree). Unix-only: creating symlinks on Windows
+    // requires elevated privileges or Developer Mode.
+    #[cfg(unix)]
+    #[test]
+    fn seed_headless_settings_refuses_symlinked_claude_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // `<worktree>/.claude` -> some directory outside the worktree.
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".claude")).unwrap();
+        seed_headless_runtime_settings("claude-code", tmp.path());
+        assert!(
+            !outside.path().join("settings.json").exists(),
+            "must not write settings.json through a .claude symlink target"
+        );
+    }
 
     #[test]
     fn mcp_spawn_policy_read_only_denies_writable_allows() {
