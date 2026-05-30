@@ -324,6 +324,30 @@ pub enum EventPayload {
         model: String,
         cost_usd: Option<f64>,
     },
+    /// A run's cumulative spend crossed the configured warn threshold on a
+    /// budget dimension at a stage boundary. Advisory — the run continues.
+    /// Recorded once per threshold crossing (idempotent re-evaluation). Schema v3.
+    BudgetWarningRaised {
+        /// Which limit was approached.
+        dimension: crate::budget::BudgetDimension,
+        /// Percentage of the limit reached (1..=100).
+        pct: u8,
+        /// Cumulative USD spend at the time of the warning.
+        cost_usd: f64,
+        /// Cumulative tokens (prompt + output) at the time of the warning.
+        total_tokens: u64,
+    },
+    /// A run's cumulative spend reached or passed a budget limit at a stage
+    /// boundary. The engine acts per the run's budget policy (escalate via
+    /// `request_human_input`, or abort). Schema v3.
+    BudgetExceeded {
+        /// Which limit was exceeded.
+        dimension: crate::budget::BudgetDimension,
+        /// Cumulative USD spend at the time of the breach.
+        cost_usd: f64,
+        /// Cumulative tokens (prompt + output) at the time of the breach.
+        total_tokens: u64,
+    },
     ForkCreated {
         new_run: RunId,
         fork_at_seq: u64,
@@ -465,6 +489,8 @@ impl EventPayload {
             Self::HookExecuted { .. } => "HookExecuted",
             Self::OutcomeRejectedByHook { .. } => "OutcomeRejectedByHook",
             Self::TokensConsumed { .. } => "TokensConsumed",
+            Self::BudgetWarningRaised { .. } => "BudgetWarningRaised",
+            Self::BudgetExceeded { .. } => "BudgetExceeded",
             Self::HumanInputRequested { .. } => "HumanInputRequested",
             Self::HumanInputResolved { .. } => "HumanInputResolved",
             Self::HumanInputTimedOut { .. } => "HumanInputTimedOut",
@@ -1092,6 +1118,44 @@ mod tests {
             error: Some("test".into()),
         };
         assert_eq!(p2.discriminant_str(), "NotifyDelivered");
+
+        let p3 = EventPayload::BudgetWarningRaised {
+            dimension: crate::budget::BudgetDimension::Usd,
+            pct: 80,
+            cost_usd: 8.0,
+            total_tokens: 1_000,
+        };
+        assert_eq!(p3.discriminant_str(), "BudgetWarningRaised");
+
+        let p4 = EventPayload::BudgetExceeded {
+            dimension: crate::budget::BudgetDimension::Tokens,
+            cost_usd: 12.5,
+            total_tokens: 5_000,
+        };
+        assert_eq!(p4.discriminant_str(), "BudgetExceeded");
+    }
+
+    #[test]
+    fn budget_events_roundtrip() {
+        for payload in [
+            EventPayload::BudgetWarningRaised {
+                dimension: crate::budget::BudgetDimension::Usd,
+                pct: 90,
+                cost_usd: 9.0,
+                total_tokens: 4_200,
+            },
+            EventPayload::BudgetExceeded {
+                dimension: crate::budget::BudgetDimension::Tokens,
+                cost_usd: 1.5,
+                total_tokens: 10_000,
+            },
+        ] {
+            let wrapped = VersionedEventPayload::new(payload.clone());
+            let bytes = serde_json::to_vec(&wrapped).unwrap();
+            let parsed: VersionedEventPayload = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(wrapped, parsed);
+            assert_eq!(parsed.payload, payload);
+        }
     }
 
     #[test]

@@ -9,9 +9,10 @@
 //! [`BudgetVerdict`], so budget decisions replay identically.
 
 use crate::run_state::CostSummary;
+use serde::{Deserialize, Serialize};
 
 /// Which budget dimension a verdict refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BudgetDimension {
     /// US-dollar spend.
     Usd,
