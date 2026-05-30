@@ -217,7 +217,7 @@
   - PID file + Unix socket / Windows named-pipe stale-handle cleanup on startup
   - Recovery idempotency: re-running recovery on already-recovered runs is a no-op
 
-- [ ] **v0.1 public release** — first announceable cut (touches workspace root, `surge-cli`, `docs/`, CI)
+- [ ] **v0.1 public release** — first announceable cut (touches workspace root, `surge-cli`, `docs/`, CI) — **in progress.** Landed: `surge --version` with git sha + commit date (build.rs), panic crash-report hook, `surge.toml`/`flow.toml`/event-payload schemas frozen at v1 with a documented bump plan ([`docs/schema-versioning.md`](../docs/schema-versioning.md)), `cargo deny` license gate ([`deny.toml`](../deny.toml) + [`THIRD_PARTY.md`](../THIRD_PARTY.md), wired into `security.yml`), MSRV (1.85) CI job, and the v0.1 release-notes draft incl. zero-by-default telemetry posture ([`docs/release-notes-v0.1.md`](../docs/release-notes-v0.1.md)). The 3-OS smoke matrix already exists in `ci.yml`. Remaining (external infra, not codeable in-tree): `cargo publish` of publishable crates, Homebrew tap + Scoop manifest, live multi-OS CI execution, and the recorded end-to-end run against a real public repo.
   - `surge.toml` schema frozen with `schema_version = 1`; documented in `docs/`
   - `flow.toml` schema frozen with `schema_version = 1`; documented in `docs/`
   - Schema migration plan documented for future bumps
@@ -234,7 +234,7 @@
   - First-run UX: `surge init` walks user through config, agent install, telegram setup
   - End-to-end smoke against a real public repo recorded as an example run
 
-- [ ] **Replay & fork-from-here UI** — post-v0.1 polish over the same fold primitive (touches `surge-ui`, `surge-persistence`, `surge-cli`)
+- [ ] **Replay & fork-from-here UI** — post-v0.1 polish over the same fold primitive (touches `surge-ui`, `surge-persistence`, `surge-cli`) — **CLI mirror started.** `surge engine replay <run_id> --seq <N>` folds the event log to seq `N` and prints the run state (reusing the tested `aggregate_status` primitive). Building it surfaced and fixed a real reader bug: `read_events` bound `EventSeq(u64::MAX)` as `-1` in SQLite (open-ended reads returned zero rows), which also silently degraded `current_status` (cockpit `/status`) and crash-recovery stuck/reconcile detection. Remaining: `surge fork <run_id> --seq <N>`, the GPUI scrubber/visual states, and live-vs-replay mode toggle.
   - Scrubber timeline rendered from event log with `seq` slider
   - Live mode disables scrubber; Replay mode enables it; clear visual differentiation
   - Fork CTA copies events `1..N` into a new run id; new git worktree at the same commit

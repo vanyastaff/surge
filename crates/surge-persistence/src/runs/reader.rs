@@ -123,8 +123,15 @@ impl RunReader {
                 "SELECT seq, timestamp, kind, payload, schema_version
                  FROM events WHERE seq >= ? AND seq < ? ORDER BY seq",
             )?;
+            // SQLite stores seq as i64. A naive `range.end.0 as i64` wraps
+            // the common open-ended sentinel `EventSeq(u64::MAX)` to -1,
+            // making `seq < -1` match nothing. Clamp instead so an
+            // out-of-i64-range bound becomes i64::MAX (every real seq fits
+            // in i64).
+            let start_bind = i64::try_from(range.start.0).unwrap_or(i64::MAX);
+            let end_bind = i64::try_from(range.end.0).unwrap_or(i64::MAX);
             let iter =
-                stmt.query_map(params![range.start.0 as i64, range.end.0 as i64], |row| {
+                stmt.query_map(params![start_bind, end_bind], |row| {
                     let blob: Vec<u8> = row.get(3)?;
                     Ok((
                         EventSeq(row.get::<_, i64>(0)? as u64),

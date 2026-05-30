@@ -75,6 +75,15 @@ pub enum EngineCommands {
         #[arg(long)]
         follow: bool,
     },
+    /// Print the folded run state at a given event seq (CLI mirror of the
+    /// replay scrubber; always reads from disk, daemon not required).
+    Replay {
+        /// `RunId` (ULID).
+        run_id: String,
+        /// Fold events up to and including this seq (default: latest).
+        #[arg(long)]
+        seq: Option<u64>,
+    },
 }
 
 /// Top-level dispatcher for `surge engine` invocations.
@@ -100,6 +109,7 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             since,
             follow,
         } => logs_command(run_id, since, follow).await,
+        EngineCommands::Replay { run_id, seq } => replay_command(run_id, seq).await,
     }
 }
 
@@ -431,6 +441,59 @@ async fn follow_log_from(run_id: RunId, since_seq: u64) -> Result<u64> {
         }
     }
     Ok(max_seq)
+}
+
+/// `surge engine replay <run_id> --seq N` — fold the event log up to seq
+/// `N` and print the resulting run state. CLI mirror of the replay
+/// scrubber over the same fold primitive the engine/cockpit use.
+async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
+    use surge_persistence::runs::{EventSeq, RunReader, aggregate_status};
+
+    let id = parse_run_id(&run_id)?;
+    let storage = Storage::open(&surge_runs_dir()?).await?;
+    let reader: RunReader = storage.open_run_reader(id).await?;
+
+    // `read_events` end is exclusive, so include seq N by reading up to N+1.
+    let cutoff = seq.unwrap_or(u64::MAX);
+    let end = if cutoff == u64::MAX {
+        EventSeq(u64::MAX)
+    } else {
+        EventSeq(cutoff.saturating_add(1))
+    };
+    let events = reader.read_events(EventSeq(0)..end).await?;
+    let snap = aggregate_status(id, &events);
+
+    let seq_label = if cutoff == u64::MAX {
+        "latest".to_string()
+    } else {
+        cutoff.to_string()
+    };
+    println!("run:           {id}");
+    println!("seq cutoff:    {seq_label}");
+    println!("events folded: {}", snap.event_count);
+    println!(
+        "active node:   {}",
+        snap.active_node.as_deref().unwrap_or("-")
+    );
+    println!(
+        "last outcome:  {}",
+        snap.last_outcome.as_deref().unwrap_or("-")
+    );
+    println!(
+        "attempt:       {}",
+        snap.last_attempt
+            .map_or_else(|| "-".to_string(), |a| a.to_string())
+    );
+    let terminal = if snap.terminal {
+        if snap.failed { "yes (failed)" } else { "yes" }
+    } else {
+        "no"
+    };
+    println!("terminal:      {terminal}");
+    if let Some(ms) = snap.elapsed_ms {
+        println!("elapsed:       {ms} ms");
+    }
+    Ok(())
 }
 
 fn parse_run_id(s: &str) -> Result<RunId> {

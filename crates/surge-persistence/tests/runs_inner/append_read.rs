@@ -45,3 +45,30 @@ async fn append_read_1000_events_correct_ordered_atomic() {
 
     writer.close().await.expect("close");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_events_with_u64_max_upper_bound_returns_all() {
+    let t = setup().await;
+    let writer = t
+        .storage
+        .create_run(t.run_id, "/tmp/proj", None)
+        .await
+        .expect("create_run");
+
+    for i in 0..5u64 {
+        writer.append_event(dummy_payload(i)).await.expect("append");
+    }
+    writer.flush().await.expect("flush");
+
+    // `current_status`, `surge engine logs`, and `surge engine replay` all
+    // pass `EventSeq(u64::MAX)` as the open-ended exclusive upper bound. The
+    // SQLite bind must not wrap `u64::MAX as i64` to -1 (which silently
+    // matched `seq < -1` → zero rows).
+    let all = writer
+        .read_events(EventSeq(0)..EventSeq(u64::MAX))
+        .await
+        .expect("read open-ended range");
+    assert_eq!(all.len(), 5, "u64::MAX upper bound must return all events");
+
+    writer.close().await.expect("close");
+}
