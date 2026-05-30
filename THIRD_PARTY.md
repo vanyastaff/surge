@@ -41,7 +41,7 @@ shows under both `MIT` and `GPL-2.0-only`, but Surge selects the permissive
 option, which is why `cargo deny check` passes while copyleft tags still
 appear in this raw frequency:
 
-```
+```text
 MIT (808)         Apache-2.0 (618)   Unicode-3.0 (19)   Zlib (19)
 BSD-3-Clause (13) ISC (13)           Unlicense (10)*    Apache WITH LLVM-exception (9)
 0BSD (7)          BSD-2-Clause (6)   CC0-1.0 (6)        MPL-2.0 (3)
@@ -55,7 +55,7 @@ truth, not this frequency table.
 
 ## Regenerating
 
-```
+```shell
 cargo deny list            # full per-crate breakdown by license
 cargo deny check licenses  # enforce the deny.toml allow-list
 ```

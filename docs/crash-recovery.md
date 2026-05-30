@@ -83,7 +83,7 @@ resumed run logs its prior status and stage.
 
 ## CLI
 
-```
+```shell
 surge daemon recover --dry-run     # preview decisions, no side effects
 surge daemon recover               # apply registry-safe reconciliations
                                    # (only while the daemon is stopped)

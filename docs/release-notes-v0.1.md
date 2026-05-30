@@ -38,9 +38,9 @@ one-liners at tag time.
 > Pending: `cargo publish` of the publishable crates and the Homebrew tap /
 > Scoop manifest. Until then, build from source.
 
-From source (stable Rust ≥ 1.91):
+From source (stable Rust ≥ 1.96):
 
-```
+```shell
 git clone https://github.com/vanyastaff/surge
 cd surge
 cargo build --release
@@ -49,7 +49,7 @@ cargo build --release
 
 Planned at/after tag:
 
-```
+```shell
 cargo install surge-cli            # once published to crates.io
 brew install vanyastaff/tap/surge  # Homebrew tap (planned)
 scoop install surge                # Scoop manifest, Windows (planned)
@@ -57,7 +57,7 @@ scoop install surge                # Scoop manifest, Windows (planned)
 
 First run:
 
-```
+```shell
 surge init            # interactive wizard (or `surge init --default`)
 surge project describe
 surge doctor report
