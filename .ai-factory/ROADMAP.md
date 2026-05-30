@@ -202,7 +202,7 @@
   - Ticket-as-master integrity: external state changes on ticket (close, reassign) reflected in inbox state
   - L3 merge-on-success guarded by all-checks-green and review-approved policy
 
-- [ ] **Crash recovery** — daemon survives restarts with no AFK regression, **v0.1 blocker** (touches `surge-daemon`, `surge-persistence`, `surge-orchestrator`, `surge-notify`)
+- [x] **Crash recovery** — daemon survives restarts with no AFK regression, **v0.1 blocker** (touches `surge-daemon`, `surge-persistence`, `surge-orchestrator`, `surge-notify`) — landed via `surge-daemon::recovery`: a pure `decide_action` policy (skip-active / skip-terminal / reconcile-terminal / mark-failed-worktree-lost / flag-stuck / resume), a read-only `plan_recovery` registry scan, and an `execute_recovery` executor wired into daemon startup through the shared admission + broadcast registry (so recovered runs publish `RunFinished` globally). `surge daemon recover [--dry-run]` exposes the inspector; `Storage::set_run_status` added for reconciliation. Full model + decision table in [`docs/crash-recovery.md`](../docs/crash-recovery.md). Deferred: a dedicated `kill -9`/power-cut fault-injection harness (WAL durability is configured and the resume-from-log path is integration-tested; the explicit process-kill checkpoint harness is a follow-up).
   - Daemon startup scans `runs` table for non-terminal status (`run_status NOT IN (Completed, Failed, Aborted)`)
   - For each non-terminal run, fold event log to current state via `surge-core::fold`
   - Per-stage recovery decisions: `Agent` mid-turn → retry; `HumanGate` pending → re-emit approval; `Notify` mid-flight → retry; `Terminal` not yet appended → append on stage completion
@@ -269,3 +269,6 @@
 | Sandbox delegation matrix | 2026-05-13 |
 | Legacy pipeline retirement | 2026-05-13 |
 | MCP server lifecycle | 2026-05-17 |
+| Telegram cockpit production-ready | 2026-05-30 |
+| Tracker automation tiers | 2026-05-30 |
+| Crash recovery | 2026-05-30 |

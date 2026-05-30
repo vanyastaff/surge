@@ -18,6 +18,7 @@ pub mod inbox;
 pub mod intake_completion;
 pub mod lifecycle;
 pub mod pidfile;
+pub mod recovery;
 pub mod server;
 
 pub use error::DaemonError;

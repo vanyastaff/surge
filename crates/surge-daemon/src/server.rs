@@ -88,7 +88,8 @@ pub async fn run(
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
     let broadcast = Arc::new(BroadcastRegistry::new());
-    run_with_registry(cfg, facade, broadcast, shutdown).await
+    let admission = Arc::new(AdmissionController::new(cfg.max_active, cfg.max_queue));
+    run_with_registry(cfg, facade, broadcast, admission, shutdown).await
 }
 
 /// Like [`run`], but accepts a pre-built [`BroadcastRegistry`] so the
@@ -99,11 +100,11 @@ pub async fn run_with_registry(
     cfg: ServerConfig,
     facade: Arc<dyn EngineFacade>,
     broadcast: Arc<BroadcastRegistry>,
+    admission: Arc<AdmissionController>,
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
     use interprocess::local_socket::ListenerOptions;
 
-    let admission = Arc::new(AdmissionController::new(cfg.max_active, cfg.max_queue));
     let pending_starts: PendingStarts = Arc::new(Mutex::new(HashMap::new()));
 
     // F2: Unlink any stale socket file from a previous unclean exit.
@@ -1052,10 +1053,52 @@ async fn drain_one_pass(
     }
 }
 
+/// Resume `run_id` into this daemon's admission + broadcast machinery.
+///
+/// Shared seam between the IPC `ResumeRun` handler and crash recovery
+/// ([`crate::recovery`]). Consumes an admission slot without queueing
+/// (a resume is expected to come back live, not wait in the FIFO),
+/// registers the per-run broadcast channel, kicks off
+/// [`EngineFacade::resume_run`], and spawns [`spawn_forward_task`] so the
+/// run's `RunFinished` is published globally — keeping tracker-completion
+/// comments and the L3 merge gate working for recovered runs.
+///
+/// Returns `Err` (with a human string) when the admission cap is reached
+/// or the engine refuses the resume; the caller decides how to surface it.
+pub async fn resume_run_tracked(
+    run_id: RunId,
+    worktree_path: PathBuf,
+    facade: &dyn EngineFacade,
+    admission: &Arc<AdmissionController>,
+    broadcast: &Arc<BroadcastRegistry>,
+) -> Result<(), String> {
+    if !admission.try_admit_no_queue(run_id).await {
+        return Err(format!("admission cap reached; cannot resume {run_id} now"));
+    }
+    let publisher = broadcast.register(run_id).await;
+    match facade.resume_run(run_id, worktree_path).await {
+        Ok(handle) => {
+            spawn_forward_task(
+                run_id,
+                handle,
+                publisher,
+                admission.clone(),
+                broadcast.clone(),
+            );
+            Ok(())
+        },
+        Err(e) => {
+            broadcast.deregister(run_id).await;
+            admission.notify_completed(run_id).await;
+            Err(format!("{e}"))
+        },
+    }
+}
+
 /// Spawn the task that forwards engine events into the broadcast
 /// registry and on terminal: publishes `RunFinished` + frees the
 /// admission slot.
-fn spawn_forward_task(
+pub(crate) fn spawn_forward_task(
     run_id: RunId,
     handle: surge_orchestrator::engine::handle::RunHandle,
     publisher: tokio::sync::broadcast::Sender<EngineRunEvent>,
