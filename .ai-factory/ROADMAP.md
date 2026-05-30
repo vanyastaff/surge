@@ -249,6 +249,54 @@
   - CLI mirror: `surge replay <run_id> --seq <N>` prints state at that seq
   - CLI mirror: `surge fork <run_id> --seq <N>` creates the forked run from terminal
 
+## v0.2 — Autonomy: AFK → PR for real
+
+> North star: make the core thesis — *describe → approve → walk away → return to a PR* — trustworthy for real, unattended work. v0.1 proved the loop drives a live ACP agent end-to-end; v0.2 hardens the autonomous path so it can run for hours without a human babysitting cost, merge, or agent quirks. Per-milestone task sequencing: run `/aif-plan <milestone>`.
+
+- [ ] **Live budget enforcement** — stop burning money/tokens unattended (touches `surge-core`, `surge-orchestrator`, `surge-persistence`, `surge-notify`)
+  - Per-run and per-milestone budget overrides (USD + tokens) layered over the existing global `AnalyticsConfig.budget_*`; resolution order global → run → milestone, surfaced in `surge.toml` / `flow.toml`
+  - Engine accumulates ACP session usage (`unstable_session_usage`) into run state at every stage boundary; cumulative cost/tokens are a deterministic fold, no wall-clock
+  - Budget evaluation at stage transitions: warn at `budget_warn_threshold` → `Notify`; exceed → policy-driven action (escalate via `request_human_input`, pause-for-approval, or abort) chosen by config
+  - New `surge-core` events: `BudgetWarningRaised`, `BudgetExceeded`, `BudgetDecision` (resume-with-raise / abort), with `schema_version` + migration entry
+  - Budget state visible in `surge analytics`, the Telegram budget card (warn/exceeded with raise/abort buttons), and `surge engine replay`
+  - Idempotency: re-evaluating budget on an already-warned/exceeded run is a no-op until the threshold is crossed again
+  - Tests: fold determinism for usage accumulation, warn/exceed transition table, escalate-vs-abort policy, replay parity, threshold-crossing idempotency
+  - Documentation: budget model + policy matrix in `docs/`
+
+- [ ] **L3 auto-merge completion** — close "return to a *merged* PR" (touches `surge-daemon`, `surge-intake`, `surge-git`, `surge-orchestrator`)
+  - Real PR-readiness gate (replaces the no-op fallback): all-required-checks-green + review-approved, polled via `octocrab` (GitHub) with stable status codes
+  - `CadenceController` source-loop wiring (replaces the deferred stub): L1 5min / L2 2min / L3 1min polling with exponential backoff on rate limits
+  - Merge-on-success guarded by the readiness gate; merge method configurable (squash default, matching repo convention)
+  - Failure modes: checks red / review missing / merge conflict → tracker comment + `EscalationRequested`, never a silent stall
+  - Idempotency: `(tracker, ticket_id, merge, run_id)` dedup prevents double-merge on retry; merge already-done is a clean no-op
+  - Audit: every readiness decision + merge attempt recorded as events with the command/PR summary
+  - Tests: gate-green-merges, gate-red-blocks-and-escalates, conflict-escalates, idempotent double-merge, cadence backoff
+  - Documentation: L3 lifecycle in `docs/tracker-automation.md` (replace the "out of scope (next milestone)" note)
+
+- [ ] **Multi-agent breadth validated live** — agent-agnostic in fact, not just in registry (touches `surge-acp`, `surge-orchestrator`, `surge-cli`)
+  - Live launch validation for Codex and Gemini ACP adapters through handshake → `new_session` → `session/prompt` (the bar v0.1 hit for Claude), env-gated like `real_acp_smoke`
+  - Fix any launch/arg/headless-mode gaps surfaced per runtime (mirror of the Claude headless-settings + npx-resolve work)
+  - `surge doctor agent <name>` runs a real smoke session per registered runtime and reports the failure stage precisely (spawn / handshake / auth / prompt)
+  - Cross-agent artifact uniformity: same flow on Claude vs Codex vs Gemini vs mock produces format-equivalent artifacts (golden-file compare in CI where an agent is available)
+  - Per-runtime auth-failure diagnostics reuse the `AgentAuthenticationFailed` classification
+  - Tests: per-adapter launch-arg unit tests, doctor smoke-stage classification, golden artifact compare
+  - Documentation: per-runtime support matrix + known quirks in `docs/`
+
+- [ ] **Durability proof — fault-injection harness** — recovery survives the worst case (touches `surge-daemon`, `surge-persistence`, test infra)
+  - Harness that kills the daemon process (SIGKILL / simulated power-cut) at defined checkpoints mid-run, restarts, and asserts recovery resumes to the correct folded state
+  - WAL checkpoint behaviour verified: no event-log corruption, no lost committed events, no duplicate appends after restart
+  - Checkpoint matrix: mid-Agent-turn, pending-HumanGate, mid-Notify, pre-Terminal-append — each asserts the v0.1 recovery decision policy
+  - Recovery idempotency under repeated kills (kill during recovery itself)
+  - CI: harness runs on Linux (signals) with a Windows-named-pipe stale-handle variant
+  - Closes the v0.1 deferred "`kill -9` / power-cut fault-injection harness"
+
+- [ ] **Recorded real-repo end-to-end** — the proof artifact (touches `docs/`, `examples/`, CI-adjacent)
+  - Scripted end-to-end against a real public repo: `init → describe → approve → run → PR` with a working agent runtime, producing a real PR
+  - Recorded as a reproducible example (asciinema/log + the resulting flow + artifacts) under `examples/` / `docs/`
+  - Documents the one external prerequisite (agent runtime auth) and the exact commands
+  - Doubles as the v0.1 release-notes "end-to-end smoke against a real public repo recorded as an example run" deliverable
+  - Smoke variant wired into CI with the mock agent so the script itself can't rot
+
 ## Completed
 
 | Milestone | Date |
