@@ -434,6 +434,18 @@ pub(crate) async fn close_all_sessions(
     }
 }
 
+/// Resolve a program name to a concrete path via PATH + PATHEXT.
+///
+/// `Command::new("npx")` fails with "program not found" on Windows because
+/// the standard library searches PATH for `npx`/`npx.exe` but does NOT
+/// append the other `PATHEXT` extensions, so `.cmd`/`.bat` shims (npx, the
+/// npm-installed agent CLIs) are never found. `which` performs the full
+/// PATHEXT-aware lookup. Falls back to the original name (absolute paths,
+/// or when resolution fails) so spawn still surfaces a clear NotFound.
+fn resolve_program(binary: &Path) -> PathBuf {
+    which::which(binary).unwrap_or_else(|_| binary.to_path_buf())
+}
+
 /// Resolve `AgentKind` to a `tokio::process::Command` ready to spawn.
 /// `Mock` short-circuits to `CARGO_BIN_EXE_mock_acp_agent` (set by Cargo
 /// during `cargo test`); falls back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`
@@ -441,25 +453,25 @@ pub(crate) async fn close_all_sessions(
 fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, std::io::Error> {
     let mut cmd = match kind {
         AgentKind::ClaudeCode { binary, extra_args } => {
-            let mut c = Command::new(binary);
+            let mut c = Command::new(resolve_program(binary));
             c.arg("--acp");
             c.args(extra_args);
             c
         },
         AgentKind::Codex { binary, extra_args } => {
-            let mut c = Command::new(binary);
+            let mut c = Command::new(resolve_program(binary));
             c.arg("acp");
             c.args(extra_args);
             c
         },
         AgentKind::GeminiCli { binary, extra_args } => {
-            let mut c = Command::new(binary);
+            let mut c = Command::new(resolve_program(binary));
             c.arg("--acp");
             c.args(extra_args);
             c
         },
         AgentKind::Custom { binary, args } => {
-            let mut c = Command::new(binary);
+            let mut c = Command::new(resolve_program(binary));
             c.args(args);
             c
         },
@@ -1217,6 +1229,26 @@ mod tests {
     use crate::bridge::sandbox::DenyListSandbox;
     use crate::bridge::tools::{ToolCategory, ToolDef};
     use serde_json::json;
+
+    #[test]
+    fn resolve_program_finds_path_extension_shim() {
+        // `cargo` is always present where tests run. The key property: a bare
+        // program name resolves to a concrete existing path (on Windows this
+        // exercises PATHEXT — the std `Command::new("npx")` gap this guards).
+        let resolved = resolve_program(Path::new("cargo"));
+        assert!(
+            resolved.is_absolute() || resolved.exists(),
+            "cargo should resolve to a concrete path, got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_program_falls_back_to_original_when_missing() {
+        // Unresolvable names pass through unchanged so spawn still surfaces a
+        // clear NotFound rather than this helper masking the error.
+        let missing = Path::new("__surge_definitely_not_a_real_program__");
+        assert_eq!(resolve_program(missing), missing.to_path_buf());
+    }
 
     #[test]
     fn filter_removes_denied_tools() {

@@ -27,6 +27,9 @@ reqwest = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 chrono = { workspace = true }
+# Resolve agent launch binaries via PATH + PATHEXT so `.cmd`/`.bat` shims
+# (e.g. `npx` on Windows) are found when spawning ACP agent subprocesses.
+which = "6"
 
 # Process tracking
 [target.'cfg(unix)'.dependencies]
