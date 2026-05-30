@@ -14,6 +14,15 @@ fn main() {
     if let Some(head) = git(&["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={head}");
     }
+    // Also watch the resolved branch ref. HEAD is usually symbolic
+    // (`ref: refs/heads/<branch>`) and its file content does NOT change on a
+    // new commit — the branch ref file does. Without this, incremental
+    // builds keep a stale SHA/date after HEAD advances on the same branch.
+    if let Some(sym) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
+        if let Some(ref_path) = git(&["rev-parse", "--git-path", sym.as_str()]) {
+            println!("cargo:rerun-if-changed={ref_path}");
+        }
+    }
     println!("cargo:rerun-if-changed=build.rs");
 
     let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());

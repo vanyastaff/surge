@@ -5,6 +5,11 @@
 # nebula monorepo (e.g. via a worktree) or against a standalone checkout
 # of just the surge crate (which is what CI does — see .github/workflows/ci.yml).
 
+# Clippy's lint-MSRV is kept conservative (below the build MSRV in
+# Cargo.toml) on purpose: raising it enables let-chain-era lints
+# (collapsible_if, etc.) on pre-existing crates that have not been migrated,
+# which would fail the strict `-D warnings` clippy gate. Bump this only
+# alongside that migration.
 msrv = "1.85"
 
 # ── Test ergonomics ────────────────────────────────────────────────────────

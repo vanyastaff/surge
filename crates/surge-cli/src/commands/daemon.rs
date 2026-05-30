@@ -150,10 +150,17 @@ async fn recover(dry_run: bool) -> Result<()> {
         if apply {
             match &d.action {
                 RecoveryAction::MarkFailedWorktreeLost => {
-                    storage
-                        .set_run_status(&d.run_id, surge_core::RunStatus::Failed, Some(now_ms))
-                        .await
-                        .with_context(|| format!("mark {} failed", d.run_id))?;
+                    // Append a terminal RunFailed to the log AND set the
+                    // registry status, so replay / current_status agree with
+                    // the recovery view.
+                    surge_daemon::recovery::fail_run_in_log_and_registry(
+                        &storage,
+                        d.run_id,
+                        "worktree lost; cannot resume",
+                        now_ms,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("mark {} failed: {e}", d.run_id))?;
                     applied += 1;
                 },
                 RecoveryAction::ReconcileTerminal { failed } => {

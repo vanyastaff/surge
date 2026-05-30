@@ -234,6 +234,46 @@ fn main() -> std::process::ExitCode {
         let broadcast_registry = Arc::new(BroadcastRegistry::new());
         let completion_rx = broadcast_registry.subscribe_global();
 
+        let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
+
+        // Admission controller is created here (not inside the server) so
+        // crash recovery and the IPC server share one slot accounting:
+        // runs resumed at startup consume slots the server then respects.
+        let admission = Arc::new(surge_daemon::admission::AdmissionController::new(
+            args.max_active,
+            max_queue,
+        ));
+
+        // --- Crash recovery (v0.1 blocker) ---
+        // Run BEFORE any subsystem that can launch runs (the TaskRouter and
+        // the inbox action consumer below both poll immediately). Otherwise
+        // a freshly-launched run could be active in this process while the
+        // recovery scan still sees an empty active set, and recovery might
+        // try to resume or re-status a run that is already live. Resumes
+        // flow through the shared admission + broadcast registry so
+        // recovered runs publish RunFinished globally.
+        let worktrees_root = surge_runs_dir().join("worktrees");
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let recovery_outcome = surge_daemon::recovery::recover_on_startup(
+            &storage,
+            &facade,
+            &admission,
+            &broadcast_registry,
+            &notifier,
+            worktrees_root,
+            now_ms,
+        )
+        .await;
+        info!(
+            resumed = recovery_outcome.resumed,
+            reconciled = recovery_outcome.reconciled,
+            failed_worktree = recovery_outcome.failed_worktree,
+            flagged_stuck = recovery_outcome.flagged_stuck,
+            skipped = recovery_outcome.skipped,
+            errors = recovery_outcome.errors,
+            "crash recovery pass complete"
+        );
+
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
                 sources,
@@ -274,43 +314,6 @@ fn main() -> std::process::ExitCode {
             &config,
             shutdown.clone(),
         ).await;
-
-        let max_queue = args.max_queue.unwrap_or(args.max_active.saturating_mul(4));
-
-        // Admission controller is created here (not inside the server) so
-        // crash recovery and the IPC server share one slot accounting:
-        // runs resumed at startup consume slots the server then respects.
-        let admission = Arc::new(surge_daemon::admission::AdmissionController::new(
-            args.max_active,
-            max_queue,
-        ));
-
-        // --- Crash recovery (v0.1 blocker) ---
-        // Scan the registry for runs the previous daemon left non-terminal
-        // and bring them back to life (or mark/flag them) BEFORE accepting
-        // IPC connections. Resumes flow through the shared admission +
-        // broadcast registry so recovered runs publish RunFinished globally.
-        let worktrees_root = surge_runs_dir().join("worktrees");
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let recovery_outcome = surge_daemon::recovery::recover_on_startup(
-            &storage,
-            &facade,
-            &admission,
-            &broadcast_registry,
-            &notifier,
-            worktrees_root,
-            now_ms,
-        )
-        .await;
-        info!(
-            resumed = recovery_outcome.resumed,
-            reconciled = recovery_outcome.reconciled,
-            failed_worktree = recovery_outcome.failed_worktree,
-            flagged_stuck = recovery_outcome.flagged_stuck,
-            skipped = recovery_outcome.skipped,
-            errors = recovery_outcome.errors,
-            "crash recovery pass complete"
-        );
 
         let server_cfg = ServerConfig {
             max_active: args.max_active,

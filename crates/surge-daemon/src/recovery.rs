@@ -247,6 +247,13 @@ pub async fn plan_recovery(
         }
 
         let run_id = summary.id;
+        // The worktree path is NOT persisted (the registry stores only
+        // `project_path`, and `RunStarted` carries no worktree field), so we
+        // reconstruct the deterministic location daemon-managed runs use:
+        // `<worktrees_root>/<run_id>` (see the inbox ticket-run launcher).
+        // Runs launched via `surge engine run --daemon --worktree <custom>`
+        // do not record their path and are not resumable here — a known
+        // limitation that needs a future event-schema addition.
         let worktree_path = opts.worktrees_root.join(run_id.to_string());
         let worktree_exists = worktree_path.exists();
 
@@ -547,12 +554,9 @@ impl RecoveryEffects for DaemonRecoveryEffects {
     async fn mark_failed(
         &self,
         run_id: &surge_core::id::RunId,
-        _reason: &str,
+        reason: &str,
     ) -> Result<(), String> {
-        self.storage
-            .set_run_status(run_id, RunStatus::Failed, Some(self.now_ms))
-            .await
-            .map_err(|e| e.to_string())
+        fail_run_in_log_and_registry(&self.storage, *run_id, reason, self.now_ms).await
     }
 
     async fn reconcile_terminal(
@@ -610,6 +614,58 @@ impl RecoveryEffects for DaemonRecoveryEffects {
 /// stuck rather than resumable: 24 hours (per the roadmap's stuck-run
 /// detection bullet).
 pub const DEFAULT_STUCK_THRESHOLD: Duration = Duration::from_secs(24 * 3600);
+
+/// Mark a run failed in BOTH the event log and the registry.
+///
+/// Appends a terminal `RunFailed` event to the per-run log, then sets the
+/// registry status to `Failed`. The event log is the source of truth, so
+/// updating only the registry would leave `replay` / `current_status`
+/// folding the run as still in-flight while `list`/recovery report it
+/// failed. The per-run event DB lives under `~/.surge/runs/<run_id>/`,
+/// independent of the (possibly lost) worktree, so the append succeeds even
+/// for the worktree-lost case.
+///
+/// Best-effort on the log append: if the writer cannot be opened, the
+/// registry is still updated and the discrepancy is logged.
+pub async fn fail_run_in_log_and_registry(
+    storage: &std::sync::Arc<surge_persistence::runs::Storage>,
+    run_id: surge_core::id::RunId,
+    reason: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    match storage.open_run_writer(run_id).await {
+        Ok(writer) => {
+            let ev = surge_core::run_event::VersionedEventPayload::new(
+                surge_core::run_event::EventPayload::RunFailed {
+                    error: reason.to_string(),
+                },
+            );
+            if let Err(e) = writer.append_event(ev).await {
+                tracing::warn!(
+                    target: "surge.recovery",
+                    run_id = %run_id,
+                    error = %e,
+                    "could not append RunFailed event; registry will still be updated"
+                );
+            }
+            // Flush + release the writer lock before the registry write.
+            let _ = writer.close().await;
+        },
+        Err(e) => {
+            tracing::warn!(
+                target: "surge.recovery",
+                run_id = %run_id,
+                error = %e,
+                "could not open writer to append RunFailed; updating registry only"
+            );
+        },
+    }
+
+    storage
+        .set_run_status(&run_id, RunStatus::Failed, Some(now_ms))
+        .await
+        .map_err(|e| e.to_string())
+}
 
 /// Run a full crash-recovery pass at daemon startup: scan the registry,
 /// decide per run, and carry out the actions against the live daemon
