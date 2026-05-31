@@ -244,6 +244,25 @@ async fn assert_no_new_comments_for(src: &Arc<MockTaskSource>, window: Duration)
     }
 }
 
+/// Wait up to 2 seconds for the gate to have invoked `fetch_task` at least
+/// `expected` times. A positive signal that the gate processed the event and
+/// resolved the policy (it does so before any merge decision), so a no-op
+/// assertion does not rely on a bare timeout. Panics on timeout.
+async fn wait_for_fetch_task(src: &Arc<MockTaskSource>, expected: u32) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if src.fetch_task_calls().await >= expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "gate did not call fetch_task {expected}x within 2s (got {})",
+            src.fetch_task_calls().await
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn l3_ready_merges_and_posts_merged_comment_and_label() {
     let setup = make_setup();
@@ -440,6 +459,56 @@ async fn l3_merge_conflict_escalates() {
 }
 
 #[tokio::test]
+async fn l3_already_merged_is_success() {
+    // A manual merge raced the gate; merge_pr reports AlreadyMerged. The gate
+    // treats it as a success terminal — surge:merged + success escalation,
+    // never merge-blocked — instead of a false conflict alarm.
+    let setup = make_setup();
+    let task_id_str = "mock:test#50";
+    seed_l3_task(&setup.src, task_id_str).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup
+        .src
+        .arm_merge_outcome(MergeOutcome::AlreadyMerged)
+        .await;
+
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task_id_str, &run_id.to_string());
+    }
+
+    let rx = setup.tx.subscribe();
+    let _handle = spawn_gate(&setup, rx);
+    setup.tx.send(completed_event(run_id)).unwrap();
+
+    let _ = wait_for_comments(&setup.src, 1).await;
+    let labels = setup.src.recorded_labels().await;
+    assert!(
+        labels
+            .iter()
+            .any(|(_, l, p)| l == automation_merge_gate::labels::MERGED && *p),
+        "AlreadyMerged must apply merged label, got: {labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .all(|(_, l, _)| l != automation_merge_gate::labels::MERGE_BLOCKED),
+        "AlreadyMerged must not apply merge-blocked, got: {labels:?}"
+    );
+    let escalations = wait_for_escalations(&setup.notifier, 1).await;
+    assert!(
+        escalations
+            .iter()
+            .any(|(sev, _, _)| matches!(sev, NotifySeverity::Success)),
+        "AlreadyMerged must escalate success, got: {escalations:?}"
+    );
+}
+
+#[tokio::test]
 async fn l3_default_readiness_blocks_when_provider_does_not_implement() {
     // No `arm_merge_readiness` — MockTaskSource falls back to the same
     // Blocked reason a PR-less provider (Linear) surfaces.
@@ -493,7 +562,10 @@ async fn non_l3_task_is_a_no_op() {
     let _handle = spawn_gate(&setup, rx);
     setup.tx.send(completed_event(run_id)).unwrap();
 
-    assert_no_new_comments_for(&setup.src, Duration::from_millis(400)).await;
+    // Positive anchor: the gate resolves the policy via fetch_task before it
+    // can decide non-L3, so waiting for that call proves the gate processed
+    // the event — then the no-op assertions are meaningful, not just a race.
+    wait_for_fetch_task(&setup.src, 1).await;
     assert!(
         setup.src.merge_calls().await.is_empty(),
         "non-L3 must not merge"

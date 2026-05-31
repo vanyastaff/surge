@@ -25,6 +25,7 @@ pub struct MockTaskSource {
     merge_readiness_override: Mutex<Option<MergeReadiness>>,
     merge_outcome_override: Mutex<Option<MergeOutcome>>,
     merge_calls: Mutex<Vec<(TaskId, Option<String>)>>,
+    fetch_task_calls: Mutex<u32>,
 }
 
 impl MockTaskSource {
@@ -43,6 +44,7 @@ impl MockTaskSource {
             merge_readiness_override: Mutex::new(None),
             merge_outcome_override: Mutex::new(None),
             merge_calls: Mutex::new(Vec::new()),
+            fetch_task_calls: Mutex::new(0),
         }
     }
 
@@ -93,6 +95,13 @@ impl MockTaskSource {
     pub async fn merge_calls(&self) -> Vec<(TaskId, Option<String>)> {
         self.merge_calls.lock().await.clone()
     }
+
+    /// Count of `fetch_task` invocations. A positive anchor for tests that
+    /// assert the gate ran and decided a no-op (it calls `fetch_task` to
+    /// resolve the policy before bailing), instead of relying on a timeout.
+    pub async fn fetch_task_calls(&self) -> u32 {
+        *self.fetch_task_calls.lock().await
+    }
 }
 
 #[async_trait]
@@ -127,6 +136,7 @@ impl TaskSource for MockTaskSource {
     }
 
     async fn fetch_task(&self, id: &TaskId) -> Result<TaskDetails> {
+        *self.fetch_task_calls.lock().await += 1;
         self.open_tasks
             .lock()
             .await

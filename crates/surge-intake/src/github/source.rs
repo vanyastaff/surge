@@ -555,9 +555,24 @@ impl TaskSource for GitHubIssuesTaskSource {
     }
 
     async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
-        let number = parse_issue_number(id.as_str())?;
         // Surge assumes PR# == issue#; the readiness gate already confirmed
         // the PR exists, is open, mergeable, and approved before we get here.
+        let number = parse_issue_number(id.as_str())?;
+        let pulls = self
+            .client
+            .octocrab
+            .pulls(&self.client.owner, &self.client.repo);
+
+        // Pre-check: a manual merge may have raced the gate between the
+        // readiness check and now. Report that as AlreadyMerged (a clean
+        // no-op the gate records as success) instead of attempting a merge
+        // GitHub would reject with 405 and we would misreport as a conflict.
+        match pulls.get(number).await {
+            Ok(pr) if pr.merged_at.is_some() => return Ok(MergeOutcome::AlreadyMerged),
+            Ok(_) => {},
+            Err(e) => return Err(Self::map_octocrab_error(&e)),
+        }
+
         let method = match self.merge_method {
             surge_core::config::MergeMethod::Merge => octocrab::params::pulls::MergeMethod::Merge,
             surge_core::config::MergeMethod::Rebase => octocrab::params::pulls::MergeMethod::Rebase,
@@ -565,10 +580,6 @@ impl TaskSource for GitHubIssuesTaskSource {
             _ => octocrab::params::pulls::MergeMethod::Squash,
         };
 
-        let pulls = self
-            .client
-            .octocrab
-            .pulls(&self.client.owner, &self.client.repo);
         let mut builder = pulls.merge(number).method(method);
         // Pin the merge to the exact head the readiness verdict approved.
         // GitHub returns 409 if the head has moved since, so a push that

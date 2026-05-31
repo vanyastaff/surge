@@ -262,7 +262,8 @@ Every outbound side-effect goes through `intake_emit_log` keyed by
 
 - `triage_decision` (the inbox-card / duplicate-comment emission)
 - `run_started` / `run_completed` / `run_failed` / `run_aborted`
-- `merge_proposed` / `merge_blocked`
+- `merged` (terminal success — prevents a double-merge on a re-fired
+  completion) / `merge_blocked` / `merge_proposed` (legacy, no longer written)
 
 A retried `RunFinished` event (e.g. after daemon restart) cannot
 double-post a comment or double-label the ticket. The per-source
