@@ -85,6 +85,15 @@ pub struct RunMemory {
     pub artifacts_by_node: BTreeMap<NodeKey, Vec<ArtifactRef>>,
     pub outcomes: BTreeMap<NodeKey, Vec<OutcomeRecord>>,
     pub costs: CostSummary,
+    /// Whether a `BudgetWarningRaised` has been folded for this run. Set once
+    /// and never cleared, so the engine's stage-boundary budget check warns at
+    /// most once per run — and, because it is derived from the event log,
+    /// survives a daemon restart / resume (the warning is not re-emitted).
+    pub budget_warning_raised: bool,
+    /// Whether a `BudgetExceeded` has been folded for this run. Gates the
+    /// `WarnOnly` breach record so the hard-limit crossing is surfaced exactly
+    /// once (separate from the threshold warning) and is resume-safe.
+    pub budget_exceeded_noted: bool,
     /// Per-bootstrap-stage edit-loop counter. Incremented on every
     /// `BootstrapEditRequested` event. Read by the bootstrap HumanGate
     /// handler to enforce `EngineRunConfig.bootstrap.edit_loop_cap`.
@@ -623,6 +632,12 @@ impl RunMemory {
                 self.costs.cache_hits += u64::from(*cache_hits);
                 self.costs.cost_usd += cost_usd.unwrap_or(0.0);
             },
+            EventPayload::BudgetWarningRaised { .. } => {
+                self.budget_warning_raised = true;
+            },
+            EventPayload::BudgetExceeded { .. } => {
+                self.budget_exceeded_noted = true;
+            },
             EventPayload::BootstrapEditRequested { stage, feedback } => {
                 *self.bootstrap_edit_counts.entry(*stage).or_insert(0) += 1;
                 self.last_edit_feedback_by_stage
@@ -981,6 +996,25 @@ mod tests {
         assert_eq!(m.costs.tokens_in, 0);
         assert!(m.bootstrap_edit_counts.is_empty());
         assert!(m.node_visits.is_empty());
+        assert!(!m.budget_warning_raised);
+    }
+
+    #[test]
+    fn budget_warning_raised_folds_into_memory_flag() {
+        // The flag is derived from the event log so a resumed run does not
+        // re-emit a warning it already recorded (warn-once idempotency).
+        let mut m = RunMemory::default();
+        assert!(!m.budget_warning_raised);
+        m.apply_event(&make_event(
+            1,
+            EventPayload::BudgetWarningRaised {
+                dimension: crate::budget::BudgetDimension::Tokens,
+                pct: 80,
+                cost_usd: 0.0,
+                total_tokens: 800_000,
+            },
+        ));
+        assert!(m.budget_warning_raised);
     }
 
     #[test]

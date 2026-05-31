@@ -186,6 +186,162 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
                 }
             },
         }
+
+        // Stage boundary: the just-completed stage's token usage has been
+        // folded into `state.memory.costs` by `route_and_snapshot`. Enforce the
+        // run's budget here — warn once at the threshold, abort on breach.
+        // A failure to durably record an abort decision is fatal (the run must
+        // never terminate without a persisted reason).
+        match enforce_budget(&params, &mut state).await {
+            Ok(Some(outcome)) => return outcome,
+            Ok(None) => {},
+            Err(error) => return failed(&params, error).await,
+        }
+    }
+}
+
+/// Evaluate the run budget against the freshly-folded cumulative cost and act.
+///
+/// Returns:
+/// - `Ok(None)` to continue (within budget, unlimited, or after recording an
+///   advisory warn/breach under `WarnOnly`).
+/// - `Ok(Some(outcome))` when an `Abort`-policy breach durably terminated the
+///   run.
+/// - `Err(reason)` when a **mandatory** abort write (`BudgetExceeded` /
+///   `RunAborted`) failed to persist — the caller turns this into a hard run
+///   failure so the run never terminates without a durable, replayable record.
+///
+/// Advisory writes (the threshold warning, and the `WarnOnly` breach record)
+/// are best-effort: on append failure the flag is left unset so the next stage
+/// boundary retries, rather than failing an otherwise-healthy run.
+async fn enforce_budget(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Result<Option<RunOutcome>, String> {
+    use surge_core::budget::{BudgetAction, decide};
+
+    let guard = params.run_config.budget;
+    if guard.is_unlimited() {
+        return Ok(None);
+    }
+
+    let cost_usd = state.memory.costs.cost_usd;
+    let total_tokens = state
+        .memory
+        .costs
+        .tokens_in
+        .saturating_add(state.memory.costs.tokens_out);
+    let verdict = guard.limits.evaluate(&state.memory.costs);
+
+    match decide(
+        verdict,
+        guard.policy,
+        state.budget_warned,
+        state.budget_exceeded_noted,
+    ) {
+        BudgetAction::Continue => Ok(None),
+        BudgetAction::Warn { dimension, pct } => {
+            // Advisory: on a failed append leave the flag unset so the next
+            // boundary retries, rather than losing the warning and silencing
+            // all future ones.
+            if let Err(error) = params
+                .writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::BudgetWarningRaised {
+                        dimension,
+                        pct,
+                        cost_usd,
+                        total_tokens,
+                    },
+                ))
+                .await
+            {
+                tracing::warn!(
+                    target: "engine::budget",
+                    run_id = %params.run_id,
+                    %error,
+                    "failed to append BudgetWarningRaised; will retry at next boundary"
+                );
+                return Ok(None);
+            }
+            state.budget_warned = true;
+            tracing::warn!(
+                target: "engine::budget",
+                run_id = %params.run_id,
+                ?dimension,
+                pct,
+                cost_usd,
+                total_tokens,
+                "run budget warning threshold crossed"
+            );
+            Ok(None)
+        },
+        BudgetAction::NoteExceeded { dimension } => {
+            // WarnOnly breach record — advisory, same retry-on-failure posture.
+            if let Err(error) = params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
+                    dimension,
+                    cost_usd,
+                    total_tokens,
+                }))
+                .await
+            {
+                tracing::warn!(
+                    target: "engine::budget",
+                    run_id = %params.run_id,
+                    %error,
+                    "failed to append BudgetExceeded (warn-only); will retry at next boundary"
+                );
+                return Ok(None);
+            }
+            state.budget_exceeded_noted = true;
+            tracing::warn!(
+                target: "engine::budget",
+                run_id = %params.run_id,
+                ?dimension,
+                cost_usd,
+                total_tokens,
+                "run budget exceeded (warn-only policy; run continues)"
+            );
+            Ok(None)
+        },
+        BudgetAction::Abort { dimension } => {
+            // Mandatory: the breach record and the terminal abort MUST be
+            // durable, or replay/audit cannot explain why the run stopped.
+            params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
+                    dimension,
+                    cost_usd,
+                    total_tokens,
+                }))
+                .await
+                .map_err(|e| format!("persist BudgetExceeded for abort: {e}"))?;
+            let reason = format!(
+                "budget exceeded ({dimension:?}): cost=${cost_usd:.4}, tokens={total_tokens}"
+            );
+            params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+                    reason: reason.clone(),
+                }))
+                .await
+                .map_err(|e| format!("persist RunAborted for budget breach: {e}"))?;
+            tracing::warn!(
+                target: "engine::budget",
+                run_id = %params.run_id,
+                ?dimension,
+                cost_usd,
+                total_tokens,
+                "run budget exceeded; aborting run"
+            );
+            let outcome = RunOutcome::Aborted { reason };
+            let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                outcome: outcome.clone(),
+            });
+            Ok(Some(outcome))
+        },
     }
 }
 
@@ -200,6 +356,12 @@ struct RunExecutionState {
     processed_graph_revision_seq: u64,
     pending_graph_revisions: Vec<ObservedGraphRevision>,
     pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
+    /// Whether a `BudgetWarningRaised` has already been emitted this run, so the
+    /// warn band fires at most once per run (idempotent re-evaluation).
+    budget_warned: bool,
+    /// Whether a `BudgetExceeded` has already been recorded this run, so the
+    /// `WarnOnly` breach record fires at most once (separate from the warn).
+    budget_exceeded_noted: bool,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -220,6 +382,12 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
             .await
             .map_err(|e| format!("load pending graph revisions: {e}"))?;
 
+    // Seed the warn-once / breach-once flags from the folded event log so a
+    // resumed run does not re-emit a `BudgetWarningRaised` / `BudgetExceeded`
+    // it already recorded before a restart.
+    let budget_warned = memory.budget_warning_raised;
+    let budget_exceeded_noted = memory.budget_exceeded_noted;
+
     Ok(RunExecutionState {
         active_graph,
         cursor,
@@ -234,6 +402,8 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
         pending_elevations: params.pending_elevations.clone(),
+        budget_warned,
+        budget_exceeded_noted,
     })
 }
 

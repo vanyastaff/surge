@@ -31,7 +31,14 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// unchanged (same JSON wrapper); old v1/v2 payloads decode cleanly with
 /// `mcp_server: None`. Per the v2 precedent the version is still bumped so
 /// readers know per-server attribution is in scope.
-pub const MAX_SUPPORTED_VERSION: u32 = 3;
+///
+/// **v4 (introduced 2026-05):** adds the [`EventPayload::BudgetWarningRaised`]
+/// and [`EventPayload::BudgetExceeded`] variants (live budget enforcement).
+/// Purely additive — old v1/v2/v3 payloads decode cleanly (they never contain
+/// the new variants). The version is bumped so a v3-max reader rejects a
+/// budget event with a clean [`SurgeError::SchemaTooNew`] rather than an
+/// unknown-variant decode error.
+pub const MAX_SUPPORTED_VERSION: u32 = 4;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -103,6 +110,27 @@ impl Migration for IdentityV3 {
     }
 }
 
+/// Identity migration for v4 — the schema bump that introduced the
+/// `BudgetWarningRaised` / `BudgetExceeded` variants (live budget
+/// enforcement). The wire shape is unchanged (same JSON-encoded
+/// [`VersionedEventPayload`] wrapper); old payloads decode cleanly because
+/// they never carry the new variants. The `schema_version` field is the only
+/// signal that distinguishes v1/v2/v3 from v4 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV4;
+
+impl Migration for IdentityV4 {
+    fn version(&self) -> u32 {
+        4
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v4 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -110,7 +138,7 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// and [`IdentityV3`].
+    /// [`IdentityV3`], and [`IdentityV4`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -118,6 +146,7 @@ impl MigrationChain {
                 Box::new(IdentityV1),
                 Box::new(IdentityV2),
                 Box::new(IdentityV3),
+                Box::new(IdentityV4),
             ],
         }
     }
@@ -226,7 +255,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 3);
+        assert_eq!(wrapper.schema_version, 4);
     }
 
     #[test]
@@ -234,8 +263,20 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 3 }
+            SurgeError::SchemaTooNew { found: 99, max: 4 }
         ));
+    }
+
+    #[test]
+    fn v4_budget_event_round_trips() {
+        let payload = EventPayload::BudgetExceeded {
+            dimension: crate::budget::BudgetDimension::Tokens,
+            cost_usd: 0.0,
+            total_tokens: 1_500_000,
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 
     #[test]
