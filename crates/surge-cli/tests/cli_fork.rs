@@ -8,11 +8,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use surge_core::agent_config::{AgentConfig, NodeLimits};
 use surge_core::approvals::ApprovalPolicy;
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
-use surge_core::keys::NodeKey;
+use surge_core::keys::{NodeKey, ProfileKey};
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
@@ -141,4 +142,157 @@ fn engine_fork_nonexistent_run_fails_cleanly() {
         .args(["engine", "fork", fake, "--seq", "1"])
         .assert()
         .failure();
+}
+
+/// A graph with one Agent node `impl_1` plus a terminal `end`, so `--prompt`
+/// has a valid Agent target.
+fn agent_graph() -> Graph {
+    let impl_node = NodeKey::try_from("impl_1").unwrap();
+    let end = NodeKey::try_from("end").unwrap();
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        impl_node.clone(),
+        Node {
+            id: impl_node.clone(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Agent(AgentConfig {
+                profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+                prompt_overrides: None,
+                tool_overrides: None,
+                sandbox_override: None,
+                approvals_override: None,
+                bindings: vec![],
+                rules_overrides: None,
+                limits: NodeLimits::default(),
+                hooks: vec![],
+                custom_fields: BTreeMap::new(),
+            }),
+        },
+    );
+    nodes.insert(
+        end.clone(),
+        Node {
+            id: end.clone(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        },
+    );
+    Graph {
+        schema_version: SCHEMA_VERSION,
+        metadata: GraphMetadata {
+            name: "fork-cli-edit-test".into(),
+            description: None,
+            template_origin: None,
+            created_at: chrono::Utc::now(),
+            author: None,
+            archetype: None,
+        },
+        start: impl_node,
+        nodes,
+        edges: vec![],
+        subgraphs: BTreeMap::new(),
+    }
+}
+
+async fn seed_agent_parent(home: &Path) -> RunId {
+    let storage = Storage::open(home).await.unwrap();
+    let parent = RunId::new();
+    let worktree = home.to_path_buf();
+    let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+    let graph = agent_graph();
+    let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
+    let config = RunConfig {
+        sandbox_default: SandboxMode::WorkspaceWrite,
+        approval_default: ApprovalPolicy::OnRequest,
+        auto_pr: false,
+        mcp_servers: vec![],
+    };
+    writer
+        .append_events(vec![
+            VersionedEventPayload::new(EventPayload::RunStarted {
+                pipeline_template: None,
+                project_path: worktree.clone(),
+                initial_prompt: "seed".into(),
+                config,
+            }),
+            VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                graph: Box::new(graph),
+                graph_hash,
+            }),
+        ])
+        .await
+        .unwrap();
+    drop(writer);
+    drop(storage);
+    parent
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engine_fork_with_prompt_edit_rewrites_child_graph() {
+    use surge_persistence::runs::seq::EventSeq;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let parent = seed_agent_parent(tmp.path()).await;
+
+    let assert = assert_cmd::Command::cargo_bin("surge")
+        .unwrap()
+        .env("SURGE_HOME", tmp.path())
+        .args([
+            "engine",
+            "fork",
+            &parent.to_string(),
+            "--seq",
+            "2",
+            "--prompt",
+            "impl_1=retry: prefer X",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("edits applied: 1 prompt"),
+        "stdout was: {stdout}"
+    );
+
+    // Read the child's materialized graph back and confirm the prompt landed.
+    let child_id = stdout
+        .lines()
+        .find(|l| l.contains("new run:"))
+        .and_then(|l| l.split_whitespace().last())
+        .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
+    let child: RunId = child_id.parse().unwrap();
+
+    let storage = Storage::open(tmp.path()).await.unwrap();
+    let reader = storage.open_run_reader(child).await.unwrap();
+    let max = reader.current_seq().await.unwrap();
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(max.as_u64() + 1))
+        .await
+        .unwrap();
+    let graph = events
+        .iter()
+        .find_map(|e| match &e.payload.payload {
+            EventPayload::PipelineMaterialized { graph, .. } => Some((**graph).clone()),
+            _ => None,
+        })
+        .expect("child has a materialized graph");
+    let node = graph
+        .nodes
+        .get(&NodeKey::try_from("impl_1").unwrap())
+        .unwrap();
+    let NodeConfig::Agent(cfg) = &node.config else {
+        panic!("impl_1 must be an Agent node");
+    };
+    assert_eq!(
+        cfg.prompt_overrides
+            .as_ref()
+            .and_then(|o| o.append_system.as_deref()),
+        Some("retry: prefer X"),
+        "the forked child's graph must carry the --prompt append"
+    );
 }

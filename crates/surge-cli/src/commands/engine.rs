@@ -93,6 +93,14 @@ pub enum EngineCommands {
         /// Inclusive event seq to fork at (events `1..=seq` are inherited).
         #[arg(long)]
         seq: u64,
+        /// Append text to an Agent node's system prompt in the fork,
+        /// `--prompt <node>=<text>` (repeatable).
+        #[arg(long = "prompt", value_name = "NODE=TEXT")]
+        prompt: Vec<String>,
+        /// Replace an Agent node's profile in the fork,
+        /// `--profile <node>=<key>` (repeatable).
+        #[arg(long = "profile", value_name = "NODE=KEY")]
+        profile: Vec<String>,
     },
 }
 
@@ -120,7 +128,12 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             follow,
         } => logs_command(run_id, since, follow).await,
         EngineCommands::Replay { run_id, seq } => replay_command(run_id, seq).await,
-        EngineCommands::Fork { run_id, seq } => fork_command(run_id, seq).await,
+        EngineCommands::Fork {
+            run_id,
+            seq,
+            prompt,
+            profile,
+        } => fork_command(run_id, seq, prompt, profile).await,
     }
 }
 
@@ -510,22 +523,59 @@ async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
     Ok(())
 }
 
-/// `surge engine fork <run_id> --seq N` — copy the parent's event history
-/// `1..=N` into a fresh run (inheriting the snapshot so it resumes at the fork
-/// point) and record `ForkCreated` lineage on the parent. The fork is
-/// immediately inspectable via `surge engine replay <new_id>` and resumable
-/// via `surge engine resume <new_id> --daemon`.
-async fn fork_command(run_id: String, seq: u64) -> Result<()> {
-    use surge_orchestrator::engine::fork::{ForkRequest, fork};
+/// `surge engine fork <run_id> --seq N [--prompt node=text] [--profile node=key]`
+/// — copy the parent's event history `1..=N` into a fresh run (inheriting the
+/// snapshot so it resumes at the fork point), optionally rewriting an Agent
+/// node's prompt/profile in the child's graph, and record `ForkCreated` lineage
+/// on the parent. The fork is inspectable via `surge engine replay <new_id>`
+/// and resumable via `surge engine resume <new_id> --daemon`.
+async fn fork_command(
+    run_id: String,
+    seq: u64,
+    prompt: Vec<String>,
+    profile: Vec<String>,
+) -> Result<()> {
+    use surge_core::keys::{NodeKey, ProfileKey};
+    use surge_orchestrator::engine::fork::{ForkEdits, ForkRequest, fork};
 
     let parent = parse_run_id(&run_id)?;
+
+    let mut edits = ForkEdits::default();
+    for item in &prompt {
+        let (node, text) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--prompt must be NODE=TEXT, got '{item}'"))?;
+        let key = NodeKey::try_from(node).map_err(|e| anyhow!("invalid node '{node}': {e}"))?;
+        edits.prompt_appends.insert(key, text.to_string());
+    }
+    for item in &profile {
+        let (node, prof) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--profile must be NODE=KEY, got '{item}'"))?;
+        let key = NodeKey::try_from(node).map_err(|e| anyhow!("invalid node '{node}': {e}"))?;
+        let pkey =
+            ProfileKey::try_from(prof).map_err(|e| anyhow!("invalid profile key '{prof}': {e}"))?;
+        edits.profile_overrides.insert(key, pkey);
+    }
+
     let storage = Storage::open(&surge_runs_dir()?).await?;
     let child = RunId::new();
-    let outcome = fork(&storage, ForkRequest::new(parent, child, seq)).await?;
+    let outcome = fork(
+        &storage,
+        ForkRequest::new(parent, child, seq).with_edits(edits),
+    )
+    .await?;
 
     println!("forked {parent} @ seq {seq}");
     println!("  new run:       {}", outcome.new_run);
     println!("  events copied: {}", outcome.copied_events);
+    if !prompt.is_empty() || !profile.is_empty() {
+        println!(
+            "  edits applied: {} prompt, {} profile",
+            prompt.len(),
+            profile.len()
+        );
+    }
     println!();
     println!("inspect:  surge engine replay {}", outcome.new_run);
     println!("resume:   surge engine resume {} --daemon", outcome.new_run);
