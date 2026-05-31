@@ -1,25 +1,51 @@
 //! Fork-from-here: spawn a new run that inherits a parent run's event history
 //! up to a chosen `seq`, then diverges forward from that point.
 //!
-//! Invariant: the child log is a faithful copy of the parent's first `at_seq`
-//! event payloads, so `fold(child_events) == fold(parent_events[1..=at_seq])`.
-//! The parent records a `ForkCreated { new_run, fork_at_seq }` event so the
-//! lineage survives in the (append-only) event log.
+//! Invariant: without [`ForkEdits`], the child log is a faithful copy of the
+//! parent's first `at_seq` event payloads, so
+//! `fold(child_events) == fold(parent_events[1..=at_seq])`. Pre-fork edits
+//! rewrite a single node in the child's materialized graph (and its hash) so a
+//! fork can retry a stage with a corrective hint or a different profile. The
+//! parent records a `ForkCreated { new_run, fork_at_seq }` event so the lineage
+//! survives in the (append-only) event log.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use surge_core::agent_config::PromptOverride;
+use surge_core::content_hash::ContentHash;
+use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::keys::{NodeKey, ProfileKey};
+use surge_core::node::NodeConfig;
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::seq::EventSeq;
 
 use crate::engine::error::EngineError;
 
-/// Request to fork `parent` at `at_seq` into a fresh run `new_run`.
-///
-/// Pre-fork edits (per-node prompt override, profile swap) are a later M1
-/// increment; they will extend this struct when they actually take effect,
-/// rather than shipping an ignored knob now.
+/// Pre-fork edits applied to the child's materialized graph before it resumes,
+/// so a fork can retry a stage with a corrective hint or a different profile
+/// without re-running the stages that already succeeded. Empty by default.
+#[derive(Debug, Clone, Default)]
+pub struct ForkEdits {
+    /// Per Agent node: text appended to that node's system prompt
+    /// (`prompt_overrides.append_system`) in the child's graph.
+    pub prompt_appends: BTreeMap<NodeKey, String>,
+    /// Per Agent node: replacement profile key in the child's graph.
+    pub profile_overrides: BTreeMap<NodeKey, ProfileKey>,
+}
+
+impl ForkEdits {
+    /// True when no edits are requested.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.prompt_appends.is_empty() && self.profile_overrides.is_empty()
+    }
+}
+
+/// Request to fork `parent` at `at_seq` into a fresh run `new_run`, with
+/// optional pre-fork [`ForkEdits`].
 #[derive(Debug, Clone)]
 pub struct ForkRequest {
     /// The run whose history is inherited.
@@ -28,17 +54,27 @@ pub struct ForkRequest {
     pub new_run: RunId,
     /// Inclusive sequence to fork at: events `1..=at_seq` are copied.
     pub at_seq: u64,
+    /// Edits applied to the child's graph before it resumes.
+    pub edits: ForkEdits,
 }
 
 impl ForkRequest {
-    /// Build a fork request.
+    /// Build a fork request with no pre-fork edits.
     #[must_use]
     pub fn new(parent: RunId, new_run: RunId, at_seq: u64) -> Self {
         Self {
             parent,
             new_run,
             at_seq,
+            edits: ForkEdits::default(),
         }
+    }
+
+    /// Attach pre-fork edits to the request.
+    #[must_use]
+    pub fn with_edits(mut self, edits: ForkEdits) -> Self {
+        self.edits = edits;
+        self
     }
 }
 
@@ -54,15 +90,16 @@ pub struct ForkOutcome {
 /// Fork a run: copy parent events `1..=at_seq` into `new_run`, then record a
 /// `ForkCreated { new_run, fork_at_seq }` event on the parent for lineage.
 ///
-/// The child's log is a byte-for-byte copy of the parent prefix, so folding it
+/// The child's log copies the parent prefix verbatim (optionally rewriting one
+/// node's prompt/profile per [`ForkEdits`]), so without edits folding it
 /// reproduces the parent's state at `at_seq` exactly. The child does not start
 /// executing here; the caller resumes it (see `Engine::resume_run`).
 ///
 /// # Errors
 ///
 /// Returns [`EngineError`] if the parent has no readable log, `at_seq` is out
-/// of bounds, the inherited prefix does not begin with a `RunStarted` event,
-/// or persistence fails.
+/// of bounds, the inherited prefix does not begin with a `RunStarted` event, a
+/// pre-fork edit targets an unknown or non-Agent node, or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
     let reader = storage
         .open_run_reader(req.parent)
@@ -105,6 +142,15 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         },
     };
 
+    // Build the child's payloads and apply any pre-fork edits up front. Edit
+    // validation is pure — no run exists yet — so an unknown or non-Agent target
+    // fails before any child is created (never leaving an orphan behind). With
+    // edits the child intentionally diverges from a byte-for-byte copy.
+    let mut copied: Vec<VersionedEventPayload> = prefix.iter().map(|e| e.payload.clone()).collect();
+    if !req.edits.is_empty() {
+        apply_fork_edits(&mut copied, &req.edits)?;
+    }
+
     // The fork is not atomic across the two per-run logs (parent and child are
     // separate SQLite databases — there is no shared transaction). To keep the
     // worst-case failure benign we: (1) acquire the parent writer up front so
@@ -119,8 +165,8 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-    // Create the child run and copy the prefix payloads verbatim. Folding the
-    // child therefore reproduces the parent's state at `at_seq` exactly.
+    // Create the child run and write the (possibly edited) prefix payloads.
+    // Folding the child reproduces the parent's state at `at_seq` (modulo edits).
     let child_writer = storage
         .create_run(
             req.new_run,
@@ -129,7 +175,6 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         )
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
-    let copied: Vec<VersionedEventPayload> = prefix.iter().map(|e| e.payload.clone()).collect();
     child_writer
         .append_events(copied)
         .await
@@ -169,14 +214,105 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
     })
 }
 
+/// Apply pre-fork [`ForkEdits`] to the child's materialized graph, rewriting the
+/// `PipelineMaterialized` event in `copied` (graph + recomputed hash).
+///
+/// Runs with mid-run graph revisions are rejected: the child would fold to the
+/// revised graph, so editing the base `PipelineMaterialized` would silently have
+/// no effect. Supporting that is a follow-up.
+fn apply_fork_edits(
+    copied: &mut [VersionedEventPayload],
+    edits: &ForkEdits,
+) -> Result<(), EngineError> {
+    if copied
+        .iter()
+        .any(|ev| matches!(ev.payload, EventPayload::GraphRevisionAccepted { .. }))
+    {
+        return Err(EngineError::ForkInvalid(
+            "pre-fork edits are not yet supported for runs with mid-run graph revisions".into(),
+        ));
+    }
+    let idx = copied
+        .iter()
+        .position(|ev| matches!(ev.payload, EventPayload::PipelineMaterialized { .. }))
+        .ok_or_else(|| {
+            EngineError::ForkInvalid(
+                "cannot apply pre-fork edits: the inherited prefix has no materialized graph"
+                    .into(),
+            )
+        })?;
+
+    let EventPayload::PipelineMaterialized { graph, .. } = &copied[idx].payload else {
+        unreachable!("idx points at a PipelineMaterialized event")
+    };
+    let mut graph = (**graph).clone();
+    apply_edits_to_graph(&mut graph, edits)?;
+
+    let graph_hash = ContentHash::compute(
+        &serde_json::to_vec(&graph)
+            .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?,
+    );
+    copied[idx].payload = EventPayload::PipelineMaterialized {
+        graph: Box::new(graph),
+        graph_hash,
+    };
+    Ok(())
+}
+
+/// Mutate `graph` in place per `edits`. Validates every targeted node up front
+/// (it must exist and be an `Agent`) so the operation is all-or-nothing.
+fn apply_edits_to_graph(graph: &mut Graph, edits: &ForkEdits) -> Result<(), EngineError> {
+    for node_key in edits
+        .prompt_appends
+        .keys()
+        .chain(edits.profile_overrides.keys())
+    {
+        match graph.nodes.get(node_key) {
+            None => {
+                return Err(EngineError::ForkInvalid(format!(
+                    "pre-fork edit targets unknown node '{node_key}'"
+                )));
+            },
+            Some(node) if !matches!(node.config, NodeConfig::Agent(_)) => {
+                return Err(EngineError::ForkInvalid(format!(
+                    "pre-fork edit targets non-Agent node '{node_key}'"
+                )));
+            },
+            Some(_) => {},
+        }
+    }
+
+    for (node_key, text) in &edits.prompt_appends {
+        if let Some(node) = graph.nodes.get_mut(node_key) {
+            if let NodeConfig::Agent(cfg) = &mut node.config {
+                cfg.prompt_overrides
+                    .get_or_insert_with(|| PromptOverride {
+                        system: None,
+                        append_system: None,
+                    })
+                    .append_system = Some(text.clone());
+            }
+        }
+    }
+    for (node_key, profile) in &edits.profile_overrides {
+        if let Some(node) = graph.nodes.get_mut(node_key) {
+            if let NodeConfig::Agent(cfg) = &mut node.config {
+                cfg.profile = profile.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use surge_core::agent_config::{AgentConfig, NodeLimits};
     use surge_core::approvals::ApprovalPolicy;
     use surge_core::content_hash::ContentHash;
     use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
-    use surge_core::keys::{NodeKey, OutcomeKey};
+    use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
     use surge_core::node::{Node, NodeConfig, Position};
     use surge_core::run_event::RunConfig;
     use surge_core::run_state::RunMemory;
@@ -476,6 +612,213 @@ mod tests {
         assert!(
             matches!(res, Err(EngineError::ForkInvalid(_))),
             "fork must reject a prefix that does not begin with RunStarted, got {res:?}"
+        );
+    }
+
+    /// A graph with one Agent node `impl_1` (profile `implementer@1.0`) and a
+    /// terminal `end`. Structural validity is irrelevant — fork edits operate on
+    /// the node map, not the edges.
+    fn agent_graph() -> Graph {
+        let impl_node = NodeKey::try_from("impl_1").unwrap();
+        let end = NodeKey::try_from("end").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            impl_node.clone(),
+            Node {
+                id: impl_node.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Agent(AgentConfig {
+                    profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: vec![],
+                    rules_overrides: None,
+                    limits: NodeLimits::default(),
+                    hooks: vec![],
+                    custom_fields: BTreeMap::new(),
+                }),
+            },
+        );
+        nodes.insert(
+            end.clone(),
+            Node {
+                id: end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "fork-edit-test".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: impl_node,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    /// Seed a parent run `[RunStarted, PipelineMaterialized(agent_graph)]`.
+    async fn seed_agent_parent(dir: &std::path::Path) -> (Arc<Storage>, RunId) {
+        let storage = Storage::open(dir).await.unwrap();
+        let parent = RunId::new();
+        let worktree = dir.to_path_buf();
+        let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+        let graph = agent_graph();
+        let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
+        let config = RunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: vec![],
+        };
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: worktree.clone(),
+                    initial_prompt: "orig".into(),
+                    config,
+                }),
+                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash,
+                }),
+            ])
+            .await
+            .unwrap();
+        drop(writer);
+        (storage, parent)
+    }
+
+    /// Read the child's materialized graph back from storage.
+    async fn child_graph(storage: &Arc<Storage>, child: RunId) -> Graph {
+        let reader = storage.open_run_reader(child).await.unwrap();
+        let max = reader.current_seq().await.unwrap();
+        let events = reader
+            .read_events(EventSeq(0)..EventSeq(max.as_u64() + 1))
+            .await
+            .unwrap();
+        events
+            .iter()
+            .find_map(|e| match &e.payload.payload {
+                EventPayload::PipelineMaterialized { graph, .. } => Some((**graph).clone()),
+                _ => None,
+            })
+            .expect("child has a PipelineMaterialized graph")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_prompt_append_edits_child_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let child = RunId::new();
+
+        let mut edits = ForkEdits::default();
+        edits.prompt_appends.insert(
+            NodeKey::try_from("impl_1").unwrap(),
+            "retry: prefer X".into(),
+        );
+        fork(
+            &storage,
+            ForkRequest::new(parent, child, 2).with_edits(edits),
+        )
+        .await
+        .expect("fork with prompt edit");
+
+        let g = child_graph(&storage, child).await;
+        let node = g.nodes.get(&NodeKey::try_from("impl_1").unwrap()).unwrap();
+        let NodeConfig::Agent(cfg) = &node.config else {
+            panic!("impl_1 must be an Agent node");
+        };
+        assert_eq!(
+            cfg.prompt_overrides
+                .as_ref()
+                .and_then(|o| o.append_system.as_deref()),
+            Some("retry: prefer X"),
+            "child graph must carry the appended prompt"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_profile_override_edits_child_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+        let child = RunId::new();
+        let new_profile = ProfileKey::try_from("reviewer@1.0").unwrap();
+
+        let mut edits = ForkEdits::default();
+        edits
+            .profile_overrides
+            .insert(NodeKey::try_from("impl_1").unwrap(), new_profile.clone());
+        fork(
+            &storage,
+            ForkRequest::new(parent, child, 2).with_edits(edits),
+        )
+        .await
+        .expect("fork with profile edit");
+
+        let g = child_graph(&storage, child).await;
+        let node = g.nodes.get(&NodeKey::try_from("impl_1").unwrap()).unwrap();
+        let NodeConfig::Agent(cfg) = &node.config else {
+            panic!("impl_1 must be an Agent node");
+        };
+        assert_eq!(
+            cfg.profile, new_profile,
+            "child graph must carry the swapped profile"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_edit_unknown_node_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+
+        let mut edits = ForkEdits::default();
+        edits
+            .prompt_appends
+            .insert(NodeKey::try_from("nope").unwrap(), "x".into());
+        let res = fork(
+            &storage,
+            ForkRequest::new(parent, RunId::new(), 2).with_edits(edits),
+        )
+        .await;
+        assert!(
+            matches!(res, Err(EngineError::ForkInvalid(_))),
+            "an edit targeting an unknown node must be rejected, got {res:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_edit_non_agent_node_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, parent) = seed_agent_parent(dir.path()).await;
+
+        let mut edits = ForkEdits::default();
+        edits
+            .prompt_appends
+            .insert(NodeKey::try_from("end").unwrap(), "x".into());
+        let res = fork(
+            &storage,
+            ForkRequest::new(parent, RunId::new(), 2).with_edits(edits),
+        )
+        .await;
+        assert!(
+            matches!(res, Err(EngineError::ForkInvalid(_))),
+            "an edit targeting a non-Agent node must be rejected, got {res:?}"
         );
     }
 }

@@ -74,8 +74,11 @@ lineage event on the parent. The fork is immediately inspectable with
 `surge engine resume <new_id> --daemon`.
 
 Use fork to retry a run from just before the stage that went wrong without
-re-executing the stages that already succeeded. Pre-fork prompt/profile edits
-are a follow-up increment.
+re-executing the stages that already succeeded — optionally *with a fix*:
+`--prompt <node>=<text>` appends corrective guidance to an Agent node's system
+prompt, and `--profile <node>=<key>` swaps its profile. Both flags are
+repeatable, target Agent nodes only, and are rewritten into the child's
+materialized graph (validated all-or-nothing before the fork is created).
 
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
 
