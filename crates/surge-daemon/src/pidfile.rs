@@ -28,10 +28,20 @@ pub enum PidfileError {
     AlreadyRunning(u32),
 }
 
-/// Returns the daemon directory path: `~/.surge/daemon/`.
+/// Returns the daemon directory path: `${SURGE_HOME}/daemon/`, or
+/// `~/.surge/daemon/` when `SURGE_HOME` is unset/empty.
+///
+/// Honouring `SURGE_HOME` (matching the CLI's `surge_runs_dir` and
+/// `profile_loader::paths::surge_home`) lets a test or operator isolate the
+/// daemon's pid/socket/version files into a sandbox instead of racing the
+/// real `~/.surge/daemon/`.
+#[must_use = "the resolved daemon directory should be used"]
 pub fn daemon_dir() -> Result<PathBuf, PidfileError> {
-    let home = dirs::home_dir().ok_or(PidfileError::NoHome)?;
-    Ok(home.join(".surge").join("daemon"))
+    let home = match std::env::var("SURGE_HOME") {
+        Ok(custom) if !custom.is_empty() => PathBuf::from(custom),
+        _ => dirs::home_dir().ok_or(PidfileError::NoHome)?.join(".surge"),
+    };
+    Ok(home.join("daemon"))
 }
 
 /// Returns the PID file path.

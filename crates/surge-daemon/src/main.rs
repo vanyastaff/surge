@@ -363,6 +363,14 @@ fn main() -> std::process::ExitCode {
 }
 
 fn surge_runs_dir() -> std::path::PathBuf {
+    // `SURGE_HOME` (set and non-empty) relocates the surge home — keeps the
+    // daemon's runs/worktrees/intake in the same sandbox as its pid/socket
+    // (see `pidfile::daemon_dir`) and matches the CLI contract.
+    if let Ok(custom) = std::env::var("SURGE_HOME")
+        && !custom.is_empty()
+    {
+        return std::path::PathBuf::from(custom);
+    }
     dirs::home_dir()
         .map(|h| h.join(".surge"))
         .unwrap_or_else(|| std::path::PathBuf::from(".surge"))
