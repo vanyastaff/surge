@@ -581,7 +581,7 @@ impl TaskSource for GitHubIssuesTaskSource {
             // These are expected failure modes the gate escalates, not
             // transport errors.
             Err(octocrab::Error::GitHub { source, .. })
-                if matches!(source.status_code.as_u16(), 405 | 409 | 422) =>
+                if is_not_mergeable_status(source.status_code.as_u16()) =>
             {
                 Ok(MergeOutcome::Conflict(format!(
                     "PR #{number} not mergeable ({}): {}",
@@ -660,9 +660,44 @@ fn parse_issue_number(task_id: &str) -> Result<u64> {
         .map_err(|_| Error::InvalidTaskId(task_id.into()))
 }
 
+/// Whether a GitHub HTTP status from the merge endpoint means "the PR is
+/// not mergeable right now" (an expected `MergeOutcome::Conflict` the gate
+/// escalates) rather than a transport/permission failure (surfaced as an
+/// error so the operator sees the real cause):
+///
+/// - `405 Method Not Allowed` — base branch moved / required state regressed.
+/// - `409 Conflict` — the provided head SHA is stale.
+/// - `422 Unprocessable Entity` — merge conflicts.
+///
+/// `403`, `404`, `401`, and 5xx are deliberately excluded — those are
+/// permission / not-found / auth / server errors that route through
+/// `map_octocrab_error` so the comment names the real cause.
+fn is_not_mergeable_status(status: u16) -> bool {
+    matches!(status, 405 | 409 | 422)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn not_mergeable_status_covers_conflict_family() {
+        for s in [405, 409, 422] {
+            assert!(is_not_mergeable_status(s), "{s} should be not-mergeable");
+        }
+    }
+
+    #[test]
+    fn not_mergeable_status_excludes_transport_and_auth() {
+        // 200 (handled as Merged), 401/403/404 (auth/permission/not-found),
+        // and 5xx (server) must NOT be classified as a merge conflict.
+        for s in [200, 401, 403, 404, 429, 500, 502] {
+            assert!(
+                !is_not_mergeable_status(s),
+                "{s} must not be treated as a merge conflict"
+            );
+        }
+    }
 
     #[test]
     fn parse_issue_number_extracts_trailing() {
