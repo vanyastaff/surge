@@ -115,10 +115,10 @@ The durability claim is exercised by a real fault-injection test rather than
 trusted on inspection (v0.2 M4).
 
 **Checkpoint seam.** `engine::run_task` carries a debug-only seam: when
-`SURGE_CHECKPOINT_EXIT` names the node about to execute, the process aborts
+`SURGE_CHECKPOINT_EXIT` names the node being entered, the process aborts
 **uncleanly** (`std::process::exit(99)` — no async teardown, no `Drop`, like a
-`kill -9`) the instant after the node's `StageEntered` event is durably
-committed. Release builds compile this to a no-op. The match is pinned by a
+`kill -9`) the instant after that node's `StageEntered` event is durably
+committed, before the stage body runs. Release builds compile this to a no-op. The match is pinned by a
 pure, unit-tested predicate (`checkpoint_exit_matches`).
 
 **Slice 1 — WAL durability under unclean death** (`surge-cli/tests/fault_injection.rs`):
