@@ -128,8 +128,11 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
         .keys()
         .map(|k| (k.as_str().to_owned(), (NodeStatus::Future, 0, None)))
         .collect();
-    let mut active_node = None;
+    let mut active_node: Option<String> = None;
     let mut terminal = None;
+    // `RunCompleted` names the terminal node directly; terminal stages emit no
+    // `StageCompleted` for it, so it is promoted after the fold.
+    let mut terminal_node = None;
     let mut edges_traversed = Vec::new();
     let mut cost = CostView::default();
 
@@ -151,12 +154,19 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
                         .or_insert((NodeStatus::Future, 0, None));
                 e.0 = NodeStatus::Completed;
                 e.2 = Some(outcome.as_str().to_owned());
+                // The frontier node finished — it is no longer "running".
+                if active_node.as_deref() == Some(node.as_str()) {
+                    active_node = None;
+                }
             },
             EventPayload::StageFailed { node, .. } => {
                 status
                     .entry(node.as_str().to_owned())
                     .or_insert((NodeStatus::Future, 0, None))
                     .0 = NodeStatus::Failed;
+                if active_node.as_deref() == Some(node.as_str()) {
+                    active_node = None;
+                }
             },
             EventPayload::EdgeTraversed { edge, from, to, .. } => {
                 edges_traversed.push(EdgeView {
@@ -177,11 +187,41 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
                 cost.cache_hits += u64::from(*cache_hits);
                 cost.cost_usd += cost_usd.unwrap_or(0.0);
             },
-            EventPayload::RunCompleted { .. } => terminal = Some(TerminalKind::Completed),
+            EventPayload::RunCompleted { terminal_node: tn } => {
+                terminal = Some(TerminalKind::Completed);
+                terminal_node = Some(tn.as_str().to_owned());
+            },
             EventPayload::RunFailed { .. } => terminal = Some(TerminalKind::Failed),
             EventPayload::RunAborted { .. } => terminal = Some(TerminalKind::Aborted),
             _ => {},
         }
+    }
+
+    // Promote the run-level terminal disposition onto the node table. Terminal
+    // stages emit `RunCompleted`/`RunFailed`/`RunAborted` directly (no
+    // `StageCompleted`/`StageFailed`), so without this the terminal/frontier
+    // node would be misclassified.
+    match terminal {
+        Some(TerminalKind::Completed) => {
+            if let Some(tn) = &terminal_node {
+                status
+                    .entry(tn.clone())
+                    .or_insert((NodeStatus::Future, 0, None))
+                    .0 = NodeStatus::Completed;
+            }
+        },
+        Some(TerminalKind::Failed) => {
+            // A direct `RunFailed` (no preceding `StageFailed`) means the live
+            // frontier failed; mark it (still-`Active`) `Failed`.
+            if let Some(frontier) = &active_node {
+                if let Some(e) = status.get_mut(frontier) {
+                    if e.0 == NodeStatus::Active {
+                        e.0 = NodeStatus::Failed;
+                    }
+                }
+            }
+        },
+        _ => {},
     }
 
     // A terminal run has no live frontier.
@@ -361,8 +401,8 @@ mod tests {
         assert_eq!(impl_v.attempts, 1);
         assert_eq!(impl_v.last_outcome.as_deref(), Some("done"));
 
-        // end entered but never completed → Active classification at node level.
-        assert_eq!(node_view(&view, "end").status, NodeStatus::Active);
+        // end entered, then promoted to Completed by RunCompleted { terminal_node }.
+        assert_eq!(node_view(&view, "end").status, NodeStatus::Completed);
 
         // Edge captured.
         assert_eq!(view.edges_traversed.len(), 1);
@@ -396,5 +436,73 @@ mod tests {
         assert_eq!(node_view(&view, "impl_1").status, NodeStatus::Active);
         assert_eq!(node_view(&view, "impl_1").attempts, 2);
         assert_eq!(node_view(&view, "end").status, NodeStatus::Future);
+    }
+
+    #[test]
+    fn build_replay_view_terminal_promotion_and_frontier_clearing() {
+        let graph = graph_impl_to_end();
+        let impl_k = NodeKey::try_from("impl_1").unwrap();
+        let end_k = NodeKey::try_from("end").unwrap();
+        let done = OutcomeKey::try_from("done").unwrap();
+
+        // (a) Realistic completed run: the terminal node is NEVER entered; it is
+        //     promoted to Completed by `RunCompleted { terminal_node }`.
+        let events = vec![
+            ev(
+                3,
+                EventPayload::StageEntered {
+                    node: impl_k.clone(),
+                    attempt: 1,
+                },
+            ),
+            ev(
+                4,
+                EventPayload::StageCompleted {
+                    node: impl_k.clone(),
+                    outcome: done.clone(),
+                },
+            ),
+            ev(
+                5,
+                EventPayload::RunCompleted {
+                    terminal_node: end_k,
+                },
+            ),
+        ];
+        let view = build_replay_view(&graph, &events);
+        assert_eq!(view.terminal, Some(TerminalKind::Completed));
+        assert_eq!(view.active_node, None);
+        assert_eq!(node_view(&view, "impl_1").status, NodeStatus::Completed);
+        assert_eq!(
+            node_view(&view, "end").status,
+            NodeStatus::Completed,
+            "terminal node promoted even though it was never entered"
+        );
+
+        // (b) Partial replay ending on StageCompleted (no terminal): the frontier
+        //     is cleared, so active_node does not name the just-finished node.
+        let events = vec![
+            ev(
+                3,
+                EventPayload::StageEntered {
+                    node: impl_k.clone(),
+                    attempt: 1,
+                },
+            ),
+            ev(
+                4,
+                EventPayload::StageCompleted {
+                    node: impl_k,
+                    outcome: done,
+                },
+            ),
+        ];
+        let view = build_replay_view(&graph, &events);
+        assert_eq!(view.terminal, None);
+        assert_eq!(
+            view.active_node, None,
+            "frontier cleared once the active node completes"
+        );
+        assert_eq!(node_view(&view, "impl_1").status, NodeStatus::Completed);
     }
 }

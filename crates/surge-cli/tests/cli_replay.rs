@@ -11,7 +11,7 @@ use surge_core::approvals::ApprovalPolicy;
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
-use surge_core::keys::{NodeKey, OutcomeKey};
+use surge_core::keys::NodeKey;
 use surge_core::node::{Node, NodeConfig, Position};
 use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
 use surge_core::sandbox::SandboxMode;
@@ -50,8 +50,9 @@ fn minimal_graph() -> Graph {
     }
 }
 
-/// Seed a completed run: RunStarted, PipelineMaterialized, StageEntered(end),
-/// StageCompleted(end), RunCompleted (5 events).
+/// Seed a completed run the way the engine really emits it: the terminal node
+/// gets no `StageCompleted`; `RunCompleted { terminal_node }` is the only signal
+/// it finished. RunStarted, PipelineMaterialized, RunCompleted (3 events).
 async fn seed_completed_run(home: &Path) -> RunId {
     let storage = Storage::open(home).await.unwrap();
     let run = RunId::new();
@@ -61,7 +62,6 @@ async fn seed_completed_run(home: &Path) -> RunId {
     let graph = minimal_graph();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let end = NodeKey::try_from("end").unwrap();
-    let done = OutcomeKey::try_from("done").unwrap();
     let config = RunConfig {
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
@@ -79,14 +79,6 @@ async fn seed_completed_run(home: &Path) -> RunId {
             VersionedEventPayload::new(EventPayload::PipelineMaterialized {
                 graph: Box::new(graph),
                 graph_hash,
-            }),
-            VersionedEventPayload::new(EventPayload::StageEntered {
-                node: end.clone(),
-                attempt: 1,
-            }),
-            VersionedEventPayload::new(EventPayload::StageCompleted {
-                node: end.clone(),
-                outcome: done,
             }),
             VersionedEventPayload::new(EventPayload::RunCompleted { terminal_node: end }),
         ])
@@ -112,7 +104,7 @@ async fn engine_replay_json_emits_enriched_view() {
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be JSON: {e}\n{stdout}"));
 
-    assert_eq!(json["events_folded"], 5);
+    assert_eq!(json["events_folded"], 3);
     assert_eq!(json["terminal"], true);
     assert_eq!(json["view"]["terminal"], "completed");
 
@@ -121,6 +113,7 @@ async fn engine_replay_json_emits_enriched_view() {
         .iter()
         .find(|n| n["node"] == "end")
         .expect("end node present");
+    // The terminal node is promoted to `completed` by RunCompleted even though
+    // it never received a StageCompleted event.
     assert_eq!(end["status"], "completed");
-    assert_eq!(end["last_outcome"], "done");
 }
