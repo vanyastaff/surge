@@ -26,6 +26,8 @@ RunMemory {
         cache_hits: 0,
         cost_usd: 0.0,
     },
+    budget_warning_raised: false,
+    budget_exceeded_noted: false,
     bootstrap_edit_counts: {},
     node_visits: {},
     last_edit_feedback_by_stage: {},
