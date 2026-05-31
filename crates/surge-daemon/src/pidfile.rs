@@ -35,6 +35,7 @@ pub enum PidfileError {
 /// `profile_loader::paths::surge_home`) lets a test or operator isolate the
 /// daemon's pid/socket/version files into a sandbox instead of racing the
 /// real `~/.surge/daemon/`.
+#[must_use = "the resolved daemon directory should be used"]
 pub fn daemon_dir() -> Result<PathBuf, PidfileError> {
     let home = match std::env::var("SURGE_HOME") {
         Ok(custom) if !custom.is_empty() => PathBuf::from(custom),
