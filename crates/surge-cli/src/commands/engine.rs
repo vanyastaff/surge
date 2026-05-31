@@ -504,12 +504,22 @@ fn parse_run_id(s: &str) -> Result<RunId> {
 }
 
 fn surge_runs_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
-    let dir = home.join(".surge").join("runs");
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    // Storage::open expects the parent .surge dir, not .surge/runs;
-    // storage itself creates the runs/ subdir. Return .surge.
-    Ok(home.join(".surge"))
+    // `SURGE_HOME`, when set and non-empty, IS the surge home dir itself
+    // (matching `feature::surge_home_dir` and `profile_loader::paths::surge_home`);
+    // otherwise fall back to `~/.surge`. It gives the durability harness an
+    // isolated, cross-platform sandbox — `dirs::home_dir()` on Windows reads a
+    // Win32 known-folder and ignores HOME/USERPROFILE overrides.
+    let surge_home = match std::env::var("SURGE_HOME") {
+        Ok(custom) if !custom.is_empty() => PathBuf::from(custom),
+        _ => dirs::home_dir()
+            .ok_or_else(|| anyhow!("SURGE_HOME unset and home directory unknown"))?
+            .join(".surge"),
+    };
+    let runs = surge_home.join("runs");
+    std::fs::create_dir_all(&runs).with_context(|| format!("create {}", runs.display()))?;
+    // Storage::open expects the surge-home dir (parent of runs/), which it
+    // populates with the runs/ subdir itself.
+    Ok(surge_home)
 }
 
 fn build_default_notifier() -> Arc<dyn surge_notify::NotifyDeliverer> {
