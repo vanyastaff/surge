@@ -246,8 +246,8 @@
   - Keyboard shortcuts: arrow keys for prev/next event, `f` for fork, `space` for play/pause
   - Performance: scrubber update under 16ms (60fps) for runs up to 10k events
   - GPUI integration extends existing `surge-ui::screens::live_execution`
-  - CLI mirror: `surge replay <run_id> --seq <N>` prints state at that seq
-  - CLI mirror: `surge fork <run_id> --seq <N>` creates the forked run from terminal
+  - CLI mirror: `surge engine replay <run_id> --seq <N>` prints state at that seq
+  - CLI mirror: `surge engine fork <run_id> --seq <N>` creates the forked run from terminal
 
 ## v0.2 — Autonomy: AFK → PR for real
 

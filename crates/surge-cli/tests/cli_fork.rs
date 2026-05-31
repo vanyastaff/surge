@@ -102,7 +102,32 @@ async fn engine_fork_creates_child_from_seeded_parent() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     assert!(stdout.contains("events copied: 2"), "stdout was: {stdout}");
-    assert!(stdout.contains("new run:"), "stdout was: {stdout}");
+
+    // Parse the child run id from stdout and read it back from storage to prove
+    // the run was actually persisted — not just that the banner was printed.
+    let child_line = stdout
+        .lines()
+        .find(|l| l.contains("new run:"))
+        .unwrap_or_else(|| panic!("stdout must report the new run id; was: {stdout}"));
+    let child_id = child_line
+        .split_whitespace()
+        .last()
+        .expect("new run line has an id");
+    let child: RunId = child_id
+        .parse()
+        .unwrap_or_else(|e| panic!("new run id '{child_id}' must parse: {e}"));
+
+    let storage = Storage::open(tmp.path()).await.unwrap();
+    let reader = storage
+        .open_run_reader(child)
+        .await
+        .expect("forked child run must be persisted on disk");
+    let seq = reader.current_seq().await.unwrap();
+    assert_eq!(
+        seq.as_u64(),
+        2,
+        "child run must hold the 2 inherited events from the parent prefix"
+    );
 }
 
 #[test]

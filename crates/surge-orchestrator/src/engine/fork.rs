@@ -61,7 +61,8 @@ pub struct ForkOutcome {
 /// # Errors
 ///
 /// Returns [`EngineError`] if the parent has no readable log, `at_seq` is out
-/// of bounds, the prefix lacks a `RunStarted` event, or persistence fails.
+/// of bounds, the inherited prefix does not begin with a `RunStarted` event,
+/// or persistence fails.
 pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcome, EngineError> {
     let reader = storage
         .open_run_reader(req.parent)
@@ -85,24 +86,38 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-    // The prefix must begin with `RunStarted` so the child has a project path
-    // and config to fold; reuse the parent's so the fork stays in the same
-    // project (a fresh worktree is provisioned by the caller).
-    let (project_path, pipeline_template) = prefix
-        .iter()
-        .find_map(|e| match &e.payload.payload {
-            EventPayload::RunStarted {
-                project_path,
-                pipeline_template,
-                ..
-            } => Some((project_path.clone(), pipeline_template.clone())),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            EngineError::ForkInvalid(
+    // The prefix must BEGIN with `RunStarted` (it is always seq 1 in a
+    // well-formed log). Requiring the first event — rather than scanning for
+    // any `RunStarted` — rejects a malformed parent log that would otherwise be
+    // copied into the child with an impossible event order. The child reuses
+    // the parent's project path so the fork stays in the same project (a fresh
+    // worktree is provisioned by the caller).
+    let (project_path, pipeline_template) = match prefix.first().map(|e| &e.payload.payload) {
+        Some(EventPayload::RunStarted {
+            project_path,
+            pipeline_template,
+            ..
+        }) => (project_path.clone(), pipeline_template.clone()),
+        _ => {
+            return Err(EngineError::ForkInvalid(
                 "inherited prefix has no RunStarted event to seed the fork".into(),
-            )
-        })?;
+            ));
+        },
+    };
+
+    // The fork is not atomic across the two per-run logs (parent and child are
+    // separate SQLite databases — there is no shared transaction). To keep the
+    // worst-case failure benign we: (1) acquire the parent writer up front so
+    // an actively-running parent fails fast, before any orphan child is
+    // created; (2) write the child fully (it is self-contained and the
+    // authoritative artifact); then (3) append the parent lineage last. The
+    // only residual failure is a usable child without a parent back-ref — never
+    // a `ForkCreated` pointing at a child that does not exist. Each fork uses a
+    // fresh child id, so a retry creates a distinct run, not a duplicate.
+    let parent_writer = storage
+        .open_run_writer(req.parent)
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
 
     // Create the child run and copy the prefix payloads verbatim. Folding the
     // child therefore reproduces the parent's state at `at_seq` exactly.
@@ -134,12 +149,8 @@ pub async fn fork(storage: &Arc<Storage>, req: ForkRequest) -> Result<ForkOutcom
             .map_err(|e| EngineError::Storage(e.to_string()))?;
     }
 
-    // Record lineage on the parent. Appends are allowed even after a terminal
-    // event (the append-only triggers block UPDATE/DELETE, not INSERT).
-    let parent_writer = storage
-        .open_run_writer(req.parent)
-        .await
-        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    // Record lineage on the parent last (append-only; valid even after a
+    // terminal event, since the triggers block UPDATE/DELETE, not INSERT).
     parent_writer
         .append_events(vec![VersionedEventPayload::new(
             EventPayload::ForkCreated {
@@ -431,6 +442,40 @@ mod tests {
         assert!(
             matches!(past, Err(EngineError::ForkInvalid(_))),
             "seq past the last event must be rejected, got {past:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fork_rejects_prefix_not_starting_with_run_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+        let parent = RunId::new();
+        let worktree = dir.path().to_path_buf();
+        let writer = storage.create_run(parent, &worktree, None).await.unwrap();
+
+        let graph = minimal_graph();
+        let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
+        // Malformed log: the first event is NOT RunStarted. A scan-anywhere
+        // check would accept this; requiring `prefix.first()` rejects it.
+        writer
+            .append_events(vec![
+                VersionedEventPayload::new(EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash,
+                }),
+                VersionedEventPayload::new(EventPayload::StageEntered {
+                    node: NodeKey::try_from("end").unwrap(),
+                    attempt: 1,
+                }),
+            ])
+            .await
+            .unwrap();
+        drop(writer);
+
+        let res = fork(&storage, ForkRequest::new(parent, RunId::new(), 2)).await;
+        assert!(
+            matches!(res, Err(EngineError::ForkInvalid(_))),
+            "fork must reject a prefix that does not begin with RunStarted, got {res:?}"
         );
     }
 }
