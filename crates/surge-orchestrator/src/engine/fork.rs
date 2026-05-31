@@ -15,13 +15,11 @@ use surge_persistence::runs::seq::EventSeq;
 
 use crate::engine::error::EngineError;
 
-/// Pre-fork edits applied to the child's inherited history before it resumes.
-///
-/// Empty today; prompt/profile overrides land in a later M1 increment.
-#[derive(Debug, Clone, Default)]
-pub struct ForkEdits {}
-
 /// Request to fork `parent` at `at_seq` into a fresh run `new_run`.
+///
+/// Pre-fork edits (per-node prompt override, profile swap) are a later M1
+/// increment; they will extend this struct when they actually take effect,
+/// rather than shipping an ignored knob now.
 #[derive(Debug, Clone)]
 pub struct ForkRequest {
     /// The run whose history is inherited.
@@ -30,19 +28,16 @@ pub struct ForkRequest {
     pub new_run: RunId,
     /// Inclusive sequence to fork at: events `1..=at_seq` are copied.
     pub at_seq: u64,
-    /// Optional pre-fork edits.
-    pub edits: ForkEdits,
 }
 
 impl ForkRequest {
-    /// Build a request with no pre-fork edits.
+    /// Build a fork request.
     #[must_use]
     pub fn new(parent: RunId, new_run: RunId, at_seq: u64) -> Self {
         Self {
             parent,
             new_run,
             at_seq,
-            edits: ForkEdits::default(),
         }
     }
 }

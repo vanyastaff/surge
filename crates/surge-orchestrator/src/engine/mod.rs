@@ -57,7 +57,7 @@ pub use engine::Engine;
 pub use error::EngineError;
 pub use event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 pub use facade::{EngineFacade, LocalEngineFacade};
-pub use fork::{ForkEdits, ForkOutcome, ForkRequest, fork};
+pub use fork::{ForkOutcome, ForkRequest, fork};
 pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus, RunSummary};
 pub use ipc::{
