@@ -129,10 +129,32 @@ proves the committed event was not lost and the WAL log is not corrupt after a
 hard process death. Tests use `SURGE_HOME` for an isolated, cross-platform
 sandbox (HOME overrides are unreliable on Windows).
 
-**Deferred to slice 2.** The full daemon-process kill → restart → recovery
-cycle (spawn the `surge-daemon` binary, abort at each checkpoint in the matrix
-— mid-Agent-turn / pending-HumanGate / mid-Notify / pre-Terminal-append —
-restart, and assert the recovery decision policy resumes/reconciles correctly),
-plus the true power-cut case (which needs `synchronous = FULL` rather than the
-current `NORMAL`), are follow-ups. The recovery decision policy itself is
-already exhaustively unit-tested; slice 2 adds the live subprocess cycle.
+**Daemon kill → restart → recover cycle (operator harness).** The full
+cross-process cycle is runnable but intentionally **not a CI test** — it spawns
+the agent (so it needs the `mock_acp_agent` binary, which isn't built or
+resolvable from a downstream crate's test sandbox), and cross-process
+spawn/IPC/restart timing is a flake magnet. The recovery *decision policy* is
+already exhaustively unit-tested (`decide_action` / `plan_recovery` /
+`execute_recovery`), and slice 1 above proves the on-disk durability the cycle
+depends on. The building blocks are in place:
+
+- `SURGE_HOME` now relocates the **daemon's** `.surge` tree too (pid / socket /
+  version via `pidfile::daemon_dir`, runs / worktrees / intake via
+  `surge_runs_dir`), so a harness can isolate a daemon into a sandbox instead
+  of racing the real `~/.surge/daemon/`.
+- The `SURGE_CHECKPOINT_EXIT` seam makes the kill **deterministic** (self-exit
+  at a named node, no kill-timing race).
+
+To run the cycle by hand:
+
+```sh
+export SURGE_HOME=$(mktemp -d)/.surge
+SURGE_FORCE_AGENT_MOCK=1 SURGE_CHECKPOINT_EXIT=impl_1 surge daemon start   # exits at the checkpoint
+surge daemon recover --dry-run    # inspect the recovery decision for the killed run
+surge daemon start                # restart -> recover_on_startup resumes it
+surge engine replay <run_id>      # fold the log: the run reaches a terminal state
+```
+
+**Still a follow-up:** the true power-cut case (OS cache loss), which needs the
+per-run WAL on `synchronous = FULL` rather than the current `NORMAL`; `kill -9`
+/ `process::exit` (OS survives) is covered by slice 1 + this cycle.
