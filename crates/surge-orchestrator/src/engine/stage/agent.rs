@@ -144,6 +144,36 @@ pub(crate) fn effective_agent_hooks(
     hooks
 }
 
+/// Resolve the effective system-prompt template for an agent stage.
+///
+/// The *base* is the node's `prompt_overrides.system`, else the resolved
+/// profile's `prompt.system`, else empty. If `prompt_overrides.append_system`
+/// is set, it is appended to that base (separated by a blank line) — so an
+/// append augments the base prompt instead of replacing it. Pre-fork `--prompt`
+/// edits rely on this: appending a corrective hint must not discard the node's
+/// or profile's existing system prompt.
+pub(crate) fn effective_system_prompt(
+    agent_config: &AgentConfig,
+    resolved_profile: Option<&surge_core::profile::registry::ResolvedProfile>,
+) -> String {
+    let base = agent_config
+        .prompt_overrides
+        .as_ref()
+        .and_then(|po| po.system.as_deref())
+        .or_else(|| resolved_profile.map(|r| r.profile.prompt.system.as_str()))
+        .unwrap_or("");
+    let append = agent_config
+        .prompt_overrides
+        .as_ref()
+        .and_then(|po| po.append_system.as_deref())
+        .filter(|s| !s.is_empty());
+    match append {
+        Some(extra) if base.is_empty() => extra.to_string(),
+        Some(extra) => format!("{base}\n\n{extra}"),
+        None => base.to_string(),
+    }
+}
+
 /// Execute a single agent stage.
 ///
 /// Phase 6.2: opens a session, sends an empty placeholder message, then drives
@@ -200,26 +230,12 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     let effective_hooks = effective_agent_hooks(p.agent_config, resolved_profile.as_ref());
     let effective_approval_cfg = effective_approvals(p.agent_config, resolved_profile.as_ref());
 
-    // Prompt selection: explicit prompt_overrides.system wins; then
-    // prompt_overrides.append_system; then the resolved profile's
-    // prompt.system; then empty string (legacy fallback).
-    let prompt_template = p
-        .agent_config
-        .prompt_overrides
-        .as_ref()
-        .and_then(|po| po.system.as_deref())
-        .or_else(|| {
-            p.agent_config
-                .prompt_overrides
-                .as_ref()
-                .and_then(|po| po.append_system.as_deref())
-        })
-        .or_else(|| {
-            resolved_profile
-                .as_ref()
-                .map(|r| r.profile.prompt.system.as_str())
-        })
-        .unwrap_or("");
+    // Effective system prompt: node `system` override (or the profile's system)
+    // as the base, with `append_system` appended (see `effective_system_prompt`).
+    // Appending — rather than the old either/or — is what makes pre-fork
+    // `--prompt` edits take effect even when the node or profile already carries
+    // a base system prompt.
+    let prompt_template = effective_system_prompt(p.agent_config, resolved_profile.as_ref());
     // Lenient at runtime: missing bindings render as empty strings rather
     // than failing the stage. Strict-mode validation runs at
     // `ProfileRegistry::load` so bundled / disk profiles are caught at
@@ -227,7 +243,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // optional-binding edge cases the profile schema authorizes.
     let renderer = PromptRenderer::lenient();
     let prompt_text = renderer
-        .render(prompt_template, &resolved_bindings)
+        .render(&prompt_template, &resolved_bindings)
         .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
 
     // Derive AgentKind. With a resolved profile in hand, take the agent_id
@@ -2035,6 +2051,52 @@ mod tests {
             provenance: Provenance::Bundled,
             chain: vec![profile_key],
         }
+    }
+
+    #[test]
+    fn effective_system_prompt_appends_not_replaces() {
+        use surge_core::agent_config::PromptOverride;
+
+        // The minimal-agent case Copilot flagged: a node with an existing
+        // `system` override must still receive the fork append, not drop it.
+        let mut cfg = agent_config(vec![]);
+        cfg.prompt_overrides = Some(PromptOverride {
+            system: Some("BASE".into()),
+            append_system: Some("retry: prefer X".into()),
+        });
+        assert_eq!(
+            effective_system_prompt(&cfg, None),
+            "BASE\n\nretry: prefer X"
+        );
+
+        // Append onto the resolved profile's system prompt when the node has no
+        // `system` of its own (profile.prompt.system == "Implement").
+        let mut cfg = agent_config(vec![]);
+        cfg.prompt_overrides = Some(PromptOverride {
+            system: None,
+            append_system: Some("retry: prefer X".into()),
+        });
+        let rp = resolved_profile(vec![]);
+        assert_eq!(
+            effective_system_prompt(&cfg, Some(&rp)),
+            "Implement\n\nretry: prefer X"
+        );
+
+        // No append → base is returned unchanged.
+        let mut cfg = agent_config(vec![]);
+        cfg.prompt_overrides = Some(PromptOverride {
+            system: Some("BASE".into()),
+            append_system: None,
+        });
+        assert_eq!(effective_system_prompt(&cfg, None), "BASE");
+
+        // Append with an empty base → just the append.
+        let mut cfg = agent_config(vec![]);
+        cfg.prompt_overrides = Some(PromptOverride {
+            system: None,
+            append_system: Some("only".into()),
+        });
+        assert_eq!(effective_system_prompt(&cfg, None), "only");
     }
 
     #[test]
