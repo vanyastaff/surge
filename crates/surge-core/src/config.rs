@@ -93,6 +93,25 @@ impl Default for AnalyticsConfig {
     }
 }
 
+impl AnalyticsConfig {
+    /// Resolve the live-enforcement budget guard from the configured limits.
+    ///
+    /// The breach policy defaults to [`crate::budget::BudgetPolicy::Abort`]
+    /// (the safe AFK posture). When neither `budget_usd` nor `budget_tokens`
+    /// is set the guard is unlimited and the engine skips enforcement.
+    #[must_use]
+    pub fn budget_guard(&self) -> crate::budget::BudgetGuard {
+        crate::budget::BudgetGuard {
+            limits: crate::budget::BudgetLimits {
+                usd: self.budget_usd,
+                tokens: self.budget_tokens,
+                warn_threshold_pct: self.budget_warn_threshold,
+            },
+            policy: crate::budget::BudgetPolicy::default(),
+        }
+    }
+}
+
 fn default_budget_warn_threshold() -> u8 {
     80
 }
@@ -2023,6 +2042,28 @@ url = "ws://localhost:8080"
         let pipeline = PipelineConfig::default();
         assert!(pipeline.max_cost_usd.is_none());
         assert!(pipeline.max_tokens.is_none());
+    }
+
+    #[test]
+    fn analytics_budget_guard_default_is_unlimited() {
+        let guard = AnalyticsConfig::default().budget_guard();
+        assert!(guard.is_unlimited());
+        assert_eq!(guard.policy, crate::budget::BudgetPolicy::Abort);
+    }
+
+    #[test]
+    fn analytics_budget_guard_resolves_limits() {
+        let analytics = AnalyticsConfig {
+            budget_usd: Some(25.0),
+            budget_tokens: Some(500_000),
+            budget_warn_threshold: 75,
+            ..AnalyticsConfig::default()
+        };
+        let guard = analytics.budget_guard();
+        assert!(!guard.is_unlimited());
+        assert_eq!(guard.limits.usd, Some(25.0));
+        assert_eq!(guard.limits.tokens, Some(500_000));
+        assert_eq!(guard.limits.warn_threshold_pct, 75);
     }
 
     #[test]

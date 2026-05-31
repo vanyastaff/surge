@@ -26,14 +26,17 @@ pub enum BudgetDimension {
 /// `tokens` limit is treated as unset (degenerate, never triggers). Override
 /// resolution (global → run → milestone) happens upstream; this type holds the
 /// already-resolved effective limits.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct BudgetLimits {
     /// Hard USD ceiling. `None` = unlimited.
+    #[serde(default)]
     pub usd: Option<f64>,
     /// Hard token ceiling (prompt + output). `None` = unlimited.
+    #[serde(default)]
     pub tokens: Option<u64>,
     /// Warn once accrued spend reaches this percentage (1–100) of a limit.
     /// `0` disables the warn band (only `Exceeded` can fire).
+    #[serde(default)]
     pub warn_threshold_pct: u8,
 }
 
@@ -128,6 +131,94 @@ fn usd_pct(spend: f64, limit: f64) -> u8 {
     out
 }
 
+/// What the engine does when a run reaches a budget limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetPolicy {
+    /// Stop the run on the first breach (default — the safe AFK posture: an
+    /// unattended run never overruns its budget).
+    #[default]
+    Abort,
+    /// Record warn/exceed events but never stop the run. For operators who
+    /// only want visibility, not enforcement.
+    WarnOnly,
+}
+
+/// Per-run budget configuration: the resolved limits plus the breach policy.
+/// Frozen at run start and carried on [`crate::run_event::RunConfig`]-adjacent
+/// engine config so enforcement is deterministic and replayable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct BudgetGuard {
+    /// Effective spend limits.
+    #[serde(default)]
+    pub limits: BudgetLimits,
+    /// Action on breach.
+    #[serde(default)]
+    pub policy: BudgetPolicy,
+}
+
+impl BudgetGuard {
+    /// Whether this guard enforces nothing (no effective limit).
+    #[must_use]
+    pub fn is_unlimited(&self) -> bool {
+        self.limits.is_unlimited()
+    }
+}
+
+/// The concrete action the engine takes at a stage boundary after evaluating
+/// the budget — the IO-free decision separated from event emission / abort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetAction {
+    /// Nothing to do — proceed to the next stage.
+    Continue,
+    /// Emit a one-time `BudgetWarningRaised` and proceed.
+    Warn {
+        /// Dimension that triggered the warning.
+        dimension: BudgetDimension,
+        /// Percentage of the limit reached (1..=100).
+        pct: u8,
+    },
+    /// Emit `BudgetExceeded` and abort the run.
+    Abort {
+        /// Dimension that was exceeded.
+        dimension: BudgetDimension,
+    },
+}
+
+/// Decide the engine action from a verdict, the policy, and whether a warning
+/// has already been raised this run. Pure and deterministic.
+///
+/// - `Ok` → `Continue`.
+/// - `Warn` → `Warn` once, then `Continue` (idempotent via `already_warned`).
+/// - `Exceeded` under `Abort` → `Abort`; under `WarnOnly` → a one-time `Warn`
+///   at 100% (visibility without stopping), then `Continue`.
+#[must_use]
+pub fn decide(verdict: BudgetVerdict, policy: BudgetPolicy, already_warned: bool) -> BudgetAction {
+    match verdict {
+        BudgetVerdict::Ok => BudgetAction::Continue,
+        BudgetVerdict::Warn { dimension, pct } => {
+            if already_warned {
+                BudgetAction::Continue
+            } else {
+                BudgetAction::Warn { dimension, pct }
+            }
+        },
+        BudgetVerdict::Exceeded { dimension } => match policy {
+            BudgetPolicy::Abort => BudgetAction::Abort { dimension },
+            BudgetPolicy::WarnOnly => {
+                if already_warned {
+                    BudgetAction::Continue
+                } else {
+                    BudgetAction::Warn {
+                        dimension,
+                        pct: 100,
+                    }
+                }
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,7 +236,10 @@ mod tests {
     fn unlimited_when_no_effective_limits() {
         let limits = BudgetLimits::default();
         assert!(limits.is_unlimited());
-        assert_eq!(limits.evaluate(&costs(999.0, 1_000_000, 0)), BudgetVerdict::Ok);
+        assert_eq!(
+            limits.evaluate(&costs(999.0, 1_000_000, 0)),
+            BudgetVerdict::Ok
+        );
     }
 
     #[test]
@@ -260,5 +354,74 @@ mod tests {
                 dimension: BudgetDimension::Usd,
             }
         );
+    }
+
+    #[test]
+    fn decide_ok_continues() {
+        assert_eq!(
+            decide(BudgetVerdict::Ok, BudgetPolicy::Abort, false),
+            BudgetAction::Continue
+        );
+    }
+
+    #[test]
+    fn decide_warn_fires_once_then_continues() {
+        let verdict = BudgetVerdict::Warn {
+            dimension: BudgetDimension::Usd,
+            pct: 85,
+        };
+        assert_eq!(
+            decide(verdict, BudgetPolicy::Abort, false),
+            BudgetAction::Warn {
+                dimension: BudgetDimension::Usd,
+                pct: 85,
+            }
+        );
+        // Already warned → no repeat.
+        assert_eq!(
+            decide(verdict, BudgetPolicy::Abort, true),
+            BudgetAction::Continue
+        );
+    }
+
+    #[test]
+    fn decide_exceeded_aborts_under_abort_policy() {
+        assert_eq!(
+            decide(
+                BudgetVerdict::Exceeded {
+                    dimension: BudgetDimension::Tokens,
+                },
+                BudgetPolicy::Abort,
+                false,
+            ),
+            BudgetAction::Abort {
+                dimension: BudgetDimension::Tokens,
+            }
+        );
+    }
+
+    #[test]
+    fn decide_exceeded_warns_once_under_warn_only() {
+        let verdict = BudgetVerdict::Exceeded {
+            dimension: BudgetDimension::Usd,
+        };
+        assert_eq!(
+            decide(verdict, BudgetPolicy::WarnOnly, false),
+            BudgetAction::Warn {
+                dimension: BudgetDimension::Usd,
+                pct: 100,
+            }
+        );
+        assert_eq!(
+            decide(verdict, BudgetPolicy::WarnOnly, true),
+            BudgetAction::Continue
+        );
+    }
+
+    #[test]
+    fn guard_default_is_unlimited_abort() {
+        let g = BudgetGuard::default();
+        assert!(g.is_unlimited());
+        assert_eq!(g.policy, BudgetPolicy::Abort);
     }
 }

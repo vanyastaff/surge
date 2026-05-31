@@ -215,11 +215,14 @@ async fn run_command(
 
     let app_config =
         SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
-    let run_config = surge_orchestrator::project_context::with_project_context_seed(
+    let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
         EngineRunConfig::default(),
         &worktree_path,
         &app_config,
     );
+    // Freeze the operator's [analytics] budget into the run so the engine
+    // enforces it at every stage boundary (warn → abort by default).
+    run_config.budget = app_config.analytics.budget_guard();
 
     let handle = facade
         .start_run(run_id, graph, worktree_path, run_config)

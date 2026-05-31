@@ -186,6 +186,97 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
                 }
             },
         }
+
+        // Stage boundary: the just-completed stage's token usage has been
+        // folded into `state.memory.costs` by `route_and_snapshot`. Enforce the
+        // run's budget here — warn once at the threshold, abort on breach.
+        if let Some(outcome) = enforce_budget(&params, &mut state).await {
+            return outcome;
+        }
+    }
+}
+
+/// Evaluate the run budget against the freshly-folded cumulative cost and act:
+/// emit a one-time `BudgetWarningRaised`, or emit `BudgetExceeded` and abort.
+/// Returns `Some(outcome)` only when the run must terminate. No-op (and no
+/// event-log churn) when the run is unlimited or within budget.
+async fn enforce_budget(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Option<RunOutcome> {
+    use surge_core::budget::{BudgetAction, decide};
+
+    let guard = params.run_config.budget;
+    if guard.is_unlimited() {
+        return None;
+    }
+
+    let cost_usd = state.memory.costs.cost_usd;
+    let total_tokens = state
+        .memory
+        .costs
+        .tokens_in
+        .saturating_add(state.memory.costs.tokens_out);
+    let verdict = guard.limits.evaluate(&state.memory.costs);
+
+    match decide(verdict, guard.policy, state.budget_warned) {
+        BudgetAction::Continue => None,
+        BudgetAction::Warn { dimension, pct } => {
+            let _ = params
+                .writer
+                .append_event(VersionedEventPayload::new(
+                    EventPayload::BudgetWarningRaised {
+                        dimension,
+                        pct,
+                        cost_usd,
+                        total_tokens,
+                    },
+                ))
+                .await;
+            state.budget_warned = true;
+            tracing::warn!(
+                target: "engine::budget",
+                run_id = %params.run_id,
+                ?dimension,
+                pct,
+                cost_usd,
+                total_tokens,
+                "run budget warning threshold crossed"
+            );
+            None
+        },
+        BudgetAction::Abort { dimension } => {
+            let _ = params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
+                    dimension,
+                    cost_usd,
+                    total_tokens,
+                }))
+                .await;
+            let reason = format!(
+                "budget exceeded ({dimension:?}): cost=${cost_usd:.4}, tokens={total_tokens}"
+            );
+            let _ = params
+                .writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+                    reason: reason.clone(),
+                }))
+                .await;
+            tracing::warn!(
+                target: "engine::budget",
+                run_id = %params.run_id,
+                ?dimension,
+                cost_usd,
+                total_tokens,
+                "run budget exceeded; aborting run"
+            );
+            let outcome = RunOutcome::Aborted { reason };
+            let _ = params.event_tx.send(EngineRunEvent::Terminal {
+                outcome: outcome.clone(),
+            });
+            Some(outcome)
+        },
     }
 }
 
@@ -200,6 +291,9 @@ struct RunExecutionState {
     processed_graph_revision_seq: u64,
     pending_graph_revisions: Vec<ObservedGraphRevision>,
     pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
+    /// Whether a `BudgetWarningRaised` has already been emitted this run, so the
+    /// warn band fires at most once per run (idempotent re-evaluation).
+    budget_warned: bool,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -234,6 +328,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
         pending_elevations: params.pending_elevations.clone(),
+        budget_warned: false,
     })
 }
 

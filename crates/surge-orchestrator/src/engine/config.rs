@@ -87,6 +87,13 @@ pub struct EngineRunConfig {
     /// bootstrap graph; non-bootstrap runs ignore the section entirely.
     #[serde(default)]
     pub bootstrap: BootstrapRunConfig,
+    /// Live budget enforcement: resolved spend limits + breach policy, frozen
+    /// at run start. Default is unlimited (no enforcement); the CLI/daemon
+    /// populates it from the `[analytics]` budget settings in `surge.toml`.
+    /// The engine evaluates it at every stage boundary against the run's
+    /// folded cumulative cost.
+    #[serde(default)]
+    pub budget: surge_core::budget::BudgetGuard,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -187,6 +194,7 @@ impl Default for EngineRunConfig {
             project_context: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
+            budget: surge_core::budget::BudgetGuard::default(),
         }
     }
 }
@@ -239,6 +247,7 @@ mod tests {
             project_context: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
+            budget: surge_core::budget::BudgetGuard::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -269,6 +278,7 @@ mod tests {
             project_context: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
+            budget: surge_core::budget::BudgetGuard::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -313,6 +323,7 @@ mod tests {
             project_context: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
+            budget: surge_core::budget::BudgetGuard::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
