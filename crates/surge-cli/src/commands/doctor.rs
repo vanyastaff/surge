@@ -14,12 +14,113 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 use surge_acp::Registry;
+use surge_acp::bridge::error::{OpenSessionError, SendMessageError};
+use surge_acp::bridge::{AcpBridge, AgentKind, AlwaysAllowSandbox, MessageContent, SessionConfig};
+use surge_core::OutcomeKey;
 use surge_core::doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 use surge_core::runtime::{RuntimeKind, RuntimeVersionPolicy, version_policy};
 use surge_core::sandbox::SandboxMode;
 use surge_core::sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow};
 use surge_orchestrator::engine::version_probe::{ProbeError, probe_version};
 use tracing::{debug, info, warn};
+
+/// The lifecycle stage a `surge doctor agent` smoke session reached (or
+/// failed at). Lets the operator see *where* a runtime breaks — the single
+/// most useful signal when "the agent won't work".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmokeStage {
+    /// Spawning the agent subprocess (binary missing / not on PATH).
+    Spawn,
+    /// ACP handshake — `initialize` / `new_session` (protocol mismatch, agent
+    /// not speaking ACP, crash before ready).
+    Handshake,
+    /// Authentication (agent process is up but not logged in / no API key).
+    Auth,
+    /// Sending the first prompt (dispatch failed for a non-auth reason).
+    Prompt,
+}
+
+impl std::fmt::Display for SmokeStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Spawn => "spawn",
+            Self::Handshake => "handshake",
+            Self::Auth => "auth",
+            Self::Prompt => "prompt",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Map an `open_session` failure to the stage it broke at.
+fn classify_open_error(e: &OpenSessionError) -> SmokeStage {
+    match e {
+        OpenSessionError::AgentSpawnFailed { .. } => SmokeStage::Spawn,
+        // Everything else from open is the handshake leg (initialize /
+        // new_session / config validation surfaced before a session exists).
+        _ => SmokeStage::Handshake,
+    }
+}
+
+/// Map a `send_message` failure to the stage it broke at. Auth failures get
+/// their own stage (reusing the `AgentAuthenticationFailed` classification
+/// from the prompt-dispatch path) so the operator is told to log in.
+fn classify_send_error(e: &SendMessageError) -> SmokeStage {
+    match e {
+        SendMessageError::AgentAuthenticationFailed { .. } => SmokeStage::Auth,
+        _ => SmokeStage::Prompt,
+    }
+}
+
+/// Run a real ACP smoke session against `entry`: spawn → handshake →
+/// new_session → one prompt, then close. Returns the first stage that failed
+/// (with a detail string), or `Ok(())` when every reachable stage passed.
+///
+/// Requires the runtime's binary installed and authenticated — hence the
+/// `SURGE_DOCTOR_REAL` gate in [`run_agent_smoke`].
+async fn run_real_smoke(
+    entry: &surge_acp::RegistryEntry,
+) -> std::result::Result<(), (SmokeStage, String)> {
+    // The builtin registry launches via npx with the full invocation in
+    // `default_args`, so `Custom` spawns `command + args` verbatim (same as
+    // the engine's resolution; see `derive_agent_kind_from_id`).
+    let agent_kind = AgentKind::Custom {
+        binary: PathBuf::from(&entry.command),
+        args: entry.default_args.clone(),
+    };
+    let workdir = std::env::temp_dir().join(format!("surge-doctor-smoke-{}", entry.id));
+    let _ = std::fs::create_dir_all(&workdir);
+    let outcome = OutcomeKey::try_from("done").expect("static outcome key");
+    let config = SessionConfig {
+        agent_kind,
+        working_dir: workdir,
+        system_prompt: "Surge doctor smoke. Touch no files.".into(),
+        declared_outcomes: vec![outcome],
+        allows_escalation: false,
+        tools: vec![],
+        sandbox: Box::new(AlwaysAllowSandbox),
+        permission_policy: surge_acp::client::PermissionPolicy::default(),
+        bindings: Default::default(),
+    };
+
+    let bridge = AcpBridge::with_defaults().map_err(|e| (SmokeStage::Spawn, e.to_string()))?;
+    let session = match bridge.open_session(config).await {
+        Ok(s) => s,
+        Err(e) => return Err((classify_open_error(&e), e.to_string())),
+    };
+    // Spawn + handshake passed. Send one prompt to exercise auth/dispatch.
+    let send = bridge
+        .send_message(
+            session,
+            MessageContent::Text("Report the `done` outcome immediately.".into()),
+        )
+        .await;
+    let _ = bridge.close_session(session).await;
+    match send {
+        Ok(()) => Ok(()),
+        Err(e) => Err((classify_send_error(&e), e.to_string())),
+    }
+}
 
 /// `surge doctor` subcommand surface.
 #[derive(Subcommand, Debug)]
@@ -260,13 +361,30 @@ async fn run_agent_smoke(name: String) -> Result<()> {
     }
 
     if real {
-        // Real smoke: open ACP session, send canned prompt, close.
-        // Deferred to Task 11's full implementation — placeholder for now.
-        warn!(
-            target: "surge_cli.doctor",
-            "real smoke session not yet wired; rerun with SURGE_DOCTOR_REAL unset for matrix-only dry-run"
-        );
-        println!("real smoke session: NOT YET IMPLEMENTED — Task 11 follow-up");
+        // Real smoke: spawn → handshake → new_session → prompt → close.
+        // Requires the runtime installed and logged in.
+        match run_real_smoke(&entry).await {
+            Ok(()) => {
+                println!("real smoke session: PASS (spawn + handshake + prompt dispatched)");
+            },
+            Err((stage, detail)) => {
+                warn!(
+                    target: "surge_cli.doctor",
+                    agent = %name,
+                    stage = %stage,
+                    detail = %detail,
+                    "doctor smoke failed"
+                );
+                println!("real smoke session: FAIL at stage `{stage}`");
+                println!("  detail: {detail}");
+                if stage == SmokeStage::Auth {
+                    println!("  hint: log the runtime in (run its own login, or set its API key).");
+                }
+                return Err(anyhow::anyhow!(
+                    "doctor smoke for `{name}` failed at stage `{stage}`"
+                ));
+            },
+        }
     } else {
         println!("real smoke session: skipped (set SURGE_DOCTOR_REAL=1 to enable)");
     }
@@ -483,6 +601,47 @@ fn format_status(status: MatrixCellStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_open_error_maps_spawn_vs_handshake() {
+        let spawn = OpenSessionError::AgentSpawnFailed {
+            kind: "codex".into(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no binary"),
+        };
+        assert_eq!(classify_open_error(&spawn), SmokeStage::Spawn);
+
+        let handshake = OpenSessionError::HandshakeFailed {
+            reason: "protocol mismatch".into(),
+        };
+        assert_eq!(classify_open_error(&handshake), SmokeStage::Handshake);
+
+        // Non-spawn open failures all read as the handshake leg.
+        assert_eq!(
+            classify_open_error(&OpenSessionError::NoDeclaredOutcomes),
+            SmokeStage::Handshake
+        );
+    }
+
+    #[test]
+    fn classify_send_error_maps_auth_vs_prompt() {
+        let auth = SendMessageError::AgentAuthenticationFailed {
+            details: "401 authentication_error".into(),
+        };
+        assert_eq!(classify_send_error(&auth), SmokeStage::Auth);
+
+        let other = SendMessageError::Bridge(
+            surge_acp::bridge::error::BridgeError::CommandSendFailed("reset".into()),
+        );
+        assert_eq!(classify_send_error(&other), SmokeStage::Prompt);
+    }
+
+    #[test]
+    fn smoke_stage_display_is_stable() {
+        assert_eq!(SmokeStage::Spawn.to_string(), "spawn");
+        assert_eq!(SmokeStage::Handshake.to_string(), "handshake");
+        assert_eq!(SmokeStage::Auth.to_string(), "auth");
+        assert_eq!(SmokeStage::Prompt.to_string(), "prompt");
+    }
 
     #[test]
     fn matrix_dry_run_covers_four_modes() {
