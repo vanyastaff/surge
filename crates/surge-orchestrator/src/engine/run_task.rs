@@ -459,6 +459,38 @@ async fn abort_if_cancelled(params: &RunTaskParams) -> Option<RunOutcome> {
     Some(outcome)
 }
 
+/// Pure check for the [`checkpoint_exit_if_requested`] fault-injection seam:
+/// does `env` (the `SURGE_CHECKPOINT_EXIT` value) name `node_key`?
+///
+/// Always compiled (not debug-gated) so it is unit-testable; only the actual
+/// `process::exit` wrapper is debug-gated.
+fn checkpoint_exit_matches(env: Option<&str>, node_key: &str) -> bool {
+    env.is_some_and(|target| target == node_key)
+}
+
+/// Durability fault-injection seam (debug builds only). When
+/// `SURGE_CHECKPOINT_EXIT` names the node about to execute, abort the process
+/// **uncleanly** — `std::process::exit` runs no async teardown and no `Drop`,
+/// the way a `kill -9` would. Called right after the `StageEntered` event is
+/// durably committed, so the on-disk event log is left in a precise mid-run
+/// state for the recovery/durability harness to assert against.
+#[cfg(debug_assertions)]
+fn checkpoint_exit_if_requested(node_key: &surge_core::keys::NodeKey) {
+    let target = std::env::var("SURGE_CHECKPOINT_EXIT").ok();
+    if checkpoint_exit_matches(target.as_deref(), node_key.as_str()) {
+        tracing::warn!(
+            target: "engine::fault_injection",
+            node = %node_key,
+            "SURGE_CHECKPOINT_EXIT hit; aborting process uncleanly (exit 99) after StageEntered commit"
+        );
+        std::process::exit(99);
+    }
+}
+
+#[cfg(not(debug_assertions))]
+#[inline]
+fn checkpoint_exit_if_requested(_node_key: &surge_core::keys::NodeKey) {}
+
 async fn enter_stage(
     params: &RunTaskParams,
     cursor: &Cursor,
@@ -471,6 +503,8 @@ async fn enter_stage(
         }))
         .await
         .map_err(|e| format!("write StageEntered: {e}"))?;
+    // Fault-injection: simulate a crash mid-run, with StageEntered durable.
+    checkpoint_exit_if_requested(&cursor.node);
     params
         .writer
         .current_seq()
@@ -1461,6 +1495,14 @@ mod tests {
     use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
     use surge_core::keys::ProfileKey;
     use surge_core::node::{Node, OutcomeDecl, Position};
+
+    #[test]
+    fn checkpoint_exit_matches_only_named_node() {
+        assert!(checkpoint_exit_matches(Some("impl_1"), "impl_1"));
+        assert!(!checkpoint_exit_matches(Some("impl_1"), "review_1"));
+        assert!(!checkpoint_exit_matches(None, "impl_1"));
+        assert!(!checkpoint_exit_matches(Some(""), "impl_1"));
+    }
 
     fn agent_node(hooks: Vec<Hook>, declared: Vec<&str>) -> Node {
         Node {

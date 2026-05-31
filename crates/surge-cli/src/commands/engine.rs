@@ -504,7 +504,14 @@ fn parse_run_id(s: &str) -> Result<RunId> {
 }
 
 fn surge_runs_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
+    // `SURGE_HOME` relocates the entire `.surge` tree. It gives the durability
+    // harness an isolated, cross-platform sandbox (HOME overrides are
+    // unreliable on Windows where `dirs` reads a Win32 known-folder, not the
+    // env). Falls back to the user home.
+    let home = match std::env::var_os("SURGE_HOME") {
+        Some(h) => PathBuf::from(h),
+        None => dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?,
+    };
     let dir = home.join(".surge").join("runs");
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     // Storage::open expects the parent .surge dir, not .surge/runs;

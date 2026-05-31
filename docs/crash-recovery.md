@@ -109,10 +109,30 @@ Re-running recovery is a no-op:
 - `Engine::resume_run` itself guards with `RunAlreadyActive` and short-
   circuits runs whose log is already terminal.
 
-## Deferred
+## Fault-injection harness
 
-- **`kill -9` / power-cut fault-injection harness.** WAL durability is
-  provided by SQLite WAL mode (configured in the per-run pragmas) and the
-  resume-from-log path is covered by integration tests; a dedicated
-  process-kill harness that asserts checkpoint behavior under hard kill is
-  a follow-up.
+The durability claim is exercised by a real fault-injection test rather than
+trusted on inspection (v0.2 M4).
+
+**Checkpoint seam.** `engine::run_task` carries a debug-only seam: when
+`SURGE_CHECKPOINT_EXIT` names the node about to execute, the process aborts
+**uncleanly** (`std::process::exit(99)` — no async teardown, no `Drop`, like a
+`kill -9`) the instant after the node's `StageEntered` event is durably
+committed. Release builds compile this to a no-op. The match is pinned by a
+pure, unit-tested predicate (`checkpoint_exit_matches`).
+
+**Slice 1 — WAL durability under unclean death** (`surge-cli/tests/fault_injection.rs`):
+a real `surge engine run` subprocess is aborted via the seam mid-run, then a
+fresh `surge engine replay` folds the surviving on-disk log and asserts it
+shows the precise mid-run state (`active node: impl_1`, not terminal). This
+proves the committed event was not lost and the WAL log is not corrupt after a
+hard process death. Tests use `SURGE_HOME` for an isolated, cross-platform
+sandbox (HOME overrides are unreliable on Windows).
+
+**Deferred to slice 2.** The full daemon-process kill → restart → recovery
+cycle (spawn the `surge-daemon` binary, abort at each checkpoint in the matrix
+— mid-Agent-turn / pending-HumanGate / mid-Notify / pre-Terminal-append —
+restart, and assert the recovery decision policy resumes/reconciles correctly),
+plus the true power-cut case (which needs `synchronous = FULL` rather than the
+current `NORMAL`), are follow-ups. The recovery decision policy itself is
+already exhaustively unit-tested; slice 2 adds the live subprocess cycle.
