@@ -35,6 +35,7 @@ pub mod engine;
 pub mod error;
 pub mod event_tap;
 pub mod facade;
+pub mod fork;
 pub mod frames;
 pub mod handle;
 pub mod hooks;
@@ -56,6 +57,7 @@ pub use engine::Engine;
 pub use error::EngineError;
 pub use event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 pub use facade::{EngineFacade, LocalEngineFacade};
+pub use fork::{ForkOutcome, ForkRequest, fork};
 pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus, RunSummary};
 pub use ipc::{
