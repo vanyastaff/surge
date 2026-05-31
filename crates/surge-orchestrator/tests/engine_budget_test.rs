@@ -323,3 +323,65 @@ async fn run_completes_within_budget() {
     }
     drop(engine);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn warn_only_records_breach_but_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    // 15_000 tokens reported, against a 1_000-token budget under WarnOnly.
+    let bridge = Arc::new(BudgetMockBridge::new(10_000, 5_000)) as Arc<dyn BridgeFacade>;
+    let dispatcher =
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+
+    let run_config = EngineRunConfig {
+        budget: BudgetGuard {
+            limits: BudgetLimits {
+                usd: None,
+                tokens: Some(1_000),
+                warn_threshold_pct: 80,
+            },
+            policy: BudgetPolicy::WarnOnly,
+        },
+        ..EngineRunConfig::default()
+    };
+
+    let run_id = RunId::new();
+    let handle = engine
+        .start_run(
+            run_id,
+            one_agent_graph(),
+            dir.path().to_path_buf(),
+            run_config,
+        )
+        .await
+        .unwrap();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(30), handle.await_completion())
+        .await
+        .expect("run hung > 30s")
+        .expect("await_completion");
+
+    // WarnOnly never stops the run — it completes.
+    match outcome {
+        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+        other => panic!("expected Completed under WarnOnly, got {other:?}"),
+    }
+    drop(engine);
+
+    // ...but the breach is still recorded for visibility (no abort).
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let last = reader.current_seq().await.unwrap();
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        .await
+        .unwrap();
+    let saw_exceeded = events
+        .iter()
+        .any(|ev| matches!(ev.payload.payload, EventPayload::BudgetExceeded { .. }));
+    let saw_aborted = events
+        .iter()
+        .any(|ev| matches!(ev.payload.payload, EventPayload::RunAborted { .. }));
+    assert!(saw_exceeded, "WarnOnly must still record the breach");
+    assert!(!saw_aborted, "WarnOnly must not abort the run");
+}

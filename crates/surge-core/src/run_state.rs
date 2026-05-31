@@ -90,6 +90,10 @@ pub struct RunMemory {
     /// most once per run — and, because it is derived from the event log,
     /// survives a daemon restart / resume (the warning is not re-emitted).
     pub budget_warning_raised: bool,
+    /// Whether a `BudgetExceeded` has been folded for this run. Gates the
+    /// `WarnOnly` breach record so the hard-limit crossing is surfaced exactly
+    /// once (separate from the threshold warning) and is resume-safe.
+    pub budget_exceeded_noted: bool,
     /// Per-bootstrap-stage edit-loop counter. Incremented on every
     /// `BootstrapEditRequested` event. Read by the bootstrap HumanGate
     /// handler to enforce `EngineRunConfig.bootstrap.edit_loop_cap`.
@@ -630,6 +634,9 @@ impl RunMemory {
             },
             EventPayload::BudgetWarningRaised { .. } => {
                 self.budget_warning_raised = true;
+            },
+            EventPayload::BudgetExceeded { .. } => {
+                self.budget_exceeded_noted = true;
             },
             EventPayload::BootstrapEditRequested { stage, feedback } => {
                 *self.bootstrap_edit_counts.entry(*stage).or_insert(0) += 1;

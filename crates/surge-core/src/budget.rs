@@ -181,6 +181,12 @@ pub enum BudgetAction {
         /// Percentage of the limit reached (1..=100).
         pct: u8,
     },
+    /// Emit a one-time `BudgetExceeded` and proceed (the `WarnOnly` breach
+    /// record — surfaces the actual limit crossing without stopping the run).
+    NoteExceeded {
+        /// Dimension that was exceeded.
+        dimension: BudgetDimension,
+    },
     /// Emit `BudgetExceeded` and abort the run.
     Abort {
         /// Dimension that was exceeded.
@@ -188,15 +194,26 @@ pub enum BudgetAction {
     },
 }
 
-/// Decide the engine action from a verdict, the policy, and whether a warning
-/// has already been raised this run. Pure and deterministic.
+/// Decide the engine action from a verdict, the policy, and the run's
+/// idempotency state. Pure and deterministic.
+///
+/// Threshold warnings and breach records carry **separate** idempotency
+/// (`already_warned` vs `already_exceeded`) so a `WarnOnly` run that first
+/// warns at the threshold still records the actual breach exactly once when it
+/// later crosses the hard limit.
 ///
 /// - `Ok` → `Continue`.
-/// - `Warn` → `Warn` once, then `Continue` (idempotent via `already_warned`).
-/// - `Exceeded` under `Abort` → `Abort`; under `WarnOnly` → a one-time `Warn`
-///   at 100% (visibility without stopping), then `Continue`.
+/// - `Warn` → `Warn` once (via `already_warned`), then `Continue`.
+/// - `Exceeded` under `Abort` → `Abort` (the run ends, so idempotency is moot).
+/// - `Exceeded` under `WarnOnly` → `NoteExceeded` once (via `already_exceeded`),
+///   then `Continue` — independent of any earlier threshold warning.
 #[must_use]
-pub fn decide(verdict: BudgetVerdict, policy: BudgetPolicy, already_warned: bool) -> BudgetAction {
+pub fn decide(
+    verdict: BudgetVerdict,
+    policy: BudgetPolicy,
+    already_warned: bool,
+    already_exceeded: bool,
+) -> BudgetAction {
     match verdict {
         BudgetVerdict::Ok => BudgetAction::Continue,
         BudgetVerdict::Warn { dimension, pct } => {
@@ -209,13 +226,10 @@ pub fn decide(verdict: BudgetVerdict, policy: BudgetPolicy, already_warned: bool
         BudgetVerdict::Exceeded { dimension } => match policy {
             BudgetPolicy::Abort => BudgetAction::Abort { dimension },
             BudgetPolicy::WarnOnly => {
-                if already_warned {
+                if already_exceeded {
                     BudgetAction::Continue
                 } else {
-                    BudgetAction::Warn {
-                        dimension,
-                        pct: 100,
-                    }
+                    BudgetAction::NoteExceeded { dimension }
                 }
             },
         },
@@ -362,7 +376,7 @@ mod tests {
     #[test]
     fn decide_ok_continues() {
         assert_eq!(
-            decide(BudgetVerdict::Ok, BudgetPolicy::Abort, false),
+            decide(BudgetVerdict::Ok, BudgetPolicy::Abort, false, false),
             BudgetAction::Continue
         );
     }
@@ -374,7 +388,7 @@ mod tests {
             pct: 85,
         };
         assert_eq!(
-            decide(verdict, BudgetPolicy::Abort, false),
+            decide(verdict, BudgetPolicy::Abort, false, false),
             BudgetAction::Warn {
                 dimension: BudgetDimension::Usd,
                 pct: 85,
@@ -382,7 +396,7 @@ mod tests {
         );
         // Already warned → no repeat.
         assert_eq!(
-            decide(verdict, BudgetPolicy::Abort, true),
+            decide(verdict, BudgetPolicy::Abort, true, false),
             BudgetAction::Continue
         );
     }
@@ -396,6 +410,7 @@ mod tests {
                 },
                 BudgetPolicy::Abort,
                 false,
+                false,
             ),
             BudgetAction::Abort {
                 dimension: BudgetDimension::Tokens,
@@ -404,19 +419,21 @@ mod tests {
     }
 
     #[test]
-    fn decide_exceeded_warns_once_under_warn_only() {
+    fn decide_warn_only_records_breach_once_independent_of_warn() {
         let verdict = BudgetVerdict::Exceeded {
             dimension: BudgetDimension::Usd,
         };
+        // Even after an earlier threshold warning (already_warned = true), a
+        // breach still surfaces once via NoteExceeded.
         assert_eq!(
-            decide(verdict, BudgetPolicy::WarnOnly, false),
-            BudgetAction::Warn {
+            decide(verdict, BudgetPolicy::WarnOnly, true, false),
+            BudgetAction::NoteExceeded {
                 dimension: BudgetDimension::Usd,
-                pct: 100,
             }
         );
+        // Already recorded the breach → no repeat.
         assert_eq!(
-            decide(verdict, BudgetPolicy::WarnOnly, true),
+            decide(verdict, BudgetPolicy::WarnOnly, true, true),
             BudgetAction::Continue
         );
     }
