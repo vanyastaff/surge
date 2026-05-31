@@ -1309,6 +1309,58 @@ mod tests {
         assert_eq!(resolve_program(missing), missing.to_path_buf());
     }
 
+    /// Args (after the program) `build_agent_command` produces for a kind.
+    /// The program path is resolution-dependent; the *args* are the
+    /// per-runtime contract that decides whether a launch actually works.
+    fn launch_args(kind: &AgentKind) -> Vec<String> {
+        let cmd = build_agent_command(kind, Path::new(".")).expect("build command");
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn claude_kind_injects_acp_flag_before_extra_args() {
+        let kind = AgentKind::ClaudeCode {
+            binary: PathBuf::from("__surge_claude_test__"),
+            extra_args: vec!["--model".into(), "opus".into()],
+        };
+        assert_eq!(launch_args(&kind), vec!["--acp", "--model", "opus"]);
+    }
+
+    #[test]
+    fn codex_kind_uses_acp_subcommand_not_flag() {
+        // Codex takes a bare `acp` subcommand, NOT `--acp`. Swapping the two
+        // silently breaks the launch — pin it.
+        let kind = AgentKind::Codex {
+            binary: PathBuf::from("__surge_codex_test__"),
+            extra_args: vec![],
+        };
+        assert_eq!(launch_args(&kind), vec!["acp"]);
+    }
+
+    #[test]
+    fn gemini_kind_injects_acp_flag() {
+        let kind = AgentKind::GeminiCli {
+            binary: PathBuf::from("__surge_gemini_test__"),
+            extra_args: vec!["-y".into()],
+        };
+        assert_eq!(launch_args(&kind), vec!["--acp", "-y"]);
+    }
+
+    #[test]
+    fn custom_kind_passes_args_verbatim_no_injected_flag() {
+        // The npx registry model lands on `Custom`: the package args already
+        // encode the full invocation, so the builder must NOT inject `--acp`
+        // (doing so would double the flag and break the launch).
+        let kind = AgentKind::Custom {
+            binary: PathBuf::from("npx"),
+            args: vec!["@zed-industries/codex-acp".into()],
+        };
+        assert_eq!(launch_args(&kind), vec!["@zed-industries/codex-acp"]);
+    }
+
     #[test]
     fn filter_removes_denied_tools() {
         let tools = vec![
