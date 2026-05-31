@@ -224,7 +224,12 @@ async fn run_aborts_when_token_budget_exceeded() {
 
     let run_id = RunId::new();
     let handle = engine
-        .start_run(run_id, one_agent_graph(), dir.path().to_path_buf(), run_config)
+        .start_run(
+            run_id,
+            one_agent_graph(),
+            dir.path().to_path_buf(),
+            run_config,
+        )
         .await
         .unwrap();
 
@@ -239,7 +244,7 @@ async fn run_aborts_when_token_budget_exceeded() {
                 reason.contains("budget exceeded"),
                 "abort reason should cite the budget, got: {reason}"
             );
-        }
+        },
         other => panic!("expected Aborted on budget breach, got {other:?}"),
     }
 
@@ -263,7 +268,10 @@ async fn run_aborts_when_token_budget_exceeded() {
             }
         )
     });
-    assert!(saw_exceeded, "expected a BudgetExceeded(Tokens) event in the log");
+    assert!(
+        saw_exceeded,
+        "expected a BudgetExceeded(Tokens) event in the log"
+    );
 
     let completed = events
         .iter()
@@ -295,7 +303,12 @@ async fn run_completes_within_budget() {
 
     let run_id = RunId::new();
     let handle = engine
-        .start_run(run_id, one_agent_graph(), dir.path().to_path_buf(), run_config)
+        .start_run(
+            run_id,
+            one_agent_graph(),
+            dir.path().to_path_buf(),
+            run_config,
+        )
         .await
         .unwrap();
 
