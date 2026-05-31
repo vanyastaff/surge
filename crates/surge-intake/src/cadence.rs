@@ -10,16 +10,19 @@
 //! and decide when to schedule the next fetch. This keeps the controller
 //! deterministic and easy to test under a frozen `tokio::time` clock.
 //!
-//! ### Integration scope
+//! ### Integration
 //!
-//! Production wiring of this controller into the actual source-poll
-//! loops requires either a new `TaskSource::set_poll_interval` method
-//! (changing the trait) or a wrapping stream that buffers events from
-//! `watch_for_tasks()` and emits them at the controlled cadence. Both
-//! are deliberately out of scope for the milestone — see ADR 0014
-//! § "Tier-aware polling" for the staged plan. The controller is
-//! useful on its own as the single source of truth for "what cadence
-//! does this source want right now?".
+//! Each polling source owns one controller (keyed by its own id). The
+//! GitHub source drives it from inside `watch_for_tasks`: it sleeps
+//! [`CadenceController::next_interval`] (with [`jitter_seed`]) before each
+//! poll, calls [`CadenceController::raise_tier_for`] from the tiers of the
+//! issues it just fetched (only ever speeding up — the fetch is an
+//! incremental delta, so a replace would wrongly downshift on a quiet poll),
+//! [`CadenceController::notify_success`] on a clean fetch, and
+//! [`CadenceController::notify_rate_limited`] on a rate-limited one. The
+//! Linear source still polls at its fixed configured interval —
+//! its fetch path does not yet surface per-issue labels, so tier-aware
+//! cadence there is a follow-up.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -123,7 +126,9 @@ impl CadenceController {
 
     /// Update the base interval for `source_id` from the most
     /// aggressive policy among its active tickets. Idempotent —
-    /// repeated calls with the same value are no-ops.
+    /// repeated calls with the same value are no-ops. Replaces the base
+    /// outright (can speed up *or* slow down); use this only when
+    /// `policies` is the full active set.
     pub fn set_tier_for(&mut self, source_id: &str, policies: &[AutomationPolicy]) {
         let base = most_aggressive(policies);
         let entry = self
@@ -131,6 +136,31 @@ impl CadenceController {
             .entry(source_id.to_owned())
             .or_insert_with(|| SourceState::fresh(base));
         entry.base = base;
+    }
+
+    /// Raise (only ever speed up) the base cadence for `source_id` to the
+    /// most aggressive tier among `policies`. Unlike [`set_tier_for`], this
+    /// never slows the cadence down.
+    ///
+    /// This is the safe update when `policies` comes from an *incremental*
+    /// poll delta (e.g. issues updated since a watermark): a quiet cycle
+    /// yields an empty or low-tier delta, and replacing the base from it
+    /// would wrongly downshift a source whose higher-tier issues are still
+    /// open. Mirrors the most-aggressive-wins rule reviewers asked for.
+    ///
+    /// Trade-off: the cadence does not slow back down when a high-tier issue
+    /// closes (a delta filtered on open state never reports the close).
+    /// Recomputing the base from a full open-issue snapshot is a follow-up.
+    pub fn raise_tier_for(&mut self, source_id: &str, policies: &[AutomationPolicy]) {
+        let candidate = most_aggressive(policies);
+        let entry = self
+            .sources
+            .entry(source_id.to_owned())
+            .or_insert_with(|| SourceState::fresh(candidate));
+        // Smaller Duration == faster poll. Only ever go faster.
+        if candidate < entry.base {
+            entry.base = candidate;
+        }
     }
 
     /// Record a `RateLimited` fetch — bumps the backoff exponent.
@@ -191,6 +221,21 @@ fn apply_jitter(target: Duration, seed: f64) -> Duration {
     Duration::from_secs_f64(scaled)
 }
 
+/// Deterministic jitter seed in `[0.0, 1.0)` for poll attempt `n`.
+///
+/// Uses the golden-ratio low-discrepancy sequence so successive polls of one
+/// source spread evenly across the jitter band instead of clustering, while
+/// staying fully reproducible (no RNG — replay- and test-friendly). Feed the
+/// result to [`CadenceController::next_interval`] as `jitter_unit_interval`.
+#[must_use]
+pub fn jitter_seed(attempt: u64) -> f64 {
+    // Fractional part of n * (1/φ); the classic additive-recurrence sequence.
+    const INV_PHI: f64 = 0.618_033_988_749_895;
+    #[allow(clippy::cast_precision_loss)]
+    let x = (attempt as f64) * INV_PHI;
+    x.fract()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +281,31 @@ mod tests {
         assert!(
             (got - target).abs() <= 0.11 * target,
             "{got} not within 10% of {target}"
+        );
+    }
+
+    #[test]
+    fn raise_tier_only_speeds_up_never_down() {
+        let mut c = CadenceController::new();
+        let l3 = intervals::L3.as_secs_f64();
+        let within = |got: f64, target: f64| (got - target).abs() <= 0.11 * target;
+
+        // First sighting of an L3 issue speeds the source to L3.
+        c.raise_tier_for("src", &[auto()]);
+        assert!(within(c.next_interval("src", 0.5).as_secs_f64(), l3));
+
+        // A quiet poll (empty delta) must NOT downshift back to idle/L1.
+        c.raise_tier_for("src", &[]);
+        assert!(
+            within(c.next_interval("src", 0.5).as_secs_f64(), l3),
+            "empty delta downshifted the cadence"
+        );
+
+        // A low-tier delta (only L1 issues updated) must NOT downshift either.
+        c.raise_tier_for("src", &[AutomationPolicy::Standard]);
+        assert!(
+            within(c.next_interval("src", 0.5).as_secs_f64(), l3),
+            "L1 delta downshifted the cadence"
         );
     }
 
@@ -315,6 +385,35 @@ mod tests {
         let base = target.as_secs_f64();
         assert!((low / base - 0.9).abs() < 1e-9);
         assert!((high / base - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn jitter_seed_is_in_unit_interval_and_varies() {
+        let seeds: Vec<f64> = (0..16).map(jitter_seed).collect();
+        for (n, s) in seeds.iter().enumerate() {
+            assert!(
+                (0.0..1.0).contains(s),
+                "seed for attempt {n} = {s} out of [0,1)"
+            );
+        }
+        // Consecutive attempts must differ (no clustering on one point).
+        assert!(seeds[0] != seeds[1] && seeds[1] != seeds[2]);
+        // attempt 0 maps to 0.0 (n * c with n=0).
+        assert!((jitter_seed(0) - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jitter_seed_feeds_next_interval_within_band() {
+        let mut c = CadenceController::new();
+        c.set_tier_for("src", &[AutomationPolicy::Standard]); // L1 = 300s
+        let base = intervals::L1.as_secs_f64();
+        for attempt in 0..32u64 {
+            let d = c.next_interval("src", jitter_seed(attempt)).as_secs_f64();
+            assert!(
+                (0.9 * base..=1.1 * base).contains(&d),
+                "attempt {attempt}: {d}s outside ±10% of {base}s"
+            );
+        }
     }
 
     #[test]

@@ -192,22 +192,31 @@ The merge returns one of:
 PR-less providers keep the trait-default `merge_pr`, which errors; they never
 reach this path because their readiness stays `Blocked`.
 
-> **Still deferred to the next M2 task.** `CadenceController` is wired into
-> diagnostics but not yet into the source poll loops — see the priority-label
-> section below and ADR 0013 § "Tier-aware polling".
+The GitHub source polls on a **tier-aware cadence** (see the priority-label
+section below): faster for L3 tickets, with exponential backoff on rate limits.
 
 ## Priority labels
 
 The label `surge-priority/<level>` is honoured independently of the tier
-label. Recognized levels: `urgent`, `high`, `medium`, `low`. Priority affects:
+label. Recognized levels: `urgent`, `high`, `medium`, `low`. Priority affects
+inbox-card sort order. (Priority does **not** drive polling cadence — that is
+the automation tier's job, below.)
 
-- Inbox-card sort order.
-- (Future) `CadenceController` polling pace — the algorithm exists in
-  [`surge_intake::cadence`](../crates/surge-intake/src/cadence.rs) with the
-  tier-aware interval table (L1 = 5 min, L2 = 2 min, L3 = 1 min,
-  exponential backoff on rate-limit). Production wiring of the controller
-  into the source poll loops is staged in a follow-up — see ADR 0013
-  § "Tier-aware polling" for the deferred-work note.
+## Polling cadence
+
+Poll pace is driven by the **automation tier** (not the priority label), via
+[`CadenceController`](../crates/surge-intake/src/cadence.rs). The tier is
+resolved from the `surge:*` automation labels (`surge:enabled` → L1,
+`surge:template/*` → L2, `surge:auto` → L3) — the same `resolve_policy` used
+elsewhere — and maps to an interval table: L1 = 5 min, L2 = 2 min, L3 = 1 min,
+with exponential backoff on rate-limit and ±10% jitter.
+
+The **GitHub** source is wired: each poll sleeps the cadence interval, raises
+its tier from the fetched issues' automation labels (only ever speeding up, so
+a quiet incremental poll never downshifts a still-active high tier), and backs
+off on a rate-limited fetch. The **Linear** source still polls at its fixed
+configured interval — its fetch path does not yet surface per-issue labels, so
+both tier-aware cadence and downshift-on-close there are follow-ups.
 
 ## External state changes (ticket-as-master)
 
