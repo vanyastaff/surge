@@ -13,18 +13,27 @@
 //!    comment).
 //! 4. Idempotency precheck via `intake_emit_log` — a re-fired
 //!    `RunFinished` does not duplicate the merge action.
-//! 5. Evaluate merge readiness (currently always blocked — see
-//!    [`check_merge_readiness`] for the deferred-work note).
-//! 6. Post a `merge-proposed` or `merge-blocked` comment + apply the
-//!    matching `surge:*` label.
-//! 7. Record the side-effect into `intake_emit_log` so a retry no-ops.
+//! 5. Evaluate merge readiness via [`TaskSource::check_merge_readiness`]
+//!    (GitHub inspects PR state + approving reviews; PR-less providers
+//!    stay `Blocked`).
+//! 6. On `Ready`, execute the merge via [`TaskSource::merge_pr`] and post a
+//!    `merged` comment + label; on `Blocked` (or a failed merge), post a
+//!    `merge-blocked` comment + label and escalate to the operator so a
+//!    stalled L3 run is never silent.
+//! 7. Record the terminal decision into `intake_emit_log` so a re-fired
+//!    completion no-ops — in particular, a recorded `Merged` row prevents a
+//!    double-merge after recovery.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use rusqlite::Connection;
+use surge_core::id::RunId;
+use surge_core::keys::NodeKey;
+use surge_core::notify_config::{NotifyChannel, NotifySeverity};
 use surge_intake::types::TaskId;
-use surge_intake::{AutomationPolicy, MergeReadiness, TaskSource, resolve_policy};
+use surge_intake::{AutomationPolicy, MergeOutcome, MergeReadiness, TaskSource, resolve_policy};
+use surge_notify::{NotifyDeliverer, NotifyDeliveryContext, NotifyError, RenderedNotification};
 use surge_orchestrator::engine::handle::RunOutcome;
 use surge_orchestrator::engine::ipc::GlobalDaemonEvent;
 use surge_persistence::intake::IntakeRepo;
@@ -36,11 +45,15 @@ use tracing::{info, warn};
 /// Stable label literals applied to the tracker ticket on each
 /// decision. Public for the docs renderer.
 pub mod labels {
-    /// Applied when [`MergeReadiness::Ready`] fired and the auto-merge
-    /// comment was posted.
+    /// Legacy label applied when the gate only *proposed* a merge. No longer
+    /// written (the gate now executes the merge), kept for the docs renderer
+    /// and to read back tickets labelled before the gate merged for real.
     pub const MERGE_PROPOSED: &str = "surge:merge-proposed";
-    /// Applied when [`MergeReadiness::Blocked`] fired.
+    /// Applied when [`MergeReadiness::Blocked`] fired, or a merge attempt
+    /// could not proceed (conflict / API error).
     pub const MERGE_BLOCKED: &str = "surge:merge-blocked";
+    /// Applied when the gate successfully merged the PR.
+    pub const MERGED: &str = "surge:merged";
 }
 
 /// Spawn the merge gate. The returned handle can be aborted on
@@ -52,14 +65,16 @@ pub fn spawn(
     rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,
     conn: Arc<Mutex<Connection>>,
+    notifier: Arc<dyn NotifyDeliverer>,
 ) -> JoinHandle<()> {
-    tokio::spawn(run(rx, source_map, conn))
+    tokio::spawn(run(rx, source_map, conn, notifier))
 }
 
 async fn run(
     mut rx: broadcast::Receiver<GlobalDaemonEvent>,
     source_map: Arc<HashMap<String, Arc<dyn TaskSource>>>,
     conn: Arc<Mutex<Connection>>,
+    notifier: Arc<dyn NotifyDeliverer>,
 ) {
     loop {
         let event = match rx.recv().await {
@@ -81,16 +96,19 @@ async fn run(
         if let GlobalDaemonEvent::RunFinished { run_id, outcome } = event
             && let RunOutcome::Completed { .. } = outcome
         {
-            handle_completion(&run_id.to_string(), &source_map, &conn).await;
+            handle_completion(run_id, &source_map, &conn, &notifier).await;
         }
     }
 }
 
 async fn handle_completion(
-    run_id_str: &str,
+    run_id: RunId,
     source_map: &Arc<HashMap<String, Arc<dyn TaskSource>>>,
     conn: &Arc<Mutex<Connection>>,
+    notifier: &Arc<dyn NotifyDeliverer>,
 ) {
+    let run_id_str = run_id.to_string();
+    let run_id_str = run_id_str.as_str();
     let Some(row) = lookup_ticket(conn, run_id_str).await else {
         return;
     };
@@ -127,16 +145,31 @@ async fn handle_completion(
     }
 
     let readiness = check_merge_readiness(&source, &task_id).await;
-    apply_merge_decision(
-        &source,
-        &task_id,
-        &row.source_id,
-        &row.task_id,
+    let ctx = MergeCtx {
+        source: &source,
+        task_id: &task_id,
+        source_id: &row.source_id,
+        task_id_str: &row.task_id,
+        run_id,
         run_id_str,
-        readiness,
         conn,
-    )
-    .await;
+        notifier,
+    };
+    apply_merge_decision(&ctx, readiness).await;
+}
+
+/// Bundle of the stable references the decision path threads through its
+/// helpers. Collapses what would otherwise be 8–9 positional arguments per
+/// function into one borrow.
+struct MergeCtx<'a> {
+    source: &'a Arc<dyn TaskSource>,
+    task_id: &'a TaskId,
+    source_id: &'a str,
+    task_id_str: &'a str,
+    run_id: RunId,
+    run_id_str: &'a str,
+    conn: &'a Arc<Mutex<Connection>>,
+    notifier: &'a Arc<dyn NotifyDeliverer>,
 }
 
 async fn lookup_ticket(
@@ -205,76 +238,147 @@ async fn already_emitted(
     task_id: &str,
     run_id_str: &str,
 ) -> bool {
-    let key_proposed = EmitKey {
-        source_id,
-        task_id,
-        event_kind: EmitEventKind::MergeProposed,
-        run_id: run_id_str,
-    };
-    let key_blocked = EmitKey {
-        source_id,
-        task_id,
-        event_kind: EmitEventKind::MergeBlocked,
-        run_id: run_id_str,
-    };
+    // Any prior terminal decision for this (source, task, run) makes the
+    // gate a no-op on a re-fired completion. `Merged` is the critical one:
+    // it guarantees a recovery re-emit never double-merges. `MergeBlocked`
+    // (and the legacy `MergeProposed`) likewise suppress duplicate
+    // comments / escalations.
+    let kinds = [
+        EmitEventKind::Merged,
+        EmitEventKind::MergeBlocked,
+        EmitEventKind::MergeProposed,
+    ];
     let guard = conn.lock().await;
-    match (has(&guard, key_proposed), has(&guard, key_blocked)) {
-        (Ok(p), Ok(b)) => p || b,
-        (Err(e), _) | (_, Err(e)) => {
-            warn!(target: "intake::merge_gate", error = %e, "intake_emit_log has() failed");
-            false
+    for kind in kinds {
+        let key = EmitKey {
+            source_id,
+            task_id,
+            event_kind: kind,
+            run_id: run_id_str,
+        };
+        match has(&guard, key) {
+            Ok(true) => return true,
+            Ok(false) => {},
+            Err(e) => {
+                warn!(target: "intake::merge_gate", error = %e, "intake_emit_log has() failed");
+                return false;
+            },
+        }
+    }
+    false
+}
+
+async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
+    match readiness {
+        // The readiness gate already confirmed the PR exists, is open,
+        // mergeable, and approved — execute the real merge.
+        MergeReadiness::Ready => attempt_merge(ctx).await,
+        // Red checks / missing review / errored readiness check. Comment +
+        // label + escalate so an L3 run never silently fails to merge.
+        MergeReadiness::Blocked(reason) => {
+            record_blocked(ctx, &format!("Surge L3 auto-merge: blocked — {reason}")).await;
         },
     }
 }
 
-async fn apply_merge_decision(
-    source: &Arc<dyn TaskSource>,
-    task_id: &TaskId,
-    source_id: &str,
-    task_id_str: &str,
-    run_id_str: &str,
-    readiness: MergeReadiness,
-    conn: &Arc<Mutex<Connection>>,
-) {
-    let (event_kind, label, body) = match readiness {
-        MergeReadiness::Ready => (
-            EmitEventKind::MergeProposed,
-            labels::MERGE_PROPOSED,
-            "Surge L3 auto-merge: PR is ready (checks green + review approved). \
-             Merge action proposed."
-                .to_string(),
-        ),
-        MergeReadiness::Blocked(reason) => (
-            EmitEventKind::MergeBlocked,
-            labels::MERGE_BLOCKED,
-            format!("Surge L3 auto-merge: blocked — {reason}"),
-        ),
-    };
+/// Execute the merge for a `Ready` PR and record the outcome.
+async fn attempt_merge(ctx: &MergeCtx<'_>) {
+    match ctx.source.merge_pr(ctx.task_id).await {
+        Ok(MergeOutcome::Merged | MergeOutcome::AlreadyMerged) => {
+            // The merge is irreversible. Record the terminal `Merged` dedup
+            // row FIRST: even if the follow-up comment/label fail, a
+            // re-fired completion then no-ops instead of re-attempting the
+            // merge (which would 405 against an already-merged PR).
+            record_dedup(ctx, EmitEventKind::Merged).await;
 
-    // Both side-effects must succeed before we record the dedup row.
-    // Otherwise a transient provider failure would be marked as
-    // emitted and the next `RunFinished` retry would no-op, leaving
-    // the ticket without the merge decision visible on the tracker.
-    let comment_ok = match source.post_comment(task_id, &body).await {
+            let body = "Surge L3 auto-merge: PR merged ✓ (checks green + review approved).";
+            if let Err(e) = ctx.source.post_comment(ctx.task_id, body).await {
+                warn!(
+                    target: "intake::merge_gate",
+                    error = %e,
+                    task_id = %ctx.task_id_str,
+                    "merged, but completion comment failed (merge already durable)"
+                );
+            }
+            if let Err(e) = ctx
+                .source
+                .set_label(ctx.task_id, labels::MERGED, true)
+                .await
+            {
+                warn!(
+                    target: "intake::merge_gate",
+                    error = %e,
+                    task_id = %ctx.task_id_str,
+                    "merged, but set_label failed"
+                );
+            }
+            escalate(
+                ctx,
+                NotifySeverity::Success,
+                "L3 auto-merge complete",
+                &format!(
+                    "Surge merged the PR for {} after run {}.",
+                    ctx.task_id_str, ctx.run_id_str
+                ),
+            )
+            .await;
+            info!(
+                target: "intake::merge_gate",
+                task_id = %ctx.task_id_str,
+                run_id = %ctx.run_id_str,
+                "merge gate merged PR"
+            );
+        },
+        Ok(MergeOutcome::Conflict(reason)) => {
+            record_blocked(
+                ctx,
+                &format!("Surge L3 auto-merge: merge could not proceed — {reason}"),
+            )
+            .await;
+        },
+        Err(e) => {
+            record_blocked(
+                ctx,
+                &format!("Surge L3 auto-merge: merge attempt errored — {e}"),
+            )
+            .await;
+        },
+    }
+}
+
+/// Post a `merge-blocked` comment + label, escalate to the operator, and
+/// record the dedup row. Used for both readiness-blocked and merge-failed
+/// paths so a stalled L3 run is always visible.
+async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
+    // Escalate first: "never a silent stall" must hold even if the tracker
+    // comment fails. The `already_emitted` precheck stops re-fires before
+    // reaching here, so this fires at most once per run.
+    escalate(ctx, NotifySeverity::Warn, "L3 auto-merge blocked", body).await;
+
+    let comment_ok = match ctx.source.post_comment(ctx.task_id, body).await {
         Ok(()) => true,
         Err(e) => {
             warn!(
                 target: "intake::merge_gate",
                 error = %e,
-                task_id = %task_id_str,
+                task_id = %ctx.task_id_str,
                 "merge gate comment post failed; will retry on next RunFinished"
             );
             false
         },
     };
-    let label_ok = match source.set_label(task_id, label, true).await {
+    let label_ok = match ctx
+        .source
+        .set_label(ctx.task_id, labels::MERGE_BLOCKED, true)
+        .await
+    {
         Ok(()) => true,
         Err(e) => {
             warn!(
                 target: "intake::merge_gate",
                 error = %e,
-                task_id = %task_id_str,
-                label = label,
+                task_id = %ctx.task_id_str,
+                label = labels::MERGE_BLOCKED,
                 "merge gate set_label failed; will retry on next RunFinished"
             );
             false
@@ -284,35 +388,76 @@ async fn apply_merge_decision(
     if !(comment_ok && label_ok) {
         warn!(
             target: "intake::merge_gate",
-            task_id = %task_id_str,
-            run_id = %run_id_str,
+            task_id = %ctx.task_id_str,
+            run_id = %ctx.run_id_str,
             comment_ok,
             label_ok,
             "merge gate emission incomplete — skipping intake_emit_log record so retry can fire"
         );
         return;
     }
-
-    {
-        let guard = conn.lock().await;
-        let emit_key = EmitKey {
-            source_id,
-            task_id: task_id_str,
-            event_kind,
-            run_id: run_id_str,
-        };
-        if let Err(e) = record(&guard, emit_key) {
-            warn!(target: "intake::merge_gate", error = %e, "intake_emit_log record failed");
-        }
-    }
-
+    record_dedup(ctx, EmitEventKind::MergeBlocked).await;
     info!(
         target: "intake::merge_gate",
-        task_id = %task_id_str,
-        run_id = %run_id_str,
-        decision = %event_kind.as_str(),
+        task_id = %ctx.task_id_str,
+        run_id = %ctx.run_id_str,
+        decision = %EmitEventKind::MergeBlocked.as_str(),
         "merge gate emitted decision"
     );
+}
+
+/// Insert the idempotency dedup row for a terminal gate decision.
+async fn record_dedup(ctx: &MergeCtx<'_>, kind: EmitEventKind) {
+    let guard = ctx.conn.lock().await;
+    let key = EmitKey {
+        source_id: ctx.source_id,
+        task_id: ctx.task_id_str,
+        event_kind: kind,
+        run_id: ctx.run_id_str,
+    };
+    if let Err(e) = record(&guard, key) {
+        warn!(
+            target: "intake::merge_gate",
+            error = %e,
+            kind = %kind.as_str(),
+            "intake_emit_log record failed"
+        );
+    }
+}
+
+/// Deliver an operator escalation for the merge decision. A missing desktop
+/// channel is tolerated (the decision is also on the tracker + in the log);
+/// other delivery errors are logged but never fail the gate.
+async fn escalate(ctx: &MergeCtx<'_>, severity: NotifySeverity, title: &str, body: &str) {
+    let node = match NodeKey::try_new("merge_gate") {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(target: "intake::merge_gate", error = %e, "bad merge-gate notify node key");
+            return;
+        },
+    };
+    let rendered = RenderedNotification {
+        severity,
+        title: title.to_string(),
+        body: body.to_string(),
+        artifact_paths: vec![],
+    };
+    let delivery_ctx = NotifyDeliveryContext {
+        run_id: ctx.run_id,
+        node: &node,
+    };
+    match ctx
+        .notifier
+        .deliver(&delivery_ctx, &NotifyChannel::Desktop, &rendered)
+        .await
+    {
+        Ok(()) | Err(NotifyError::ChannelNotConfigured) => {},
+        Err(e) => warn!(
+            target: "intake::merge_gate",
+            error = %e,
+            "merge gate escalation delivery failed"
+        ),
+    }
 }
 
 /// Delegate the merge-readiness decision to the provider's
@@ -359,10 +504,13 @@ mod tests {
     fn label_constants_are_stable() {
         assert_eq!(labels::MERGE_PROPOSED, "surge:merge-proposed");
         assert_eq!(labels::MERGE_BLOCKED, "surge:merge-blocked");
+        assert_eq!(labels::MERGED, "surge:merged");
     }
 
     #[test]
     fn label_constants_do_not_collide() {
         assert_ne!(labels::MERGE_PROPOSED, labels::MERGE_BLOCKED);
+        assert_ne!(labels::MERGED, labels::MERGE_BLOCKED);
+        assert_ne!(labels::MERGED, labels::MERGE_PROPOSED);
     }
 }

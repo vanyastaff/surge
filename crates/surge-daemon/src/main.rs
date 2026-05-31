@@ -210,6 +210,7 @@ fn main() -> std::process::ExitCode {
                         api_token: token,
                         poll_interval: g.poll_interval,
                         label_filters: g.label_filters.clone(),
+                        merge_method: g.merge_method,
                     };
                     match GitHubIssuesTaskSource::new(cfg) {
                         Ok(s) => {
@@ -307,6 +308,7 @@ fn main() -> std::process::ExitCode {
                     merge_gate_rx,
                     source_map_arc,
                     conn_arc,
+                    Arc::clone(&notifier),
                 );
             } else {
                 info!("intake disabled; run-completion → tracker-comment hook not started");

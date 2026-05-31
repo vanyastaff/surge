@@ -21,6 +21,26 @@ pub enum MergeReadiness {
     Blocked(String),
 }
 
+/// Outcome of an attempted PR merge.
+///
+/// Returned by [`TaskSource::merge_pr`] and consumed by the L3 auto-merge
+/// gate. `Merged` and `AlreadyMerged` are both success terminals (the gate
+/// records a durable dedup row so a re-fired completion never double-merges);
+/// `Conflict` is the expected "could not proceed" failure mode that the gate
+/// surfaces as a tracker comment plus an operator escalation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// The merge succeeded.
+    Merged,
+    /// The PR was already merged before this attempt — a clean, idempotent
+    /// no-op (e.g. a manual merge raced the gate, or a recovery re-fire).
+    AlreadyMerged,
+    /// The merge could not proceed: conflict, head moved, or the readiness
+    /// the gate observed went stale before the merge call landed. Carries a
+    /// human-readable reason for the tracker comment + escalation.
+    Conflict(String),
+}
+
 /// Adapter to an external task tracker (Linear, GitHub Issues, future Discord/Jira/...).
 ///
 /// `TaskSource` exposes only the operations that respect the
@@ -80,6 +100,30 @@ pub trait TaskSource: Send + Sync {
     async fn check_merge_readiness(&self, _id: &TaskId) -> Result<MergeReadiness> {
         Ok(MergeReadiness::Blocked(
             "provider does not implement merge readiness checks".into(),
+        ))
+    }
+
+    /// Merge the PR linked to this task.
+    ///
+    /// The L3 auto-merge gate calls this only after
+    /// [`TaskSource::check_merge_readiness`] returned [`MergeReadiness::Ready`].
+    /// The merge method (squash / merge / rebase) is the implementation's own
+    /// concern — it is a property of the repository convention, configured on
+    /// the source, not chosen by the gate.
+    ///
+    /// Default implementation returns an error — providers without a PR
+    /// concept (Linear, etc.) never reach this path because their
+    /// [`TaskSource::check_merge_readiness`] stays `Blocked`. The gate treats
+    /// an error here as an escalation, never a silent success.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error if the merge API call fails for a reason
+    /// other than "not mergeable" (those are reported as
+    /// [`MergeOutcome::Conflict`], not errors).
+    async fn merge_pr(&self, _id: &TaskId) -> Result<MergeOutcome> {
+        Err(crate::Error::Internal(
+            "provider does not implement PR merge".into(),
         ))
     }
 }

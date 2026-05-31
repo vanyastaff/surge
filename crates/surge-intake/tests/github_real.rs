@@ -46,6 +46,7 @@ async fn lists_open_tasks_in_test_repo() {
         api_token: token,
         poll_interval: Duration::from_secs(60),
         label_filters: vec!["surge:test".into()],
+        merge_method: surge_core::config::MergeMethod::Squash,
     };
     let source = GitHubIssuesTaskSource::new(cfg).expect("client init");
     let summaries = source
