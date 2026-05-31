@@ -98,8 +98,14 @@ impl GitHubIssuesTaskSource {
         tokio::time::sleep(interval).await;
     }
 
-    /// After a clean fetch, set the cadence tier from the fetched issues'
+    /// After a clean fetch, raise the cadence tier from the fetched issues'
     /// labels and clear any rate-limit backoff.
+    ///
+    /// `issues` is the incremental poll delta (issues updated since the
+    /// watermark), so it can be empty or low-tier on a quiet cycle. We use
+    /// [`CadenceController::raise_tier_for`] (only ever speeds up) rather than
+    /// `set_tier_for` so a quiet poll cannot downshift a source whose
+    /// higher-tier issues are still open.
     async fn note_fetch_success(&self, issues: &[octocrab::models::issues::Issue]) {
         let policies: Vec<AutomationPolicy> = issues
             .iter()
@@ -109,7 +115,7 @@ impl GitHubIssuesTaskSource {
             })
             .collect();
         let mut c = self.cadence.lock().await;
-        c.set_tier_for(&self.id, &policies);
+        c.raise_tier_for(&self.id, &policies);
         c.notify_success(&self.id);
     }
 
@@ -212,17 +218,22 @@ impl TaskSource for GitHubIssuesTaskSource {
         "github_issues"
     }
 
-    /// Polls GitHub's issues API on a fixed interval, emitting events for each
-    /// open issue matching the configured label filters.
+    /// Polls GitHub's issues API on a tier-aware cadence, emitting events for
+    /// each open issue matching the configured label filters.
+    ///
+    /// Each cycle sleeps a cadence-driven interval (L1 5min / L2 2min /
+    /// L3 1min, scaled by the most aggressive tier among fetched issues, with
+    /// exponential rate-limit backoff and ±10% jitter) rather than a fixed
+    /// interval — see [`crate::cadence`].
     ///
     /// The stream uses a `since` watermark (tracking `updated_at`) to avoid
-    /// re-emitting issues that haven't changed since the last poll cycle.
+    /// re-emitting issues that haven't changed since the last poll cycle, and
+    /// an internal queue to emit all issues from a single fetch before polling
+    /// again.
     ///
-    /// Uses an internal queue to emit all issues from a single fetch before polling again.
-    ///
-    /// Rate-limit errors and authentication failures are mapped to `Error::RateLimited`
-    /// and `Error::AuthFailed` respectively, allowing the consumer to implement
-    /// backoff logic.
+    /// Rate-limit errors and authentication failures are mapped to
+    /// `Error::RateLimited` and `Error::AuthFailed` respectively; a
+    /// rate-limited fetch also bumps the cadence backoff.
     #[allow(clippy::excessive_nesting)]
     fn watch_for_tasks<'a>(&'a self) -> BoxStream<'a, Result<TaskEvent>> {
         use std::collections::VecDeque;

@@ -15,10 +15,12 @@
 //! Each polling source owns one controller (keyed by its own id). The
 //! GitHub source drives it from inside `watch_for_tasks`: it sleeps
 //! [`CadenceController::next_interval`] (with [`jitter_seed`]) before each
-//! poll, calls [`CadenceController::set_tier_for`] from the tiers of the
-//! issues it just fetched, [`CadenceController::notify_success`] on a clean
-//! fetch, and [`CadenceController::notify_rate_limited`] on a rate-limited
-//! one. The Linear source still polls at its fixed configured interval —
+//! poll, calls [`CadenceController::raise_tier_for`] from the tiers of the
+//! issues it just fetched (only ever speeding up — the fetch is an
+//! incremental delta, so a replace would wrongly downshift on a quiet poll),
+//! [`CadenceController::notify_success`] on a clean fetch, and
+//! [`CadenceController::notify_rate_limited`] on a rate-limited one. The
+//! Linear source still polls at its fixed configured interval —
 //! its fetch path does not yet surface per-issue labels, so tier-aware
 //! cadence there is a follow-up.
 
@@ -124,7 +126,9 @@ impl CadenceController {
 
     /// Update the base interval for `source_id` from the most
     /// aggressive policy among its active tickets. Idempotent —
-    /// repeated calls with the same value are no-ops.
+    /// repeated calls with the same value are no-ops. Replaces the base
+    /// outright (can speed up *or* slow down); use this only when
+    /// `policies` is the full active set.
     pub fn set_tier_for(&mut self, source_id: &str, policies: &[AutomationPolicy]) {
         let base = most_aggressive(policies);
         let entry = self
@@ -132,6 +136,31 @@ impl CadenceController {
             .entry(source_id.to_owned())
             .or_insert_with(|| SourceState::fresh(base));
         entry.base = base;
+    }
+
+    /// Raise (only ever speed up) the base cadence for `source_id` to the
+    /// most aggressive tier among `policies`. Unlike [`set_tier_for`], this
+    /// never slows the cadence down.
+    ///
+    /// This is the safe update when `policies` comes from an *incremental*
+    /// poll delta (e.g. issues updated since a watermark): a quiet cycle
+    /// yields an empty or low-tier delta, and replacing the base from it
+    /// would wrongly downshift a source whose higher-tier issues are still
+    /// open. Mirrors the most-aggressive-wins rule reviewers asked for.
+    ///
+    /// Trade-off: the cadence does not slow back down when a high-tier issue
+    /// closes (a delta filtered on open state never reports the close).
+    /// Recomputing the base from a full open-issue snapshot is a follow-up.
+    pub fn raise_tier_for(&mut self, source_id: &str, policies: &[AutomationPolicy]) {
+        let candidate = most_aggressive(policies);
+        let entry = self
+            .sources
+            .entry(source_id.to_owned())
+            .or_insert_with(|| SourceState::fresh(candidate));
+        // Smaller Duration == faster poll. Only ever go faster.
+        if candidate < entry.base {
+            entry.base = candidate;
+        }
     }
 
     /// Record a `RateLimited` fetch — bumps the backoff exponent.
@@ -252,6 +281,31 @@ mod tests {
         assert!(
             (got - target).abs() <= 0.11 * target,
             "{got} not within 10% of {target}"
+        );
+    }
+
+    #[test]
+    fn raise_tier_only_speeds_up_never_down() {
+        let mut c = CadenceController::new();
+        let l3 = intervals::L3.as_secs_f64();
+        let within = |got: f64, target: f64| (got - target).abs() <= 0.11 * target;
+
+        // First sighting of an L3 issue speeds the source to L3.
+        c.raise_tier_for("src", &[auto()]);
+        assert!(within(c.next_interval("src", 0.5).as_secs_f64(), l3));
+
+        // A quiet poll (empty delta) must NOT downshift back to idle/L1.
+        c.raise_tier_for("src", &[]);
+        assert!(
+            within(c.next_interval("src", 0.5).as_secs_f64(), l3),
+            "empty delta downshifted the cadence"
+        );
+
+        // A low-tier delta (only L1 issues updated) must NOT downshift either.
+        c.raise_tier_for("src", &[AutomationPolicy::Standard]);
+        assert!(
+            within(c.next_interval("src", 0.5).as_secs_f64(), l3),
+            "L1 delta downshifted the cadence"
         );
     }
 
