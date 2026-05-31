@@ -103,15 +103,18 @@ flowchart LR
     Card["Inbox card<br/>(visibility only)"]
     Run["Engine run"]
     Gate{Merge gate<br/>green checks?<br/>review approved?}
-    Proposed["surge:merge-proposed<br/>+ tracker comment"]
-    Blocked["surge:merge-blocked<br/>+ reason comment"]
+    Merge{merge_pr}
+    Merged["surge:merged<br/>+ comment + success escalation"]
+    Blocked["surge:merge-blocked<br/>+ reason comment + warn escalation"]
 
     Ticket --> Triage
     Triage -->|Enqueued + L3| Card
     Card --> Run
     Run --> Gate
-    Gate -->|Ready| Proposed
+    Gate -->|Ready| Merge
     Gate -->|Blocked| Blocked
+    Merge -->|Merged| Merged
+    Merge -->|Conflict / error| Blocked
 ```
 
 ### L3 merge gate
@@ -124,11 +127,17 @@ consumer:
 2. Re-fetches the ticket's current labels (the user may have flipped
    `surge:auto` off mid-run).
 3. Confirms the policy is still `Auto { merge_when_clean: true }`.
-4. Calls `intake_emit_log::has(...)` to dedup against a re-fired event.
-5. Evaluates merge readiness.
-6. Posts the decision comment + applies the `surge:merge-proposed` or
-   `surge:merge-blocked` label.
-7. Records the side-effect in `intake_emit_log` so retries no-op.
+4. Calls `intake_emit_log::has(...)` to dedup against a re-fired event —
+   a recorded `merged` row means a recovery re-emit can never double-merge.
+5. Evaluates merge readiness via `TaskSource::check_merge_readiness`.
+6. On `Ready`, executes the merge via `TaskSource::merge_pr`; on success
+   posts a `surge:merged` comment + label and a **success** operator
+   escalation. On `Blocked` — or a merge that returns a conflict / errors —
+   posts a `surge:merge-blocked` comment + label and a **warn** escalation,
+   so a stalled L3 run is never silent.
+7. Records the terminal decision (`merged` or `merge_blocked`) in
+   `intake_emit_log` so retries no-op. The `merged` row is written **before**
+   the follow-up comment/label, because the merge is irreversible.
 
 ### GitHub readiness check
 
@@ -150,10 +159,42 @@ Linear (and any other PR-less provider) inherits the trait default that
 returns `Blocked("provider does not implement merge readiness checks")`,
 so L3 runs against them never silently fall through.
 
-> **Out of scope (next milestone).** The gate stops at posting
-> `merge-proposed` — the actual `octocrab.pulls().merge()` call is
-> deferred per ADR 0013 §5 so per-provider merge semantics (squash vs.
-> rebase vs. merge commit) can be opted into explicitly.
+The `Ready` verdict carries the **head SHA** it was computed against. The
+gate passes that SHA back to `merge_pr`, which pins the GitHub merge to it
+(`merge(...).sha(head)`). If a push lands between the readiness check and the
+merge, GitHub returns `409` and the gate escalates instead of merging the new,
+unreviewed head — closing the check-to-merge race on an irreversible action.
+
+### Executing the merge
+
+When readiness is `Ready`, the gate calls `TaskSource::merge_pr`, which for
+GitHub issues `octocrab.pulls().merge(number)` with the repo's configured
+merge method:
+
+```toml
+[[task_sources]]
+type = "github_issues"
+id = "github-myapp"
+repo = "user/myapp"
+api_token_env = "GITHUB_TOKEN"
+merge_method = "squash"   # squash (default) | merge | rebase
+```
+
+`merge_method` defaults to `squash` (linear history, the common convention).
+The merge returns one of:
+
+- `Merged` / `AlreadyMerged` → `surge:merged` + success escalation.
+- `Conflict(reason)` (GitHub `405` / `409` / `422` — head moved, conflicts,
+  or required state regressed between the readiness check and the merge) →
+  `surge:merge-blocked` + warn escalation. A genuine transport error is
+  surfaced the same way. The merge is never retried silently.
+
+PR-less providers keep the trait-default `merge_pr`, which errors; they never
+reach this path because their readiness stays `Blocked`.
+
+> **Still deferred to the next M2 task.** `CadenceController` is wired into
+> diagnostics but not yet into the source poll loops — see the priority-label
+> section below and ADR 0013 § "Tier-aware polling".
 
 ## Priority labels
 
@@ -221,7 +262,8 @@ Every outbound side-effect goes through `intake_emit_log` keyed by
 
 - `triage_decision` (the inbox-card / duplicate-comment emission)
 - `run_started` / `run_completed` / `run_failed` / `run_aborted`
-- `merge_proposed` / `merge_blocked`
+- `merged` (terminal success — prevents a double-merge on a re-fired
+  completion) / `merge_blocked` / `merge_proposed` (legacy, no longer written)
 
 A retried `RunFinished` event (e.g. after daemon restart) cannot
 double-post a comment or double-label the ticket. The per-source

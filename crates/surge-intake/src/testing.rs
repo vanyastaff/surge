@@ -1,7 +1,7 @@
 //! Test utilities for `surge-intake`. Always compiled (not feature-gated)
 //! so consumer crates can use `MockTaskSource` in their integration tests.
 
-use crate::source::{MergeReadiness, TaskSource};
+use crate::source::{MergeOutcome, MergeReadiness, TaskSource};
 use crate::types::{TaskDetails, TaskEvent, TaskId, TaskSummary};
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -23,6 +23,9 @@ pub struct MockTaskSource {
     recorded_labels: Mutex<Vec<(TaskId, String, bool)>>,
     fail_post_comment: Mutex<bool>,
     merge_readiness_override: Mutex<Option<MergeReadiness>>,
+    merge_outcome_override: Mutex<Option<MergeOutcome>>,
+    merge_calls: Mutex<Vec<(TaskId, Option<String>)>>,
+    fetch_task_calls: Mutex<u32>,
 }
 
 impl MockTaskSource {
@@ -39,6 +42,9 @@ impl MockTaskSource {
             recorded_labels: Mutex::new(Vec::new()),
             fail_post_comment: Mutex::new(false),
             merge_readiness_override: Mutex::new(None),
+            merge_outcome_override: Mutex::new(None),
+            merge_calls: Mutex::new(Vec::new()),
+            fetch_task_calls: Mutex::new(0),
         }
     }
 
@@ -75,6 +81,27 @@ impl MockTaskSource {
     pub async fn arm_post_comment_failure(&self) {
         *self.fail_post_comment.lock().await = true;
     }
+
+    /// Force [`TaskSource::merge_pr`] to return the given outcome. When no
+    /// outcome is armed, `merge_pr` returns `Error::Internal` (simulating a
+    /// provider whose merge call failed), which the gate escalates.
+    pub async fn arm_merge_outcome(&self, outcome: MergeOutcome) {
+        *self.merge_outcome_override.lock().await = Some(outcome);
+    }
+
+    /// Snapshot of `(task_id, expected_head)` pairs `merge_pr` was invoked
+    /// with, in call order. Used to assert the gate merges exactly once (no
+    /// double-merge) and pins the readiness-approved head SHA.
+    pub async fn merge_calls(&self) -> Vec<(TaskId, Option<String>)> {
+        self.merge_calls.lock().await.clone()
+    }
+
+    /// Count of `fetch_task` invocations. A positive anchor for tests that
+    /// assert the gate ran and decided a no-op (it calls `fetch_task` to
+    /// resolve the policy before bailing), instead of relying on a timeout.
+    pub async fn fetch_task_calls(&self) -> u32 {
+        *self.fetch_task_calls.lock().await
+    }
 }
 
 #[async_trait]
@@ -109,6 +136,7 @@ impl TaskSource for MockTaskSource {
     }
 
     async fn fetch_task(&self, id: &TaskId) -> Result<TaskDetails> {
+        *self.fetch_task_calls.lock().await += 1;
         self.open_tasks
             .lock()
             .await
@@ -175,6 +203,17 @@ impl TaskSource for MockTaskSource {
         Ok(MergeReadiness::Blocked(
             "provider does not implement merge readiness checks".into(),
         ))
+    }
+
+    async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
+        self.merge_calls
+            .lock()
+            .await
+            .push((id.clone(), expected_head.map(str::to_string)));
+        if let Some(o) = self.merge_outcome_override.lock().await.clone() {
+            return Ok(o);
+        }
+        Err(Error::Internal("no merge outcome armed".into()))
     }
 }
 
@@ -246,13 +285,37 @@ mod tests {
     async fn mock_merge_readiness_returns_armed_value() {
         let src = MockTaskSource::new("mock:test", "mock");
         let id = TaskId::try_new("mock:test#1").unwrap();
-        src.arm_merge_readiness(MergeReadiness::Ready).await;
+        src.arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+            .await;
         let verdict = src.check_merge_readiness(&id).await.unwrap();
-        assert_eq!(verdict, MergeReadiness::Ready);
+        assert_eq!(verdict, MergeReadiness::Ready { head_ref: None });
 
         src.arm_merge_readiness(MergeReadiness::Blocked("custom reason".into()))
             .await;
         let verdict = src.check_merge_readiness(&id).await.unwrap();
         assert_eq!(verdict, MergeReadiness::Blocked("custom reason".into()));
+    }
+
+    #[tokio::test]
+    async fn mock_merge_pr_records_call_and_returns_armed_outcome() {
+        let src = MockTaskSource::new("mock:test", "mock");
+        let id = TaskId::try_new("mock:test#1").unwrap();
+        src.arm_merge_outcome(MergeOutcome::Merged).await;
+
+        let outcome = src.merge_pr(&id, Some("deadbeef")).await.unwrap();
+        assert_eq!(outcome, MergeOutcome::Merged);
+
+        let calls = src.merge_calls().await;
+        assert_eq!(calls, vec![(id, Some("deadbeef".to_string()))]);
+    }
+
+    #[tokio::test]
+    async fn mock_merge_pr_unarmed_errors() {
+        let src = MockTaskSource::new("mock:test", "mock");
+        let id = TaskId::try_new("mock:test#1").unwrap();
+        let err = src.merge_pr(&id, None).await.unwrap_err();
+        assert!(matches!(err, Error::Internal(_)));
+        // The call is still recorded even on the error path.
+        assert_eq!(src.merge_calls().await.len(), 1);
     }
 }

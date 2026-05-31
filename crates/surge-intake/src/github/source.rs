@@ -1,7 +1,7 @@
 //! `GitHubIssuesTaskSource` — `TaskSource` impl backed by GitHub REST.
 
 use crate::github::client::GitHubClient;
-use crate::source::{MergeReadiness, TaskSource};
+use crate::source::{MergeOutcome, MergeReadiness, TaskSource};
 use crate::types::{TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary};
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -32,6 +32,8 @@ pub struct GitHubConfig {
     pub poll_interval: Duration,
     /// Issues are filtered to those carrying any of these labels.
     pub label_filters: Vec<String>,
+    /// Merge method the L3 auto-merge gate uses for this repository.
+    pub merge_method: surge_core::config::MergeMethod,
 }
 
 /// `TaskSource` implementation talking to GitHub Issues via REST (`octocrab`).
@@ -49,6 +51,7 @@ pub struct GitHubIssuesTaskSource {
     client: GitHubClient,
     poll_interval: Duration,
     label_filters: Vec<String>,
+    merge_method: surge_core::config::MergeMethod,
     last_seen_updated_at: Mutex<Option<DateTime<Utc>>>,
 }
 
@@ -68,6 +71,7 @@ impl GitHubIssuesTaskSource {
             client,
             poll_interval: config.poll_interval,
             label_filters: config.label_filters,
+            merge_method: config.merge_method,
             last_seen_updated_at: Mutex::new(None),
         })
     }
@@ -463,6 +467,11 @@ impl TaskSource for GitHubIssuesTaskSource {
             Err(e) => return Err(Self::map_octocrab_error(&e)),
         };
 
+        // Capture the head SHA the rest of this verdict is computed against.
+        // The gate pins the merge to it so a push landing between this check
+        // and the merge is rejected (stale head) rather than merged unreviewed.
+        let head_sha = pr.head.sha.clone();
+
         // 2. Fast-fail on terminal PR states.
         if pr.merged_at.is_some() {
             return Ok(MergeReadiness::Blocked(format!(
@@ -542,7 +551,65 @@ impl TaskSource for GitHubIssuesTaskSource {
             .await
             .map_err(|e| Self::map_octocrab_error(&e))?;
 
-        Ok(evaluate_reviews(number, &all_reviews))
+        Ok(evaluate_reviews(number, &all_reviews, head_sha))
+    }
+
+    async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
+        // Surge assumes PR# == issue#; the readiness gate already confirmed
+        // the PR exists, is open, mergeable, and approved before we get here.
+        let number = parse_issue_number(id.as_str())?;
+        let pulls = self
+            .client
+            .octocrab
+            .pulls(&self.client.owner, &self.client.repo);
+
+        // Pre-check: a manual merge may have raced the gate between the
+        // readiness check and now. Report that as AlreadyMerged (a clean
+        // no-op the gate records as success) instead of attempting a merge
+        // GitHub would reject with 405 and we would misreport as a conflict.
+        match pulls.get(number).await {
+            Ok(pr) if pr.merged_at.is_some() => return Ok(MergeOutcome::AlreadyMerged),
+            Ok(_) => {},
+            Err(e) => return Err(Self::map_octocrab_error(&e)),
+        }
+
+        let method = match self.merge_method {
+            surge_core::config::MergeMethod::Merge => octocrab::params::pulls::MergeMethod::Merge,
+            surge_core::config::MergeMethod::Rebase => octocrab::params::pulls::MergeMethod::Rebase,
+            // Squash (and any future variant) keep linear history by default.
+            _ => octocrab::params::pulls::MergeMethod::Squash,
+        };
+
+        let mut builder = pulls.merge(number).method(method);
+        // Pin the merge to the exact head the readiness verdict approved.
+        // GitHub returns 409 if the head has moved since, so a push that
+        // raced the gate cannot be merged unreviewed.
+        if let Some(sha) = expected_head {
+            builder = builder.sha(sha.to_string());
+        }
+        let result = builder.send().await;
+
+        match result {
+            // A 200 response means GitHub merged the PR. We deliberately do
+            // not inspect the response body's `merged`/`sha` fields: the
+            // merge endpoint only returns success on an actual merge, and
+            // pinning to body field names couples us to octocrab's model.
+            Ok(_) => Ok(MergeOutcome::Merged),
+            // 405 Method Not Allowed / 409 Conflict / 422 Unprocessable are
+            // GitHub's "not mergeable" family — head moved, conflicts, or
+            // required state regressed between the readiness check and now.
+            // These are expected failure modes the gate escalates, not
+            // transport errors.
+            Err(octocrab::Error::GitHub { source, .. })
+                if is_not_mergeable_status(source.status_code.as_u16()) =>
+            {
+                Ok(MergeOutcome::Conflict(format!(
+                    "PR #{number} not mergeable ({}): {}",
+                    source.status_code, source.message
+                )))
+            },
+            Err(e) => Err(Self::map_octocrab_error(&e)),
+        }
     }
 }
 
@@ -552,7 +619,11 @@ impl TaskSource for GitHubIssuesTaskSource {
 /// (Approved / ChangesRequested / Dismissed). Comments and pending
 /// reviews don't count. A current `ChangesRequested` blocks; otherwise
 /// at least one current `Approved` is required.
-fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review]) -> MergeReadiness {
+fn evaluate_reviews(
+    pr_number: u64,
+    reviews: &[octocrab::models::pulls::Review],
+    head_sha: String,
+) -> MergeReadiness {
     let mut latest_per_author: HashMap<String, &octocrab::models::pulls::Review> = HashMap::new();
     for review in reviews {
         // Reviews are listed in chronological order; later writes win.
@@ -601,7 +672,9 @@ fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review])
     if approved_count == 0 {
         return MergeReadiness::Blocked(format!("PR #{pr_number} has no approving reviews"));
     }
-    MergeReadiness::Ready
+    MergeReadiness::Ready {
+        head_ref: Some(head_sha),
+    }
 }
 
 fn parse_issue_number(task_id: &str) -> Result<u64> {
@@ -613,9 +686,44 @@ fn parse_issue_number(task_id: &str) -> Result<u64> {
         .map_err(|_| Error::InvalidTaskId(task_id.into()))
 }
 
+/// Whether a GitHub HTTP status from the merge endpoint means "the PR is
+/// not mergeable right now" (an expected `MergeOutcome::Conflict` the gate
+/// escalates) rather than a transport/permission failure (surfaced as an
+/// error so the operator sees the real cause):
+///
+/// - `405 Method Not Allowed` — base branch moved / required state regressed.
+/// - `409 Conflict` — the provided head SHA is stale.
+/// - `422 Unprocessable Entity` — merge conflicts.
+///
+/// `403`, `404`, `401`, and 5xx are deliberately excluded — those are
+/// permission / not-found / auth / server errors that route through
+/// `map_octocrab_error` so the comment names the real cause.
+fn is_not_mergeable_status(status: u16) -> bool {
+    matches!(status, 405 | 409 | 422)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn not_mergeable_status_covers_conflict_family() {
+        for s in [405, 409, 422] {
+            assert!(is_not_mergeable_status(s), "{s} should be not-mergeable");
+        }
+    }
+
+    #[test]
+    fn not_mergeable_status_excludes_transport_and_auth() {
+        // 200 (handled as Merged), 401/403/404 (auth/permission/not-found),
+        // and 5xx (server) must NOT be classified as a merge conflict.
+        for s in [200, 401, 403, 404, 429, 500, 502] {
+            assert!(
+                !is_not_mergeable_status(s),
+                "{s} must not be treated as a merge conflict"
+            );
+        }
+    }
 
     #[test]
     fn parse_issue_number_extracts_trailing() {

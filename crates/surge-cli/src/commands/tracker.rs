@@ -107,6 +107,7 @@ async fn test(config: SurgeConfig, target_id: &str) -> Result<()> {
                 api_token: token,
                 poll_interval: Duration::from_secs(60),
                 label_filters: g.label_filters.clone(),
+                merge_method: g.merge_method,
             };
             let src = GitHubIssuesTaskSource::new(cfg)?;
             let summaries = src.list_open_tasks().await?;

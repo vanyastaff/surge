@@ -38,10 +38,15 @@ pub enum EmitEventKind {
     RunFailed,
     /// Abort comment (user-cancel or external close).
     RunAborted,
-    /// L3 auto-merge action posted to the tracker.
+    /// L3 auto-merge action posted to the tracker (legacy: the gate
+    /// proposed a merge without executing it). Retained for on-disk
+    /// compatibility with rows written before the gate executed merges.
     MergeProposed,
-    /// L3 merge gate blocked (red checks / no review).
+    /// L3 merge gate blocked (red checks / no review / merge conflict).
     MergeBlocked,
+    /// L3 merge gate completed a real merge. This is the terminal success
+    /// dedup row that makes a re-fired completion a no-op (no double-merge).
+    Merged,
 }
 
 impl EmitEventKind {
@@ -57,6 +62,7 @@ impl EmitEventKind {
             Self::RunAborted => "run_aborted",
             Self::MergeProposed => "merge_proposed",
             Self::MergeBlocked => "merge_blocked",
+            Self::Merged => "merged",
         }
     }
 
@@ -72,6 +78,7 @@ impl EmitEventKind {
             "run_aborted" => Some(Self::RunAborted),
             "merge_proposed" => Some(Self::MergeProposed),
             "merge_blocked" => Some(Self::MergeBlocked),
+            "merged" => Some(Self::Merged),
             _ => None,
         }
     }
@@ -346,6 +353,7 @@ mod tests {
             EmitEventKind::RunAborted,
             EmitEventKind::MergeProposed,
             EmitEventKind::MergeBlocked,
+            EmitEventKind::Merged,
         ];
         for kind in cases {
             let s = kind.as_str();

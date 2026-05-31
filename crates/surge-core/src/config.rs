@@ -336,6 +336,25 @@ pub struct LinearSourceConfig {
     pub label_filters: Vec<String>,
 }
 
+/// How the L3 auto-merge gate merges a ready PR.
+///
+/// Mirrors GitHub's three merge methods. Squash is the default because it
+/// keeps `main` history linear and matches the most common repo convention;
+/// override per source in `surge.toml` to match a repo that uses merge
+/// commits or rebases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MergeMethod {
+    /// Squash all commits into one before merging (default).
+    #[default]
+    Squash,
+    /// Create a merge commit.
+    Merge,
+    /// Rebase the PR commits onto the base branch.
+    Rebase,
+}
+
 /// GitHub Issues-specific task source configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubIssuesSourceConfig {
@@ -355,6 +374,10 @@ pub struct GitHubIssuesSourceConfig {
     /// Labels that gate which GitHub issues this source ingests.
     #[serde(default)]
     pub label_filters: Vec<String>,
+    /// Merge method the L3 auto-merge gate uses for this repository.
+    /// Defaults to [`MergeMethod::Squash`].
+    #[serde(default)]
+    pub merge_method: MergeMethod,
 }
 
 fn default_poll_interval() -> std::time::Duration {
@@ -2394,6 +2417,32 @@ label_filters = ["surge:enabled"]
                 assert_eq!(g.poll_interval, std::time::Duration::from_secs(120));
                 assert_eq!(g.label_filters.len(), 1);
                 assert_eq!(g.label_filters[0], "surge:enabled");
+                // Omitted in the TOML above → defaults to squash.
+                assert_eq!(g.merge_method, MergeMethod::Squash);
+            },
+            other => panic!("expected GithubIssues, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn github_merge_method_default_is_squash_and_overridable() {
+        // Default when the key is absent.
+        assert_eq!(MergeMethod::default(), MergeMethod::Squash);
+
+        let toml_str = r#"
+default_agent = "claude-acp"
+
+[[task_sources]]
+type = "github_issues"
+id = "gh"
+repo = "user/repo"
+api_token_env = "GITHUB_TOKEN"
+merge_method = "rebase"
+"#;
+        let cfg: SurgeConfig = toml::from_str(toml_str).expect("parse");
+        match &cfg.task_sources[0] {
+            TaskSourceConfig::GithubIssues(g) => {
+                assert_eq!(g.merge_method, MergeMethod::Rebase);
             },
             other => panic!("expected GithubIssues, got {other:?}"),
         }
