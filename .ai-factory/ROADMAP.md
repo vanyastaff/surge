@@ -273,7 +273,7 @@
   - Tests: gate-green-merges, gate-red-blocks-and-escalates, conflict-escalates, idempotent double-merge, cadence backoff
   - Documentation: L3 lifecycle in `docs/tracker-automation.md` (replace the "out of scope (next milestone)" note)
 
-- [ ] **Multi-agent breadth validated live** — agent-agnostic in fact, not just in registry (touches `surge-acp`, `surge-orchestrator`, `surge-cli`)
+- [ ] **Multi-agent breadth validated live** — agent-agnostic in fact, not just in registry (touches `surge-acp`, `surge-orchestrator`, `surge-cli`) — **codeable core landed** (#76 per-runtime launch-arg unit tests + [`docs/agent-runtimes.md`](../docs/agent-runtimes.md) support matrix; `surge doctor agent <name>` real smoke with spawn/handshake/auth/prompt stage classification, env-gated `SURGE_DOCTOR_REAL`; per-runtime auth diagnostics reuse `AgentAuthenticationFailed`). **Operator-gated remainder:** live Codex/Gemini launch validation + cross-agent golden compare (need the runtimes installed + logged in).
   - Live launch validation for Codex and Gemini ACP adapters through handshake → `new_session` → `session/prompt` (the bar v0.1 hit for Claude), env-gated like `real_acp_smoke`
   - Fix any launch/arg/headless-mode gaps surfaced per runtime (mirror of the Claude headless-settings + npx-resolve work)
   - `surge doctor agent <name>` runs a real smoke session per registered runtime and reports the failure stage precisely (spawn / handshake / auth / prompt)
@@ -282,7 +282,7 @@
   - Tests: per-adapter launch-arg unit tests, doctor smoke-stage classification, golden artifact compare
   - Documentation: per-runtime support matrix + known quirks in `docs/`
 
-- [ ] **Durability proof — fault-injection harness** — recovery survives the worst case (touches `surge-daemon`, `surge-persistence`, test infra)
+- [ ] **Durability proof — fault-injection harness** — recovery survives the worst case (touches `surge-daemon`, `surge-persistence`, test infra) — **slice 1 landed** (#77): debug-only `SURGE_CHECKPOINT_EXIT` seam aborts the process uncleanly right after `StageEntered` commits; a real `surge engine run` subprocess is killed mid-run and `surge engine replay` proves the WAL log survives and folds to the partial mid-run state. **Remaining (follow-up):** the full daemon kill → restart → recover cycle across the checkpoint matrix, and the true power-cut case (`synchronous = FULL` vs the current `NORMAL`) — see [`docs/crash-recovery.md`](../docs/crash-recovery.md).
   - Harness that kills the daemon process (SIGKILL / simulated power-cut) at defined checkpoints mid-run, restarts, and asserts recovery resumes to the correct folded state
   - WAL checkpoint behavior verified: no event-log corruption, no lost committed events, no duplicate appends after restart
   - Checkpoint matrix: mid-Agent-turn, pending-HumanGate, mid-Notify, pre-Terminal-append — each asserts the v0.1 recovery decision policy
@@ -290,7 +290,7 @@
   - CI: harness runs on Linux (signals) with a Windows-named-pipe stale-handle variant
   - Closes the v0.1 deferred "`kill -9` / power-cut fault-injection harness"
 
-- [ ] **Recorded real-repo end-to-end** — the proof artifact (touches `docs/`, `examples/`, CI-adjacent)
+- [ ] **Recorded real-repo end-to-end** — the proof artifact (touches `docs/`, `examples/`, CI-adjacent) — **CI guard + operator script landed**: the mock-agent `init → describe → run` smoke runs in CI (`onboarding_smoke` in `examples_smoke.rs`) so the script can't rot; [`docs/recorded-e2e.md`](../docs/recorded-e2e.md) is the reproducible operator procedure for the real-repo + live-agent + PR run. **Operator-gated remainder:** the actual recorded run against a real public repo (needs an authenticated runtime — not runnable in CI).
   - Scripted end-to-end against a real public repo: `init → describe → approve → run → PR` with a working agent runtime, producing a real PR
   - Recorded as a reproducible example (asciinema/log + the resulting flow + artifacts) under `examples/` / `docs/`
   - Documents the one external prerequisite (agent runtime auth) and the exact commands
