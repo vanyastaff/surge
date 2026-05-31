@@ -10,16 +10,17 @@
 //! and decide when to schedule the next fetch. This keeps the controller
 //! deterministic and easy to test under a frozen `tokio::time` clock.
 //!
-//! ### Integration scope
+//! ### Integration
 //!
-//! Production wiring of this controller into the actual source-poll
-//! loops requires either a new `TaskSource::set_poll_interval` method
-//! (changing the trait) or a wrapping stream that buffers events from
-//! `watch_for_tasks()` and emits them at the controlled cadence. Both
-//! are deliberately out of scope for the milestone — see ADR 0014
-//! § "Tier-aware polling" for the staged plan. The controller is
-//! useful on its own as the single source of truth for "what cadence
-//! does this source want right now?".
+//! Each polling source owns one controller (keyed by its own id). The
+//! GitHub source drives it from inside `watch_for_tasks`: it sleeps
+//! [`CadenceController::next_interval`] (with [`jitter_seed`]) before each
+//! poll, calls [`CadenceController::set_tier_for`] from the tiers of the
+//! issues it just fetched, [`CadenceController::notify_success`] on a clean
+//! fetch, and [`CadenceController::notify_rate_limited`] on a rate-limited
+//! one. The Linear source still polls at its fixed configured interval —
+//! its fetch path does not yet surface per-issue labels, so tier-aware
+//! cadence there is a follow-up.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -191,6 +192,21 @@ fn apply_jitter(target: Duration, seed: f64) -> Duration {
     Duration::from_secs_f64(scaled)
 }
 
+/// Deterministic jitter seed in `[0.0, 1.0)` for poll attempt `n`.
+///
+/// Uses the golden-ratio low-discrepancy sequence so successive polls of one
+/// source spread evenly across the jitter band instead of clustering, while
+/// staying fully reproducible (no RNG — replay- and test-friendly). Feed the
+/// result to [`CadenceController::next_interval`] as `jitter_unit_interval`.
+#[must_use]
+pub fn jitter_seed(attempt: u64) -> f64 {
+    // Fractional part of n * (1/φ); the classic additive-recurrence sequence.
+    const INV_PHI: f64 = 0.618_033_988_749_895;
+    #[allow(clippy::cast_precision_loss)]
+    let x = (attempt as f64) * INV_PHI;
+    x.fract()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +331,35 @@ mod tests {
         let base = target.as_secs_f64();
         assert!((low / base - 0.9).abs() < 1e-9);
         assert!((high / base - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn jitter_seed_is_in_unit_interval_and_varies() {
+        let seeds: Vec<f64> = (0..16).map(jitter_seed).collect();
+        for (n, s) in seeds.iter().enumerate() {
+            assert!(
+                (0.0..1.0).contains(s),
+                "seed for attempt {n} = {s} out of [0,1)"
+            );
+        }
+        // Consecutive attempts must differ (no clustering on one point).
+        assert!(seeds[0] != seeds[1] && seeds[1] != seeds[2]);
+        // attempt 0 maps to 0.0 (n * c with n=0).
+        assert!((jitter_seed(0) - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jitter_seed_feeds_next_interval_within_band() {
+        let mut c = CadenceController::new();
+        c.set_tier_for("src", &[AutomationPolicy::Standard]); // L1 = 300s
+        let base = intervals::L1.as_secs_f64();
+        for attempt in 0..32u64 {
+            let d = c.next_interval("src", jitter_seed(attempt)).as_secs_f64();
+            assert!(
+                (0.9 * base..=1.1 * base).contains(&d),
+                "attempt {attempt}: {d}s outside ±10% of {base}s"
+            );
+        }
     }
 
     #[test]

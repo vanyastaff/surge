@@ -192,9 +192,8 @@ The merge returns one of:
 PR-less providers keep the trait-default `merge_pr`, which errors; they never
 reach this path because their readiness stays `Blocked`.
 
-> **Still deferred to the next M2 task.** `CadenceController` is wired into
-> diagnostics but not yet into the source poll loops — see the priority-label
-> section below and ADR 0013 § "Tier-aware polling".
+The GitHub source polls on a **tier-aware cadence** (see the priority-label
+section below): faster for L3 tickets, with exponential backoff on rate limits.
 
 ## Priority labels
 
@@ -202,12 +201,13 @@ The label `surge-priority/<level>` is honoured independently of the tier
 label. Recognized levels: `urgent`, `high`, `medium`, `low`. Priority affects:
 
 - Inbox-card sort order.
-- (Future) `CadenceController` polling pace — the algorithm exists in
-  [`surge_intake::cadence`](../crates/surge-intake/src/cadence.rs) with the
-  tier-aware interval table (L1 = 5 min, L2 = 2 min, L3 = 1 min,
-  exponential backoff on rate-limit). Production wiring of the controller
-  into the source poll loops is staged in a follow-up — see ADR 0013
-  § "Tier-aware polling" for the deferred-work note.
+- `CadenceController` polling pace ([`surge_intake::cadence`](../crates/surge-intake/src/cadence.rs)):
+  tier-aware interval table (L1 = 5 min, L2 = 2 min, L3 = 1 min) with
+  exponential backoff on rate-limit and ±10% jitter. The **GitHub** source is
+  wired — each poll sleeps the cadence interval, sets its tier from the
+  fetched issues' labels, and backs off on a rate-limited fetch. The **Linear**
+  source still polls at its fixed configured interval (its fetch path does not
+  yet surface per-issue labels); wiring it is a follow-up.
 
 ## External state changes (ticket-as-master)
 

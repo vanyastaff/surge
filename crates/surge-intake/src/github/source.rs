@@ -1,6 +1,8 @@
 //! `GitHubIssuesTaskSource` — `TaskSource` impl backed by GitHub REST.
 
+use crate::cadence::{self, CadenceController};
 use crate::github::client::GitHubClient;
+use crate::policy::{AutomationPolicy, resolve_policy};
 use crate::source::{MergeOutcome, MergeReadiness, TaskSource};
 use crate::types::{TaskDetails, TaskEvent, TaskEventKind, TaskId, TaskSummary};
 use crate::{Error, Result};
@@ -8,6 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::{self, BoxStream};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -49,10 +52,15 @@ pub struct GitHubIssuesTaskSource {
     id: String,
     display_name: String,
     client: GitHubClient,
-    poll_interval: Duration,
     label_filters: Vec<String>,
     merge_method: surge_core::config::MergeMethod,
     last_seen_updated_at: Mutex<Option<DateTime<Utc>>>,
+    /// Tier-aware poll cadence. Keyed by this source's id; updated from the
+    /// tiers of fetched issues and from rate-limit signals. Supersedes the
+    /// fixed `config.poll_interval` (kept in config for back-compat).
+    cadence: Mutex<CadenceController>,
+    /// Monotonic poll counter feeding the jitter seed.
+    poll_attempt: AtomicU64,
 }
 
 impl GitHubIssuesTaskSource {
@@ -69,11 +77,47 @@ impl GitHubIssuesTaskSource {
             id: config.id,
             display_name: config.display_name,
             client,
-            poll_interval: config.poll_interval,
             label_filters: config.label_filters,
             merge_method: config.merge_method,
             last_seen_updated_at: Mutex::new(None),
+            cadence: Mutex::new(CadenceController::new()),
+            poll_attempt: AtomicU64::new(0),
         })
+    }
+
+    /// Sleep until the next poll using the tier-aware cadence: the interval
+    /// scales with the most aggressive tier among fetched issues (L1 5min /
+    /// L2 2min / L3 1min) plus exponential rate-limit backoff. Replaces the
+    /// fixed `poll_interval` sleep.
+    async fn cadence_sleep(&self) {
+        let attempt = self.poll_attempt.fetch_add(1, Ordering::Relaxed);
+        let interval = {
+            let c = self.cadence.lock().await;
+            c.next_interval(&self.id, cadence::jitter_seed(attempt))
+        };
+        tokio::time::sleep(interval).await;
+    }
+
+    /// After a clean fetch, set the cadence tier from the fetched issues'
+    /// labels and clear any rate-limit backoff.
+    async fn note_fetch_success(&self, issues: &[octocrab::models::issues::Issue]) {
+        let policies: Vec<AutomationPolicy> = issues
+            .iter()
+            .map(|i| {
+                let names: Vec<String> = i.labels.iter().map(|l| l.name.clone()).collect();
+                resolve_policy(&names)
+            })
+            .collect();
+        let mut c = self.cadence.lock().await;
+        c.set_tier_for(&self.id, &policies);
+        c.notify_success(&self.id);
+    }
+
+    /// After a failed fetch, bump the cadence backoff if it was a rate limit.
+    async fn note_fetch_error(&self, err: &Error) {
+        if matches!(err, Error::RateLimited { .. }) {
+            self.cadence.lock().await.notify_rate_limited(&self.id);
+        }
     }
 
     fn task_id(&self, number: u64) -> TaskId {
@@ -194,7 +238,7 @@ impl TaskSource for GitHubIssuesTaskSource {
 
             // Queue empty: fetch a fresh page and populate the queue.
             loop {
-                tokio::time::sleep(this.poll_interval).await;
+                this.cadence_sleep().await;
                 let since = *this.last_seen_updated_at.lock().await;
 
                 // Build the paginated request(s).
@@ -219,6 +263,7 @@ impl TaskSource for GitHubIssuesTaskSource {
                         Err(e) => {
                             warn!(error = %e, "github poll failed");
                             let mapped = Self::map_octocrab_error(&e);
+                            this.note_fetch_error(&mapped).await;
                             return Some((Err(mapped), (this, queue)));
                         },
                     }
@@ -245,6 +290,7 @@ impl TaskSource for GitHubIssuesTaskSource {
                     }
                     if let Some(e) = error {
                         let mapped = Self::map_octocrab_error(&e);
+                        this.note_fetch_error(&mapped).await;
                         return Some((Err(mapped), (this, queue)));
                     }
                     all
@@ -260,6 +306,10 @@ impl TaskSource for GitHubIssuesTaskSource {
                         }
                     }
                 }
+
+                // A clean fetch: update the poll cadence from the fetched
+                // issues' tiers and clear any rate-limit backoff.
+                this.note_fetch_success(&union_items).await;
 
                 queue = this.build_events_from_page_items(union_items, since).await;
                 if let Some(item) = queue.pop_front() {
@@ -741,5 +791,46 @@ mod tests {
     #[test]
     fn parse_issue_number_rejects_non_numeric() {
         assert!(parse_issue_number("github_issues:user/repo#abc").is_err());
+    }
+
+    fn test_source() -> GitHubIssuesTaskSource {
+        // `new` builds the octocrab client offline (no network), so a fake
+        // token is fine for exercising the cadence wiring.
+        GitHubIssuesTaskSource::new(GitHubConfig {
+            id: "github_issues:o/r".into(),
+            display_name: "test".into(),
+            owner: "o".into(),
+            repo: "r".into(),
+            api_token: "ghp_test".into(),
+            poll_interval: Duration::from_secs(60),
+            label_filters: vec![],
+            merge_method: surge_core::config::MergeMethod::Squash,
+        })
+        .expect("offline octocrab client build")
+    }
+
+    #[tokio::test]
+    async fn cadence_backs_off_on_rate_limit_and_clears_on_success() {
+        let src = test_source();
+        let id = src.id.clone();
+
+        // Two rate-limited fetches bump the backoff exponent.
+        src.note_fetch_error(&Error::RateLimited {
+            retry_after_secs: 0,
+        })
+        .await;
+        src.note_fetch_error(&Error::RateLimited {
+            retry_after_secs: 0,
+        })
+        .await;
+        assert_eq!(src.cadence.lock().await.backoff_exp(&id), 2);
+
+        // A non-rate-limit error must NOT bump the backoff.
+        src.note_fetch_error(&Error::Network("blip".into())).await;
+        assert_eq!(src.cadence.lock().await.backoff_exp(&id), 2);
+
+        // A clean fetch clears the backoff.
+        src.note_fetch_success(&[]).await;
+        assert_eq!(src.cadence.lock().await.backoff_exp(&id), 0);
     }
 }
