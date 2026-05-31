@@ -113,6 +113,12 @@ pub enum EngineError {
     /// block is present.
     #[error("archetype block missing: {0}")]
     ArchetypeMissing(String),
+
+    /// A `fork` request was invalid: `at_seq` is out of bounds (zero or past
+    /// the parent's last event), or the inherited prefix lacks a `RunStarted`
+    /// event to seed the child run.
+    #[error("invalid fork request: {0}")]
+    ForkInvalid(String),
 }
 
 fn format_node_cycle(nodes: &[surge_core::keys::NodeKey]) -> String {

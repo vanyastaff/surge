@@ -234,7 +234,7 @@
   - First-run UX: `surge init` walks user through config, agent install, telegram setup
   - End-to-end smoke against a real public repo recorded as an example run
 
-- [ ] **Replay & fork-from-here UI** — post-v0.1 polish over the same fold primitive (touches `surge-ui`, `surge-persistence`, `surge-cli`) — **CLI mirror started.** `surge engine replay <run_id> --seq <N>` folds the event log to seq `N` and prints the run state (reusing the tested `aggregate_status` primitive). Building it surfaced and fixed a real reader bug: `read_events` bound `EventSeq(u64::MAX)` as `-1` in SQLite (open-ended reads returned zero rows), which also silently degraded `current_status` (cockpit `/status`) and crash-recovery stuck/reconcile detection. Remaining: `surge fork <run_id> --seq <N>`, the GPUI scrubber/visual states, and live-vs-replay mode toggle.
+- [ ] **Replay & fork-from-here UI** — post-v0.1 polish over the same fold primitive (touches `surge-ui`, `surge-persistence`, `surge-cli`) — **CLI mirror started.** `surge engine replay <run_id> --seq <N>` folds the event log to seq `N` and prints the run state (reusing the tested `aggregate_status` primitive). Building it surfaced and fixed a real reader bug: `read_events` bound `EventSeq(u64::MAX)` as `-1` in SQLite (open-ended reads returned zero rows), which also silently degraded `current_status` (cockpit `/status`) and crash-recovery stuck/reconcile detection. The fork half now landed too (v0.3 M1): `surge engine fork <run_id> --seq N` + the `engine::fork::fork` core copy the event prefix, inherit the parent snapshot so the child resumes at the fork point, and record `ForkCreated` lineage. Remaining: pre-fork prompt/profile edits, the GPUI scrubber/visual states, and live-vs-replay mode toggle (see the **v0.3 — Time-travel** section).
   - Scrubber timeline rendered from event log with `seq` slider
   - Live mode disables scrubber; Replay mode enables it; clear visual differentiation
   - Fork CTA copies events `1..N` into a new run id; new git worktree at the same commit
@@ -296,6 +296,18 @@
   - Documents the one external prerequisite (agent runtime auth) and the exact commands
   - Doubles as the v0.1 release-notes "end-to-end smoke against a real public repo recorded as an example run" deliverable
   - Smoke variant wired into CI with the mock agent so the script itself can't rot
+
+## v0.3 — Time-travel: replay, fork-from-here, run history
+
+> North star: the §1 differentiator made real — *append-only event log → replay, time-travel, fork-from-here*. A run stops being a black box and becomes a navigable, forkable, queryable artifact, so a run that derails at stage 6/8 is forked from just-before-6 with a fix instead of re-run from scratch. Engine + CLI core is deterministic and CI-verifiable; the GPUI surface sits on top of it. Per-milestone task sequencing: run `/aif-plan <milestone>`.
+
+- [ ] **M1 — Fork-from-here (engine + CLI)** — **core landed.** `engine::fork::fork` copies parent events `1..=N` into a fresh run, inherits the parent's latest snapshot (child resumes at the fork point, not `graph.start`), and records `ForkCreated` lineage on the parent; `surge engine fork <run> --seq N` exposes it (prints new id + copied count + inspect/resume hints). Tested at the orchestrator level (prefix copy + fold-equality, snapshot-inherit resume position, out-of-bounds rejection) and end-to-end through the binary.
+  - **Remaining:** pre-fork edits — per-node prompt override + profile swap applied to the child's materialized graph, validated against the registry
+  - **Remaining:** optional new-worktree-at-fork-commit + auto-resume convenience
+  - **Remaining:** fork lineage surfaced in run views (parent ↔ children)
+- [ ] **M2 — Replay-at-seq enrichment** — extend `surge engine replay` with node status (completed/active/future), traversed edges, and cost-so-far; artifact-at-seq (`--artifact <name>` renders `description.md` / `roadmap.md` / `flow.toml` as of seq N); diff-at-seq; `--format json` for UI/script consumption
+- [ ] **M3 — Run history & cross-run analytics** — `surge runs` list/show with a lineage tree (parent ↔ forks); query by archetype / profile / agent / outcome; failure-pattern aggregation and cost / duration / outcome histograms over the run registry
+- [ ] **M4 — GPUI cockpit: scrubber + fork CTA** — wire replay-at-seq + fork into `surge-ui::screens::live_execution`: seq slider, live-vs-replay mode, completed/active/future node coloring, traversed-edge highlight, fork CTA, diff + artifact viewers. Surface-level, operator-verified (GUI is not CI-runnable). Subsumes the v0.1-era "Replay & fork-from-here UI" milestone
 
 ## Completed
 

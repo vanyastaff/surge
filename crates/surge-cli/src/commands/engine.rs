@@ -84,6 +84,16 @@ pub enum EngineCommands {
         #[arg(long)]
         seq: Option<u64>,
     },
+    /// Fork a run at a given seq into a fresh run: copy events `1..=seq`
+    /// (inheriting the parent snapshot so the child resumes at the fork
+    /// point) and record `ForkCreated` lineage on the parent.
+    Fork {
+        /// Parent `RunId` (ULID) to fork from.
+        run_id: String,
+        /// Inclusive event seq to fork at (events `1..=seq` are inherited).
+        #[arg(long)]
+        seq: u64,
+    },
 }
 
 /// Top-level dispatcher for `surge engine` invocations.
@@ -110,6 +120,7 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             follow,
         } => logs_command(run_id, since, follow).await,
         EngineCommands::Replay { run_id, seq } => replay_command(run_id, seq).await,
+        EngineCommands::Fork { run_id, seq } => fork_command(run_id, seq).await,
     }
 }
 
@@ -496,6 +507,28 @@ async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
     if let Some(ms) = snap.elapsed_ms {
         println!("elapsed:       {ms} ms");
     }
+    Ok(())
+}
+
+/// `surge engine fork <run_id> --seq N` — copy the parent's event history
+/// `1..=N` into a fresh run (inheriting the snapshot so it resumes at the fork
+/// point) and record `ForkCreated` lineage on the parent. The fork is
+/// immediately inspectable via `surge engine replay <new_id>` and resumable
+/// via `surge engine resume <new_id> --daemon`.
+async fn fork_command(run_id: String, seq: u64) -> Result<()> {
+    use surge_orchestrator::engine::fork::{ForkRequest, fork};
+
+    let parent = parse_run_id(&run_id)?;
+    let storage = Storage::open(&surge_runs_dir()?).await?;
+    let child = RunId::new();
+    let outcome = fork(&storage, ForkRequest::new(parent, child, seq)).await?;
+
+    println!("forked {parent} @ seq {seq}");
+    println!("  new run:       {}", outcome.new_run);
+    println!("  events copied: {}", outcome.copied_events);
+    println!();
+    println!("inspect:  surge engine replay {}", outcome.new_run);
+    println!("resume:   surge engine resume {} --daemon", outcome.new_run);
     Ok(())
 }
 

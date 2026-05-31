@@ -57,6 +57,26 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 
 `surge engine run <flow.toml>` and `surge engine run --template <name>` both skip bootstrap. `SPEC_PATH` and `--template` are mutually exclusive; use a path for a custom graph, or a template name such as `linear-3`, `linear-with-review`, `multi-milestone`, `bug-fix`, `refactor`, `spike`, or `single-task`.
 
+## Replay And Fork (Time-Travel)
+
+Every run is an append-only event log, so any past state is one fold away.
+
+`surge engine replay <run_id> [--seq N]` folds the event log up to seq `N`
+(default: latest) and prints the run state at that point — active node, last
+outcome, attempt, terminal status, elapsed. It is the CLI mirror of the cockpit
+replay scrubber; it reads from disk and needs no daemon.
+
+`surge engine fork <run_id> --seq N` spawns a new run that inherits the parent's
+event history `1..=N` — plus the parent's latest snapshot, so the child resumes
+at the fork point rather than the graph start — and records a `ForkCreated`
+lineage event on the parent. The fork is immediately inspectable with
+`surge engine replay <new_id>` and resumable with
+`surge engine resume <new_id> --daemon`.
+
+Use fork to retry a run from just before the stage that went wrong without
+re-executing the stages that already succeeded. Pre-fork prompt/profile edits
+are a follow-up increment.
+
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
 
 ## Artifact Validation
