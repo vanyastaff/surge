@@ -51,7 +51,9 @@ fn on_error_suppress_hook(id: &str, command: String) -> Hook {
         matcher: MatcherSpec::default(),
         command,
         on_failure: HookFailureMode::Warn,
-        timeout_seconds: Some(5),
+        // Generous so a slow process cold-start under heavy parallel CI load
+        // (esp. Windows) can't blow the timeout and flake the suppression.
+        timeout_seconds: Some(30),
         inherit: HookInheritance::Extend,
     }
 }
