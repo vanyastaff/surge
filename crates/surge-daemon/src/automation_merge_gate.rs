@@ -40,7 +40,7 @@ use surge_persistence::intake::IntakeRepo;
 use surge_persistence::intake_emit_log::{EmitEventKind, EmitKey, has, record};
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Stable label literals applied to the tracker ticket on each
 /// decision. Public for the docs renderer.
@@ -271,8 +271,9 @@ async fn already_emitted(
 async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
     match readiness {
         // The readiness gate already confirmed the PR exists, is open,
-        // mergeable, and approved — execute the real merge.
-        MergeReadiness::Ready => attempt_merge(ctx).await,
+        // mergeable, and approved — execute the real merge, pinned to the
+        // head the verdict was computed against.
+        MergeReadiness::Ready { head_ref } => attempt_merge(ctx, head_ref.as_deref()).await,
         // Red checks / missing review / errored readiness check. Comment +
         // label + escalate so an L3 run never silently fails to merge.
         MergeReadiness::Blocked(reason) => {
@@ -281,9 +282,10 @@ async fn apply_merge_decision(ctx: &MergeCtx<'_>, readiness: MergeReadiness) {
     }
 }
 
-/// Execute the merge for a `Ready` PR and record the outcome.
-async fn attempt_merge(ctx: &MergeCtx<'_>) {
-    match ctx.source.merge_pr(ctx.task_id).await {
+/// Execute the merge for a `Ready` PR and record the outcome. `expected_head`
+/// pins the merge to the revision the readiness verdict approved.
+async fn attempt_merge(ctx: &MergeCtx<'_>, expected_head: Option<&str>) {
+    match ctx.source.merge_pr(ctx.task_id, expected_head).await {
         Ok(MergeOutcome::Merged | MergeOutcome::AlreadyMerged) => {
             // The merge is irreversible. Record the terminal `Merged` dedup
             // row FIRST: even if the follow-up comment/label fail, a
@@ -407,21 +409,58 @@ async fn record_blocked(ctx: &MergeCtx<'_>, body: &str) {
 }
 
 /// Insert the idempotency dedup row for a terminal gate decision.
+///
+/// Retries a few times on transient `SQLite` failure. A persistent failure on
+/// the [`EmitEventKind::Merged`] row is logged at ERROR: the merge already
+/// happened durably, so a missing dedup row means a re-fired completion could
+/// mislabel the merged PR `merge-blocked`. It can never double-merge — the
+/// readiness recheck on the re-fire returns "already merged" — but the
+/// operator should know the dedup write failed.
 async fn record_dedup(ctx: &MergeCtx<'_>, kind: EmitEventKind) {
-    let guard = ctx.conn.lock().await;
+    const ATTEMPTS: u8 = 3;
     let key = EmitKey {
         source_id: ctx.source_id,
         task_id: ctx.task_id_str,
         event_kind: kind,
         run_id: ctx.run_id_str,
     };
-    if let Err(e) = record(&guard, key) {
-        warn!(
-            target: "intake::merge_gate",
-            error = %e,
-            kind = %kind.as_str(),
-            "intake_emit_log record failed"
-        );
+    for attempt in 1..=ATTEMPTS {
+        let result = {
+            let guard = ctx.conn.lock().await;
+            record(&guard, key.clone())
+        };
+        match result {
+            Ok(_) => return,
+            Err(e) if attempt < ATTEMPTS => {
+                warn!(
+                    target: "intake::merge_gate",
+                    error = %e,
+                    kind = %kind.as_str(),
+                    attempt,
+                    "intake_emit_log record failed; retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            },
+            Err(e) if matches!(kind, EmitEventKind::Merged) => {
+                error!(
+                    target: "intake::merge_gate",
+                    error = %e,
+                    run_id = %ctx.run_id_str,
+                    task_id = %ctx.task_id_str,
+                    "CRITICAL: PR merged but `merged` dedup row not persisted after retries; \
+                     a re-fired completion may mislabel the merged PR (cannot double-merge — \
+                     the readiness recheck blocks it). Manual check advised."
+                );
+            },
+            Err(e) => {
+                warn!(
+                    target: "intake::merge_gate",
+                    error = %e,
+                    kind = %kind.as_str(),
+                    "intake_emit_log record failed after retries"
+                );
+            },
+        }
     }
 }
 
@@ -494,10 +533,10 @@ mod tests {
 
     #[test]
     fn readiness_variants_compare() {
-        let ready = MergeReadiness::Ready;
+        let ready = MergeReadiness::Ready { head_ref: None };
         let blocked = MergeReadiness::Blocked("anything".into());
         assert_ne!(ready, blocked);
-        assert_eq!(ready, MergeReadiness::Ready);
+        assert_eq!(ready, MergeReadiness::Ready { head_ref: None });
     }
 
     #[test]

@@ -159,6 +159,12 @@ Linear (and any other PR-less provider) inherits the trait default that
 returns `Blocked("provider does not implement merge readiness checks")`,
 so L3 runs against them never silently fall through.
 
+The `Ready` verdict carries the **head SHA** it was computed against. The
+gate passes that SHA back to `merge_pr`, which pins the GitHub merge to it
+(`merge(...).sha(head)`). If a push lands between the readiness check and the
+merge, GitHub returns `409` and the gate escalates instead of merging the new,
+unreviewed head — closing the check-to-merge race on an irreversible action.
+
 ### Executing the merge
 
 When readiness is `Ready`, the gate calls `TaskSource::merge_pr`, which for

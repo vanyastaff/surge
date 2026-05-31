@@ -467,6 +467,11 @@ impl TaskSource for GitHubIssuesTaskSource {
             Err(e) => return Err(Self::map_octocrab_error(&e)),
         };
 
+        // Capture the head SHA the rest of this verdict is computed against.
+        // The gate pins the merge to it so a push landing between this check
+        // and the merge is rejected (stale head) rather than merged unreviewed.
+        let head_sha = pr.head.sha.clone();
+
         // 2. Fast-fail on terminal PR states.
         if pr.merged_at.is_some() {
             return Ok(MergeReadiness::Blocked(format!(
@@ -546,10 +551,10 @@ impl TaskSource for GitHubIssuesTaskSource {
             .await
             .map_err(|e| Self::map_octocrab_error(&e))?;
 
-        Ok(evaluate_reviews(number, &all_reviews))
+        Ok(evaluate_reviews(number, &all_reviews, head_sha))
     }
 
-    async fn merge_pr(&self, id: &TaskId) -> Result<MergeOutcome> {
+    async fn merge_pr(&self, id: &TaskId, expected_head: Option<&str>) -> Result<MergeOutcome> {
         let number = parse_issue_number(id.as_str())?;
         // Surge assumes PR# == issue#; the readiness gate already confirmed
         // the PR exists, is open, mergeable, and approved before we get here.
@@ -560,14 +565,18 @@ impl TaskSource for GitHubIssuesTaskSource {
             _ => octocrab::params::pulls::MergeMethod::Squash,
         };
 
-        let result = self
+        let pulls = self
             .client
             .octocrab
-            .pulls(&self.client.owner, &self.client.repo)
-            .merge(number)
-            .method(method)
-            .send()
-            .await;
+            .pulls(&self.client.owner, &self.client.repo);
+        let mut builder = pulls.merge(number).method(method);
+        // Pin the merge to the exact head the readiness verdict approved.
+        // GitHub returns 409 if the head has moved since, so a push that
+        // raced the gate cannot be merged unreviewed.
+        if let Some(sha) = expected_head {
+            builder = builder.sha(sha.to_string());
+        }
+        let result = builder.send().await;
 
         match result {
             // A 200 response means GitHub merged the PR. We deliberately do
@@ -599,7 +608,11 @@ impl TaskSource for GitHubIssuesTaskSource {
 /// (Approved / ChangesRequested / Dismissed). Comments and pending
 /// reviews don't count. A current `ChangesRequested` blocks; otherwise
 /// at least one current `Approved` is required.
-fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review]) -> MergeReadiness {
+fn evaluate_reviews(
+    pr_number: u64,
+    reviews: &[octocrab::models::pulls::Review],
+    head_sha: String,
+) -> MergeReadiness {
     let mut latest_per_author: HashMap<String, &octocrab::models::pulls::Review> = HashMap::new();
     for review in reviews {
         // Reviews are listed in chronological order; later writes win.
@@ -648,7 +661,9 @@ fn evaluate_reviews(pr_number: u64, reviews: &[octocrab::models::pulls::Review])
     if approved_count == 0 {
         return MergeReadiness::Blocked(format!("PR #{pr_number} has no approving reviews"));
     }
-    MergeReadiness::Ready
+    MergeReadiness::Ready {
+        head_ref: Some(head_sha),
+    }
 }
 
 fn parse_issue_number(task_id: &str) -> Result<u64> {

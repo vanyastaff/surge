@@ -249,7 +249,10 @@ async fn l3_ready_merges_and_posts_merged_comment_and_label() {
     let setup = make_setup();
     let task_id_str = "mock:test#42";
     seed_l3_task(&setup.src, task_id_str).await;
-    setup.src.arm_merge_readiness(MergeReadiness::Ready).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
     setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
 
     let run_id = RunId::new();
@@ -292,6 +295,42 @@ async fn l3_ready_merges_and_posts_merged_comment_and_label() {
             .iter()
             .any(|(sev, _, _)| matches!(sev, NotifySeverity::Success)),
         "expected a success escalation, got: {escalations:?}"
+    );
+}
+
+#[tokio::test]
+async fn l3_merge_is_pinned_to_readiness_head() {
+    // The readiness verdict carries the head SHA it validated; the gate must
+    // pass that exact SHA to merge_pr so GitHub rejects a moved head rather
+    // than merging unreviewed code.
+    let setup = make_setup();
+    let task_id_str = "mock:test#49";
+    seed_l3_task(&setup.src, task_id_str).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready {
+            head_ref: Some("approved-sha-abc123".into()),
+        })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+
+    let run_id = RunId::new();
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task_id_str, &run_id.to_string());
+    }
+
+    let rx = setup.tx.subscribe();
+    let _handle = spawn_gate(&setup, rx);
+    setup.tx.send(completed_event(run_id)).unwrap();
+
+    let _ = wait_for_comments(&setup.src, 1).await;
+    let calls = setup.src.merge_calls().await;
+    assert_eq!(calls.len(), 1, "merge_pr must run once");
+    assert_eq!(
+        calls[0].1,
+        Some("approved-sha-abc123".to_string()),
+        "merge must be pinned to the readiness-approved head SHA"
     );
 }
 
@@ -353,7 +392,10 @@ async fn l3_merge_conflict_escalates() {
     seed_l3_task(&setup.src, task_id_str).await;
     // Readiness says go, but the merge call itself hits a conflict (head
     // moved between the check and the merge).
-    setup.src.arm_merge_readiness(MergeReadiness::Ready).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
     setup
         .src
         .arm_merge_outcome(MergeOutcome::Conflict("base branch moved".into()))
@@ -435,7 +477,10 @@ async fn non_l3_task_is_a_no_op() {
     let setup = make_setup();
     let task_id_str = "mock:test#45";
     seed_l1_task(&setup.src, task_id_str).await;
-    setup.src.arm_merge_readiness(MergeReadiness::Ready).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
     setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
 
     let run_id = RunId::new();
@@ -468,7 +513,10 @@ async fn idempotent_double_merge() {
     let setup = make_setup();
     let task_id_str = "mock:test#46";
     seed_l3_task(&setup.src, task_id_str).await;
-    setup.src.arm_merge_readiness(MergeReadiness::Ready).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
     setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
 
     let run_id = RunId::new();
@@ -500,7 +548,10 @@ async fn failed_run_outcome_does_not_trigger_gate() {
     let setup = make_setup();
     let task_id_str = "mock:test#47";
     seed_l3_task(&setup.src, task_id_str).await;
-    setup.src.arm_merge_readiness(MergeReadiness::Ready).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
     setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
 
     let run_id = RunId::new();
