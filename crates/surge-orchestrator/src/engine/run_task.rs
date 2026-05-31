@@ -222,7 +222,7 @@ async fn enforce_budget(
     match decide(verdict, guard.policy, state.budget_warned) {
         BudgetAction::Continue => None,
         BudgetAction::Warn { dimension, pct } => {
-            let _ = params
+            let appended = params
                 .writer
                 .append_event(VersionedEventPayload::new(
                     EventPayload::BudgetWarningRaised {
@@ -233,6 +233,19 @@ async fn enforce_budget(
                     },
                 ))
                 .await;
+            // Only suppress future warnings once the event is durably in the
+            // log — otherwise a failed append both loses the warning and (if we
+            // flipped the flag) silences every later one. On failure leave the
+            // flag unset so the next stage boundary retries.
+            if let Err(error) = appended {
+                tracing::warn!(
+                    target: "engine::budget",
+                    run_id = %params.run_id,
+                    %error,
+                    "failed to append BudgetWarningRaised; will retry at next boundary"
+                );
+                return None;
+            }
             state.budget_warned = true;
             tracing::warn!(
                 target: "engine::budget",
@@ -314,6 +327,10 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
             .await
             .map_err(|e| format!("load pending graph revisions: {e}"))?;
 
+    // Seed the warn-once flag from the folded event log so a resumed run does
+    // not re-emit a `BudgetWarningRaised` it already recorded before a restart.
+    let budget_warned = memory.budget_warning_raised;
+
     Ok(RunExecutionState {
         active_graph,
         cursor,
@@ -328,7 +345,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         processed_graph_revision_seq: applied_graph_revision_seq,
         pending_graph_revisions,
         pending_elevations: params.pending_elevations.clone(),
-        budget_warned: false,
+        budget_warned,
     })
 }
 

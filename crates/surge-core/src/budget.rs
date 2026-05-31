@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Which budget dimension a verdict refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BudgetDimension {
     /// US-dollar spend.
     Usd,
@@ -139,8 +140,10 @@ pub enum BudgetPolicy {
     /// unattended run never overruns its budget).
     #[default]
     Abort,
-    /// Record warn/exceed events but never stop the run. For operators who
-    /// only want visibility, not enforcement.
+    /// Never stop the run. Emit a one-time `BudgetWarningRaised` when a limit
+    /// is reached (at the warn threshold) or exceeded (reported at 100%); no
+    /// `BudgetExceeded` event and no abort. For operators who want visibility,
+    /// not enforcement.
     WarnOnly,
 }
 

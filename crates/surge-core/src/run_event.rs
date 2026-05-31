@@ -326,7 +326,7 @@ pub enum EventPayload {
     },
     /// A run's cumulative spend crossed the configured warn threshold on a
     /// budget dimension at a stage boundary. Advisory — the run continues.
-    /// Recorded once per threshold crossing (idempotent re-evaluation). Schema v3.
+    /// Recorded once per threshold crossing (idempotent re-evaluation). Schema v4.
     BudgetWarningRaised {
         /// Which limit was approached.
         dimension: crate::budget::BudgetDimension,
@@ -338,8 +338,8 @@ pub enum EventPayload {
         total_tokens: u64,
     },
     /// A run's cumulative spend reached or passed a budget limit at a stage
-    /// boundary. The engine acts per the run's budget policy (escalate via
-    /// `request_human_input`, or abort). Schema v3.
+    /// boundary. Under the `Abort` policy the engine appends `RunAborted`
+    /// immediately after this event; under `WarnOnly` it is advisory. Schema v4.
     BudgetExceeded {
         /// Which limit was exceeded.
         dimension: crate::budget::BudgetDimension,
