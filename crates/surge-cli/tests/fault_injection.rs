@@ -50,6 +50,9 @@ fn unclean_exit_mid_run_preserves_and_folds_event_log() {
         .env("USERPROFILE", &surge_home)
         .env("SURGE_HOME", &surge_home)
         .env("SURGE_CHECKPOINT_EXIT", "impl_1")
+        // Fail fast if the seam ever regresses: `--watch` would otherwise keep
+        // the CLI alive waiting for a terminal event that never comes.
+        .timeout(std::time::Duration::from_secs(60))
         .output()
         .expect("spawn surge engine run");
 
