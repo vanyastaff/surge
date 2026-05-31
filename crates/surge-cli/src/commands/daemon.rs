@@ -75,9 +75,15 @@ async fn recover(dry_run: bool) -> Result<()> {
     };
     use surge_persistence::runs::Storage;
 
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow!("home directory not found"))?
-        .join(".surge");
+    // Honour SURGE_HOME so `recover` inspects the same sandbox the daemon
+    // and `engine replay` use (matches `pidfile::daemon_dir` /
+    // `main::surge_runs_dir` / the CLI's `surge_runs_dir`).
+    let home = match std::env::var("SURGE_HOME") {
+        Ok(custom) if !custom.is_empty() => std::path::PathBuf::from(custom),
+        _ => dirs::home_dir()
+            .ok_or_else(|| anyhow!("home directory not found"))?
+            .join(".surge"),
+    };
     let storage = Storage::open(&home)
         .await
         .with_context(|| format!("open surge storage at {}", home.display()))?;

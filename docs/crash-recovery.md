@@ -130,11 +130,14 @@ hard process death. Tests use `SURGE_HOME` for an isolated, cross-platform
 sandbox (HOME overrides are unreliable on Windows).
 
 **Daemon kill → restart → recover cycle (operator harness).** The full
-cross-process cycle is runnable but intentionally **not a CI test** — it spawns
-the agent (so it needs the `mock_acp_agent` binary, which isn't built or
-resolvable from a downstream crate's test sandbox), and cross-process
-spawn/IPC/restart timing is a flake magnet. The recovery *decision policy* is
-already exhaustively unit-tested (`decide_action` / `plan_recovery` /
+cross-process cycle is runnable but intentionally **not a CI test**. It spawns
+the agent, which needs the `mock_acp_agent` binary on the
+`$CARGO_TARGET_DIR/debug/` fallback path — a prerequisite the `surge-acp` /
+`surge-orchestrator` integration tests satisfy (they build that bin and run
+where `CARGO_TARGET_DIR` is set), but a downstream-crate test does not get for
+free. That plus the cross-process spawn/IPC/restart timing (a flake magnet) is
+why this stays a runbook rather than a CI gate. The recovery *decision policy*
+is already exhaustively unit-tested (`decide_action` / `plan_recovery` /
 `execute_recovery`), and slice 1 above proves the on-disk durability the cycle
 depends on. The building blocks are in place:
 
@@ -145,12 +148,14 @@ depends on. The building blocks are in place:
 - The `SURGE_CHECKPOINT_EXIT` seam makes the kill **deterministic** (self-exit
   at a named node, no kill-timing race).
 
-To run the cycle by hand:
+To run the cycle by hand — note the `SURGE_CHECKPOINT_EXIT` seam is
+`#[cfg(debug_assertions)]`, so use **debug-built** `surge` / `surge-daemon`
+(`cargo run` or `target/debug/`), not an installed release binary:
 
 ```sh
-export SURGE_HOME=$(mktemp -d)/.surge
+export SURGE_HOME=$(mktemp -d)/.surge   # every command below shares this sandbox
 SURGE_FORCE_AGENT_MOCK=1 SURGE_CHECKPOINT_EXIT=impl_1 surge daemon start   # exits at the checkpoint
-surge daemon recover --dry-run    # inspect the recovery decision for the killed run
+surge daemon recover --dry-run    # inspect the recovery decision (honours SURGE_HOME)
 surge daemon start                # restart -> recover_on_startup resumes it
 surge engine replay <run_id>      # fold the log: the run reaches a terminal state
 ```
