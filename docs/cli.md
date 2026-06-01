@@ -61,10 +61,14 @@ The product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) describes a riche
 
 Every run is an append-only event log, so any past state is one fold away.
 
-`surge engine replay <run_id> [--seq N]` folds the event log up to seq `N`
-(default: latest) and prints the run state at that point — active node, last
-outcome, attempt, terminal status, elapsed. It is the CLI mirror of the cockpit
-replay scrubber; it reads from disk and needs no daemon.
+`surge engine replay <run_id> [--seq N] [--format text|json]` folds the event
+log up to seq `N` (default: latest) and prints the run state at that point: the
+summary (active node, last outcome, attempt, terminal status, elapsed) plus,
+when a graph has been materialized, an enriched view — per-node status
+(`completed` / `active` / `failed` / `future`), the edges traversed, and the
+cost accumulated (tokens + USD). `--format json` emits the whole thing for
+scripts and the cockpit scrubber. It is the CLI mirror of that scrubber; it
+reads from disk and needs no daemon.
 
 `surge engine fork <run_id> --seq N` spawns a new run that inherits the parent's
 event history `1..=N` — plus the parent's latest snapshot, so the child resumes

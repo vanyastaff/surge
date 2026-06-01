@@ -42,6 +42,7 @@ pub mod hooks;
 pub mod ipc;
 pub mod predicates;
 pub mod replay;
+pub mod replay_view;
 pub mod routing;
 pub mod run_task;
 pub mod sandbox_factory;
@@ -62,4 +63,7 @@ pub use frames::{Frame, LoopFrame, SubgraphFrame, TerminalSignal};
 pub use handle::{EngineRunEvent, RunHandle, RunOutcome, RunStatus, RunSummary};
 pub use ipc::{
     DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, GlobalDaemonEvent, RequestId,
+};
+pub use replay_view::{
+    CostView, EdgeView, NodeStatus, NodeView, ReplayView, TerminalKind, build_replay_view,
 };

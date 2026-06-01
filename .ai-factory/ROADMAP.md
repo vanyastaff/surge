@@ -305,7 +305,9 @@
   - **Remaining:** optional new-worktree-at-fork-commit + auto-resume convenience
   - **Remaining:** fork lineage surfaced in run views (parent ↔ children)
   - **Remaining:** pre-fork edits for runs with mid-run graph revisions
-- [ ] **M2 — Replay-at-seq enrichment** — extend `surge engine replay` with node status (completed/active/future), traversed edges, and cost-so-far; artifact-at-seq (`--artifact <name>` renders `description.md` / `roadmap.md` / `flow.toml` as of seq N); diff-at-seq; `--format json` for UI/script consumption
+- [ ] **M2 — Replay-at-seq enrichment** — **core landed.** `surge engine replay` now folds an enriched `ReplayView` against the materialized graph: per-node status (completed/active/failed/future), edges traversed, and cost-so-far (tokens + USD), plus `--format json`. Pure `engine::replay_view::build_replay_view` (orchestrator-tested) shared by the CLI today and the cockpit scrubber later.
+  - **Remaining:** artifact-at-seq (`--artifact <name>` renders `description.md` / `roadmap.md` / `flow.toml` as of seq N)
+  - **Remaining:** diff-at-seq (tool-call/result diffs up to seq N)
 - [ ] **M3 — Run history & cross-run analytics** — `surge runs` list/show with a lineage tree (parent ↔ forks); query by archetype / profile / agent / outcome; failure-pattern aggregation and cost / duration / outcome histograms over the run registry
 - [ ] **M4 — GPUI cockpit: scrubber + fork CTA** — wire replay-at-seq + fork into `surge-ui::screens::live_execution`: seq slider, live-vs-replay mode, completed/active/future node coloring, traversed-edge highlight, fork CTA, diff + artifact viewers. Surface-level, operator-verified (GUI is not CI-runnable). Subsumes the v0.1-era "Replay & fork-from-here UI" milestone
 

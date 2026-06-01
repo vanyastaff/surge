@@ -1,7 +1,7 @@
 //! `surge engine` subtree — in-process M6 CLI for graph-based runs.
 
 use anyhow::{Context, Result, anyhow};
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use owo_colors::{OwoColorize, Stream};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,6 +9,15 @@ use surge_core::SurgeConfig;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig};
 use surge_persistence::runs::Storage;
+
+/// Output format for read-only inspection commands.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable text (default).
+    Text,
+    /// Machine-readable JSON.
+    Json,
+}
 
 /// Subcommands under `surge engine`.
 #[derive(Subcommand, Debug)]
@@ -83,6 +92,9 @@ pub enum EngineCommands {
         /// Fold events up to and including this seq (default: latest).
         #[arg(long)]
         seq: Option<u64>,
+        /// Output format (`text` or `json`).
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
     },
     /// Fork a run at a given seq into a fresh run: copy events `1..=seq`
     /// (inheriting the parent snapshot so the child resumes at the fork
@@ -127,7 +139,11 @@ pub async fn run(command: EngineCommands) -> Result<()> {
             since,
             follow,
         } => logs_command(run_id, since, follow).await,
-        EngineCommands::Replay { run_id, seq } => replay_command(run_id, seq).await,
+        EngineCommands::Replay {
+            run_id,
+            seq,
+            format,
+        } => replay_command(run_id, seq, format).await,
         EngineCommands::Fork {
             run_id,
             seq,
@@ -473,7 +489,9 @@ async fn follow_log_from(run_id: RunId, since_seq: u64) -> Result<u64> {
 /// `surge engine replay <run_id> --seq N` — fold the event log up to seq
 /// `N` and print the resulting run state. CLI mirror of the replay
 /// scrubber over the same fold primitive the engine/cockpit use.
-async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
+async fn replay_command(run_id: String, seq: Option<u64>, format: OutputFormat) -> Result<()> {
+    use surge_core::run_event::EventPayload;
+    use surge_orchestrator::engine::build_replay_view;
     use surge_persistence::runs::{EventSeq, RunReader, aggregate_status};
 
     let id = parse_run_id(&run_id)?;
@@ -490,11 +508,42 @@ async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
     let events = reader.read_events(EventSeq(0)..end).await?;
     let snap = aggregate_status(id, &events);
 
+    // The graph the run folds to at the cutoff: the last graph-bearing event.
+    let graph = events.iter().rev().find_map(|e| match e.payload.payload() {
+        EventPayload::PipelineMaterialized { graph, .. }
+        | EventPayload::GraphRevisionAccepted { graph, .. } => Some((**graph).clone()),
+        _ => None,
+    });
+    let view = graph.as_ref().map(|g| build_replay_view(g, &events));
+
     let seq_label = if cutoff == u64::MAX {
         "latest".to_string()
     } else {
         cutoff.to_string()
     };
+
+    if matches!(format, OutputFormat::Json) {
+        let seq_cutoff = if cutoff == u64::MAX {
+            serde_json::Value::String("latest".into())
+        } else {
+            serde_json::json!(cutoff)
+        };
+        let json = serde_json::json!({
+            "run": id.to_string(),
+            "seq_cutoff": seq_cutoff,
+            "events_folded": snap.event_count,
+            "active_node": snap.active_node,
+            "last_outcome": snap.last_outcome,
+            "attempt": snap.last_attempt,
+            "terminal": snap.terminal,
+            "failed": snap.failed,
+            "elapsed_ms": snap.elapsed_ms,
+            "view": view,
+        });
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
     println!("run:           {id}");
     println!("seq cutoff:    {seq_label}");
     println!("events folded: {}", snap.event_count);
@@ -519,6 +568,36 @@ async fn replay_command(run_id: String, seq: Option<u64>) -> Result<()> {
     println!("terminal:      {terminal}");
     if let Some(ms) = snap.elapsed_ms {
         println!("elapsed:       {ms} ms");
+    }
+
+    if let Some(view) = &view {
+        println!(
+            "cost:          {}+{} tok ({} cached), ${:.4}",
+            view.cost.prompt_tokens,
+            view.cost.output_tokens,
+            view.cost.cache_hits,
+            view.cost.cost_usd
+        );
+        println!("nodes:");
+        for n in &view.nodes {
+            let attempt = if n.attempts > 0 {
+                format!(", attempt {}", n.attempts)
+            } else {
+                String::new()
+            };
+            let outcome = n
+                .last_outcome
+                .as_deref()
+                .map(|o| format!(", outcome: {o}"))
+                .unwrap_or_default();
+            println!("  [{:<9}] {}{attempt}{outcome}", n.status.as_str(), n.node);
+        }
+        if !view.edges_traversed.is_empty() {
+            println!("edges:");
+            for e in &view.edges_traversed {
+                println!("  {} --{}--> {}", e.from, e.edge, e.to);
+            }
+        }
     }
     Ok(())
 }
