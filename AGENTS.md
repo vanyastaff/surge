@@ -106,6 +106,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 | Architecture | `docs/ARCHITECTURE.md` | Canonical architecture document: positioning, principles, flow model, engine, ACP bridge, intake, storage, crate layout, non-goals. |
 | Decisions (ADRs) | `docs/adr/` | Architectural decision records with rationale, alternatives rejected, and revisit triggers. |
 | Artifact Conventions | `docs/conventions/README.md` | Canonical generated artifact names, schemas, validators, minimal examples, and profile author guidance. |
+| Agent OS Landscape | `docs/agent-os-landscape.md` | Research note on adjacent agent tools, Agent OS patterns, and Surge product direction. |
 | Development | `docs/development.md` | `cargo` checks, ignored long-running tests, local runtime state. |
 | User config example | `surge.example.toml` | Annotated example of every `surge.toml` field. |
 

@@ -325,13 +325,20 @@ Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge
 
 ## 14. Open questions / direction _(intent)_
 
-> This is where we will record what we want to build next, in our own words. Everything above is the architecture as it stands today; everything below is the conversation about where it should go.
+> Product direction now has its own decision note: [`product-strategy.md`](product-strategy.md) (positioning, evidence from the 2026-07 market research, pillars, sequencing, metrics). The market survey behind it is [`agent-os-landscape.md`](agent-os-landscape.md). Summary of the bets:
+
+- **Pillar A — completion machinery** (the moat): typed task ledger with dependency + `discovered-from` edges and context-budgeted task sizing (successor of prose `roadmap.md`); verifier nodes as the sole write path to `done`, running sealed (read-only, no network); git-committed `.surge/memory/` with a staleness audit; spec deltas extending the roadmap-amendment machinery; branch summaries on fork.
+- **Pillar B — fleet interaction** (native, rendered from the event log; no PTY, no scraping): `surge inbox` triaged Needs input / Working / Done; a steering queue (`surge steer`) delivering operator messages at safe boundaries; run cockpit; `surge run checkout` promote-to-foreground; Telegram digest mode.
+- **Build, don't bridge**: Herdr / Pi / BridgeMind are design references whose best ideas are implemented natively; no adapters to third-party multiplexers or agent-specific RPC.
+
+Open questions still unresolved:
 
 - The exact sandcastle-like ergonomics we want at the CLI surface — should `surge engine run "<prompt>"` map to a default `flow.toml` template, or always go through full bootstrap? Should `surge engine run` be renamed back to `surge run` as the single execution entry point?
 - How template authorship should feel — single TOML, or split prompt + flow?
 - The story for shared profiles across projects (registry vs git-tracked).
-- AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping?
-- Loop-level token budgeting and when to split a run into chained smaller runs.
+- AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping? (Partially answered by the inbox/digest direction: push vs poll must be user-configurable.)
+- Loop-level token budgeting and when to split a run into chained smaller runs. (Partially answered by the ledger direction: tasks are sized to a context budget at bootstrap time.)
+- Ledger representation: extend `roadmap.toml`-style artifacts, or a first-class store beside the event log?
 
 ## See Also
 
