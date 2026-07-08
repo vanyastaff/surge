@@ -90,8 +90,10 @@ mitigation = "Keep profile prompts linked to this convention."
 
 - TOML has top-level `schema_version = 2` (or `1` for legacy roadmaps).
 - TOML has one or more `[[milestones]]`.
-- Every task has a `size` (`s` / `m` / `l`) sized to one agent session.
+- **Schema v2 only:** every task has a `size` (`s` / `m` / `l`) sized to one agent
+  session (validation requires `size` at v2; legacy v1 roadmaps omit it).
 - Task ids are unique; `depends_on` / `discovered_from` reference real task ids.
+- `[[dependencies]]` (if present) reference real milestone ids and are not self-referential.
 - The task `depends_on` graph is acyclic.
 - Tasks include clear titles and testable acceptance criteria when known.
 - Markdown compatibility view has `## Milestones`, `## Dependencies`, and `## Risks`.
