@@ -14,6 +14,7 @@ use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
 use crate::screens::agent_terminal::AgentTerminalScreen;
+use crate::screens::backlog::{BacklogAction, BacklogScreen};
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
@@ -54,6 +55,7 @@ pub struct SurgeApp {
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
+    backlog: Option<Entity<BacklogScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
@@ -132,6 +134,7 @@ impl SurgeApp {
             flow: None,
             memory: None,
             runs_screen: None,
+            backlog: None,
             agent_terminal: None,
             agent_hub: None,
             spec_explorer: None,
@@ -242,6 +245,7 @@ impl SurgeApp {
         self.flow = None;
         self.memory = None;
         self.runs_screen = None;
+        self.backlog = None;
         self.agent_hub = None;
         self.agent_terminal = None;
         self.spec_explorer = None;
@@ -676,6 +680,26 @@ impl SurgeApp {
                 let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
                 s.clone().into_any_element()
             },
+            Screen::Backlog => {
+                let state = self.state.clone();
+                let backlog = self.backlog.get_or_insert_with(|| {
+                    let b = cx.new(|cx| BacklogScreen::new(state, cx));
+                    cx.subscribe(&b, |this: &mut Self, _b, event: &BacklogAction, cx| {
+                        match event {
+                            BacklogAction::OpenTask(id) => {
+                                this.task_detail_id = Some(id.clone());
+                                cx.notify();
+                            },
+                            BacklogAction::NewTask => {
+                                this.navigate(Screen::SpecWizard, cx);
+                            },
+                        }
+                    })
+                    .detach();
+                    b
+                });
+                backlog.clone().into_any_element()
+            },
             Screen::AgentHub => {
                 let state = self.state.clone();
                 let agent_hub = self
@@ -698,9 +722,51 @@ impl SurgeApp {
                 terminal.clone().into_any_element()
             },
             Screen::SpecWizard => {
-                let spec_wizard = self
-                    .spec_wizard
-                    .get_or_insert_with(|| cx.new(SpecWizardScreen::new));
+                let spec_wizard = self.spec_wizard.get_or_insert_with(|| {
+                    let w = cx.new(SpecWizardScreen::new);
+                    cx.subscribe(
+                        &w,
+                        |this: &mut Self,
+                         _w,
+                         event: &crate::screens::spec_wizard::SpecWizardEvent,
+                         cx| {
+                            match event {
+                                crate::screens::spec_wizard::SpecWizardEvent::Create {
+                                    title,
+                                    description,
+                                } => {
+                                    // Land the new work in the backlog as a
+                                    // draft task (in-memory; engine-backed
+                                    // intake is the bootstrap pipeline).
+                                    let now = chrono::Local::now().format("%H:%M").to_string();
+                                    let task = crate::app_state::TaskEntry {
+                                        id: surge_core::TaskId::new(),
+                                        _spec_id: surge_core::SpecId::new(),
+                                        title: title.clone(),
+                                        description: description.clone(),
+                                        state: surge_core::TaskState::Draft,
+                                        agent: None,
+                                        complexity: "unscoped".to_string(),
+                                        _created_at: now.clone(),
+                                        updated_at: now,
+                                    };
+                                    this.state.update(cx, |state, cx| {
+                                        state.tasks.push(task);
+                                        cx.notify();
+                                    });
+                                    this.spec_wizard = None;
+                                    this.navigate(Screen::Backlog, cx);
+                                },
+                                crate::screens::spec_wizard::SpecWizardEvent::Cancel => {
+                                    this.spec_wizard = None;
+                                    this.navigate(Screen::Backlog, cx);
+                                },
+                            }
+                        },
+                    )
+                    .detach();
+                    w
+                });
                 spec_wizard.clone().into_any_element()
             },
             Screen::Worktrees => {

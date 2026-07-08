@@ -1,5 +1,6 @@
 pub mod agent_hub;
 pub mod agent_terminal;
+pub mod backlog;
 pub mod fleet;
 pub mod flow;
 pub mod gate_approval;
