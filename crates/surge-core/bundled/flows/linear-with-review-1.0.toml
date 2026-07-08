@@ -91,16 +91,18 @@ id = "pass"
 description = "Verification clean"
 edge_kind_hint = "forward"
 is_terminal = false
+ledger_effect = "verified"
 
 [[nodes.verify_1.declared_outcomes]]
 id = "fail"
 description = "Regression detected"
 edge_kind_hint = "escalate"
 is_terminal = false
+ledger_effect = "failed_verification"
 
 [nodes.verify_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
+profile = "verifier@2.0"
 bindings = []
 hooks = []
 

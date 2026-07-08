@@ -77,10 +77,11 @@ id = "pass"
 description = "Behaviour preserved"
 edge_kind_hint = "forward"
 is_terminal = false
+ledger_effect = "verified"
 
 [nodes.verify_1.config]
 node_kind = "agent"
-profile = "implementer@1.0"
+profile = "verifier@2.0"
 bindings = []
 hooks = []
 
