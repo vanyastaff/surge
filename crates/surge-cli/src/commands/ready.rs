@@ -35,8 +35,9 @@ pub struct ReadyArgs {
     /// Only tasks belonging to this run id.
     #[arg(long = "run")]
     pub run_id: Option<String>,
-    /// Accepted for compatibility; project scoping is currently always on
-    /// (see the module docs), so this is a no-op today.
+    /// Accepted for compatibility. Per-project scoping is currently disabled —
+    /// all projects are always shown (see the module docs), so this flag is a
+    /// no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.

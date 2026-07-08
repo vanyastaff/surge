@@ -19,9 +19,9 @@ pub struct LedgerArgs {
     /// Scope to one run id.
     #[arg(long = "run")]
     pub run_id: Option<String>,
-    /// Accepted for compatibility; project scoping is currently always on
-    /// (runs store their worktree path, not the origin repo), so this is a
-    /// no-op today.
+    /// Accepted for compatibility. Per-project scoping is currently disabled —
+    /// all projects are always shown (runs store their worktree path, not the
+    /// origin repo), so this flag is a no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.
