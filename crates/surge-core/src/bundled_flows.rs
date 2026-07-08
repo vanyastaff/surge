@@ -194,16 +194,21 @@ mod tests {
         // Archetypes wired with a sealed verifier (ledger_effect = verified on
         // the verify node) must not trip the W4 "unverified success path"
         // warning — the moat's flow-load enforcement (Phase 1 M4).
-        for name in ["bug-fix", "linear-3", "linear-with-review", "refactor", "multi-milestone"] {
-            let flow = BundledFlows::by_name_latest(name)
-                .unwrap_or_else(|| panic!("{name} bundled"));
+        for name in [
+            "bug-fix",
+            "linear-3",
+            "linear-with-review",
+            "refactor",
+            "multi-milestone",
+        ] {
+            let flow =
+                BundledFlows::by_name_latest(name).unwrap_or_else(|| panic!("{name} bundled"));
             let findings = validate(&flow.graph)
                 .unwrap_or_else(|e| panic!("{name} must validate without errors: {e:?}"));
             assert!(
-                !findings.iter().any(|f| matches!(
-                    f.kind,
-                    ValidationErrorKind::UnverifiedSuccessPath { .. }
-                )),
+                !findings
+                    .iter()
+                    .any(|f| matches!(f.kind, ValidationErrorKind::UnverifiedSuccessPath { .. })),
                 "{name} should be verifier-gated, got {findings:?}"
             );
         }

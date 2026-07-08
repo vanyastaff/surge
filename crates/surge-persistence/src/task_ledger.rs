@@ -129,9 +129,8 @@ impl TaskLedgerStore {
                 input.observed_at_ms,
             ],
         )?;
-        self.get(input.run_id, &input.task_id)?.ok_or_else(|| {
-            StorageError::MigrationFailed("task ledger upsert vanished".into())
-        })
+        self.get(input.run_id, &input.task_id)?
+            .ok_or_else(|| StorageError::MigrationFailed("task ledger upsert vanished".into()))
     }
 
     /// List task-ledger rows matching `filter`, newest update first.
@@ -315,7 +314,13 @@ mod tests {
         let store = store();
         let run = RunId::new();
         store
-            .upsert(&upsert(run, "t1", RoadmapStatus::ReadyForVerification, false, None))
+            .upsert(&upsert(
+                run,
+                "t1",
+                RoadmapStatus::ReadyForVerification,
+                false,
+                None,
+            ))
             .unwrap();
         store
             .upsert(&upsert(run, "t1", RoadmapStatus::Completed, true, None))
@@ -334,7 +339,13 @@ mod tests {
             .upsert(&upsert(run, "t1", RoadmapStatus::Pending, false, None))
             .unwrap();
         store
-            .upsert(&upsert(run, "t2", RoadmapStatus::Pending, false, Some("t1")))
+            .upsert(&upsert(
+                run,
+                "t2",
+                RoadmapStatus::Pending,
+                false,
+                Some("t1"),
+            ))
             .unwrap();
         store
             .upsert(&upsert(run, "t3", RoadmapStatus::Completed, true, None))
@@ -364,11 +375,23 @@ mod tests {
         let store = store();
         let run = RunId::new();
         store
-            .upsert(&upsert(run, "t2", RoadmapStatus::Pending, false, Some("t1")))
+            .upsert(&upsert(
+                run,
+                "t2",
+                RoadmapStatus::Pending,
+                false,
+                Some("t1"),
+            ))
             .unwrap();
         // A later status-only upsert (COALESCE keeps the origin).
         store
-            .upsert(&upsert(run, "t2", RoadmapStatus::ReadyForVerification, false, None))
+            .upsert(&upsert(
+                run,
+                "t2",
+                RoadmapStatus::ReadyForVerification,
+                false,
+                None,
+            ))
             .unwrap();
         let record = store.get(run, "t2").unwrap().unwrap();
         assert_eq!(record.discovered_from.as_deref(), Some("t1"));

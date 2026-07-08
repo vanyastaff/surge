@@ -218,7 +218,10 @@ mod tests {
 
     #[test]
     fn active_task_id_ignores_items_without_id() {
-        let frames = vec![loop_frame_over(vec![toml::Value::String("plain".into())], 0)];
+        let frames = vec![loop_frame_over(
+            vec![toml::Value::String("plain".into())],
+            0,
+        )];
         assert_eq!(active_task_id(&frames), None);
     }
 

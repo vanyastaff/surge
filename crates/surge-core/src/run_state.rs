@@ -698,10 +698,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 unreachable!()
             }
         },
-        (
-            state @ RunState::Pipeline { .. },
-            EventPayload::TaskVerified { task_id, node, .. },
-        ) => {
+        (state @ RunState::Pipeline { .. }, EventPayload::TaskVerified { task_id, node, .. }) => {
             if let RunState::Pipeline {
                 graph,
                 cursor,
@@ -2129,7 +2126,10 @@ mod tests {
             panic!("expected Pipeline");
         };
         assert_eq!(a.ledger, b.ledger);
-        assert_eq!(a.ledger.tasks["m1-t1"].discovered_from.as_deref(), Some("seed"));
+        assert_eq!(
+            a.ledger.tasks["m1-t1"].discovered_from.as_deref(),
+            Some("seed")
+        );
         assert!(a.ledger.tasks["m1-t1"].verified);
     }
 
@@ -2162,7 +2162,10 @@ mod tests {
         };
         let t1 = &memory.ledger.tasks["m1-t1"];
         assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
-        assert!(!t1.verified, "verified must be cleared after non-Completed status change");
+        assert!(
+            !t1.verified,
+            "verified must be cleared after non-Completed status change"
+        );
     }
 
     #[test]

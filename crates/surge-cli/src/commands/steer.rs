@@ -14,8 +14,8 @@ use clap::Args;
 use surge_core::RunId;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
-use surge_persistence::runs::registry::RunFilter;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::registry::RunFilter;
 
 /// Arguments for `surge steer`.
 #[derive(Args, Debug)]
@@ -90,7 +90,10 @@ pub async fn run(args: SteerArgs) -> Result<()> {
             .map_err(daemon_err)?;
         println!("✓ Steer queued for run {run_id} (id {steer_id})");
         println!("  Applies at the next step — not interrupting the current agent.");
-        println!("  Cancel with:  surge steer {} --cancel {steer_id}", args.run_id);
+        println!(
+            "  Cancel with:  surge steer {} --cancel {steer_id}",
+            args.run_id
+        );
     }
     Ok(())
 }

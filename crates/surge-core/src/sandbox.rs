@@ -154,9 +154,18 @@ fn is_valid_host_pattern(entry: &str) -> bool {
 }
 
 /// `true` when the shell-allowlist entry contains characters that would let
-/// the agent chain commands past the allowlist.
+/// the agent chain commands, substitute output, or redirect past the
+/// allowlist. Covers command chaining (`;`, `|`, `&`), command substitution
+/// (backtick and `$(...)`, plus bare `$` for variable/arithmetic expansion),
+/// redirects (`<`, `>`), grouping/subshells (`(`, `)`), and newlines (which a
+/// naive line-based allowlist check would treat as a command separator).
 fn has_shell_metacharacters(entry: &str) -> bool {
-    entry.contains(';') || entry.contains('|') || entry.contains("&&") || entry.contains('`')
+    entry.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '|' | '&' | '`' | '$' | '<' | '>' | '(' | ')' | '\n' | '\r'
+        )
+    })
 }
 
 #[cfg(test)]
@@ -300,7 +309,21 @@ mod tests {
 
     #[test]
     fn validate_custom_flags_shell_metacharacters() {
-        let cases = ["cargo build && rm -rf .", "cargo|grep err", "cargo;ls"];
+        let cases = [
+            "cargo build && rm -rf .",
+            "cargo|grep err",
+            "cargo;ls",
+            // Command substitution and expansion must also be rejected.
+            "cargo $(rm -rf /)",
+            "echo `whoami`",
+            "cargo $HOME",
+            // Redirects and subshell grouping.
+            "cargo > /etc/passwd",
+            "cargo < secrets",
+            "(cargo)",
+            // Newline-embedded second command.
+            "cargo\nrm -rf .",
+        ];
         for entry in cases {
             let cfg = custom_with(vec![], vec![], vec![entry]);
             let errs = validate_custom(&cfg);

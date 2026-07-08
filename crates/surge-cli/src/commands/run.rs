@@ -14,8 +14,8 @@ use anyhow::{Context, Result, anyhow};
 use clap::Subcommand;
 use surge_core::RunId;
 use surge_git::GitManager;
-use surge_persistence::runs::registry::RunFilter;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::registry::RunFilter;
 
 /// `surge run` subcommands.
 #[derive(Subcommand, Debug)]

@@ -14,8 +14,8 @@ use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use serde::Serialize;
 use surge_core::{Attention, RunState, TerminalReason};
-use surge_persistence::runs::registry::{RunFilter, RunSummary};
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::registry::{RunFilter, RunSummary};
 
 use crate::commands::run_fold::fold_run_state;
 
@@ -114,7 +114,12 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
     };
 
     if summary.status.is_terminal() {
-        return Ok(base("done", Some(terminal_label(summary.status)), None, None));
+        return Ok(base(
+            "done",
+            Some(terminal_label(summary.status)),
+            None,
+            None,
+        ));
     }
 
     // Non-terminal: fold the event log for the authoritative attention state.
@@ -163,8 +168,14 @@ fn reason_label(reason: TerminalReason) -> &'static str {
 }
 
 fn print_inbox(entries: &[InboxEntry], show_done: bool) {
-    let needs: Vec<&InboxEntry> = entries.iter().filter(|e| e.attention == "needs_input").collect();
-    let working: Vec<&InboxEntry> = entries.iter().filter(|e| e.attention == "working").collect();
+    let needs: Vec<&InboxEntry> = entries
+        .iter()
+        .filter(|e| e.attention == "needs_input")
+        .collect();
+    let working: Vec<&InboxEntry> = entries
+        .iter()
+        .filter(|e| e.attention == "working")
+        .collect();
     let done: Vec<&InboxEntry> = entries.iter().filter(|e| e.attention == "done").collect();
 
     // Blocked-first: the "needs me right now" group leads.

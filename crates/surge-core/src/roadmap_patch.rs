@@ -1370,20 +1370,38 @@ fn validate_replace_draft_item(
         ));
     }
     match replacement {
-        RoadmapPatchItem::Milestone { milestone } => validate_required_text(
-            &milestone.title,
-            RoadmapPatchValidationCode::MissingTitle,
-            format!("operations[{index}].replacement.milestone.title"),
-            "replacement milestone title must not be empty",
-            issues,
-        ),
-        RoadmapPatchItem::Task { task } => validate_required_text(
-            &task.title,
-            RoadmapPatchValidationCode::MissingTitle,
-            format!("operations[{index}].replacement.task.title"),
-            "replacement task title must not be empty",
-            issues,
-        ),
+        RoadmapPatchItem::Milestone { milestone } => {
+            validate_required_text(
+                &milestone.id,
+                RoadmapPatchValidationCode::MissingTargetReference,
+                format!("operations[{index}].replacement.milestone.id"),
+                "replacement milestone id must not be empty",
+                issues,
+            );
+            validate_required_text(
+                &milestone.title,
+                RoadmapPatchValidationCode::MissingTitle,
+                format!("operations[{index}].replacement.milestone.title"),
+                "replacement milestone title must not be empty",
+                issues,
+            );
+        },
+        RoadmapPatchItem::Task { task } => {
+            validate_required_text(
+                &task.id,
+                RoadmapPatchValidationCode::MissingTargetReference,
+                format!("operations[{index}].replacement.task.id"),
+                "replacement task id must not be empty",
+                issues,
+            );
+            validate_required_text(
+                &task.title,
+                RoadmapPatchValidationCode::MissingTitle,
+                format!("operations[{index}].replacement.task.title"),
+                "replacement task title must not be empty",
+                issues,
+            );
+        },
     }
 }
 

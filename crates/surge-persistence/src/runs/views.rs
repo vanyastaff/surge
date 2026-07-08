@@ -380,9 +380,7 @@ pub fn maintain(
                 rusqlite::params![task_id, discovered_from, seq.0 as i64],
             )?;
         },
-        TaskVerified {
-            task_id, node, ..
-        } => {
+        TaskVerified { task_id, node, .. } => {
             // The per-run view trusts engine-emitted TaskVerified (the engine
             // enforces verification authority before emit in M3). The
             // authoritative rejection of an unauthorized/tampered event lives

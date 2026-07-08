@@ -170,10 +170,7 @@ async fn run_stage_steered(
         .read_events(EventSeq(0)..EventSeq(256))
         .await
         .unwrap();
-    let payloads: Vec<EventPayload> = events
-        .iter()
-        .map(|e| e.payload.payload().clone())
-        .collect();
+    let payloads: Vec<EventPayload> = events.iter().map(|e| e.payload.payload().clone()).collect();
     ((result, payloads), mock)
 }
 
@@ -229,9 +226,8 @@ async fn sealed_verifier_verified_outcome_emits_task_verified() {
     )
     .await
     .unwrap();
-    let expected_evidence = surge_core::content_hash::ContentHash::compute(
-        b"# Verification report\nall checks pass\n",
-    );
+    let expected_evidence =
+        surge_core::content_hash::ContentHash::compute(b"# Verification report\nall checks pass\n");
 
     let cfg = agent_cfg(Some(SandboxMode::ReadOnly), 3); // sealed
     let declared = [outcome_decl("passed", LedgerEffect::Verified)];
@@ -471,16 +467,20 @@ async fn steer_is_injected_into_prompt_and_recorded() {
     // The steer text was prepended to the prompt the agent actually received.
     let prompt = mock.last_prompt().await.expect("a prompt was sent");
     assert!(prompt.contains("Operator steering"), "prompt:\n{prompt}");
-    assert!(prompt.contains("prefer axum over actix"), "prompt:\n{prompt}");
-    assert!(prompt.contains("do not touch migrations"), "prompt:\n{prompt}");
+    assert!(
+        prompt.contains("prefer axum over actix"),
+        "prompt:\n{prompt}"
+    );
+    assert!(
+        prompt.contains("do not touch migrations"),
+        "prompt:\n{prompt}"
+    );
 
     // Both deliveries were recorded as SteerDelivered events (audit trail).
     let delivered: Vec<(String, String)> = payloads
         .iter()
         .filter_map(|p| match p {
-            EventPayload::SteerDelivered { id, message, .. } => {
-                Some((id.clone(), message.clone()))
-            },
+            EventPayload::SteerDelivered { id, message, .. } => Some((id.clone(), message.clone())),
             _ => None,
         })
         .collect();

@@ -37,15 +37,15 @@ pub(in crate::artifact_contract) fn validate_discovered_tasks(
 
     for issue in artifact.validate() {
         let (code, location) = match &issue {
-            DiscoveredTaskIssue::EmptyId => {
-                (ArtifactDiagnosticCode::MissingField, None)
-            },
-            DiscoveredTaskIssue::DuplicateId { id } => {
-                (ArtifactDiagnosticCode::DuplicateIdentifier, Some(id.clone()))
-            },
-            DiscoveredTaskIssue::EmptyTitle { id } => {
-                (ArtifactDiagnosticCode::MissingField, Some(format!("{id}.title")))
-            },
+            DiscoveredTaskIssue::EmptyId => (ArtifactDiagnosticCode::MissingField, None),
+            DiscoveredTaskIssue::DuplicateId { id } => (
+                ArtifactDiagnosticCode::DuplicateIdentifier,
+                Some(id.clone()),
+            ),
+            DiscoveredTaskIssue::EmptyTitle { id } => (
+                ArtifactDiagnosticCode::MissingField,
+                Some(format!("{id}.title")),
+            ),
         };
         report.push(ArtifactValidationDiagnostic::error(
             report.kind,

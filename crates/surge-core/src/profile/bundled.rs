@@ -171,7 +171,11 @@ mod tests {
     #[test]
     fn verifier_2_0_is_sealed_and_authoritative() {
         let p = BundledRegistry::by_name_latest("verifier").expect("verifier bundled");
-        assert_eq!(p.role.version, Version::new(2, 0, 0), "latest verifier is 2.0");
+        assert_eq!(
+            p.role.version,
+            Version::new(2, 0, 0),
+            "latest verifier is 2.0"
+        );
         assert_eq!(
             p.sandbox.mode,
             SandboxMode::ReadOnly,
@@ -248,7 +252,12 @@ mod tests {
             ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml", 2),
             ("flow-generator", ArtifactKind::Flow, "flow.toml", 1),
             ("spec-author", ArtifactKind::Spec, "spec.toml", 1),
-            ("architect", ArtifactKind::Adr, "docs/adr/<NNNN>-<slug>.md", 1),
+            (
+                "architect",
+                ArtifactKind::Adr,
+                "docs/adr/<NNNN>-<slug>.md",
+                1,
+            ),
         ] {
             let profile = BundledRegistry::by_name_latest(profile).expect("bundled profile");
             let drafted = profile

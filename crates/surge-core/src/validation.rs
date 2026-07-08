@@ -239,6 +239,7 @@ impl ReferenceResolver for NoOpResolver {
 
 /// Validate a graph. Returns Ok(warnings_or_empty) if no errors;
 /// Err(all_findings) if any errors are present.
+#[must_use = "validation results carry errors that must be inspected"]
 pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationError>> {
     let mut findings = Vec::new();
 
@@ -281,6 +282,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
 /// # Errors
 /// Same shape as [`validate`]: returns `Err(findings)` when at least one
 /// finding has [`Severity::Error`].
+#[must_use = "validation results carry errors that must be inspected"]
 pub fn validate_with_resolver(
     graph: &Graph,
     resolver: &dyn ReferenceResolver,
@@ -2432,7 +2434,12 @@ mod w4_tests {
         }
     }
 
-    fn graph(start: &str, nodes: Vec<Node>, edges: Vec<Edge>, subgraphs: BTreeMap<SubgraphKey, Subgraph>) -> Graph {
+    fn graph(
+        start: &str,
+        nodes: Vec<Node>,
+        edges: Vec<Edge>,
+        subgraphs: BTreeMap<SubgraphKey, Subgraph>,
+    ) -> Graph {
         let mut map = BTreeMap::new();
         for node in nodes {
             map.insert(node.id.clone(), node);
@@ -2469,7 +2476,10 @@ mod w4_tests {
     fn warns_when_success_has_no_verifier() {
         let g = graph(
             "impl_1",
-            vec![agent_node("impl_1", LedgerEffect::None), success_terminal("end")],
+            vec![
+                agent_node("impl_1", LedgerEffect::None),
+                success_terminal("end"),
+            ],
             vec![edge("e", "impl_1", "end")],
             BTreeMap::new(),
         );
@@ -2486,7 +2496,10 @@ mod w4_tests {
                 agent_node("verify_1", LedgerEffect::Verified),
                 success_terminal("end"),
             ],
-            vec![edge("e1", "impl_1", "verify_1"), edge("e2", "verify_1", "end")],
+            vec![
+                edge("e1", "impl_1", "verify_1"),
+                edge("e2", "verify_1", "end"),
+            ],
             BTreeMap::new(),
         );
         assert!(w4_warnings(&g).is_empty());

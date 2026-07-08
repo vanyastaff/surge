@@ -188,10 +188,8 @@ impl RoadmapArtifact {
         // Cycle detection is unreliable when duplicate task ids exist (the
         // HashMap in find_task_cycle uses last-write-wins, which can mask
         // edges). Skip it so we don't report a false-negative.
-        if !has_duplicate_task_ids {
-            if let Some(cycle) = self.find_task_cycle() {
-                issues.push(RoadmapLedgerIssue::DependencyCycle { cycle });
-            }
+        if !has_duplicate_task_ids && let Some(cycle) = self.find_task_cycle() {
+            issues.push(RoadmapLedgerIssue::DependencyCycle { cycle });
         }
 
         issues
@@ -206,10 +204,14 @@ impl RoadmapArtifact {
 
     /// Find one cycle in the task-level `depends_on` graph, if any.
     ///
-    /// Deterministic: tasks are visited in declaration order, so the same
-    /// roadmap always reports the same cycle. Unknown dependency ids are
-    /// ignored here — they are reported separately as
-    /// [`RoadmapLedgerIssue::UnknownDependsOn`].
+    /// Deterministic: tasks are visited in declaration order, and each task's
+    /// dependencies in their declared order, so the same roadmap always
+    /// reports the same cycle. Unknown dependency ids are ignored here — they
+    /// are reported separately as [`RoadmapLedgerIssue::UnknownDependsOn`].
+    ///
+    /// Uses an explicit-stack iterative DFS (not recursion): a linear chain of
+    /// tens of thousands of tasks would blow a recursive call stack, and a
+    /// depth cap would silently miss deep cycles.
     fn find_task_cycle(&self) -> Option<Vec<String>> {
         let dependencies: HashMap<&str, &[String]> = self
             .tasks()
@@ -217,12 +219,9 @@ impl RoadmapArtifact {
             .collect();
 
         let mut marks: HashMap<&str, CycleMark> = HashMap::new();
-        let mut stack: Vec<&str> = Vec::new();
 
         for task in self.tasks() {
-            if let Some(cycle) =
-                visit_for_cycle(task.id.as_str(), &dependencies, &mut marks, &mut stack, 0)
-            {
+            if let Some(cycle) = find_cycle_from(task.id.as_str(), &dependencies, &mut marks) {
                 return Some(cycle);
             }
         }
@@ -230,57 +229,78 @@ impl RoadmapArtifact {
     }
 }
 
-/// Maximum recursion depth for cycle detection before we conservatively
-/// report "no cycle". Prevents stack overflow on degenerate graphs (e.g. a
-/// linear chain of 10k tasks). 1024× the typical stack frame size (~200 bytes)
-/// is ~200 KB, well within the default 2 MB debug-mode stack.
-const MAX_CYCLE_SEARCH_DEPTH: usize = 1024;
-
 #[derive(Clone, Copy, PartialEq)]
 enum CycleMark {
     Visiting,
     Done,
 }
 
-/// Depth-first search from `node` looking for a back edge into the active
-/// stack. Returns the cycle path (first == last) on the first one found.
-///
-/// `depth` tracks the current recursion depth; when it exceeds
-/// [`MAX_CYCLE_SEARCH_DEPTH`] the search is aborted (returns `None`) to
-/// prevent stack overflow.
-fn visit_for_cycle<'a>(
+/// One entry in the explicit DFS stack: a node and the index of the next
+/// child (dependency) to visit from it.
+struct CycleFrame<'a> {
     node: &'a str,
+    next_child: usize,
+}
+
+/// Iterative depth-first search from `start` looking for a back edge into the
+/// active path. Returns the cycle path (first == last) on the first one found.
+///
+/// Mirrors a recursive coloring DFS: a node on the active path is `Visiting`,
+/// a fully-explored node is `Done`. Encountering a `Visiting` node means the
+/// active path plus that node closes a cycle.
+fn find_cycle_from<'a>(
+    start: &'a str,
     dependencies: &HashMap<&'a str, &'a [String]>,
     marks: &mut HashMap<&'a str, CycleMark>,
-    stack: &mut Vec<&'a str>,
-    depth: usize,
 ) -> Option<Vec<String>> {
-    if depth > MAX_CYCLE_SEARCH_DEPTH {
+    if marks.get(start) == Some(&CycleMark::Done) {
         return None;
     }
-    match marks.get(node) {
-        Some(CycleMark::Done) => return None,
-        Some(CycleMark::Visiting) => {
-            let start = stack.iter().position(|frame| *frame == node)?;
-            let mut cycle: Vec<String> = stack[start..].iter().map(ToString::to_string).collect();
-            cycle.push(node.to_string());
-            return Some(cycle);
-        },
-        None => {},
-    }
 
-    marks.insert(node, CycleMark::Visiting);
-    stack.push(node);
-    for dependency in dependencies.get(node).copied().unwrap_or_default() {
-        let target = dependency.as_str();
-        if dependencies.contains_key(target)
-            && let Some(cycle) = visit_for_cycle(target, dependencies, marks, stack, depth + 1)
-        {
-            return Some(cycle);
+    let mut path: Vec<CycleFrame<'a>> = vec![CycleFrame {
+        node: start,
+        next_child: 0,
+    }];
+    marks.insert(start, CycleMark::Visiting);
+
+    while let Some(frame) = path.last_mut() {
+        let node = frame.node;
+        let children = dependencies.get(node).copied().unwrap_or_default();
+
+        if frame.next_child < children.len() {
+            let target = children[frame.next_child].as_str();
+            frame.next_child += 1;
+
+            // Only follow edges to known tasks; unknown ids are a separate
+            // diagnostic and must not appear in the reported cycle.
+            if !dependencies.contains_key(target) {
+                continue;
+            }
+            match marks.get(target) {
+                Some(CycleMark::Done) => continue,
+                Some(CycleMark::Visiting) => {
+                    // Back edge: close the cycle at `target`.
+                    let start_idx = path.iter().position(|f| f.node == target)?;
+                    let mut cycle: Vec<String> = path[start_idx..]
+                        .iter()
+                        .map(|f| f.node.to_owned())
+                        .collect();
+                    cycle.push(target.to_owned());
+                    return Some(cycle);
+                },
+                None => {
+                    marks.insert(target, CycleMark::Visiting);
+                    path.push(CycleFrame {
+                        node: target,
+                        next_child: 0,
+                    });
+                },
+            }
+        } else {
+            marks.insert(node, CycleMark::Done);
+            path.pop();
         }
     }
-    stack.pop();
-    marks.insert(node, CycleMark::Done);
     None
 }
 
@@ -635,7 +655,9 @@ impl VerificationReportArtifact {
         }
         for (idx, check) in self.checks.iter().enumerate() {
             if check.command.trim().is_empty() {
-                issues.push(format!("verification-report check #{idx} has an empty command"));
+                issues.push(format!(
+                    "verification-report check #{idx} has an empty command"
+                ));
             }
             if check.result.trim().is_empty() {
                 issues.push(format!(
@@ -1156,6 +1178,32 @@ mod tests {
     }
 
     #[test]
+    fn validate_ledger_detects_deep_cycle_without_stack_overflow() {
+        // A long linear chain t0 -> t1 -> ... -> t_{n-1} -> t0 forms one big
+        // cycle far deeper than any recursion cap would allow. The iterative
+        // DFS must both avoid a stack overflow and still report the cycle.
+        let n = 20_000;
+        let tasks: Vec<RoadmapTask> = (0..n)
+            .map(|i| {
+                let next = (i + 1) % n;
+                let mut task = RoadmapTask::new(format!("t{i}"), format!("Task {i}"));
+                task.size = Some(TaskSize::M);
+                task.depends_on = vec![format!("t{next}")];
+                task
+            })
+            .collect();
+        let roadmap = ledger_roadmap(tasks);
+
+        let issues = roadmap.validate_ledger();
+        assert!(
+            issues
+                .iter()
+                .any(|i| matches!(i, RoadmapLedgerIssue::DependencyCycle { .. })),
+            "deep cycle must be reported, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn validate_ledger_requires_size_only_at_v2() {
         let mut roadmap = ledger_roadmap(vec![RoadmapTask::new("t1", "No size")]);
         assert_eq!(
@@ -1196,9 +1244,11 @@ mod tests {
         });
 
         let issues = roadmap.validate_ledger();
-        assert!(issues.contains(&RoadmapLedgerIssue::MilestoneSelfDependency {
-            milestone: "m1".to_string()
-        }));
+        assert!(
+            issues.contains(&RoadmapLedgerIssue::MilestoneSelfDependency {
+                milestone: "m1".to_string()
+            })
+        );
     }
 
     #[test]

@@ -125,7 +125,10 @@ fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_owned()
     } else {
-        format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+        format!(
+            "{}…",
+            s.chars().take(max.saturating_sub(1)).collect::<String>()
+        )
     }
 }
 
@@ -134,9 +137,7 @@ fn parse_status(value: &str) -> Result<RoadmapStatus> {
         "pending" => RoadmapStatus::Pending,
         "running" => RoadmapStatus::Running,
         "paused" => RoadmapStatus::Paused,
-        "ready_for_verification" | "ready-for-verification" => {
-            RoadmapStatus::ReadyForVerification
-        },
+        "ready_for_verification" | "ready-for-verification" => RoadmapStatus::ReadyForVerification,
         "failed_verification" | "failed-verification" => RoadmapStatus::FailedVerification,
         "completed" => RoadmapStatus::Completed,
         "failed" => RoadmapStatus::Failed,

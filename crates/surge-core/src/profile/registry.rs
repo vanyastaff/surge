@@ -526,7 +526,10 @@ mod tests {
         parent.verification = VerificationCfg { authority: true };
         let child = make_profile("security-verifier");
         let merged = merge_pair(&parent, &child);
-        assert!(merged.verification.authority, "child inherits parent authority");
+        assert!(
+            merged.verification.authority,
+            "child inherits parent authority"
+        );
 
         // A non-verifier parent + non-verifier child stays without authority.
         let parent = make_profile("implementer");

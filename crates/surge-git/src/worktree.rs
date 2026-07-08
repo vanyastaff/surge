@@ -1200,9 +1200,7 @@ mod tests {
         // An agent edits the worktree without committing (how Surge runs work).
         std::fs::write(info.path.join("new_feature.rs"), "fn added() {}\n").unwrap();
 
-        let diff = gm
-            .run_diff(&id)
-            .unwrap();
+        let diff = gm.run_diff(&id).unwrap();
         assert!(diff.contains("new_feature.rs"), "diff:\n{diff}");
         assert!(diff.contains("+fn added() {}"), "diff:\n{diff}");
     }
@@ -1214,9 +1212,7 @@ mod tests {
         let id = surge_core::RunId::new();
         gm.create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
             .unwrap();
-        let diff = gm
-            .run_diff(&id)
-            .unwrap();
+        let diff = gm.run_diff(&id).unwrap();
         assert!(diff.trim().is_empty(), "expected empty diff, got:\n{diff}");
     }
 

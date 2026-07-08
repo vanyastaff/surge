@@ -969,7 +969,11 @@ async fn project_memory_artifact_event(
         return Ok(None);
     };
     let artifact = artifact_store
-        .put(run_id, PROJECT_MEMORY_ARTIFACT_NAME, seed.content.as_bytes())
+        .put(
+            run_id,
+            PROJECT_MEMORY_ARTIFACT_NAME,
+            seed.content.as_bytes(),
+        )
         .await
         .map_err(|e| EngineError::Storage(e.to_string()))?;
     let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)

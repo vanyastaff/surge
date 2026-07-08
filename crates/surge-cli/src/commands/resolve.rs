@@ -15,8 +15,8 @@ use surge_core::node::NodeConfig;
 use surge_core::run_state::RunState;
 use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
-use surge_persistence::runs::registry::RunFilter;
 use surge_persistence::runs::Storage;
+use surge_persistence::runs::registry::RunFilter;
 
 use crate::commands::run_fold::fold_run_state;
 
@@ -69,15 +69,15 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
     };
 
     // Gate options come from the pending node's HumanGate config, if any.
-    let gate_options: Vec<(String, String)> = match graph.nodes.get(&pending.node).map(|n| &n.config)
-    {
-        Some(NodeConfig::HumanGate(cfg)) => cfg
-            .options
-            .iter()
-            .map(|o| (o.outcome.to_string(), o.label.clone()))
-            .collect(),
-        _ => Vec::new(),
-    };
+    let gate_options: Vec<(String, String)> =
+        match graph.nodes.get(&pending.node).map(|n| &n.config) {
+            Some(NodeConfig::HumanGate(cfg)) => cfg
+                .options
+                .iter()
+                .map(|o| (o.outcome.to_string(), o.label.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
     let is_tool_call = pending.call_id.is_some();
 
     // Inspect mode: no resolution flag → show the question and how to answer.
@@ -224,8 +224,16 @@ mod tests {
 
     #[test]
     fn gate_answer_builds_outcome_and_comment() {
-        let (call_id, value) =
-            build_answer(false, None, &opts(), Some("approve"), Some("lgtm"), None, None).unwrap();
+        let (call_id, value) = build_answer(
+            false,
+            None,
+            &opts(),
+            Some("approve"),
+            Some("lgtm"),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(call_id, None);
         assert_eq!(value["outcome"], "approve");
         assert_eq!(value["comment"], "lgtm");
@@ -276,8 +284,8 @@ mod tests {
 
     #[test]
     fn tool_answer_requires_text_or_json() {
-        let err = build_answer(true, Some("call-1".into()), &[], None, None, None, None)
-            .unwrap_err();
+        let err =
+            build_answer(true, Some("call-1".into()), &[], None, None, None, None).unwrap_err();
         assert!(err.to_string().contains("--text or --json"), "{err}");
     }
 }

@@ -689,7 +689,10 @@ async fn dispatch(
             run_id,
             steer_id,
         } => match facade.cancel_steer(run_id, steer_id).await {
-            Ok(removed) => Some(DaemonResponse::CancelSteerOk { request_id, removed }),
+            Ok(removed) => Some(DaemonResponse::CancelSteerOk {
+                request_id,
+                removed,
+            }),
             Err(e) => Some(DaemonResponse::Error {
                 request_id,
                 code: ErrorCode::EngineError,

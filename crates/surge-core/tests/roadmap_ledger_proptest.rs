@@ -1,9 +1,7 @@
 //! Property-based tests for the roadmap task-ledger invariants.
 
 use proptest::prelude::*;
-use surge_core::{
-    RoadmapArtifact, RoadmapLedgerIssue, RoadmapMilestone, RoadmapTask, TaskSize,
-};
+use surge_core::{RoadmapArtifact, RoadmapLedgerIssue, RoadmapMilestone, RoadmapTask, TaskSize};
 
 /// Build a sized task with the given id and dependency indexes.
 fn task(id: usize, depends_on: Vec<usize>) -> RoadmapTask {

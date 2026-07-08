@@ -86,10 +86,7 @@ fn print_ledger_table(records: &[TaskLedgerIndexRecord]) {
         );
     }
     let verified = records.iter().filter(|r| r.verified).count();
-    println!(
-        "\n{} task(s), {verified} verified.",
-        records.len()
-    );
+    println!("\n{} task(s), {verified} verified.", records.len());
 }
 
 fn truncate(s: &str, max: usize) -> String {
