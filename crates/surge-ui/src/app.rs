@@ -14,6 +14,7 @@ use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
 use crate::screens::agent_terminal::AgentTerminalScreen;
+use crate::screens::agents::{AgentsAction, AgentsScreen};
 use crate::screens::backlog::{BacklogAction, BacklogScreen};
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
@@ -56,6 +57,7 @@ pub struct SurgeApp {
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
     backlog: Option<Entity<BacklogScreen>>,
+    agents_screen: Option<Entity<AgentsScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
@@ -135,6 +137,7 @@ impl SurgeApp {
             memory: None,
             runs_screen: None,
             backlog: None,
+            agents_screen: None,
             agent_terminal: None,
             agent_hub: None,
             spec_explorer: None,
@@ -246,6 +249,7 @@ impl SurgeApp {
         self.memory = None;
         self.runs_screen = None;
         self.backlog = None;
+        self.agents_screen = None;
         self.agent_hub = None;
         self.agent_terminal = None;
         self.spec_explorer = None;
@@ -699,6 +703,25 @@ impl SurgeApp {
                     b
                 });
                 backlog.clone().into_any_element()
+            },
+            Screen::Agents => {
+                let state = self.state.clone();
+                let agents = self.agents_screen.get_or_insert_with(|| {
+                    let a = cx.new(|cx| AgentsScreen::new(state, cx));
+                    cx.subscribe(&a, |this: &mut Self, _a, event: &AgentsAction, cx| {
+                        match event {
+                            AgentsAction::OpenCatalog => {
+                                this.navigate(Screen::AgentHub, cx);
+                            },
+                            AgentsAction::OpenTerminal(_id) => {
+                                this.navigate(Screen::AgentTerminals, cx);
+                            },
+                        }
+                    })
+                    .detach();
+                    a
+                });
+                agents.clone().into_any_element()
             },
             Screen::AgentHub => {
                 let state = self.state.clone();
