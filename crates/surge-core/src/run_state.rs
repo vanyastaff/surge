@@ -280,17 +280,12 @@ impl Default for LedgerTask {
 /// would wrongly reject every `TaskVerified` those flows emit.
 #[must_use]
 pub fn node_has_verification_authority(graph: &Graph, node: &NodeKey) -> bool {
-    graph
-        .nodes
-        .get(node)
-        .into_iter()
-        .chain(graph.subgraphs.values().filter_map(|sg| sg.nodes.get(node)))
-        .any(|found| {
-            found
-                .declared_outcomes
-                .iter()
-                .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
-        })
+    graph.find_node(node).is_some_and(|found| {
+        found
+            .declared_outcomes
+            .iter()
+            .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]

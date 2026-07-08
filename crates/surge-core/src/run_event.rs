@@ -611,6 +611,11 @@ pub struct RunConfig {
     /// Empty by default — no MCP delegation.
     #[serde(default)]
     pub mcp_servers: Vec<crate::mcp_config::McpServerRef>,
+    // FOLLOW-UP (PR #84 deep review): the frozen budget guard is NOT persisted
+    // here, so a daemon-restart resume reverts budget to the unlimited default
+    // and drops spend enforcement for the rest of the run. Adding `budget`
+    // (serde(default)) is the fix, but it touches ~30 RunConfig construction
+    // sites + migration fixtures and warrants its own PR with roundtrip tests.
 }
 
 #[cfg(test)]

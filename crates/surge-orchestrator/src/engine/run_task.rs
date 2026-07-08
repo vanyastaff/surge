@@ -566,7 +566,13 @@ async fn execute_agent_node(
     // Drain any operator steer messages queued for this run and hand them to
     // the stage, which prepends them to the prompt and records delivery. This
     // is the safe stage-boundary steering point (ACP v1 has no mid-turn inject).
-    let steers = {
+    //
+    // Skip the bootstrap flow-generator: an operator steering the *work* should
+    // not have their guidance consumed by graph generation. The steers stay
+    // queued for the first real implementation stage.
+    let steers = if crate::engine::bootstrap::is_flow_generator_profile(cfg.profile.as_str()) {
+        Vec::new()
+    } else {
         let mut queue = params.pending_steers.lock().await;
         std::mem::take(&mut *queue)
     };

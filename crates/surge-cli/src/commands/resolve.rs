@@ -68,12 +68,7 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
     // node may live at the top level or inside a subgraph (e.g. a gate in a
     // loop body), so search both — a top-level-only lookup shows no options for
     // subgraph gates and skips client-side outcome validation.
-    let gate_node = graph.nodes.get(&pending.node).or_else(|| {
-        graph
-            .subgraphs
-            .values()
-            .find_map(|sg| sg.nodes.get(&pending.node))
-    });
+    let gate_node = graph.find_node(&pending.node);
     let gate_options: Vec<(String, String)> = match gate_node.map(|n| &n.config) {
         Some(NodeConfig::HumanGate(cfg)) => cfg
             .options
