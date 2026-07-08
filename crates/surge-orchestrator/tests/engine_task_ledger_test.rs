@@ -351,3 +351,60 @@ async fn unsealed_verified_outcome_is_rejected() {
         "no TaskVerified from an unsealed sandbox"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_memory_note_is_stamped_with_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mem_dir = dir.path().join(".surge/memory");
+    tokio::fs::create_dir_all(&mem_dir).await.unwrap();
+    tokio::fs::write(
+        mem_dir.join("auth.md"),
+        b"# Auth invariant\nTokens are always HS256.\n",
+    )
+    .await
+    .unwrap();
+
+    let cfg = agent_cfg(None, 3);
+    let declared = [outcome_decl("implemented", LedgerEffect::None)];
+    let (result, _payloads) = run_stage(
+        dir.path(),
+        &cfg,
+        &declared,
+        "impl_1",
+        "implemented",
+        vec![".surge/memory/auth.md".into()],
+        None,
+    )
+    .await;
+    assert_eq!(result.unwrap().as_ref(), "implemented");
+
+    let stamped = tokio::fs::read_to_string(mem_dir.join("auth.md"))
+        .await
+        .unwrap();
+    assert!(
+        stamped.starts_with("<!-- surge:memory run="),
+        "note should be stamped with provenance, got:\n{stamped}"
+    );
+    assert!(stamped.contains("node=impl_1 -->"));
+    assert!(stamped.contains("Tokens are always HS256."));
+
+    // Idempotent: re-running the stage must not double-stamp.
+    let (_r, _p) = run_stage(
+        dir.path(),
+        &cfg,
+        &declared,
+        "impl_1",
+        "implemented",
+        vec![".surge/memory/auth.md".into()],
+        None,
+    )
+    .await;
+    let twice = tokio::fs::read_to_string(mem_dir.join("auth.md"))
+        .await
+        .unwrap();
+    assert_eq!(
+        twice.matches("<!-- surge:memory").count(),
+        1,
+        "provenance marker must not be duplicated on re-run"
+    );
+}

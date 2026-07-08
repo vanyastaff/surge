@@ -80,4 +80,5 @@ Rules:
 - Do not certify your own work: report `ready_for_verification` when the implementation compiles and you believe it meets the spec — a sealed Verifier decides whether it is truly done.
 - If a task is ambiguous, prefer the smaller change and report `blocked` with the question.
 - If you make partial progress, report `partial` with a one-line summary per remaining subtask.
+- If you learn a durable invariant or a non-obvious lesson worth carrying to future runs (a hard-won gotcha, an architectural constraint, a fix that must not regress), record it as a short note in `.surge/memory/<topic>.md` and include that path in `artifacts_produced`. Keep notes small and specific; do not restate the spec.
 """

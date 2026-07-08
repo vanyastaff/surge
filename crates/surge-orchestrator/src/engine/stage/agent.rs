@@ -665,6 +665,15 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         if name == "discovered-tasks" {
                             discovered_tasks_bytes = Some(bytes.clone());
                         }
+                        // Project memory: an agent-authored note under
+                        // `.surge/memory/` accumulates across runs. Stamp its
+                        // origin (run + node) in place so provenance survives
+                        // outside git history; the file is already part of the
+                        // run's diff.
+                        if is_project_memory_note(&relative_path) {
+                            stamp_project_memory_note(&canonical_path, &bytes, p.run_id, p.node)
+                                .await?;
+                        }
                         tracing::info!(
                             target: "engine::stage::agent",
                             node = %p.node,
@@ -1129,6 +1138,46 @@ async fn emit_ledger_event(
         .append_event(VersionedEventPayload::new(payload))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// True when `relative_path` is an agent-authored project-memory note
+/// (`.surge/memory/*.md`, excluding the human-facing `MEMORY.md` index).
+fn is_project_memory_note(relative_path: &Path) -> bool {
+    relative_path.starts_with(".surge/memory")
+        && relative_path.extension().and_then(|ext| ext.to_str()) == Some("md")
+        && relative_path.file_name().and_then(|name| name.to_str()) != Some("MEMORY.md")
+}
+
+/// Prepend a provenance comment to a `.surge/memory/` note, in place.
+///
+/// Idempotent — a note already carrying the marker is left unchanged (a retry
+/// or replay re-runs the stage but must not double-stamp). Non-UTF-8 content is
+/// left as-is. The marker is an HTML comment, so it does not render in the
+/// markdown body but is visible in source and to the next run's memory seed.
+async fn stamp_project_memory_note(
+    path: &Path,
+    bytes: &[u8],
+    run_id: surge_core::id::RunId,
+    node: &NodeKey,
+) -> Result<(), StageError> {
+    const MARKER: &str = "<!-- surge:memory";
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok(());
+    };
+    if text.trim_start().starts_with(MARKER) {
+        return Ok(());
+    }
+    let stamped = format!("{MARKER} run={run_id} node={} -->\n{text}", node.as_str());
+    tokio::fs::write(path, stamped)
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    tracing::info!(
+        target: "engine::stage::agent",
+        node = %node,
+        path = %path.display(),
+        "project memory note stamped"
+    );
     Ok(())
 }
 
