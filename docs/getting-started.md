@@ -18,7 +18,35 @@ Build the core workspace (excludes the optional GPUI desktop shell):
 cargo build --workspace --exclude surge-ui
 ```
 
-The desktop UI is optional and has separate GPUI dependencies:
+The desktop UI is optional and has separate GPUI dependencies. The `gpui`
+crate links against system X11/Wayland libraries, so their `-dev` packages
+must be installed first.
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libwayland-dev libfontconfig1-dev libfreetype6-dev libxcursor-dev libx11-dev
+```
+
+On Fedora/RHEL:
+
+```bash
+sudo dnf install -y libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel \
+  wayland-devel fontconfig-devel freetype-devel libXcursor-devel libX11-devel
+```
+
+On Arch (dev symlinks ship in the base packages):
+
+```bash
+sudo pacman -S --needed libxcb libxkbcommon libxkbcommon-x11 wayland \
+  fontconfig freetype2 libxcursor libx11
+```
+
+Without these, `cargo build -p surge-ui` fails at link time with
+`library not found: xcb` — the runtime `.so.1` files are not enough; the
+linker needs the bare `-lxcb` / `-lxkbcommon` / `-lxkbcommon-x11` symlinks
+that the `-dev` packages provide.
 
 ```bash
 cargo build -p surge-ui
