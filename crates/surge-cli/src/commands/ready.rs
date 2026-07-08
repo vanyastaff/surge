@@ -16,6 +16,8 @@ use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use surge_core::{RoadmapStatus, RunId};
 use surge_persistence::runs::Storage;
+
+use crate::commands::common::surge_home_dir;
 use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
 
 /// Arguments for `surge ready`.
@@ -159,16 +161,6 @@ fn parse_run_id(value: &str) -> Result<RunId> {
 
 fn current_project_path() -> Result<PathBuf> {
     std::env::current_dir().context("resolve current directory")
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
 }
 
 #[cfg(test)]

@@ -10,13 +10,14 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::Args;
 use serde::Serialize;
 use surge_core::{Attention, RunState, TerminalReason};
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::registry::{RunFilter, RunSummary};
 
+use crate::commands::common::surge_home_dir;
 use crate::commands::run_fold::fold_run_state;
 
 /// Arguments for `surge inbox`.
@@ -224,16 +225,6 @@ fn short_run(run_id: &str) -> &str {
 
 fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or(s).trim()
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
 }
 
 #[cfg(test)]

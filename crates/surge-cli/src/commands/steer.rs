@@ -7,15 +7,12 @@
 //! `--list` shows the queued-but-undelivered steers; `--cancel <id>` drops one.
 //! The run must be hosted by a running daemon (the queue lives in its memory).
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use surge_core::RunId;
-use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::runs::Storage;
-use surge_persistence::runs::registry::RunFilter;
+
+use crate::commands::common::{connect_daemon, resolve_run_id, surge_home_dir};
 
 /// Arguments for `surge steer`.
 #[derive(Args, Debug)]
@@ -109,51 +106,4 @@ fn daemon_err(e: surge_orchestrator::engine::error::EngineError) -> anyhow::Erro
         "steer failed: {e}. The run must be active in a running daemon \
          (started with `surge engine run --daemon`)."
     )
-}
-
-/// Connect to the already-running daemon (does not spawn one — a fresh daemon
-/// would not hold the run's steer queue).
-async fn connect_daemon() -> Result<DaemonEngineFacade> {
-    let socket = surge_daemon::pidfile::socket_path().context("resolve daemon socket path")?;
-    DaemonEngineFacade::connect(socket)
-        .await
-        .map_err(|e| anyhow!("no running daemon to steer against: {e}"))
-}
-
-/// Resolve a run id, accepting the full ULID or a unique short suffix.
-async fn resolve_run_id(storage: &std::sync::Arc<Storage>, value: &str) -> Result<RunId> {
-    if let Ok(id) = value.parse::<RunId>() {
-        return Ok(id);
-    }
-    let runs = storage
-        .list_runs(RunFilter {
-            status: None,
-            project_path: None,
-            limit: Some(500),
-        })
-        .await
-        .context("list runs for id match")?;
-    let matches: Vec<RunId> = runs
-        .iter()
-        .filter(|r| r.id.to_string().ends_with(value))
-        .map(|r| r.id)
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok(*one),
-        [] => Err(anyhow!("no run matching {value:?}")),
-        many => Err(anyhow!(
-            "{} runs match {value:?}; use the full run id",
-            many.len()
-        )),
-    }
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
 }

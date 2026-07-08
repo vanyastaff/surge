@@ -8,14 +8,13 @@
 //!   branched from.
 //! - `surge run path <run>` — the worktree path, e.g. `cd "$(surge run path <run>)"`.
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, anyhow};
 use clap::Subcommand;
 use surge_core::RunId;
 use surge_git::GitManager;
 use surge_persistence::runs::Storage;
-use surge_persistence::runs::registry::RunFilter;
+
+use crate::commands::common;
 
 /// `surge run` subcommands.
 #[derive(Subcommand, Debug)]
@@ -68,43 +67,10 @@ async fn path(run: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a run id, accepting the full ULID or a unique short suffix.
+/// Resolve a run id (full ULID or unique short suffix) against the run store.
 async fn resolve_run_id(value: &str) -> Result<RunId> {
-    if let Ok(id) = value.parse::<RunId>() {
-        return Ok(id);
-    }
-    let storage = Storage::open(&surge_home_dir()?)
+    let storage = Storage::open(&common::surge_home_dir()?)
         .await
         .context("open storage")?;
-    let runs = storage
-        .list_runs(RunFilter {
-            status: None,
-            project_path: None,
-            limit: Some(500),
-        })
-        .await
-        .context("list runs for id match")?;
-    let matches: Vec<RunId> = runs
-        .iter()
-        .filter(|r| r.id.to_string().ends_with(value))
-        .map(|r| r.id)
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok(*one),
-        [] => Err(anyhow!("no run matching {value:?}")),
-        many => Err(anyhow!(
-            "{} runs match {value:?}; use the full run id",
-            many.len()
-        )),
-    }
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
+    common::resolve_run_id(&storage, value).await
 }

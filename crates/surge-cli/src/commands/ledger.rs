@@ -5,12 +5,12 @@
 //! the complete picture: verified completions, failures, and the
 //! `discovered_from` edges of mid-run discoveries.
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use surge_core::RunId;
 use surge_persistence::runs::Storage;
+
+use crate::commands::common::surge_home_dir;
 use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
 
 /// Arguments for `surge ledger`.
@@ -104,14 +104,4 @@ fn parse_run_id(value: &str) -> Result<RunId> {
     value
         .parse()
         .map_err(|error| anyhow!("invalid run id {value:?}: {error}"))
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
 }

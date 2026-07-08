@@ -348,14 +348,19 @@ pub fn maintain(
             authority_node,
             ..
         } => {
-            // Non-verified transition. Upsert status; preserve any prior
-            // verified flag and discovered_from origin.
+            // Upsert status. Mirror the authoritative fold
+            // (`run_state::record_status_change`): a transition to any
+            // non-Completed status CLEARS `verified`, so a re-worked /
+            // re-verified task can't keep a stale verified=1 with, say,
+            // ready_for_verification. Only a →Completed transition preserves it.
             tx.execute(
                 "INSERT INTO task_ledger
                     (task_id, status, verified, last_authority_node, updated_seq)
                  VALUES (?, ?, 0, ?, ?)
                  ON CONFLICT(task_id) DO UPDATE SET
                     status = excluded.status,
+                    verified = CASE WHEN excluded.status = 'completed'
+                                    THEN task_ledger.verified ELSE 0 END,
                     last_authority_node = excluded.last_authority_node,
                     updated_seq = excluded.updated_seq",
                 rusqlite::params![

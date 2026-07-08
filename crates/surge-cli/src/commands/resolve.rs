@@ -6,18 +6,14 @@
 //! must be daemon-hosted and still active. With no resolution flag the command
 //! prints the pending question and its valid outcomes ("inspect mode").
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use surge_core::RunId;
 use surge_core::node::NodeConfig;
 use surge_core::run_state::RunState;
-use surge_orchestrator::engine::daemon_facade::DaemonEngineFacade;
 use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::runs::Storage;
-use surge_persistence::runs::registry::RunFilter;
 
+use crate::commands::common::{connect_daemon, resolve_run_id, surge_home_dir};
 use crate::commands::run_fold::fold_run_state;
 
 /// Arguments for `surge resolve`.
@@ -68,16 +64,24 @@ pub async fn run(args: ResolveArgs) -> Result<()> {
         ));
     };
 
-    // Gate options come from the pending node's HumanGate config, if any.
-    let gate_options: Vec<(String, String)> =
-        match graph.nodes.get(&pending.node).map(|n| &n.config) {
-            Some(NodeConfig::HumanGate(cfg)) => cfg
-                .options
-                .iter()
-                .map(|o| (o.outcome.to_string(), o.label.clone()))
-                .collect(),
-            _ => Vec::new(),
-        };
+    // Gate options come from the pending node's HumanGate config, if any. The
+    // node may live at the top level or inside a subgraph (e.g. a gate in a
+    // loop body), so search both — a top-level-only lookup shows no options for
+    // subgraph gates and skips client-side outcome validation.
+    let gate_node = graph.nodes.get(&pending.node).or_else(|| {
+        graph
+            .subgraphs
+            .values()
+            .find_map(|sg| sg.nodes.get(&pending.node))
+    });
+    let gate_options: Vec<(String, String)> = match gate_node.map(|n| &n.config) {
+        Some(NodeConfig::HumanGate(cfg)) => cfg
+            .options
+            .iter()
+            .map(|o| (o.outcome.to_string(), o.label.clone()))
+            .collect(),
+        _ => Vec::new(),
+    };
     let is_tool_call = pending.call_id.is_some();
 
     // Inspect mode: no resolution flag → show the question and how to answer.
@@ -161,54 +165,6 @@ fn build_answer(
         response["comment"] = serde_json::Value::String(comment.to_owned());
     }
     Ok((None, response))
-}
-
-/// Connect to the already-running daemon (does not spawn one — a fresh daemon
-/// would not hold the blocked run).
-async fn connect_daemon() -> Result<DaemonEngineFacade> {
-    let socket = surge_daemon::pidfile::socket_path().context("resolve daemon socket path")?;
-    DaemonEngineFacade::connect(socket)
-        .await
-        .map_err(|e| anyhow!("no running daemon to resolve against: {e}"))
-}
-
-/// Resolve a run id, accepting either the full ULID or a unique short suffix
-/// as printed by `surge inbox` (the last 8 chars).
-async fn resolve_run_id(storage: &std::sync::Arc<Storage>, value: &str) -> Result<RunId> {
-    if let Ok(id) = value.parse::<RunId>() {
-        return Ok(id);
-    }
-    let runs = storage
-        .list_runs(RunFilter {
-            status: None,
-            project_path: None,
-            limit: Some(500),
-        })
-        .await
-        .context("list runs for id match")?;
-    let matches: Vec<RunId> = runs
-        .iter()
-        .filter(|r| r.id.to_string().ends_with(value))
-        .map(|r| r.id)
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok(*one),
-        [] => Err(anyhow!("no run matching {value:?}")),
-        many => Err(anyhow!(
-            "{} runs match {value:?}; use the full run id",
-            many.len()
-        )),
-    }
-}
-
-fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
 }
 
 #[cfg(test)]

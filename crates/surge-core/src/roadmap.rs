@@ -620,7 +620,7 @@ pub struct DiscoveredTaskEntry {
 )]
 pub struct VerificationReportArtifact {
     /// Artifact contract schema version.
-    #[serde(default = "default_artifact_schema_version")]
+    #[serde(default = "default_verification_report_schema_version")]
     pub schema_version: u32,
     /// The task this report covers.
     pub task_id: String,
@@ -851,6 +851,13 @@ fn default_discovered_tasks_schema_version() -> u32 {
     ARTIFACT_SCHEMA_VERSION
 }
 
+// verification-report is a v1 artifact; its validator requires
+// `ARTIFACT_SCHEMA_VERSION` exactly. Must NOT reuse
+// `default_artifact_schema_version`, which the roadmap bump raised to v2.
+fn default_verification_report_schema_version() -> u32 {
+    ARTIFACT_SCHEMA_VERSION
+}
+
 impl Timeline {
     /// Create a new empty timeline.
     #[must_use]
@@ -910,6 +917,17 @@ impl Timeline {
 mod tests {
     use super::*;
     use crate::id::SpecId;
+
+    #[test]
+    fn verification_report_defaults_to_v1_not_roadmap_v2() {
+        // A verifier writes verification-report.toml with no schema_version.
+        // It must default to ARTIFACT_SCHEMA_VERSION (1) — the version its
+        // contract validator requires — not the roadmap's bumped v2.
+        let toml = "task_id = \"m1-t1\"\noutcome = \"passed\"\nsummary = \"all green\"\n";
+        let report: VerificationReportArtifact = toml::from_str(toml).unwrap();
+        assert_eq!(report.schema_version, ARTIFACT_SCHEMA_VERSION);
+        assert_ne!(report.schema_version, ROADMAP_SCHEMA_VERSION);
+    }
 
     fn make_item(title: &str, status: RoadmapStatus) -> RoadmapItem {
         RoadmapItem {
