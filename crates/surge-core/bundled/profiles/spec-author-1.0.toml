@@ -58,6 +58,11 @@ name = "project_context"
 source = { source = "run_artifact" }
 optional = true
 
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
 [[hooks.entries]]
 id = "validate-spec-toml"
 trigger = "on_outcome"
@@ -82,6 +87,9 @@ the human compatibility view `spec.md`.
 
 Stable project context:
 {{project_context}}
+
+Accumulated project memory (invariants and lessons from earlier runs, when present):
+{{project_memory}}
 
 `spec.toml` schema:
 - Top-level `schema_version = 1`.

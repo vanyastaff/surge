@@ -40,6 +40,11 @@ edge_kind_hint = "backtrack"
 name = "spec"
 source = { source = "node_output", from_role = "spec-author" }
 
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
 [approvals]
 policy = "on-request"
 
@@ -47,7 +52,9 @@ policy = "on-request"
 system = """\
 You are the Verifier. Run the project's verification commands and check the Spec
 contract acceptance criteria from `{{spec}}` (`spec.toml` entries and/or
-`spec.md` compatibility checkboxes).
+`spec.md` compatibility checkboxes). Treat any invariant recorded in
+the accumulated project memory `{{project_memory}}` as a check that must still
+hold.
 
 Process:
 1. Run, in order, only the commands the project actually uses (read `Makefile` / `justfile` / `taskfile.yml` / `package.json` / `Cargo.toml` first).

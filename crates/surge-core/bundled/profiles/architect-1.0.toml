@@ -44,9 +44,14 @@ edge_kind_hint = "forward"
 name = "spec"
 source = { source = "node_output", from_role = "spec-author" }
 
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
 [prompt]
 system = """\
-You are the Architect. Read `{{spec}}` and decide whether the work merits an ADR.
+You are the Architect. Read `{{spec}}`, the accumulated project memory `{{project_memory}}` (architectural constraints and lessons from earlier runs, when present), and decide whether the work merits an ADR.
 
 If yes, output one ADR contract file at `docs/adr/<NNNN>-<slug>.md` with:
 - TOML frontmatter delimited by `+++`: `status`, `deciders`, `date`, and optional `supersedes`.
