@@ -56,6 +56,62 @@ pub enum RunState {
     },
 }
 
+/// What a run needs from the operator right now — the axis the fleet inbox
+/// (`surge inbox`) triages on. A pure classification of [`RunState`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attention {
+    /// Blocked on a human decision (a HumanGate, bootstrap approval, or
+    /// tool-driven `request_human_input`). This is the "needs me right now"
+    /// bucket the inbox surfaces first.
+    NeedsInput,
+    /// Executing with no human in the loop.
+    Working,
+    /// Reached a terminal state — no further attention needed.
+    Done(TerminalReason),
+}
+
+impl RunState {
+    /// Classify what this run needs from the operator.
+    ///
+    /// A run is [`Attention::NeedsInput`] when the fold shows an unresolved
+    /// gate: a bootstrap stage awaiting approval, or a Pipeline holding a
+    /// `pending_human_input`. Everything else in-flight is
+    /// [`Attention::Working`]; a terminal run is [`Attention::Done`].
+    #[must_use]
+    pub fn attention(&self) -> Attention {
+        match self {
+            // A just-admitted run that has not folded RunStarted yet — treat
+            // as working (it is not blocked on a human).
+            Self::NotStarted => Attention::Working,
+            Self::Bootstrapping {
+                substate: BootstrapSubstate::AwaitingApproval { .. },
+                ..
+            } => Attention::NeedsInput,
+            Self::Bootstrapping { .. } => Attention::Working,
+            Self::Pipeline {
+                pending_human_input: Some(_),
+                ..
+            } => Attention::NeedsInput,
+            Self::Pipeline { .. } => Attention::Working,
+            Self::Terminal { kind, .. } => Attention::Done(*kind),
+        }
+    }
+
+    /// The prompt shown to the operator when this run is blocked on input, if
+    /// any. `None` unless [`RunState::attention`] is [`Attention::NeedsInput`]
+    /// with a captured prompt (bootstrap approvals carry no free-form prompt).
+    #[must_use]
+    pub fn pending_prompt(&self) -> Option<&str> {
+        match self {
+            Self::Pipeline {
+                pending_human_input: Some(pending),
+                ..
+            } => Some(pending.prompt.as_str()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BootstrapSubstate {
     AgentRunning {
@@ -2107,6 +2163,83 @@ mod tests {
         let t1 = &memory.ledger.tasks["m1-t1"];
         assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
         assert!(!t1.verified, "verified must be cleared after non-Completed status change");
+    }
+
+    #[test]
+    fn attention_classifies_pipeline_working_and_needs_input() {
+        let mut events = ledger_run_prefix();
+        // Fold with only the run prefix (RunStarted + PipelineMaterialized) →
+        // Pipeline, no pending input → Working.
+        let working = fold(&events).unwrap();
+        assert_eq!(working.attention(), Attention::Working);
+        assert_eq!(working.pending_prompt(), None);
+
+        // A HumanInputRequested puts it into NeedsInput with the prompt.
+        events.push(make_event(
+            3,
+            EventPayload::HumanInputRequested {
+                node: NodeKey::try_from("verify_1").unwrap(),
+                session: None,
+                call_id: Some("c1".into()),
+                prompt: "Approve the risky migration?".into(),
+                schema: None,
+            },
+        ));
+        let blocked = fold(&events).unwrap();
+        assert_eq!(blocked.attention(), Attention::NeedsInput);
+        assert_eq!(
+            blocked.pending_prompt(),
+            Some("Approve the risky migration?")
+        );
+
+        // Resolving it returns to Working.
+        events.push(make_event(
+            4,
+            EventPayload::HumanInputResolved {
+                node: NodeKey::try_from("verify_1").unwrap(),
+                call_id: Some("c1".into()),
+                response: serde_json::json!({"decision": "approve"}),
+            },
+        ));
+        assert_eq!(fold(&events).unwrap().attention(), Attention::Working);
+    }
+
+    #[test]
+    fn attention_classifies_terminal_as_done() {
+        assert_eq!(
+            RunState::Terminal {
+                kind: TerminalReason::Completed,
+                reason: String::new(),
+            }
+            .attention(),
+            Attention::Done(TerminalReason::Completed)
+        );
+        assert_eq!(
+            RunState::NotStarted.attention(),
+            Attention::Working,
+            "a not-yet-folded run is working, not blocked"
+        );
+    }
+
+    #[test]
+    fn attention_classifies_bootstrap_awaiting_approval_as_needs_input() {
+        let awaiting = RunState::Bootstrapping {
+            stage: BootstrapStage::Flow,
+            substate: BootstrapSubstate::AwaitingApproval {
+                artifact: ContentHash::compute(b"flow"),
+                requested_seq: 5,
+            },
+        };
+        assert_eq!(awaiting.attention(), Attention::NeedsInput);
+
+        let running = RunState::Bootstrapping {
+            stage: BootstrapStage::Description,
+            substate: BootstrapSubstate::AgentRunning {
+                session: SessionId::nil(),
+                started_seq: 1,
+            },
+        };
+        assert_eq!(running.attention(), Attention::Working);
     }
 
     #[test]

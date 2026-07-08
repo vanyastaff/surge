@@ -123,7 +123,7 @@ pub use run_event::{
     SessionDisposition, VersionedEventPayload,
 };
 pub use run_state::{
-    Cursor, FoldError, LedgerState, LedgerTask, RunMemory, RunState, TerminalReason,
+    Attention, Cursor, FoldError, LedgerState, LedgerTask, RunMemory, RunState, TerminalReason,
     node_has_verification_authority,
 };
 pub use run_status::{ParseRunStatusError, RunStatus};

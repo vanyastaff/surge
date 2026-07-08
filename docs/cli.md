@@ -21,6 +21,7 @@ surge migrate-spec ...  translate a legacy .spec.toml into a flow.toml
 surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
+surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
 surge ready             list the actionable task backlog from the task ledger
 surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
@@ -87,6 +88,28 @@ repeatable, target Agent nodes only, and are rewritten into the child's
 materialized graph (validated all-or-nothing before the fork is created).
 
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
+
+## Fleet Inbox (`surge inbox`)
+
+The single strongest fleet-supervision pattern is a status-triaged inbox: "who
+needs me right now?". `surge inbox` lists every run grouped **blocked-first**:
+
+- **⚑ Needs input** — blocked on a human decision (HumanGate, bootstrap
+  approval, or a tool-driven `request_human_input`), shown with the prompt.
+- **▶ Working** — executing, with its active node.
+- **✔ Done** — terminal (a count by default; `--all` lists them).
+
+```text
+surge inbox                  # current project, blocked-first
+surge inbox --all            # also list the Done group
+surge inbox --all-projects --json
+```
+
+Attention is derived authoritatively by folding each non-terminal run's event
+log (terminal runs are read cheaply from the registry). There is no persisted
+"blocked" flag today, so this opens each active run's DB; a registry-level
+attention index (making the inbox a single indexed query) and a Telegram digest
+are planned follow-ups.
 
 ## Task Ledger (`surge ready`)
 

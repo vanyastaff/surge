@@ -148,6 +148,9 @@ enum Commands {
         command: commands::intake::IntakeCommand,
     },
 
+    /// Fleet inbox: runs grouped by attention (needs input / working / done).
+    Inbox(commands::inbox::InboxArgs),
+
     /// List the actionable task backlog from the cross-run task ledger.
     Ready(commands::ready::ReadyArgs),
 
@@ -337,6 +340,7 @@ async fn main() -> Result<()> {
             | Commands::MigrateSpec(_)
             | Commands::Tracker { .. }
             | Commands::Intake { .. }
+            | Commands::Inbox(_)
             | Commands::Ready(_)
             | Commands::Ledger(_)
             | Commands::Daemon { .. }
@@ -513,6 +517,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Intake { command } => {
             commands::intake::run(command)?;
+        },
+
+        Commands::Inbox(args) => {
+            commands::inbox::run(args).await?;
         },
 
         Commands::Ready(args) => {

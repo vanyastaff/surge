@@ -11,6 +11,7 @@ pub mod format;
 pub mod git;
 pub mod init;
 pub mod insights;
+pub mod inbox;
 pub mod intake;
 pub mod ledger;
 pub mod ready;
