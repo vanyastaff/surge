@@ -238,16 +238,17 @@ mod tests {
 
     #[test]
     fn bootstrap_profiles_declare_produced_artifact_contracts() {
-        for (profile, kind, path) in [
+        for (profile, kind, path, schema_version) in [
             (
                 "description-author",
                 ArtifactKind::Description,
                 "description.md",
+                1,
             ),
-            ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml"),
-            ("flow-generator", ArtifactKind::Flow, "flow.toml"),
-            ("spec-author", ArtifactKind::Spec, "spec.toml"),
-            ("architect", ArtifactKind::Adr, "docs/adr/<NNNN>-<slug>.md"),
+            ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml", 2),
+            ("flow-generator", ArtifactKind::Flow, "flow.toml", 1),
+            ("spec-author", ArtifactKind::Spec, "spec.toml", 1),
+            ("architect", ArtifactKind::Adr, "docs/adr/<NNNN>-<slug>.md", 1),
         ] {
             let profile = BundledRegistry::by_name_latest(profile).expect("bundled profile");
             let drafted = profile
@@ -262,7 +263,7 @@ mod tests {
                 .expect("artifact declaration");
 
             assert_eq!(declaration.path, path);
-            assert_eq!(declaration.contract.schema_version, 1);
+            assert_eq!(declaration.contract.schema_version, schema_version);
         }
     }
 

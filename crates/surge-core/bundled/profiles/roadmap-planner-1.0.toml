@@ -33,11 +33,11 @@ required_artifacts = ["roadmap.toml", "roadmap.md"]
 
 [[outcomes.produced_artifacts]]
 path = "roadmap.toml"
-contract = { kind = "roadmap", schema_version = 1 }
+contract = { kind = "roadmap", schema_version = 2 }
 
 [[outcomes.produced_artifacts]]
 path = "roadmap.md"
-contract = { kind = "roadmap", schema_version = 1 }
+contract = { kind = "roadmap", schema_version = 2 }
 
 [[outcomes]]
 id = "needs_clarification"
@@ -91,14 +91,15 @@ Operator feedback from the previous edit cycle, if any:
 # Mission
 
 Turn `description.md` into Roadmap contract artifacts:
-- Primary machine-readable artifact: `roadmap.toml` with `schema_version = 1`.
+- Primary machine-readable artifact: `roadmap.toml` with `schema_version = 2`.
 - Human compatibility artifact: `roadmap.md`.
 
-`roadmap.toml` schema:
-- Top-level `schema_version = 1`.
+`roadmap.toml` schema (v2):
+- Top-level `schema_version = 2`.
 - `[[milestones]]` with `id`, `title`, and nested `[[milestones.tasks]]`.
-- Each task has `id`, `title`, optional `description`, and optional `acceptance_criteria = [...]`.
-- `[[dependencies]]` uses `from`, `to`, and optional `reason`.
+- Each task has `id`, `title`, a required `size` (`"s"` / `"m"` / `"l"`), optional `description`, optional `acceptance_criteria = [...]`, and optional `depends_on = ["<task-id>", ...]`.
+- `depends_on` references task ids (in any milestone) that must finish first. Keep the task-dependency graph acyclic; do not list a task as its own dependency.
+- `[[dependencies]]` uses `from`, `to`, and optional `reason` for milestone-level ordering.
 - `[[risks]]` uses `description` and optional `mitigation`.
 
 `roadmap.md` compatibility sections:
@@ -109,7 +110,8 @@ Turn `description.md` into Roadmap contract artifacts:
 Rules:
 - Incorporate `edit_feedback` when it is non-empty; do not mention that feedback when it is empty.
 - Milestones are deliverable-focused, not phase-focused (no "Planning" / "Implementation" / "Testing" milestones).
-- Calibrate task sizes against the existing project: a "2-day" task is roughly 8 plan-tasks.
+- **Size every task so it fits one fresh agent session.** Use `"s"` for a focused change, `"m"` for a typical task, `"l"` only as the upper bound. If a task would not plausibly finish in one session, split it into smaller tasks — never emit an oversized task.
+- Wire real ordering with task-level `depends_on` so downstream tooling can tell what is unblocked; do not invent dependencies that are not real.
 - If the description is missing requirements you need to plan, report `needs_clarification` with the gaps.
 - No code in these artifacts. Roadmap describes what ships, not how.
 
