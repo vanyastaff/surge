@@ -270,16 +270,27 @@ impl Default for LedgerTask {
     }
 }
 
-/// True when `node` exists in `graph` and declares an outcome carrying
-/// [`LedgerEffect::Verified`] — the graph-visible signal that the node has
-/// verification authority. Keeps fold pure (no profile-registry access).
+/// True when `node` exists in `graph` — at the top level **or inside any
+/// subgraph** — and declares an outcome carrying [`LedgerEffect::Verified`],
+/// the graph-visible signal that the node has verification authority. Keeps the
+/// fold pure (no profile-registry access).
+///
+/// Subgraphs must be searched: bundled loop flows (e.g. `multi-milestone`) run
+/// the sealed verifier inside a task-body subgraph, so a top-level-only lookup
+/// would wrongly reject every `TaskVerified` those flows emit.
 #[must_use]
 pub fn node_has_verification_authority(graph: &Graph, node: &NodeKey) -> bool {
-    graph.nodes.get(node).is_some_and(|node| {
-        node.declared_outcomes
-            .iter()
-            .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
-    })
+    graph
+        .nodes
+        .get(node)
+        .into_iter()
+        .chain(graph.subgraphs.values().filter_map(|sg| sg.nodes.get(node)))
+        .any(|found| {
+            found
+                .declared_outcomes
+                .iter()
+                .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+        })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2008,6 +2019,54 @@ mod tests {
             &graph,
             &NodeKey::try_from("missing").unwrap()
         ));
+    }
+
+    #[test]
+    fn subgraph_verify_node_has_authority() {
+        use crate::edge::EdgeKind;
+        use crate::graph::Subgraph;
+        use crate::keys::{OutcomeKey, SubgraphKey};
+        use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        // Bundled loop flows run the sealed verifier inside a task-body
+        // subgraph; its TaskVerified must be honored (regression: top-level-only
+        // lookup rejected every subgraph verifier).
+        let mut graph = ledger_graph();
+        let verify_in_task = NodeKey::try_from("verify_in_task").unwrap();
+        let mut sg_nodes = BTreeMap::new();
+        sg_nodes.insert(
+            verify_in_task.clone(),
+            Node {
+                id: verify_in_task.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("passed").unwrap(),
+                    description: "verified".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::Verified,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        graph.subgraphs.insert(
+            SubgraphKey::try_from("task_body").unwrap(),
+            Subgraph {
+                start: verify_in_task.clone(),
+                nodes: sg_nodes,
+                edges: vec![],
+            },
+        );
+
+        assert!(
+            node_has_verification_authority(&graph, &verify_in_task),
+            "a verify node inside a subgraph must carry authority"
+        );
     }
 
     #[test]
