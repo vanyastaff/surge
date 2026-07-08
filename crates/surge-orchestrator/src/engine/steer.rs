@@ -36,14 +36,26 @@ pub struct QueuedSteer {
     pub message: String,
 }
 
-/// Shared FIFO queue of pending steers for one run. Held by the engine's
-/// `ActiveRun` (submit / list / cancel) and the run task (drain-at-boundary).
-pub type SteerQueue = Arc<Mutex<Vec<QueuedSteer>>>;
+/// Steer state for one run: the pending (undelivered) queue plus the ids the
+/// operator has cancelled. The cancelled set tombstones ids so that a steer
+/// cancelled while it is already in-flight (drained into a stage) is not
+/// resurrected by the run task's re-queue-on-error path.
+#[derive(Debug, Default)]
+pub struct SteerState {
+    /// Undelivered steers in FIFO order.
+    pub pending: Vec<QueuedSteer>,
+    /// Ids the operator cancelled; delivery/re-queue must skip these.
+    pub cancelled: std::collections::HashSet<String>,
+}
+
+/// Shared steer state for one run. Held by the engine's `ActiveRun` (submit /
+/// list / cancel) and the run task (drain-at-boundary, re-queue-on-error).
+pub type SteerQueue = Arc<Mutex<SteerState>>;
 
 /// Create an empty steer queue.
 #[must_use]
 pub fn new_queue() -> SteerQueue {
-    Arc::new(Mutex::new(Vec::new()))
+    Arc::new(Mutex::new(SteerState::default()))
 }
 
 /// Mint a short, human-friendly steer id (the last 10 chars of a ULID).
@@ -51,4 +63,34 @@ pub fn new_queue() -> SteerQueue {
 pub fn new_steer_id() -> String {
     let full = ulid::Ulid::new().to_string();
     full[full.len().saturating_sub(10)..].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_id_is_dropped_by_the_requeue_filter() {
+        // Mirrors run_task's re-queue-on-error: a steer cancelled while it was
+        // in-flight (its id tombstoned in `cancelled`) must NOT be restored to
+        // the pending queue, so the cancel isn't reversed.
+        let mut state = SteerState::default();
+        state.cancelled.insert("s1".to_owned());
+        let in_flight_backup = vec![
+            QueuedSteer {
+                id: "s1".to_owned(),
+                message: "cancelled".to_owned(),
+            },
+            QueuedSteer {
+                id: "s2".to_owned(),
+                message: "keep".to_owned(),
+            },
+        ];
+        let restored: Vec<_> = in_flight_backup
+            .into_iter()
+            .filter(|steer| !state.cancelled.contains(&steer.id))
+            .collect();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, "s2");
+    }
 }

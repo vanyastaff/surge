@@ -853,15 +853,15 @@ impl Engine {
         let runs = self.runs.read().await;
         let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
         let mut queue = active.pending_steers.lock().await;
-        if queue.len() >= crate::engine::steer::MAX_QUEUED_STEERS {
+        if queue.pending.len() >= crate::engine::steer::MAX_QUEUED_STEERS {
             return Err(EngineError::Internal(format!(
                 "steer queue for run {run_id} is full ({} pending); \
                  deliver or cancel some before adding more",
-                queue.len()
+                queue.pending.len()
             )));
         }
         let id = crate::engine::steer::new_steer_id();
-        queue.push(crate::engine::steer::QueuedSteer {
+        queue.pending.push(crate::engine::steer::QueuedSteer {
             id: id.clone(),
             message,
         });
@@ -875,18 +875,23 @@ impl Engine {
     ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
         let runs = self.runs.read().await;
         let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
-        Ok(active.pending_steers.lock().await.clone())
+        Ok(active.pending_steers.lock().await.pending.clone())
     }
 
-    /// Drop a queued (not-yet-delivered) steer by id. Returns `true` if a steer
-    /// with that id was found and removed.
+    /// Cancel a steer by id. Removes it from the pending queue if present, and
+    /// tombstones the id so that a steer already drained into an in-flight stage
+    /// is not resurrected by the run task's re-queue-on-error path. Returns
+    /// `true` if it was still pending; `false` means it was already delivered or
+    /// in-flight (the tombstone still prevents any re-delivery).
     pub async fn cancel_steer(&self, run_id: RunId, steer_id: &str) -> Result<bool, EngineError> {
         let runs = self.runs.read().await;
         let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
         let mut queue = active.pending_steers.lock().await;
-        let before = queue.len();
-        queue.retain(|steer| steer.id != steer_id);
-        Ok(queue.len() != before)
+        let before = queue.pending.len();
+        queue.pending.retain(|steer| steer.id != steer_id);
+        let removed = queue.pending.len() != before;
+        queue.cancelled.insert(steer_id.to_owned());
+        Ok(removed)
     }
 
     /// Snapshot the in-process active-run map as a `Vec<RunSummary>`.

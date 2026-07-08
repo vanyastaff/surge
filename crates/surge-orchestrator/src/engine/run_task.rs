@@ -574,7 +574,7 @@ async fn execute_agent_node(
         Vec::new()
     } else {
         let mut queue = params.pending_steers.lock().await;
-        std::mem::take(&mut *queue)
+        std::mem::take(&mut queue.pending)
     };
     // Kept so a stage that fails before delivery doesn't silently drop them: on
     // error we return them to the front of the queue. A post-send failure may
@@ -612,12 +612,17 @@ async fn execute_agent_node(
     };
 
     // Return undelivered steers to the front of the queue if the stage failed,
-    // so operator guidance survives a stage error / retry instead of vanishing.
+    // so operator guidance survives a stage error / retry instead of vanishing —
+    // but drop any the operator cancelled while it was in-flight, so a cancel
+    // isn't reversed by the re-queue.
     if stage_result.is_err() && !steers_backup.is_empty() {
         let mut queue = params.pending_steers.lock().await;
-        let mut restored = steers_backup;
-        restored.append(&mut queue);
-        *queue = restored;
+        let mut restored: Vec<_> = steers_backup
+            .into_iter()
+            .filter(|steer| !queue.cancelled.contains(&steer.id))
+            .collect();
+        restored.append(&mut queue.pending);
+        queue.pending = restored;
     }
 
     stage_result.map(StageOutcome::Routed)

@@ -446,19 +446,35 @@ pub const PROJECT_MEMORY_DIR: &str = ".surge/memory";
 /// `## <filename>` header so agents can attribute knowledge to its source note.
 /// `MEMORY.md` (a human-facing index, if present) is skipped — the individual
 /// notes are the content.
+/// Recursively collect `*.md` notes under `dir`, skipping the `MEMORY.md` index.
+fn collect_memory_notes(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_memory_notes(&path, out);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md")
+            && path.file_name().and_then(|n| n.to_str()) != Some("MEMORY.md")
+        {
+            out.push(path);
+        }
+    }
+}
+
 #[must_use]
 pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSeed> {
     let dir = project_root.join(PROJECT_MEMORY_DIR);
-    let mut notes: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-        Ok(read_dir) => read_dir
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| {
-                path.extension().and_then(|ext| ext.to_str()) == Some("md")
-                    && path.file_name().and_then(|n| n.to_str()) != Some("MEMORY.md")
-            })
-            .collect(),
-        Err(_) => return None,
-    };
+    if !dir.is_dir() {
+        return None;
+    }
+    // Recurse: the write-side gate (`is_project_memory_note`) accepts a note at
+    // any depth under `.surge/memory/`, so the seed must read subdirectories too
+    // — otherwise a note in a subfolder is stamped as durable memory yet never
+    // loaded into any future run.
+    let mut notes: Vec<PathBuf> = Vec::new();
+    collect_memory_notes(&dir, &mut notes);
     notes.sort();
 
     // Cap the seed: memory accumulates across runs and is injected inline into
@@ -482,9 +498,13 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
             dropped += 1;
             continue;
         }
+        // Header from the path relative to `.surge/memory/`, so a note in a
+        // subfolder is attributed as `topic/note.md` rather than a bare name.
         let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
+            .strip_prefix(&dir)
+            .ok()
+            .and_then(|rel| rel.to_str())
+            .or_else(|| path.file_name().and_then(|n| n.to_str()))
             .unwrap_or("note.md");
         let mut note = content.trim_end().to_string();
         if note.len() > MAX_NOTE_BYTES {
@@ -1218,6 +1238,30 @@ mod memory_seed_tests {
         assert!(seed.content.contains("Auth uses JWT."));
         assert!(!seed.content.contains("MEMORY.md"));
         assert!(!seed.content.contains("c-empty"));
+    }
+
+    #[test]
+    fn notes_in_subdirectories_are_seeded_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(mem.join("auth")).unwrap();
+        std::fs::write(mem.join("top.md"), "top-level note\n").unwrap();
+        std::fs::write(mem.join("auth/tokens.md"), "tokens are HS256\n").unwrap();
+
+        let seed = load_project_memory_seed(dir.path()).expect("seed");
+        // The subdir note is loaded and attributed by its relative path.
+        assert!(
+            seed.content.contains("tokens are HS256"),
+            "{}",
+            seed.content
+        );
+        assert!(
+            seed.content.contains("## auth/tokens.md")
+                || seed.content.contains("## auth\\tokens.md"),
+            "subdir note attributed by relative path:\n{}",
+            seed.content
+        );
+        assert!(seed.content.contains("top-level note"));
     }
 
     #[test]

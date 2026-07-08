@@ -66,7 +66,10 @@ pub async fn run(args: SteerArgs) -> Result<()> {
         if removed {
             println!("✓ dropped queued steer {steer_id} on run {run_id}");
         } else {
-            println!("no queued steer {steer_id:?} on run {run_id} (already delivered?)");
+            println!(
+                "steer {steer_id} was not pending on run {run_id} (already delivered or \
+                 in-flight); cancel recorded so it won't be re-delivered on a retry"
+            );
         }
         return Ok(());
     }
