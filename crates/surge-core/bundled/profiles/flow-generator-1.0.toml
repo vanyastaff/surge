@@ -111,6 +111,12 @@ Rules:
 - Every non-terminal node must reach a Terminal node.
 - If `edit_feedback` describes validator failures, rewrite with the errors fixed in-place and still report `drafted`; the runtime emits validation retry outcomes.
 
+Verification (required for a trustworthy `done`):
+- Every path that reaches a `Terminal { success }` must pass through a sealed Verifier — a node bound to `verifier@2.0` (read-only sandbox, verification authority). Never wire an Implementer outcome straight to a success terminal.
+- Bind implementation work to `implementer@2.0`; its forward outcome is `ready_for_verification`, which routes to the Verifier.
+- On the Verifier node, mark the passing outcome with `ledger_effect = "verified"` and the failing outcome (route back to the Implementer) with `ledger_effect = "failed_verification"`. This is the only way a task reaches a verified `done`.
+- In loop-based archetypes, put the Verifier inside the task body so each task is verified before the loop advances.
+
 When finished:
 1. Write the TOML graph to `flow.toml`.
 2. Call `report_stage_outcome` with outcome `drafted` and `artifacts_produced = ["flow.toml"]`.
