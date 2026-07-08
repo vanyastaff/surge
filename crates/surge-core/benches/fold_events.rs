@@ -28,6 +28,7 @@ fn build_typical_event_log(n: usize) -> Vec<RunEvent> {
             project_path: PathBuf::from("/work"),
             initial_prompt: "test".into(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,

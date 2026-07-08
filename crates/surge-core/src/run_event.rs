@@ -611,11 +611,12 @@ pub struct RunConfig {
     /// Empty by default — no MCP delegation.
     #[serde(default)]
     pub mcp_servers: Vec<crate::mcp_config::McpServerRef>,
-    // FOLLOW-UP (PR #84 deep review): the frozen budget guard is NOT persisted
-    // here, so a daemon-restart resume reverts budget to the unlimited default
-    // and drops spend enforcement for the rest of the run. Adding `budget`
-    // (serde(default)) is the fix, but it touches ~30 RunConfig construction
-    // sites + migration fixtures and warrants its own PR with roundtrip tests.
+    /// Frozen budget guard captured at run start. Persisting it here lets a
+    /// daemon-restart resume re-arm spend enforcement instead of reverting to
+    /// the unlimited default. `#[serde(default)]` keeps logs written before this
+    /// field decodable (they resume unlimited, exactly as they did before).
+    #[serde(default)]
+    pub budget: crate::budget::BudgetGuard,
 }
 
 #[cfg(test)]
@@ -665,6 +666,7 @@ mod tests {
             project_path: PathBuf::from("/work/proj"),
             initial_prompt: "build it".into(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: true,
@@ -674,6 +676,38 @@ mod tests {
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn run_config_persists_budget_and_defaults_when_absent() {
+        use crate::budget::{BudgetGuard, BudgetLimits};
+        let config = RunConfig {
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: Vec::new(),
+            budget: BudgetGuard {
+                limits: BudgetLimits {
+                    usd: Some(5.0),
+                    tokens: None,
+                    warn_threshold_pct: 80,
+                },
+                ..Default::default()
+            },
+        };
+
+        // The frozen budget round-trips, so a resume can re-arm enforcement.
+        let value = serde_json::to_value(&config).unwrap();
+        let back: RunConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(back, config);
+        assert_eq!(back.budget.limits.usd, Some(5.0));
+
+        // A log written before the `budget` field (key absent) decodes to the
+        // unlimited default — backward compatible, resumes as it did before.
+        let mut legacy = value;
+        legacy.as_object_mut().unwrap().remove("budget");
+        let decoded: RunConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.budget, BudgetGuard::default());
     }
 
     #[test]
@@ -1266,6 +1300,7 @@ mod tests {
         use std::time::Duration;
 
         let cfg = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

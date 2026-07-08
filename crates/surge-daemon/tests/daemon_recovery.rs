@@ -218,6 +218,7 @@ fn run_config() -> RunConfig {
         approval_default: ApprovalPolicy::OnRequest,
         auto_pr: false,
         mcp_servers: Vec::new(),
+        budget: Default::default(),
     }
 }
 

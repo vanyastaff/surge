@@ -63,6 +63,7 @@ async fn seed_parent(home: &Path) -> RunId {
     let graph = minimal_graph();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
+        budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
         auto_pr: false,
@@ -207,6 +208,7 @@ async fn seed_agent_parent(home: &Path) -> RunId {
     let graph = agent_graph();
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let config = RunConfig {
+        budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
         auto_pr: false,

@@ -137,6 +137,7 @@ fn build_canonical_events(graph: Graph, inner: Vec<NodeKey>, run_id: RunId) -> V
             project_path: PathBuf::from("/proptest"),
             initial_prompt: "deterministic-fold".into(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,
