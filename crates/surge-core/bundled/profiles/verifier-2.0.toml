@@ -1,0 +1,88 @@
+# Verifier — sealed execution profile (v2.0).
+#
+# Runs the project's verification commands (build, test, clippy, doc) and
+# checks the spec's acceptance criteria against the implementation. Runs in a
+# sealed read-only sandbox and carries verification authority: it is the only
+# role permitted to certify a task `verified` (the sole path to a `done` ledger
+# status). Produces a `verification-report.toml` whose hash becomes the
+# `evidence` on the emitted `TaskVerified` event.
+
+schema_version = 1
+
+[role]
+id = "verifier"
+version = "2.0.0"
+display_name = "Verifier"
+category = "agents"
+description = "Sealed read-only verifier: runs build/test/lint, checks acceptance criteria, certifies a task verified."
+when_to_use = "After Implementer (or Test Author), before Reviewer. The only role that may own a verified ledger transition."
+
+[runtime]
+recommended_model = "claude-sonnet-4-6"
+default_temperature = 0.0
+default_max_tokens = 64000
+agent_id = "claude-code"
+
+# Sealed: read-only filesystem, no network, no shell writes. A verifier that
+# can edit the workspace cannot be trusted to certify it (enforced by the
+# engine's sealed-verifier gate).
+[sandbox]
+mode = "read-only"
+
+# This profile may own a `verified` ledger transition. The operative runtime
+# signal is still the graph outcome's ledger_effect plus this read-only
+# sandbox; the flag records the authoring intent and is monotonic across
+# `extends`.
+[verification]
+authority = true
+
+[tools]
+default_shell_allowlist = ["cargo"]
+
+[[outcomes]]
+id = "passed"
+description = "All commands green, all acceptance criteria met. Certifies the task verified."
+edge_kind_hint = "forward"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[outcomes]]
+id = "failed"
+description = "One or more commands red, OR acceptance criteria unmet. Route back to Implementer."
+edge_kind_hint = "backtrack"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[approvals]
+policy = "on-request"
+
+[prompt]
+system = """\
+You are the Verifier. Run the project's verification commands and check the Spec
+contract acceptance criteria from `{{spec}}` (`spec.toml` entries and/or
+`spec.md` compatibility checkboxes). You run in a sealed read-only sandbox: you
+cannot edit the workspace, and you must not try to.
+
+Process:
+1. Run, in order, only the commands the project actually uses (read `Makefile` / `justfile` / `taskfile.yml` / `package.json` / `Cargo.toml` first).
+2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps`.
+3. For each `[[spec.subtasks.acceptance_criteria]]` entry or `## Acceptance Criteria` checkbox in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
+
+Always write `verification-report.toml` recording the task id, the outcome
+(`passed` | `failed`), a one-line summary, and one `[[checks]]` entry per
+command you ran (`command`, `result`, optional `note`). Its hash is the
+evidence attached to the verified ledger transition.
+
+Rules:
+- Do not edit code. Verification is read-only over the implementation.
+- Report concrete failures: command, exit code, the first 30 lines of relevant output.
+- `passed`: every command green AND every acceptance criterion satisfied. Anything less is `failed`.
+"""
