@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -58,6 +59,10 @@ pub struct AppState {
     /// would prevent us from synthesising a stub when a `RunAccepted` for
     /// an unknown id arrives ahead of a `ListRuns` refresh.
     pub runs: Vec<UiRun>,
+    /// Folded per-run live streams (`subscribe_to_run`). Keyed by run;
+    /// present once the UI has attached a subscription for that run.
+    /// See [`crate::run_stream`].
+    pub run_streams: HashMap<RunId, crate::run_stream::RunStreamState>,
 
     // ── Events ──
     pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
@@ -137,6 +142,7 @@ impl AppState {
             agent_pool: None,
             daemon_state: ConnectionState::default(),
             runs: Vec::new(),
+            run_streams: HashMap::new(),
             _event_tx: event_tx,
             recent_events: Vec::new(),
         }
@@ -353,6 +359,21 @@ impl AppState {
     /// Count tasks by state.
     pub fn task_count_by_state(&self, state_match: fn(&TaskState) -> bool) -> usize {
         self.tasks.iter().filter(|t| state_match(&t.state)).count()
+    }
+
+    /// All pending operator decisions across live run streams, most
+    /// urgent first (kind rank, then age). Powers the Inbox and the
+    /// "needs you" counters.
+    pub fn pending_decisions(&self) -> Vec<(RunId, crate::run_stream::PendingDecision)> {
+        let mut all: Vec<(RunId, crate::run_stream::PendingDecision)> = self
+            .run_streams
+            .iter()
+            .flat_map(|(run_id, stream)| {
+                stream.pending.iter().map(move |p| (*run_id, p.clone()))
+            })
+            .collect();
+        all.sort_by_key(|(_, p)| (p.kind.rank(), p.seq));
+        all
     }
 }
 

@@ -15,6 +15,7 @@ mod markdown;
 mod notifications;
 mod project;
 mod router;
+mod run_stream;
 mod screens;
 mod sidebar;
 mod theme;

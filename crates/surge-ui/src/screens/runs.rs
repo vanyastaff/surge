@@ -50,7 +50,7 @@ impl StageState {
 
 #[derive(Clone)]
 struct Stage {
-    label: &'static str,
+    label: String,
     sub: String,
     state: StageState,
 }
@@ -62,6 +62,21 @@ struct EventRow {
     kind: &'static str,
     color: Hsla,
     text: String,
+}
+
+/// Map a folded live stage (from the per-run stream) to a pipeline chip.
+fn stage_from_stream(row: &crate::run_stream::StageRow) -> Stage {
+    use crate::run_stream::StagePhase;
+    let state = match row.phase {
+        StagePhase::Running => StageState::Running,
+        StagePhase::Done => StageState::Done,
+        StagePhase::Failed => StageState::Failed,
+    };
+    Stage {
+        label: row.node.clone(),
+        sub: row.detail.clone(),
+        state,
+    }
 }
 
 /// Row model for the left rail + detail header, built either from a
@@ -83,6 +98,10 @@ struct RunRow {
     events: String,
     stages: Vec<Stage>,
     event_rows: Vec<EventRow>,
+    /// Live per-run stream attached (real telemetry below).
+    live_stream: bool,
+    /// (tokens_in, tokens_out, cost_usd) accumulated from the stream.
+    usage: Option<(u64, u64, f64)>,
 }
 
 fn status_parts(status: RunStatus) -> (&'static str, Hsla, bool, u8) {
@@ -136,17 +155,17 @@ fn lifecycle_stages(run: &UiRun) -> Vec<Stage> {
     };
     vec![
         Stage {
-            label: "accepted",
+            label: "accepted".to_string(),
             sub: accepted_sub,
             state: StageState::Done,
         },
         Stage {
-            label: "executing",
+            label: "executing".to_string(),
             sub: exec_sub.to_string(),
             state: exec,
         },
         Stage {
-            label: "finished",
+            label: "finished".to_string(),
             sub: fin_sub.to_string(),
             state: fin,
         },
@@ -174,6 +193,36 @@ impl RunRow {
             events,
             stages: lifecycle_stages(run),
             event_rows: Vec::new(),
+            live_stream: false,
+            usage: None,
+        }
+    }
+
+    /// Enrich a real run's row with folded per-run stream telemetry:
+    /// live stage pipeline, event log, token/cost counters.
+    fn attach_stream(&mut self, stream: &crate::run_stream::RunStreamState) {
+        self.live_stream = stream.live;
+        if !stream.stages.is_empty() {
+            self.stages = stream.stages.iter().map(stage_from_stream).collect();
+        }
+        if !stream.log.is_empty() {
+            self.event_rows = stream
+                .log
+                .iter()
+                .rev()
+                .map(|r| EventRow {
+                    t: r.time.clone(),
+                    kind: r.kind,
+                    color: r.tone.color(),
+                    text: r.text.clone(),
+                })
+                .collect();
+        }
+        if stream.last_seq > 0 {
+            self.events = stream.last_seq.to_string();
+        }
+        if stream.tokens_in > 0 || stream.tokens_out > 0 || stream.cost_usd > 0.0 {
+            self.usage = Some((stream.tokens_in, stream.tokens_out, stream.cost_usd));
         }
     }
 }
@@ -232,7 +281,17 @@ impl RunsScreen {
             return (rows, sel, false);
         }
 
-        let mut rows: Vec<RunRow> = state.runs.iter().map(RunRow::from_run).collect();
+        let mut rows: Vec<RunRow> = state
+            .runs
+            .iter()
+            .map(|run| {
+                let mut row = RunRow::from_run(run);
+                if let Some(stream) = state.run_streams.get(&run.run_id) {
+                    row.attach_stream(stream);
+                }
+                row
+            })
+            .collect();
         rows.sort_by_key(|r| r.rank);
         let sel = self
             .selected
@@ -525,7 +584,7 @@ impl RunsScreen {
         };
         let sep = || div().w(px(1.0)).my(px(14.0)).bg(theme::hairline());
 
-        div()
+        let mut strip = div()
             .h(px(60.0))
             .flex_shrink_0()
             .h_flex()
@@ -554,7 +613,25 @@ impl RunsScreen {
                 "STATUS",
                 row.status_label.to_uppercase(),
                 row.color,
-            )))
+            )));
+
+        // Token/cost counters — only when the live stream reported them.
+        if let Some((tokens_in, tokens_out, cost)) = row.usage {
+            strip = strip
+                .child(sep())
+                .child(div().pl(px(26.0)).child(cell(
+                    "TOKENS",
+                    format!("{}k in · {}k out", tokens_in / 1000, tokens_out / 1000),
+                    theme::text_primary(),
+                )))
+                .child(sep())
+                .child(div().pl(px(26.0)).child(cell(
+                    "COST",
+                    format!("${cost:.2}"),
+                    theme::success(),
+                )));
+        }
+        strip
     }
 
     /// Dot-grid backdrop for the pipeline zone (bounds-driven, so it
@@ -631,7 +708,7 @@ impl RunsScreen {
                             } else {
                                 theme::text_primary()
                             })
-                            .child(stage.label),
+                            .child(stage.label.clone()),
                     )
                     .child(
                         div()
@@ -719,8 +796,10 @@ impl RunsScreen {
                     .bottom(px(16.0))
                     .text_size(px(9.5))
                     .text_color(theme::text_muted().opacity(0.8))
-                    .child(if live {
-                        "run lifecycle · per-stage telemetry lands with the per-run stream"
+                    .child(if row.live_stream {
+                        "live stage telemetry · since cockpit attach"
+                    } else if live {
+                        "run lifecycle · select while active for live stage telemetry"
                     } else {
                         "sample pipeline · start the daemon for live runs"
                     }),
@@ -738,9 +817,12 @@ impl RunsScreen {
             .pb(px(12.0));
 
         if row.event_rows.is_empty() {
-            let text = if live {
-                "No per-run event feed yet — the daemon exposes run lifecycle only. \
-                 Per-run event streaming is the next daemon phase."
+            let text = if row.live_stream {
+                "Stream attached — events will appear as the run emits them \
+                 (no history replay before attach)."
+            } else if live {
+                "No live stream for this run — it either finished before the \
+                 cockpit attached, or is queued."
             } else {
                 "No events — queued behind fleet capacity."
             };
@@ -807,11 +889,46 @@ impl RunsScreen {
                     .child(ui::section_label("EVENT LOG"))
                     .child(ui::meta("event-sourced · replayable"))
                     .child(div().flex_1())
-                    .when(live, |el| {
+                    .when(row.live_stream, |el| {
+                        el.child(
+                            div()
+                                .h_flex()
+                                .gap(px(5.0))
+                                .items_center()
+                                .px(px(10.0))
+                                .py(px(3.0))
+                                .rounded_md()
+                                .bg(theme::accent().opacity(0.1))
+                                .border_1()
+                                .border_color(theme::accent().opacity(0.28))
+                                .child(
+                                    ui::status_dot(theme::accent())
+                                        .with_animation(
+                                            "live-tail-pulse",
+                                            Animation::new(Duration::from_millis(1400)).repeat(),
+                                            |el, delta| {
+                                                el.opacity(
+                                                    0.35 + 0.65
+                                                        * (delta * std::f32::consts::PI).sin(),
+                                                )
+                                            },
+                                        )
+                                        .into_any_element(),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme::accent())
+                                        .child("LIVE TAIL"),
+                                ),
+                        )
+                    })
+                    .when(live && !row.live_stream, |el| {
                         el.child(ui::pill(
                             "LIFECYCLE FEED",
-                            theme::accent(),
-                            theme::accent().opacity(0.1),
+                            theme::text_muted(),
+                            theme::panel_raised(),
                         ))
                     }),
             )
@@ -923,7 +1040,7 @@ fn sample_rows() -> Vec<RunRow> {
     let stages = |list: Vec<(&'static str, &str, StageState)>| -> Vec<Stage> {
         list.into_iter()
             .map(|(label, sub, state)| Stage {
-                label,
+                label: label.to_string(),
                 sub: sub.to_string(),
                 state,
             })
@@ -964,6 +1081,8 @@ fn sample_rows() -> Vec<RunRow> {
                 ev("14:28", "PLAN", amber, "Plan approved at gate — 6 stages"),
                 ev("14:21", "START", muted, "Run accepted · worktree wt-9c1e"),
             ],
+            live_stream: false,
+            usage: None,
         },
         RunRow {
             run_id: None,
@@ -990,6 +1109,8 @@ fn sample_rows() -> Vec<RunRow> {
                 ev("14:38", "READ", muted, "Scanning call sites of retry()"),
                 ev("14:29", "START", muted, "Run accepted · worktree wt-b2e8"),
             ],
+            live_stream: false,
+            usage: None,
         },
         RunRow {
             run_id: None,
@@ -1016,6 +1137,8 @@ fn sample_rows() -> Vec<RunRow> {
                 ev("14:12", "TEST", red, "test_env_override ✗ expected \"prod\", got \"dev\""),
                 ev("13:58", "START", muted, "Run accepted · worktree wt-77b0"),
             ],
+            live_stream: false,
+            usage: None,
         },
         RunRow {
             run_id: None,
@@ -1042,6 +1165,8 @@ fn sample_rows() -> Vec<RunRow> {
                 ev("12:31", "GATE", green, "Review approved by operator"),
                 ev("12:02", "START", muted, "Run accepted · worktree wt-4f2a"),
             ],
+            live_stream: false,
+            usage: None,
         },
         RunRow {
             run_id: None,
@@ -1064,6 +1189,8 @@ fn sample_rows() -> Vec<RunRow> {
                 ("merge", "—", StageState::Queued),
             ]),
             event_rows: Vec::new(),
+            live_stream: false,
+            usage: None,
         },
     ]
 }

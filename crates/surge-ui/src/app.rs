@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder;
@@ -67,6 +68,8 @@ pub struct SurgeApp {
     gate_approval: Option<Entity<GateApprovalScreen>>,
     /// Queued notifications to flush on next render (needs Window access).
     pending_notifications: Vec<gpui_component::notification::Notification>,
+    /// Runs we already attached a per-run event subscription for.
+    stream_subscribed: HashSet<surge_core::id::RunId>,
 }
 
 impl SurgeApp {
@@ -146,6 +149,75 @@ impl SurgeApp {
             settings: None,
             gate_approval: None,
             pending_notifications: Vec::new(),
+            stream_subscribed: HashSet::new(),
+        }
+    }
+
+    /// Attach per-run event subscriptions for every active run we are
+    /// not already streaming. The per-run broadcast has no history
+    /// replay, so the earlier we attach, the more the cockpit sees —
+    /// we sync right after `list_runs` and on every `RunAccepted`.
+    fn sync_run_subscriptions(&mut self, cx: &mut Context<Self>) {
+        use surge_orchestrator::engine::handle::RunStatus;
+
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            return;
+        };
+        let to_subscribe: Vec<surge_core::id::RunId> = self
+            .state
+            .read(cx)
+            .runs
+            .iter()
+            .filter(|r| matches!(r.status, RunStatus::Active))
+            .map(|r| r.run_id)
+            .filter(|id| !self.stream_subscribed.contains(id))
+            .collect();
+
+        for run_id in to_subscribe {
+            self.stream_subscribed.insert(run_id);
+            let state = self.state.clone();
+            let facade = facade.clone();
+            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let mut rx = match facade.subscribe_to_run(run_id).await {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        tracing::debug!(run_id = %run_id, "subscribe_to_run failed: {e}");
+                        return;
+                    },
+                };
+                tracing::info!(run_id = %run_id, "per-run event stream attached");
+                let _ = cx.update(|cx| {
+                    state.update(cx, |s, cx| {
+                        s.run_streams.entry(run_id).or_default().live = true;
+                        cx.notify();
+                    });
+                });
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => {
+                            let _ = cx.update(|cx| {
+                                state.update(cx, |s, cx| {
+                                    s.run_streams.entry(run_id).or_default().apply(&event);
+                                    cx.notify();
+                                });
+                            });
+                        },
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged");
+                        },
+                    }
+                }
+                let _ = cx.update(|cx| {
+                    state.update(cx, |s, cx| {
+                        if let Some(st) = s.run_streams.get_mut(&run_id) {
+                            st.live = false;
+                        }
+                        cx.notify();
+                    });
+                });
+            })
+            .detach();
         }
     }
 
@@ -440,6 +512,9 @@ impl SurgeApp {
                                 state.set_runs_from_summaries(&summaries);
                                 cx.notify();
                             });
+                            let _ = this.update(cx, |this, cx| {
+                                this.sync_run_subscriptions(cx);
+                            });
                         });
                     },
                     Err(e) => {
@@ -482,6 +557,9 @@ impl SurgeApp {
                             });
                             let _ = this.update(cx, |this, cx| {
                                 this.queue_notification_for_global(&event_for_app);
+                                // A RunAccepted may have added an active run —
+                                // attach its event stream immediately.
+                                this.sync_run_subscriptions(cx);
                                 cx.notify();
                             });
                         });
