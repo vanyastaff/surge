@@ -196,7 +196,11 @@ impl RunStreamState {
                 }
             },
             EventPayload::StageCompleted { node, outcome } => {
-                self.set_stage(node.as_str(), StagePhase::Done, outcome.as_str().to_string());
+                self.set_stage(
+                    node.as_str(),
+                    StagePhase::Done,
+                    outcome.as_str().to_string(),
+                );
             },
             EventPayload::StageFailed { node, reason, .. } => {
                 self.set_stage(node.as_str(), StagePhase::Failed, reason.clone());
@@ -271,9 +275,9 @@ impl RunStreamState {
                 },
             ),
             EventPayload::ApprovalDecided { gate, .. } => {
-                self.pending.retain(|p| {
-                    !matches!(&p.kind, DecisionKind::Gate { gate: g } if g == gate.as_str())
-                });
+                self.pending.retain(
+                    |p| !matches!(&p.kind, DecisionKind::Gate { gate: g } if g == gate.as_str()),
+                );
             },
             EventPayload::BootstrapApprovalRequested { stage, .. } => push(
                 &mut self.pending,
@@ -408,9 +412,11 @@ fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
             Tone::Accent,
             format!("{task_id} · {from:?} → {to:?}"),
         ),
-        P::TaskDiscovered { task_id, title, .. } => {
-            ("TASK", Tone::Warn, format!("discovered {task_id} · {title}"))
-        },
+        P::TaskDiscovered { task_id, title, .. } => (
+            "TASK",
+            Tone::Warn,
+            format!("discovered {task_id} · {title}"),
+        ),
         P::TaskVerified { task_id, node, .. } => (
             "VERIFY",
             Tone::Ok,
@@ -454,11 +460,9 @@ fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
             Tone::Warn,
             format!("approval needed @ {}", gate.as_str()),
         ),
-        P::ApprovalDecided { gate, decision, .. } => (
-            "GATE",
-            Tone::Ok,
-            format!("{} · {decision}", gate.as_str()),
-        ),
+        P::ApprovalDecided { gate, decision, .. } => {
+            ("GATE", Tone::Ok, format!("{} · {decision}", gate.as_str()))
+        },
         P::BootstrapApprovalRequested { stage, .. } => (
             "GATE",
             Tone::Warn,

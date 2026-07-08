@@ -246,9 +246,7 @@ impl RunsScreen {
         // 1s ticker so ELAPSED / age counters move while runs are active.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_secs(1))
-                    .await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 let alive = cx.update(|cx| this.update(cx, |_, cx| cx.notify()).is_ok());
                 if !matches!(alive, Ok(true)) {
                     break;
@@ -320,7 +318,7 @@ impl RunsScreen {
             // Refresh the run list so the rail reflects the new status.
             if let Ok(summaries) = facade.list_runs().await {
                 let _ = cx.update(|cx| {
-                    let _ = state.update(cx, |s, cx| {
+                    state.update(cx, |s, cx| {
                         s.set_runs_from_summaries(&summaries);
                         cx.notify();
                     });
@@ -476,9 +474,7 @@ impl RunsScreen {
                     .px(px(14.0))
                     .pt(px(14.0))
                     .pb(px(10.0))
-                    .child(
-                        ui::section_label(format!("RUNS · {}", rows.len())).flex_1(),
-                    )
+                    .child(ui::section_label(format!("RUNS · {}", rows.len())).flex_1())
                     .when(needs > 0, |el| {
                         el.child(ui::pill(
                             format!("{needs} need you"),
@@ -537,30 +533,31 @@ impl RunsScreen {
         }
 
         // Stop run — a real facade call; only offered for live active runs.
-        if live && row.active {
-            if let Some(run_id) = row.run_id {
-                header = header.child(
-                    div()
-                        .id("stop-run")
-                        .h_flex()
-                        .gap(px(7.0))
-                        .items_center()
-                        .h(px(30.0))
-                        .px(px(13.0))
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::error().opacity(0.35))
-                        .text_color(theme::error().opacity(0.95))
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .hover(|s: StyleRefinement| s.border_color(theme::error().opacity(0.7)))
-                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                            this.stop_run(run_id, cx);
-                        }))
-                        .child("■ Stop run"),
-                );
-            }
+        if live
+            && row.active
+            && let Some(run_id) = row.run_id
+        {
+            header = header.child(
+                div()
+                    .id("stop-run")
+                    .h_flex()
+                    .gap(px(7.0))
+                    .items_center()
+                    .h(px(30.0))
+                    .px(px(13.0))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::error().opacity(0.35))
+                    .text_color(theme::error().opacity(0.95))
+                    .text_size(px(11.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.border_color(theme::error().opacity(0.7)))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.stop_run(run_id, cx);
+                    }))
+                    .child("■ Stop run"),
+            );
         }
 
         header
@@ -596,11 +593,9 @@ impl RunsScreen {
             .child(cell("STARTED", row.started.clone(), theme::text_primary()))
             .child(sep())
             .child(
-                div().pl(px(26.0)).child(cell(
-                    "ELAPSED",
-                    row.elapsed.clone(),
-                    theme::accent(),
-                )),
+                div()
+                    .pl(px(26.0))
+                    .child(cell("ELAPSED", row.elapsed.clone(), theme::accent())),
             )
             .child(sep())
             .child(div().pl(px(26.0)).child(cell(
@@ -720,16 +715,13 @@ impl RunsScreen {
 
         let mut cell = div().h_flex().items_center().child(chip);
         if !last {
-            cell = cell.child(
-                div()
-                    .w(px(34.0))
-                    .h(px(2.0))
-                    .bg(if stage.state == StageState::Done {
-                        theme::success().opacity(0.55)
-                    } else {
-                        theme::graph_line()
-                    }),
-            );
+            cell = cell.child(div().w(px(34.0)).h(px(2.0)).bg(
+                if stage.state == StageState::Done {
+                    theme::success().opacity(0.55)
+                } else {
+                    theme::graph_line()
+                },
+            ));
         }
         cell
     }
@@ -982,9 +974,9 @@ impl RunsScreen {
                         theme::accent().opacity(0.12),
                     ))
                     .child(
-                        div()
-                            .flex_1()
-                            .child(Input::new(self.steer_input.as_ref().unwrap()).appearance(false)),
+                        div().flex_1().child(
+                            Input::new(self.steer_input.as_ref().unwrap()).appearance(false),
+                        ),
                     )
                     .child(ui::kbd("↵")),
             )
@@ -1076,7 +1068,12 @@ fn sample_rows() -> Vec<RunRow> {
             ]),
             event_rows: vec![
                 ev("14:36", "TEST", green, "Tests passed — 42/42 green"),
-                ev("14:34", "WRITE", amber, "Wrote src/middleware/rate_limit.rs +186"),
+                ev(
+                    "14:34",
+                    "WRITE",
+                    amber,
+                    "Wrote src/middleware/rate_limit.rs +186",
+                ),
                 ev("14:31", "LINT", green, "Lint clean"),
                 ev("14:28", "PLAN", amber, "Plan approved at gate — 6 stages"),
                 ev("14:21", "START", muted, "Run accepted · worktree wt-9c1e"),
@@ -1133,8 +1130,18 @@ fn sample_rows() -> Vec<RunRow> {
                 ("merge", "blocked", StageState::Queued),
             ]),
             event_rows: vec![
-                ev("14:15", "FAIL", red, "qa suite failed — 3/6: config_env round-trip"),
-                ev("14:12", "TEST", red, "test_env_override ✗ expected \"prod\", got \"dev\""),
+                ev(
+                    "14:15",
+                    "FAIL",
+                    red,
+                    "qa suite failed — 3/6: config_env round-trip",
+                ),
+                ev(
+                    "14:12",
+                    "TEST",
+                    red,
+                    "test_env_override ✗ expected \"prod\", got \"dev\"",
+                ),
                 ev("13:58", "START", muted, "Run accepted · worktree wt-77b0"),
             ],
             live_stream: false,

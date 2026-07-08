@@ -109,9 +109,10 @@ fn card_from_task(task: &crate::app_state::TaskEntry) -> Card {
     let (pill, needs_you): ((String, Hsla), bool) = match &task.state {
         TaskState::Draft => (("draft".into(), theme::text_muted()), false),
         TaskState::Planning => (("planning".into(), theme::accent()), false),
-        TaskState::Planned { subtask_count } => {
-            ((format!("{subtask_count} subtasks"), theme::accent()), false)
-        },
+        TaskState::Planned { subtask_count } => (
+            (format!("{subtask_count} subtasks"), theme::accent()),
+            false,
+        ),
         TaskState::Executing { completed, total } => {
             ((format!("{completed}/{total}"), theme::accent()), false)
         },
@@ -466,21 +467,19 @@ impl Render for BacklogScreen {
 /// Clearly-labelled sample board (no tasks yet) — mirrors the concept
 /// so the four-lane idea reads before a project has real work.
 fn sample_cards() -> Vec<Card> {
-    let mk = |id: &str,
-              title: &str,
-              pill: (&str, Hsla),
-              meta: &str,
-              needs_you: bool,
-              column: Column| Card {
-        task_id: None,
-        id_label: id.to_string(),
-        title: title.to_string(),
-        pill: (pill.0.to_string(), pill.1),
-        meta: meta.to_string(),
-        progress: None,
-        needs_you,
-        column,
-    };
+    let mk =
+        |id: &str, title: &str, pill: (&str, Hsla), meta: &str, needs_you: bool, column: Column| {
+            Card {
+                task_id: None,
+                id_label: id.to_string(),
+                title: title.to_string(),
+                pill: (pill.0.to_string(), pill.1),
+                meta: meta.to_string(),
+                progress: None,
+                needs_you,
+                column,
+            }
+        };
 
     vec![
         mk(

@@ -400,9 +400,7 @@ impl AgentsScreen {
                     .filter(|r| r.runtime == runtime)
                     .collect();
                 if rows.is_empty() {
-                    body = body.child(ui::meta(
-                        "no delegation rows declared for this runtime yet",
-                    ));
+                    body = body.child(ui::meta("no delegation rows declared for this runtime yet"));
                 }
                 for row in rows {
                     let mode = format!("{:?}", row.mode);
@@ -570,56 +568,51 @@ impl AgentsScreen {
     }
 
     fn render_empty(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .v_flex()
-                    .gap(px(12.0))
-                    .items_center()
-                    .max_w(px(420.0))
-                    .child(
-                        div()
-                            .text_size(px(14.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::text_primary())
-                            .child("No agents detected on PATH"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .line_height(px(18.0))
-                            .text_color(theme::text_muted())
-                            .text_center()
-                            .child(
-                                "Surge orchestrates any ACP-speaking coding agent. \
+        div().flex_1().flex().items_center().justify_center().child(
+            div()
+                .v_flex()
+                .gap(px(12.0))
+                .items_center()
+                .max_w(px(420.0))
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::text_primary())
+                        .child("No agents detected on PATH"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .line_height(px(18.0))
+                        .text_color(theme::text_muted())
+                        .text_center()
+                        .child(
+                            "Surge orchestrates any ACP-speaking coding agent. \
                                  Install one (Claude Code, Codex CLI, Gemini CLI, …) \
                                  and it appears here as crew.",
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("agents-open-catalog")
-                            .h(px(34.0))
-                            .px(px(16.0))
-                            .rounded_lg()
-                            .bg(theme::accent())
-                            .flex()
-                            .items_center()
-                            .text_color(hsla(0.0, 0.0, 0.08, 1.0))
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::BOLD)
-                            .cursor_pointer()
-                            .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-                            .on_click(cx.listener(|_this, _e, _w, cx| {
-                                cx.emit(AgentsAction::OpenCatalog);
-                            }))
-                            .child("Browse the catalog"),
-                    ),
-            )
+                        ),
+                )
+                .child(
+                    div()
+                        .id("agents-open-catalog")
+                        .h(px(34.0))
+                        .px(px(16.0))
+                        .rounded_lg()
+                        .bg(theme::accent())
+                        .flex()
+                        .items_center()
+                        .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::BOLD)
+                        .cursor_pointer()
+                        .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
+                        .on_click(cx.listener(|_this, _e, _w, cx| {
+                            cx.emit(AgentsAction::OpenCatalog);
+                        }))
+                        .child("Browse the catalog"),
+                ),
+        )
     }
 }
 

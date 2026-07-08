@@ -69,7 +69,9 @@ fn kind_color(k: NodeKind) -> Hsla {
 
 fn kind_desc(k: NodeKind) -> &'static str {
     match k {
-        NodeKind::Agent => "Runs an agent profile in a sealed worktree; routes on its declared outcomes.",
+        NodeKind::Agent => {
+            "Runs an agent profile in a sealed worktree; routes on its declared outcomes."
+        },
         NodeKind::HumanGate => "Pauses for an operator decision before routing on.",
         NodeKind::Branch => "Deterministic fork — chooses an edge from graph data.",
         NodeKind::Terminal => "End state. The run stops here.",
@@ -101,9 +103,7 @@ impl FlowScreen {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         let flow = BundledFlows::by_name_latest(DEFAULT_FLOW)
             .or_else(|| BundledFlows::all().into_iter().next());
-        let selected = flow
-            .as_ref()
-            .map(|f| f.graph.start.as_str().to_string());
+        let selected = flow.as_ref().map(|f| f.graph.start.as_str().to_string());
         Self { flow, selected }
     }
 
@@ -114,8 +114,7 @@ impl FlowScreen {
             return out;
         };
         let g = &flow.graph;
-        let (mut minx, mut maxx, mut miny, mut maxy) =
-            (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        let (mut minx, mut maxx, mut miny, mut maxy) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
         for n in g.nodes.values() {
             minx = minx.min(n.position.x);
             maxx = maxx.max(n.position.x);
@@ -270,10 +269,8 @@ impl FlowScreen {
                 while gy < h {
                     let mut gx = 8.0_f32;
                     while gx < w {
-                        let d = Bounds::new(
-                            point(ox + px(gx), oy + px(gy)),
-                            size(px(1.4), px(1.4)),
-                        );
+                        let d =
+                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.4), px(1.4)));
                         window.paint_quad(fill(d, dot_color));
                         gx += step;
                     }
@@ -392,8 +389,7 @@ impl FlowScreen {
             for e in &flow.graph.edges {
                 let from = e.from.node.as_str();
                 let to = e.to.as_str();
-                if let (Some(&(fx, fy)), Some(&(tx, ty))) =
-                    (positions.get(from), positions.get(to))
+                if let (Some(&(fx, fy)), Some(&(tx, ty))) = (positions.get(from), positions.get(to))
                 {
                     segs.push(EdgeSeg {
                         x1: fx + NODE_W,
@@ -529,8 +525,15 @@ impl FlowScreen {
                     .map(|e| e.to.as_str().to_string())
                     .unwrap_or_else(|| "—".to_string());
                 let neg = oc.is_terminal
-                    || matches!(outcome, "fail" | "changes_requested" | "rejected" | "blocked");
-                let tag_color = if neg { theme::error() } else { theme::success() };
+                    || matches!(
+                        outcome,
+                        "fail" | "changes_requested" | "rejected" | "blocked"
+                    );
+                let tag_color = if neg {
+                    theme::error()
+                } else {
+                    theme::success()
+                };
                 div()
                     .h_flex()
                     .gap(px(8.0))
@@ -541,7 +544,11 @@ impl FlowScreen {
                     .bg(theme::panel_raised())
                     .border_1()
                     .border_color(theme::hairline())
-                    .child(ui::pill(outcome.to_string(), tag_color, tag_color.opacity(0.14)))
+                    .child(ui::pill(
+                        outcome.to_string(),
+                        tag_color,
+                        tag_color.opacity(0.14),
+                    ))
                     .child(
                         div()
                             .text_size(px(10.0))
@@ -644,7 +651,11 @@ impl FlowScreen {
                     .child(text),
             );
         };
-        push(format!("start = \"{}\"", g.start.as_str()), theme::accent(), 0.0);
+        push(
+            format!("start = \"{}\"", g.start.as_str()),
+            theme::accent(),
+            0.0,
+        );
         for n in g.nodes.values() {
             push(
                 format!("[{}]  {}", n.id.as_str(), kind_label(n.kind())),

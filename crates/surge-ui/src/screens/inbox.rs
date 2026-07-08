@@ -136,11 +136,9 @@ impl InboxScreen {
                         }
                         (theme::accent(), prompt.clone(), ev)
                     },
-                    DecisionKind::Gate { gate } => (
-                        theme::accent(),
-                        format!("Review gate @ {gate}"),
-                        Vec::new(),
-                    ),
+                    DecisionKind::Gate { gate } => {
+                        (theme::accent(), format!("Review gate @ {gate}"), Vec::new())
+                    },
                     DecisionKind::Bootstrap { stage } => (
                         theme::accent(),
                         format!("Bootstrap {stage} artifact awaits approval"),
@@ -261,7 +259,7 @@ impl InboxScreen {
             return (samples, false);
         }
 
-        items.sort_by(|a, b| a.rank.cmp(&b.rank));
+        items.sort_by_key(|a| a.rank);
         (items, true)
     }
 
@@ -520,10 +518,7 @@ impl InboxScreen {
                             .text_color(theme::text_primary())
                             .child("Inbox"),
                     )
-                    .child(ui::meta(format!(
-                        "{} blocked on you",
-                        items.len()
-                    )))
+                    .child(ui::meta(format!("{} blocked on you", items.len())))
                     .child(div().flex_1())
                     .when(!live, |el| {
                         el.child(ui::pill(
@@ -554,7 +549,10 @@ impl InboxScreen {
                 |this: &mut Self, _input, event: &InputEvent, _window, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
                         let (items, _) = this.items(cx);
-                        if let Some(item) = items.get(this.selected.min(items.len().saturating_sub(1))).cloned() {
+                        if let Some(item) = items
+                            .get(this.selected.min(items.len().saturating_sub(1)))
+                            .cloned()
+                        {
                             this.send_response(&item, cx);
                         }
                     }
@@ -566,20 +564,32 @@ impl InboxScreen {
 
         let is_live_input = matches!(
             &item.source,
-            Source::Live { kind: DecisionKind::HumanInput { .. }, .. }
+            Source::Live {
+                kind: DecisionKind::HumanInput { .. },
+                ..
+            }
         );
         let is_elevation = matches!(
             &item.source,
-            Source::Live { kind: DecisionKind::Elevation { .. }, .. }
+            Source::Live {
+                kind: DecisionKind::Elevation { .. },
+                ..
+            }
         );
         let is_bootstrap = matches!(
             &item.source,
-            Source::Live { kind: DecisionKind::Bootstrap { .. }, .. }
+            Source::Live {
+                kind: DecisionKind::Bootstrap { .. },
+                ..
+            }
         );
         let is_failure = matches!(&item.source, Source::FailedRun { .. });
         let is_escalation = matches!(
             &item.source,
-            Source::Live { kind: DecisionKind::Escalation { .. }, .. }
+            Source::Live {
+                kind: DecisionKind::Escalation { .. },
+                ..
+            }
         );
 
         let mut pane = div()
@@ -652,26 +662,24 @@ impl InboxScreen {
 
         // response / comment input (not for failure triage or elevation)
         if !is_failure && !is_elevation && !is_escalation {
-            pane = pane.child(
-                div()
-                    .mt(px(18.0))
-                    .h_flex()
-                    .gap(px(10.0))
-                    .items_center()
-                    .h(px(38.0))
-                    .px(px(12.0))
-                    .rounded_lg()
-                    .bg(theme::panel_deep())
-                    .border_1()
-                    .border_color(theme::hairline_strong())
-                    .child(
-                        div().flex_1().child(
-                            Input::new(self.response_input.as_ref().unwrap())
-                                .appearance(false),
-                        ),
-                    )
-                    .when(is_live_input, |el| el.child(ui::kbd("↵ send"))),
-            );
+            pane =
+                pane.child(
+                    div()
+                        .mt(px(18.0))
+                        .h_flex()
+                        .gap(px(10.0))
+                        .items_center()
+                        .h(px(38.0))
+                        .px(px(12.0))
+                        .rounded_lg()
+                        .bg(theme::panel_deep())
+                        .border_1()
+                        .border_color(theme::hairline_strong())
+                        .child(div().flex_1().child(
+                            Input::new(self.response_input.as_ref().unwrap()).appearance(false),
+                        ))
+                        .when(is_live_input, |el| el.child(ui::kbd("↵ send"))),
+                );
         }
 
         // action row
@@ -731,13 +739,11 @@ impl InboxScreen {
             );
         } else if is_elevation || is_escalation {
             if let Source::Live { run_id, .. } = item.source {
-                actions = actions.child(
-                    secondary("inbox-open-run-2", "Open cockpit").on_click(cx.listener(
-                        move |this, _e, _w, cx| {
-                            cx.emit(InboxAction::OpenRun(run_id));
-                        },
-                    )),
-                );
+                actions = actions.child(secondary("inbox-open-run-2", "Open cockpit").on_click(
+                    cx.listener(move |this, _e, _w, cx| {
+                        cx.emit(InboxAction::OpenRun(run_id));
+                    }),
+                ));
             }
         } else {
             actions = actions
@@ -848,8 +854,7 @@ fn sample_items() -> Vec<InboxItem> {
             evidence: vec![
                 (
                     "EVIDENCE".to_string(),
-                    "qa suite 42/42 green · lint clean · +186 −12 across 4 files"
-                        .to_string(),
+                    "qa suite 42/42 green · lint clean · +186 −12 across 4 files".to_string(),
                 ),
                 (
                     "RISK".to_string(),
@@ -868,8 +873,7 @@ fn sample_items() -> Vec<InboxItem> {
             age: "32m".to_string(),
             evidence: vec![(
                 "LAST EVENTS".to_string(),
-                "14:15 FAIL qa suite failed — 3/6\n14:12 TEST test_env_override ✗"
-                    .to_string(),
+                "14:15 FAIL qa suite failed — 3/6\n14:12 TEST test_env_override ✗".to_string(),
             )],
             source: Source::Sample,
         },

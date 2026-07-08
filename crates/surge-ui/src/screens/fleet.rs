@@ -163,10 +163,8 @@ impl FleetScreen {
                 while gy < stage_h {
                     let mut gx = 8.0_f32;
                     while gx < stage_w {
-                        let dot = Bounds::new(
-                            point(ox + px(gx), oy + px(gy)),
-                            size(px(1.5), px(1.5)),
-                        );
+                        let dot =
+                            Bounds::new(point(ox + px(gx), oy + px(gy)), size(px(1.5), px(1.5)));
                         window.paint_quad(fill(dot, dot_color));
                         gx += step;
                     }
@@ -439,7 +437,11 @@ impl FleetScreen {
                             .text_size(px(10.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(node.kind.color())
-                            .child(if live { "NEEDS ATTENTION" } else { "REVIEW GATE" }),
+                            .child(if live {
+                                "NEEDS ATTENTION"
+                            } else {
+                                "REVIEW GATE"
+                            }),
                     )
                     .child(div().flex_1())
                     .child(ui::meta(node.id.clone())),

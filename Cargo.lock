@@ -7617,6 +7617,7 @@ dependencies = [
  "surge-core",
  "surge-daemon",
  "surge-orchestrator",
+ "surge-persistence",
  "tokio",
  "toml 0.8.23",
  "tracing",

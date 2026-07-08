@@ -205,8 +205,7 @@ impl RoadmapScreen {
         let mut steps = Vec::new();
         let mut current = g.start.clone();
         let mut hops = 0;
-        loop {
-            let Some(node) = g.nodes.get(&current) else { break };
+        while let Some(node) = g.nodes.get(&current) {
             steps.push(LineStep {
                 label: current.as_str().replace('_', " "),
                 kind: node.kind(),
@@ -253,11 +252,9 @@ impl RoadmapScreen {
                     theme::success(),
                     theme::success().opacity(0.12),
                 ),
-                SourceKind::Specs => ui::pill(
-                    "from specs",
-                    theme::accent(),
-                    theme::accent().opacity(0.12),
-                ),
+                SourceKind::Specs => {
+                    ui::pill("from specs", theme::accent(), theme::accent().opacity(0.12))
+                },
                 SourceKind::Sample => ui::pill(
                     "sample · surge bootstrap writes the real one",
                     theme::text_muted(),
@@ -350,13 +347,7 @@ impl RoadmapScreen {
                     .text_size(px(9.5))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::accent())
-                    .child(
-                        div()
-                            .w(px(7.0))
-                            .h(px(7.0))
-                            .rounded_sm()
-                            .bg(theme::accent()),
-                    )
+                    .child(div().w(px(7.0)).h(px(7.0)).rounded_sm().bg(theme::accent()))
                     .child(step.label.clone()),
                 NodeKind::Terminal => div()
                     .px(px(9.0))
@@ -392,7 +383,9 @@ impl RoadmapScreen {
             }
         }
 
-        row = row.child(div().flex_1()).child(ui::meta("linear-with-review · bundled flow"));
+        row = row
+            .child(div().flex_1())
+            .child(ui::meta("linear-with-review · bundled flow"));
 
         div()
             .h_flex()
@@ -586,10 +579,22 @@ fn sample_milestones() -> Vec<MilestoneRow> {
             done: 4,
             total: 4,
             tasks: vec![
-                ("m1-t1".into(), "OAuth token refresh".into(), theme::success()),
+                (
+                    "m1-t1".into(),
+                    "OAuth token refresh".into(),
+                    theme::success(),
+                ),
                 ("m1-t2".into(), "Session cache".into(), theme::success()),
-                ("m1-t3".into(), "Rate limiter middleware".into(), theme::success()),
-                ("m1-t4".into(), "Audit log for logins".into(), theme::success()),
+                (
+                    "m1-t3".into(),
+                    "Rate limiter middleware".into(),
+                    theme::success(),
+                ),
+                (
+                    "m1-t4".into(),
+                    "Audit log for logins".into(),
+                    theme::success(),
+                ),
             ],
             note: String::new(),
         },
@@ -602,11 +607,23 @@ fn sample_milestones() -> Vec<MilestoneRow> {
             done: 2,
             total: 5,
             tasks: vec![
-                ("m2-t1".into(), "Streaming CSV parser".into(), theme::success()),
+                (
+                    "m2-t1".into(),
+                    "Streaming CSV parser".into(),
+                    theme::success(),
+                ),
                 ("m2-t2".into(), "Schema inference".into(), theme::success()),
                 ("m2-t3".into(), "Retry logic patch".into(), theme::accent()),
-                ("m2-t4".into(), "Config loader refactor".into(), theme::error()),
-                ("m2-t5".into(), "Import progress UI".into(), theme::text_muted()),
+                (
+                    "m2-t4".into(),
+                    "Config loader refactor".into(),
+                    theme::error(),
+                ),
+                (
+                    "m2-t5".into(),
+                    "Import progress UI".into(),
+                    theme::text_muted(),
+                ),
             ],
             note: "m2-t4 failed verification — routed back".into(),
         },
@@ -619,9 +636,21 @@ fn sample_milestones() -> Vec<MilestoneRow> {
             done: 0,
             total: 3,
             tasks: vec![
-                ("m3-t1".into(), "Structured logging".into(), theme::text_muted()),
-                ("m3-t2".into(), "Budget guard per run".into(), theme::text_muted()),
-                ("m3-t3".into(), "Token usage dashboard".into(), theme::text_muted()),
+                (
+                    "m3-t1".into(),
+                    "Structured logging".into(),
+                    theme::text_muted(),
+                ),
+                (
+                    "m3-t2".into(),
+                    "Budget guard per run".into(),
+                    theme::text_muted(),
+                ),
+                (
+                    "m3-t3".into(),
+                    "Token usage dashboard".into(),
+                    theme::text_muted(),
+                ),
             ],
             note: String::new(),
         },

@@ -787,8 +787,9 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let inbox = self.inbox.get_or_insert_with(|| {
                     let i = cx.new(|cx| InboxScreen::new(state, cx));
-                    cx.subscribe(&i, |this: &mut Self, _i, event: &InboxAction, cx| {
-                        match event {
+                    cx.subscribe(
+                        &i,
+                        |this: &mut Self, _i, event: &InboxAction, cx| match event {
                             InboxAction::OpenRun(run_id) => {
                                 let run_id = *run_id;
                                 if let Some(runs_screen) = this.runs_screen.clone() {
@@ -799,8 +800,8 @@ impl SurgeApp {
                             InboxAction::TaskDecision { task_id, approved } => {
                                 this.write_gate_decision(task_id.clone(), *approved, cx);
                             },
-                        }
-                    })
+                        },
+                    )
                     .detach();
                     i
                 });
@@ -810,8 +811,9 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let backlog = self.backlog.get_or_insert_with(|| {
                     let b = cx.new(|cx| BacklogScreen::new(state, cx));
-                    cx.subscribe(&b, |this: &mut Self, _b, event: &BacklogAction, cx| {
-                        match event {
+                    cx.subscribe(
+                        &b,
+                        |this: &mut Self, _b, event: &BacklogAction, cx| match event {
                             BacklogAction::OpenTask(id) => {
                                 this.task_detail_id = Some(id.clone());
                                 cx.notify();
@@ -819,8 +821,8 @@ impl SurgeApp {
                             BacklogAction::NewTask => {
                                 this.navigate(Screen::SpecWizard, cx);
                             },
-                        }
-                    })
+                        },
+                    )
                     .detach();
                     b
                 });
@@ -830,16 +832,17 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let agents = self.agents_screen.get_or_insert_with(|| {
                     let a = cx.new(|cx| AgentsScreen::new(state, cx));
-                    cx.subscribe(&a, |this: &mut Self, _a, event: &AgentsAction, cx| {
-                        match event {
+                    cx.subscribe(
+                        &a,
+                        |this: &mut Self, _a, event: &AgentsAction, cx| match event {
                             AgentsAction::OpenCatalog => {
                                 this.navigate(Screen::AgentHub, cx);
                             },
                             AgentsAction::OpenTerminal(_id) => {
                                 this.navigate(Screen::AgentTerminals, cx);
                             },
-                        }
-                    })
+                        },
+                    )
                     .detach();
                     a
                 });
@@ -1247,89 +1250,86 @@ impl Render for SurgeApp {
         // Flush any queued notifications now that we have Window access.
         self.flush_notifications(window, cx);
 
-        let content: AnyElement = match &self.mode {
-            AppMode::Welcome(welcome) => div()
-                .key_context("SurgeApp")
-                .track_focus(&self.focus)
-                .size_full()
-                .font_family(crate::ui::MONO)
-                .child(welcome.clone())
-                .into_any_element(),
-            AppMode::Project { .. } => {
-                div()
+        let content: AnyElement =
+            match &self.mode {
+                AppMode::Welcome(welcome) => div()
                     .key_context("SurgeApp")
                     .track_focus(&self.focus)
                     .size_full()
                     .font_family(crate::ui::MONO)
-                    .bg(theme::background())
-                    .text_color(theme::text_primary())
-                    .on_action(
-                        cx.listener(|this, _: &GoToFleet, _w, cx| {
+                    .child(welcome.clone())
+                    .into_any_element(),
+                AppMode::Project { .. } => {
+                    div()
+                        .key_context("SurgeApp")
+                        .track_focus(&self.focus)
+                        .size_full()
+                        .font_family(crate::ui::MONO)
+                        .bg(theme::background())
+                        .text_color(theme::text_primary())
+                        .on_action(cx.listener(|this, _: &GoToFleet, _w, cx| {
                             this.navigate(Screen::Fleet, cx)
-                        }),
-                    )
-                    .on_action(cx.listener(|this, _: &GoToRoadmap, _w, cx| {
-                        this.navigate(Screen::Roadmap, cx)
-                    }))
-                    .on_action(
-                        cx.listener(|this, _: &GoToRuns, _w, cx| this.navigate(Screen::Runs, cx)),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &GoToFlow, _w, cx| this.navigate(Screen::Flow, cx)),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &GoToInbox, _w, cx| {
+                        }))
+                        .on_action(cx.listener(|this, _: &GoToRoadmap, _w, cx| {
+                            this.navigate(Screen::Roadmap, cx)
+                        }))
+                        .on_action(
+                            cx.listener(|this, _: &GoToRuns, _w, cx| {
+                                this.navigate(Screen::Runs, cx)
+                            }),
+                        )
+                        .on_action(
+                            cx.listener(|this, _: &GoToFlow, _w, cx| {
+                                this.navigate(Screen::Flow, cx)
+                            }),
+                        )
+                        .on_action(cx.listener(|this, _: &GoToInbox, _w, cx| {
                             this.navigate(Screen::Inbox, cx)
-                        }),
-                    )
-                    .on_action(cx.listener(|this, _: &GoToBacklog, _w, cx| {
-                        this.navigate(Screen::Backlog, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| {
-                        this.navigate(Screen::Agents, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToMemory, _w, cx| {
-                        this.navigate(Screen::ContextMemory, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| {
-                        this.navigate(Screen::Settings, cx)
-                    }))
-                    .on_action(
-                        cx.listener(|this, _: &ToggleSidebarAction, _w, cx| {
+                        }))
+                        .on_action(cx.listener(|this, _: &GoToBacklog, _w, cx| {
+                            this.navigate(Screen::Backlog, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| {
+                            this.navigate(Screen::Agents, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &GoToMemory, _w, cx| {
+                            this.navigate(Screen::ContextMemory, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| {
+                            this.navigate(Screen::Settings, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &ToggleSidebarAction, _w, cx| {
                             this.toggle_sidebar(cx)
-                        }),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &ToggleCommandPalette, _w, cx| {
+                        }))
+                        .on_action(cx.listener(|this, _: &ToggleCommandPalette, _w, cx| {
                             this.toggle_palette(cx)
-                        }),
-                    )
-                    .on_action(cx.listener(|this, _: &SwitchProject, _w, cx| {
-                        // Toggle project switcher in top bar.
-                        if let Some(top_bar) = &this.top_bar {
-                            top_bar.update(cx, |tb, cx| tb.toggle_switcher(cx));
-                        }
-                    }))
-                    .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
-                        this.navigate(Screen::SpecWizard, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
-                        // If on gate approval screen, approve the current gate
-                        if this.active_screen == Screen::GateApproval {
-                            if let Some(gate_approval) = &this.gate_approval {
-                                gate_approval.update(cx, |ga, cx| {
-                                    // Trigger approve button click programmatically
-                                    cx.emit(GateDecision {
-                                        task_id: ga.task_id.clone(),
-                                        approved: true,
-                                    });
-                                    cx.notify();
-                                });
+                        }))
+                        .on_action(cx.listener(|this, _: &SwitchProject, _w, cx| {
+                            // Toggle project switcher in top bar.
+                            if let Some(top_bar) = &this.top_bar {
+                                top_bar.update(cx, |tb, cx| tb.toggle_switcher(cx));
                             }
-                        }
-                    }))
-                    .child(
-                        div()
+                        }))
+                        .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
+                            this.navigate(Screen::SpecWizard, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
+                            // If on gate approval screen, approve the current gate
+                            if this.active_screen == Screen::GateApproval {
+                                if let Some(gate_approval) = &this.gate_approval {
+                                    gate_approval.update(cx, |ga, cx| {
+                                        // Trigger approve button click programmatically
+                                        cx.emit(GateDecision {
+                                            task_id: ga.task_id.clone(),
+                                            approved: true,
+                                        });
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }))
+                        .child(
+                            div()
                             .size_full()
                             .v_flex()
                             // Top bar
@@ -1350,13 +1350,13 @@ impl Render for SurgeApp {
                                             .child(self.render_screen_content(cx)),
                                     ),
                             ),
-                    )
-                    .child(self.render_palette_overlay())
-                    .child(self.render_task_detail_overlay(cx))
-                    .children(gpui_component::Root::render_notification_layer(window, cx))
-                    .into_any_element()
-            },
-        };
+                        )
+                        .child(self.render_palette_overlay())
+                        .child(self.render_task_detail_overlay(cx))
+                        .children(gpui_component::Root::render_notification_layer(window, cx))
+                        .into_any_element()
+                },
+            };
 
         div()
             .size_full()

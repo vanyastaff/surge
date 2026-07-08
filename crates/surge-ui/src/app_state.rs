@@ -368,9 +368,7 @@ impl AppState {
         let mut all: Vec<(RunId, crate::run_stream::PendingDecision)> = self
             .run_streams
             .iter()
-            .flat_map(|(run_id, stream)| {
-                stream.pending.iter().map(move |p| (*run_id, p.clone()))
-            })
+            .flat_map(|(run_id, stream)| stream.pending.iter().map(move |p| (*run_id, p.clone())))
             .collect();
         all.sort_by_key(|(_, p)| (p.kind.rank(), p.seq));
         all

@@ -74,12 +74,7 @@ impl AppSidebar {
         let reviews = state
             .tasks
             .iter()
-            .filter(|t| {
-                matches!(
-                    t.state,
-                    TaskState::HumanReview | TaskState::QaReview { .. }
-                )
-            })
+            .filter(|t| matches!(t.state, TaskState::HumanReview | TaskState::QaReview { .. }))
             .count();
         let failed = state
             .runs
@@ -121,7 +116,8 @@ impl AppSidebar {
         } else {
             base.text_color(theme::text_muted())
                 .hover(|s: StyleRefinement| {
-                    s.bg(theme::panel_raised()).text_color(theme::text_primary())
+                    s.bg(theme::panel_raised())
+                        .text_color(theme::text_primary())
                 })
         };
 
