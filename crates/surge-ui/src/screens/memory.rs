@@ -800,10 +800,12 @@ impl Render for MemoryScreen {
                 )
                 .into_any_element()
         } else {
+            // Plain .flex() row so the three panes stretch to full
+            // height (h_flex would center them vertically).
             div()
                 .flex_1()
                 .min_h_0()
-                .h_flex()
+                .flex()
                 .child(self.render_list(cx))
                 .child(self.render_graph(cx))
                 .child(self.render_inspector())

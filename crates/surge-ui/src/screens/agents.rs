@@ -676,7 +676,8 @@ impl Render for AgentsScreen {
                     .child("+ Add agent"),
             );
 
-        let mut detail = div().flex_1().min_h_0().h_flex().gap(px(14.0));
+        // Plain .flex() row so both detail panes stretch to full height.
+        let mut detail = div().flex_1().min_h_0().flex().gap(px(14.0));
         if let Some(agent) = &selected {
             detail = detail
                 .child(

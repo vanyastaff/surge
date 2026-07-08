@@ -1010,10 +1010,13 @@ impl Render for RunsScreen {
             .size_full()
             .v_flex()
             .child(
+                // Plain .flex() row — gpui-component's h_flex() would
+                // items_center the panes instead of stretching them to
+                // full height.
                 div()
                     .flex_1()
                     .min_h_0()
-                    .h_flex()
+                    .flex()
                     .child(self.render_rail(&rows, sel, live, cx))
                     .child(main),
             )

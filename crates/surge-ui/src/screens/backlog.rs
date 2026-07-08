@@ -449,10 +449,12 @@ impl Render for BacklogScreen {
             .child(self.render_header(cards.len(), live, cx))
             .child(self.render_capacity(cx))
             .child(
+                // Plain .flex() row — columns must stretch to full
+                // height, not center (h_flex sets items_center).
                 div()
                     .flex_1()
                     .min_h_0()
-                    .h_flex()
+                    .flex()
                     .gap(px(14.0))
                     .px(px(20.0))
                     .pb(px(18.0))

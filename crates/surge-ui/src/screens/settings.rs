@@ -90,26 +90,6 @@ impl SettingsPage {
         }
     }
 
-    fn icon_color(self) -> Hsla {
-        match self {
-            Self::Appearance => ACCENT_ORANGE,
-            Self::DisplayFonts => ACCENT_BLUE,
-            Self::Agents => ACCENT_GREEN,
-            Self::Keybindings => ACCENT_BLUE,
-            Self::EditorPaths => ACCENT_ORANGE,
-            Self::Notifications => ACCENT_PINK,
-            Self::General => ACCENT_PURPLE,
-            Self::Pipeline => ACCENT_AMBER,
-            Self::Routing => ACCENT_BLUE,
-            Self::Budgets => ACCENT_AMBER,
-            Self::GitWorktrees => ACCENT_TEAL,
-            Self::Resilience => ACCENT_PINK,
-            Self::McpServers => ACCENT_PURPLE,
-            Self::ContextMemory => ACCENT_ORANGE,
-            Self::Integrations => ACCENT_TEAL,
-        }
-    }
-
     fn app_pages() -> &'static [SettingsPage] {
         &[
             Self::Appearance,
@@ -168,51 +148,6 @@ impl SettingsPage {
         }
     }
 }
-
-// ── Accent colors ──────────────────────────────────────────────────
-
-const ACCENT_ORANGE: Hsla = Hsla {
-    h: 33.0 / 360.0,
-    s: 0.90,
-    l: 0.55,
-    a: 1.0,
-};
-const ACCENT_BLUE: Hsla = Hsla {
-    h: 210.0 / 360.0,
-    s: 0.80,
-    l: 0.55,
-    a: 1.0,
-};
-const ACCENT_GREEN: Hsla = Hsla {
-    h: 142.0 / 360.0,
-    s: 0.71,
-    l: 0.45,
-    a: 1.0,
-};
-const ACCENT_PURPLE: Hsla = Hsla {
-    h: 263.0 / 360.0,
-    s: 0.85,
-    l: 0.58,
-    a: 1.0,
-};
-const ACCENT_TEAL: Hsla = Hsla {
-    h: 175.0 / 360.0,
-    s: 0.65,
-    l: 0.45,
-    a: 1.0,
-};
-const ACCENT_AMBER: Hsla = Hsla {
-    h: 45.0 / 360.0,
-    s: 0.93,
-    l: 0.50,
-    a: 1.0,
-};
-const ACCENT_PINK: Hsla = Hsla {
-    h: 330.0 / 360.0,
-    s: 0.80,
-    l: 0.55,
-    a: 1.0,
-};
 
 // ── Appearance mode ────────────────────────────────────────────────
 
@@ -463,9 +398,9 @@ impl SettingsScreen {
             .w(px(240.0))
             .h_full()
             .flex_shrink_0()
-            .bg(theme::sidebar_bg())
+            .bg(theme::panel())
             .border_r_1()
-            .border_color(theme::surface())
+            .border_color(theme::hairline())
             .py_4()
             .overflow_y_scroll()
             .child(
@@ -485,7 +420,7 @@ impl SettingsScreen {
                             )
                             .child(
                                 div()
-                                    .text_lg()
+                                    .text_size(px(13.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme::text_primary())
                                     .child("Settings"),
@@ -493,7 +428,7 @@ impl SettingsScreen {
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted())
                             .child("App & Project configuration"),
                     ),
@@ -524,7 +459,7 @@ impl SettingsScreen {
                     .px_2()
                     .pt_3()
                     .pb_1()
-                    .text_xs()
+                    .text_size(px(10.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme::text_muted().opacity(0.5))
                     .child(title.to_string()),
@@ -546,9 +481,9 @@ impl SettingsScreen {
             .mt_3()
             .p_2()
             .rounded_lg()
-            .bg(theme::surface())
+            .bg(theme::panel_raised())
             .border_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .h_flex()
             .gap_2()
             .child(
@@ -564,7 +499,7 @@ impl SettingsScreen {
                             .h_flex()
                             .justify_center()
                             .items_center()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::primary())
                             .child(
@@ -583,14 +518,14 @@ impl SettingsScreen {
                     .v_flex()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(project_name.clone()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted())
                             .child(project_path),
                     ),
@@ -604,7 +539,11 @@ impl SettingsScreen {
 
     fn render_sidebar_item(&self, page: SettingsPage, cx: &mut Context<Self>) -> Stateful<Div> {
         let is_active = page == self.active_page;
-        let icon_color = page.icon_color();
+        let icon_color = if is_active {
+            theme::accent()
+        } else {
+            theme::text_muted()
+        };
         let is_pipeline = matches!(page, SettingsPage::Pipeline);
 
         let base = div()
@@ -623,7 +562,7 @@ impl SettingsScreen {
         let base = if is_active {
             base.bg(theme::primary().opacity(0.15))
         } else {
-            base.hover(|s: StyleRefinement| s.bg(theme::surface()))
+            base.hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
         };
 
         let mut row = base
@@ -632,7 +571,17 @@ impl SettingsScreen {
                     .w(px(24.0))
                     .h(px(24.0))
                     .rounded_md()
-                    .bg(icon_color.opacity(0.15))
+                    .bg(if is_active {
+                        theme::accent().opacity(0.14)
+                    } else {
+                        theme::panel_raised()
+                    })
+                    .border_1()
+                    .border_color(if is_active {
+                        theme::accent().opacity(0.35)
+                    } else {
+                        theme::hairline()
+                    })
                     .flex_shrink_0()
                     .child(
                         div()
@@ -649,13 +598,13 @@ impl SettingsScreen {
                     .v_flex()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_primary())
                             .child(page.label().to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted().opacity(0.6))
                             .child(page.subtitle().to_string()),
                     ),
@@ -664,13 +613,13 @@ impl SettingsScreen {
         if is_pipeline {
             row = row.child(
                 div()
-                    .text_xs()
+                    .text_size(px(10.0))
                     .font_weight(FontWeight::BOLD)
                     .px(px(6.0))
                     .py(px(2.0))
                     .rounded(px(4.0))
-                    .bg(theme::success().opacity(0.15))
-                    .text_color(theme::success())
+                    .bg(theme::accent().opacity(0.14))
+                    .text_color(theme::accent())
                     .child("CORE"),
             );
         }
@@ -689,7 +638,7 @@ impl SettingsScreen {
             .v_flex()
             .h_full()
             .overflow_y_scroll()
-            .p_8()
+            .p_6()
             .child(self.render_page_header(page))
             .child(match page {
                 SettingsPage::Appearance => self.render_appearance(cx),
@@ -718,10 +667,10 @@ impl SettingsScreen {
             .pb_4()
             .mb_6()
             .border_b_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .child(
                 div()
-                    .text_2xl()
+                    .text_size(px(16.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::text_primary())
                     .child(page.label().to_string()),
@@ -736,19 +685,19 @@ impl SettingsScreen {
                     .items_center()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child(format!("{subtitle} — maps to")),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .px_2()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme::surface())
+                            .bg(theme::panel_raised())
                             .border_1()
-                            .border_color(theme::text_muted().opacity(0.15))
+                            .border_color(theme::hairline_strong())
                             .text_color(theme::text_primary())
                             .child(config_ref.to_string()),
                     ),
@@ -756,7 +705,7 @@ impl SettingsScreen {
         } else {
             header = header.child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child(subtitle.to_string()),
             );
@@ -773,7 +722,7 @@ impl SettingsScreen {
             .pt_6()
             .mt_6()
             .border_t_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .child(
                 div()
                     .flex_1()
@@ -789,7 +738,7 @@ impl SettingsScreen {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::warning())
                             .child("Unsaved changes"),
                     ),
@@ -833,12 +782,12 @@ impl SettingsScreen {
                     .justify_center()
                     .gap_3()
                     .py_6()
-                    .rounded_xl()
+                    .rounded_lg()
                     .cursor_pointer()
                     .bg(if is_selected {
                         theme::primary().opacity(0.12)
                     } else {
-                        theme::surface()
+                        theme::panel_raised()
                     })
                     .border_1()
                     .border_color(if is_selected {
@@ -866,7 +815,7 @@ impl SettingsScreen {
                     }))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if is_selected {
                                 theme::text_primary()
@@ -884,7 +833,7 @@ impl SettingsScreen {
             .child(self.section_title("Appearance Mode"))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child("Choose light, dark, or system preference"),
             )
@@ -900,9 +849,9 @@ impl SettingsScreen {
                     .id(SharedString::from(format!("theme-{}", tn.label())))
                     .flex_1()
                     .p_3()
-                    .rounded_xl()
+                    .rounded_lg()
                     .cursor_pointer()
-                    .bg(theme::surface())
+                    .bg(theme::panel_raised())
                     .border_1()
                     .border_color(if is_selected {
                         theme::primary().opacity(0.5)
@@ -936,7 +885,7 @@ impl SettingsScreen {
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(px(12.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
                                             .child(tn.label().to_string()),
@@ -951,7 +900,7 @@ impl SettingsScreen {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
                                     .text_color(theme::text_muted())
                                     .child(tn.description().to_string()),
                             ),
@@ -975,7 +924,7 @@ impl SettingsScreen {
             .child(self.section_title("Color Theme"))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child("Select a color palette for the interface"),
             )
@@ -997,7 +946,7 @@ impl SettingsScreen {
             .child(self.section_title("Accent Color"))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child("Current accent color from selected theme"),
             )
@@ -1013,17 +962,17 @@ impl SettingsScreen {
                             .rounded_lg()
                             .bg(accent)
                             .border_1()
-                            .border_color(theme::text_muted().opacity(0.2)),
+                            .border_color(theme::hairline_strong()),
                     )
                     .child(
                         div()
                             .px_3()
                             .py(px(8.0))
                             .rounded_lg()
-                            .bg(theme::surface())
+                            .bg(theme::panel_raised())
                             .border_1()
-                            .border_color(theme::text_muted().opacity(0.15))
-                            .text_sm()
+                            .border_color(theme::hairline_strong())
+                            .text_size(px(12.0))
                             .text_color(theme::text_primary())
                             .child(hex),
                     )
@@ -1061,8 +1010,8 @@ impl SettingsScreen {
                     .h_flex()
                     .gap_3()
                     .p_4()
-                    .rounded_xl()
-                    .bg(theme::surface())
+                    .rounded_lg()
+                    .bg(theme::panel_raised())
                     .border_1()
                     .border_color(if is_default {
                         theme::primary().opacity(0.3)
@@ -1091,7 +1040,7 @@ impl SettingsScreen {
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(px(12.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
                                             .child(a.entry.id.clone()),
@@ -1099,7 +1048,7 @@ impl SettingsScreen {
                                     .when(is_default, |el: Div| {
                                         el.child(
                                             div()
-                                                .text_xs()
+                                                .text_size(px(10.0))
                                                 .px(px(6.0))
                                                 .py(px(1.0))
                                                 .rounded(px(4.0))
@@ -1111,7 +1060,7 @@ impl SettingsScreen {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
                                     .text_color(theme::text_muted())
                                     .child(format!(
                                         "Model: {}  ·  {}",
@@ -1123,7 +1072,7 @@ impl SettingsScreen {
                     // Installed badge
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .px_2()
                             .py_0p5()
                             .rounded_md()
@@ -1143,8 +1092,8 @@ impl SettingsScreen {
                     .h_flex()
                     .gap_3()
                     .p_4()
-                    .rounded_xl()
-                    .bg(theme::surface())
+                    .rounded_lg()
+                    .bg(theme::panel_raised())
                     .border_1()
                     .border_color(theme::text_muted().opacity(0.06))
                     .child(
@@ -1162,20 +1111,20 @@ impl SettingsScreen {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(12.0))
                                     .text_color(theme::text_muted())
                                     .child(entry.id.clone()),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
                                     .text_color(theme::text_muted().opacity(0.6))
                                     .child(format!("Install: {}", entry.install_instructions)),
                             ),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .px_2()
                             .py_0p5()
                             .rounded_md()
@@ -1254,7 +1203,7 @@ impl SettingsScreen {
             .child(self.section_title("Gates"))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child("Pause pipeline at these checkpoints for human approval"),
             )
@@ -1270,7 +1219,7 @@ impl SettingsScreen {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let indicator_color = if enabled {
-            theme::success()
+            theme::accent()
         } else {
             theme::text_muted()
         };
@@ -1282,12 +1231,12 @@ impl SettingsScreen {
             .justify_between()
             .items_center()
             .p_4()
-            .rounded_xl()
-            .bg(theme::surface())
+            .rounded_lg()
+            .bg(theme::panel_raised())
             .border_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::text_muted().opacity(0.2)))
+            .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 match idx {
                     0 => this.gate_after_spec = !this.gate_after_spec,
@@ -1304,14 +1253,14 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(name.to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted())
                             .child(description.to_string()),
                     ),
@@ -1357,14 +1306,14 @@ impl SettingsScreen {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(12.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text_primary())
                                     .child("Timeout"),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
                                     .text_color(theme::text_muted())
                                     .child("0 = wait forever"),
                             ),
@@ -1375,7 +1324,12 @@ impl SettingsScreen {
                             .gap_2()
                             .items_center()
                             .child(self.value_box(&format!("{}", self.gate_timeout)))
-                            .child(div().text_sm().text_color(theme::text_muted()).child("sec")),
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::text_muted())
+                                    .child("sec"),
+                            ),
                     ),
             )
             .child(
@@ -1385,7 +1339,7 @@ impl SettingsScreen {
                     .items_center()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child("On timeout"),
@@ -1457,14 +1411,14 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(label.to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted())
                             .child(description.to_string()),
                     ),
@@ -1501,7 +1455,7 @@ impl SettingsScreen {
                                     .rounded_full()
                                     .bg(theme::success())
                                     .border_2()
-                                    .border_color(theme::background()),
+                                    .border_color(theme::panel_deep()),
                             ),
                     )
                     // +/- buttons
@@ -1511,7 +1465,7 @@ impl SettingsScreen {
                             .cursor_pointer()
                             .px(px(4.0))
                             .rounded_md()
-                            .hover(|s: StyleRefinement| s.bg(theme::surface()))
+                            .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
                             .child(Icon::new(IconName::Minus).size_3p5().text_color(theme::text_muted()))
                             .when(value > min, |el: Stateful<Div>| {
                                 el.on_click(cx.listener(move |this, _event, _window, cx| {
@@ -1522,7 +1476,7 @@ impl SettingsScreen {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .min_w(px(28.0))
@@ -1535,7 +1489,7 @@ impl SettingsScreen {
                             .cursor_pointer()
                             .px(px(4.0))
                             .rounded_md()
-                            .hover(|s: StyleRefinement| s.bg(theme::surface()))
+                            .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
                             .child(Icon::new(IconName::Plus).size_3p5().text_color(theme::text_muted()))
                             .when(value < max, |el: Stateful<Div>| {
                                 el.on_click(cx.listener(move |this, _event, _window, cx| {
@@ -1752,7 +1706,7 @@ impl SettingsScreen {
                     .child(self.section_title("Navigation"))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child("Switch between screens"),
                     )
@@ -1787,12 +1741,12 @@ impl SettingsScreen {
                     .items_center()
                     .px_4()
                     .py_3()
-                    .rounded_xl()
-                    .bg(theme::surface())
+                    .rounded_lg()
+                    .bg(theme::panel_raised())
                     .border_1()
                     .border_color(theme::text_muted().opacity(0.08))
                     .hover(|s: StyleRefinement| {
-                        s.border_color(theme::text_muted().opacity(0.15))
+                        s.border_color(theme::hairline_strong())
                     })
                     // Left: action + description
                     .child(
@@ -1801,14 +1755,14 @@ impl SettingsScreen {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(12.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme::text_primary())
                                     .child(action.to_string()),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
                                     .text_color(theme::text_muted().opacity(0.7))
                                     .child(desc.to_string()),
                             ),
@@ -1832,7 +1786,7 @@ impl SettingsScreen {
                     // Separator
                     items.push(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted().opacity(0.4))
                             .child("+"),
                     );
@@ -1842,10 +1796,10 @@ impl SettingsScreen {
                         .px(px(8.0))
                         .py(px(3.0))
                         .rounded(px(6.0))
-                        .bg(theme::background())
+                        .bg(theme::panel_deep())
                         .border_1()
-                        .border_color(theme::text_muted().opacity(0.15))
-                        .text_xs()
+                        .border_color(theme::hairline_strong())
+                        .text_size(px(10.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::text_primary())
                         .child(part.to_string()),
@@ -1871,7 +1825,7 @@ impl SettingsScreen {
                     .child(self.section_title("Event Notifications"))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child("Choose which events trigger notifications"),
                     )
@@ -1900,7 +1854,7 @@ impl SettingsScreen {
                     .child(self.section_title("Preview"))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child("Test how notifications look"),
                     )
@@ -1964,7 +1918,7 @@ impl SettingsScreen {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let indicator_color = if enabled {
-            theme::success()
+            theme::accent()
         } else {
             theme::text_muted()
         };
@@ -1976,12 +1930,12 @@ impl SettingsScreen {
             .items_center()
             .px_4()
             .py_3()
-            .rounded_xl()
-            .bg(theme::surface())
+            .rounded_lg()
+            .bg(theme::panel_raised())
             .border_1()
             .border_color(theme::text_muted().opacity(0.08))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::text_muted().opacity(0.15)))
+            .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 let val = field(this);
                 *val = !*val;
@@ -1993,14 +1947,14 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text_primary())
                             .child(label.to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted().opacity(0.7))
                             .child(description.to_string()),
                     ),
@@ -2102,8 +2056,8 @@ impl SettingsScreen {
             .h_flex()
             .gap_3()
             .p_3()
-            .rounded_xl()
-            .bg(theme::surface())
+            .rounded_lg()
+            .bg(theme::panel_raised())
             .border_1()
             .border_color(theme::text_muted().opacity(0.08))
             .child(Icon::new(icon).size_4().text_color(color))
@@ -2114,14 +2068,14 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .child(title.to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted())
                             .child(message.to_string()),
                     ),
@@ -2223,12 +2177,12 @@ impl SettingsScreen {
                     .items_center()
                     .gap_1()
                     .py_3()
-                    .rounded_xl()
+                    .rounded_lg()
                     .cursor_pointer()
                     .bg(if is_selected {
                         color.opacity(0.12)
                     } else {
-                        theme::surface()
+                        theme::panel_raised()
                     })
                     .border_1()
                     .border_color(if is_selected {
@@ -2244,7 +2198,7 @@ impl SettingsScreen {
                     .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(color))
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .font_weight(if is_selected {
                                 FontWeight::BOLD
                             } else {
@@ -2271,7 +2225,7 @@ impl SettingsScreen {
                     .child(self.section_title("Logging"))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child("Set the verbosity level for Surge logs"),
                     )
@@ -2351,7 +2305,7 @@ impl SettingsScreen {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let indicator_color = if enabled {
-            theme::success()
+            theme::accent()
         } else {
             theme::text_muted()
         };
@@ -2363,12 +2317,12 @@ impl SettingsScreen {
             .items_center()
             .px_4()
             .py_3()
-            .rounded_xl()
-            .bg(theme::surface())
+            .rounded_lg()
+            .bg(theme::panel_raised())
             .border_1()
             .border_color(theme::text_muted().opacity(0.08))
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::text_muted().opacity(0.15)))
+            .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 let val = field(this);
                 *val = !*val;
@@ -2380,14 +2334,14 @@ impl SettingsScreen {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text_primary())
                             .child(label.to_string()),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.0))
                             .text_color(theme::text_muted().opacity(0.7))
                             .child(description.to_string()),
                     ),
@@ -2412,13 +2366,13 @@ impl SettingsScreen {
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted().opacity(0.5))
                     .child(format!("Configure: {subtitle}")),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(10.0))
                     .text_color(theme::text_muted().opacity(0.3))
                     .child("Coming soon"),
             )
@@ -2442,7 +2396,7 @@ impl SettingsScreen {
             .py(px(6.0))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_muted())
                     .child(label.to_string()),
             )
@@ -2451,15 +2405,15 @@ impl SettingsScreen {
 
     fn value_box(&self, value: &str) -> Div {
         div()
-            .text_sm()
+            .text_size(px(12.0))
             .text_color(theme::text_primary())
             .px_3()
             .py(px(6.0))
             .min_w(px(60.0))
             .rounded_lg()
-            .bg(theme::surface())
+            .bg(theme::panel_raised())
             .border_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .child(value.to_string())
     }
 
@@ -2472,13 +2426,13 @@ impl SettingsScreen {
             .py(px(6.0))
             .min_w(px(80.0))
             .rounded_lg()
-            .bg(theme::surface())
+            .bg(theme::panel_raised())
             .border_1()
-            .border_color(theme::text_muted().opacity(0.1))
+            .border_color(theme::hairline())
             .child(
                 div()
                     .flex_1()
-                    .text_sm()
+                    .text_size(px(12.0))
                     .text_color(theme::text_primary())
                     .child(value.to_string()),
             )
@@ -2492,10 +2446,12 @@ impl SettingsScreen {
 
 impl Render for SettingsScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Plain .flex() row so sidebar + content stretch to full height
+        // (h_flex would vertically center them).
         div()
             .size_full()
-            .h_flex()
-            .bg(theme::background())
+            .flex()
+            .bg(theme::panel_deep())
             .overflow_hidden()
             .child(self.render_settings_sidebar(cx))
             .child(self.render_content(cx))

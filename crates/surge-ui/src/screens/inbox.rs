@@ -817,9 +817,11 @@ impl Render for InboxScreen {
             None => self.render_all_clear().into_any_element(),
         };
 
+        // Plain .flex() row so both panes stretch to full height
+        // (h_flex would vertically center them).
         div()
             .size_full()
-            .h_flex()
+            .flex()
             .child(self.render_queue(&items, live, cx))
             .child(focus)
     }
