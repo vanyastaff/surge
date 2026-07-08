@@ -20,6 +20,7 @@ use crate::screens::backlog::{BacklogAction, BacklogScreen};
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
+use crate::screens::inbox::{InboxAction, InboxScreen};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::runs::RunsScreen;
 use crate::screens::settings::SettingsScreen;
@@ -57,6 +58,7 @@ pub struct SurgeApp {
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
+    inbox: Option<Entity<InboxScreen>>,
     backlog: Option<Entity<BacklogScreen>>,
     agents_screen: Option<Entity<AgentsScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
@@ -139,6 +141,7 @@ impl SurgeApp {
             flow: None,
             memory: None,
             runs_screen: None,
+            inbox: None,
             backlog: None,
             agents_screen: None,
             agent_terminal: None,
@@ -320,6 +323,7 @@ impl SurgeApp {
         self.flow = None;
         self.memory = None;
         self.runs_screen = None;
+        self.inbox = None;
         self.backlog = None;
         self.agents_screen = None;
         self.agent_hub = None;
@@ -642,7 +646,15 @@ impl SurgeApp {
     fn handle_gate_decision(&mut self, decision: GateDecision, cx: &mut Context<Self>) {
         let task_id = decision.task_id.clone();
         let approved = decision.approved;
+        self.write_gate_decision(task_id, approved, cx);
+        // Back to the constellation after a decision.
+        self.navigate(Screen::Fleet, cx);
+    }
 
+    /// Persist an operator gate decision to `.surge/gates/<task>.json`
+    /// where the engine's gate poller picks it up. Shared by the Gate
+    /// Approval screen and the Inbox.
+    fn write_gate_decision(&mut self, task_id: String, approved: bool, cx: &mut Context<Self>) {
         // Get project path from AppMode
         let project_path = match &self.mode {
             AppMode::Project { _path, .. } => _path.clone(),
@@ -718,9 +730,10 @@ impl SurgeApp {
                     let f = cx.new(|cx| FleetScreen::new(state, cx));
                     cx.subscribe(&f, |this: &mut Self, _f, event: &FleetAction, cx| {
                         match event {
-                            FleetAction::OpenGate(id) => {
-                                this.task_detail_id = Some(id.clone());
-                                this.navigate(Screen::GateApproval, cx);
+                            FleetAction::OpenGate(_id) => {
+                                // Decisions live in the Inbox — the queue picks
+                                // the most urgent item automatically.
+                                this.navigate(Screen::Inbox, cx);
                             },
                             FleetAction::OpenRun(id) => {
                                 // Fleet labels runs "r-<short>"; map back to the
@@ -761,6 +774,29 @@ impl SurgeApp {
             Screen::ContextMemory => {
                 let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
                 s.clone().into_any_element()
+            },
+            Screen::Inbox => {
+                let state = self.state.clone();
+                let inbox = self.inbox.get_or_insert_with(|| {
+                    let i = cx.new(|cx| InboxScreen::new(state, cx));
+                    cx.subscribe(&i, |this: &mut Self, _i, event: &InboxAction, cx| {
+                        match event {
+                            InboxAction::OpenRun(run_id) => {
+                                let run_id = *run_id;
+                                if let Some(runs_screen) = this.runs_screen.clone() {
+                                    runs_screen.update(cx, |s, cx| s.select_run(run_id, cx));
+                                }
+                                this.navigate(Screen::Runs, cx);
+                            },
+                            InboxAction::TaskDecision { task_id, approved } => {
+                                this.write_gate_decision(task_id.clone(), *approved, cx);
+                            },
+                        }
+                    })
+                    .detach();
+                    i
+                });
+                inbox.clone().into_any_element()
             },
             Screen::Backlog => {
                 let state = self.state.clone();

@@ -61,10 +61,44 @@ impl AppSidebar {
         cx.notify();
     }
 
+    /// Count of decisions blocked on the operator — the Inbox badge.
+    /// Live gates from run streams + tasks in review + failed runs.
+    fn needs_you_count(&self, cx: &Context<Self>) -> usize {
+        use surge_core::TaskState;
+        let state = self.state.read(cx);
+        let live = state
+            .run_streams
+            .values()
+            .map(|s| s.pending.len())
+            .sum::<usize>();
+        let reviews = state
+            .tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.state,
+                    TaskState::HumanReview | TaskState::QaReview { .. }
+                )
+            })
+            .count();
+        let failed = state
+            .runs
+            .iter()
+            .filter(|r| matches!(r.status, RunStatus::Failed | RunStatus::Aborted))
+            .count();
+        live + reviews + failed
+    }
+
     fn render_nav_item(&self, screen: Screen, cx: &mut Context<Self>) -> Stateful<Div> {
         let is_active = self.active == screen;
         let collapsed = self.collapsed;
         let label = screen.label();
+        let badge = if screen == Screen::Inbox {
+            let n = self.needs_you_count(cx);
+            (n > 0).then_some(n)
+        } else {
+            None
+        };
 
         let base = div()
             .id(SharedString::from(format!("nav-{label}")))
@@ -110,6 +144,19 @@ impl AppSidebar {
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.to_string()),
             );
+
+            if let Some(n) = badge {
+                row = row.child(
+                    div()
+                        .px(px(6.0))
+                        .rounded_full()
+                        .bg(theme::accent())
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(gpui::hsla(0.0, 0.0, 0.08, 1.0))
+                        .child(n.to_string()),
+                );
+            }
 
             if let Some(sc) = screen.shortcut() {
                 // Show just the trailing digit (Ctrl+N → N) as a quiet key hint.
