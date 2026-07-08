@@ -710,9 +710,11 @@ impl FlowScreen {
 
 impl Render for FlowScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Plain .flex() row so the three panes stretch to full height
+        // (h_flex would vertically center them in tall windows).
         div()
             .size_full()
-            .h_flex()
+            .flex()
             .min_h_0()
             .child(self.render_palette())
             .child(self.render_canvas(cx))
