@@ -236,6 +236,84 @@ async fn sealed_verifier_verified_outcome_emits_task_verified() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovered_tasks_artifact_emits_task_discovered() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(
+        dir.path().join("discovered-tasks.toml"),
+        b"schema_version = 1\n\n\
+          [[tasks]]\nid = \"m1-t9\"\ntitle = \"Handle empty export\"\n\n\
+          [[tasks]]\nid = \"m1-t10\"\ntitle = \"Add pagination\"\n",
+    )
+    .await
+    .unwrap();
+
+    let cfg = agent_cfg(None, 3);
+    let declared = [outcome_decl("implemented", LedgerEffect::None)];
+    let (result, payloads) = run_stage(
+        dir.path(),
+        &cfg,
+        &declared,
+        "impl_1",
+        "implemented",
+        vec!["discovered-tasks.toml".into()],
+        Some("m1-t1".into()),
+    )
+    .await;
+
+    assert_eq!(result.unwrap().as_ref(), "implemented");
+    let discovered: Vec<(String, String, String)> = payloads
+        .iter()
+        .filter_map(|p| match p {
+            EventPayload::TaskDiscovered {
+                task_id,
+                discovered_from,
+                title,
+            } => Some((task_id.clone(), discovered_from.clone(), title.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(discovered.len(), 2);
+    assert_eq!(discovered[0].0, "m1-t9");
+    assert_eq!(discovered[0].1, "m1-t1");
+    assert_eq!(discovered[0].2, "Handle empty export");
+    assert_eq!(discovered[1].0, "m1-t10");
+    assert_eq!(discovered[1].1, "m1-t1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_discovered_tasks_artifact_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(
+        dir.path().join("discovered-tasks.toml"),
+        b"this is = not valid = toml [[[",
+    )
+    .await
+    .unwrap();
+
+    let cfg = agent_cfg(None, 3);
+    let declared = [outcome_decl("implemented", LedgerEffect::None)];
+    let (result, payloads) = run_stage(
+        dir.path(),
+        &cfg,
+        &declared,
+        "impl_1",
+        "implemented",
+        vec!["discovered-tasks.toml".into()],
+        Some("m1-t1".into()),
+    )
+    .await;
+
+    // The stage still succeeds; the malformed artifact is skipped.
+    assert_eq!(result.unwrap().as_ref(), "implemented");
+    assert!(
+        !payloads
+            .iter()
+            .any(|p| matches!(p, EventPayload::TaskDiscovered { .. })),
+        "a malformed discovered-tasks artifact emits no events"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsealed_verified_outcome_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     // Default WorkspaceWrite sandbox (not sealed) + max_retries=0 so the first

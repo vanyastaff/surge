@@ -2,6 +2,7 @@
 
 pub(super) mod adr;
 pub(super) mod description;
+pub(super) mod discovered_tasks;
 pub(super) mod flow;
 pub(super) mod plan;
 pub(super) mod requirements;

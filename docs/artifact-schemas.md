@@ -39,6 +39,7 @@ sections are surfaced explicitly instead.
 | `requirements`   | markdown       | no — required sections only             |
 | `roadmap`        | TOML           | **yes** (`roadmap.json`)                |
 | `roadmap-patch`  | TOML           | **yes** (`roadmap-patch.json`)          |
+| `discovered-tasks` | TOML         | **yes** (`discovered-tasks.json`)       |
 | `spec`           | TOML           | **yes** (`spec.json`)                   |
 | `adr`            | markdown + TOML frontmatter | **yes** (frontmatter only) |
 | `story`          | markdown       | no — required sections only             |

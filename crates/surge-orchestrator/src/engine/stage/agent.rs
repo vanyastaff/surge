@@ -595,6 +595,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // A missing or unreadable path is logged and skipped — it
                 // does not fail the stage.
                 let mut produced_hashes: BTreeMap<String, ContentHash> = BTreeMap::new();
+                let mut discovered_tasks_bytes: Option<Vec<u8>> = None;
                 if !artifacts_produced.is_empty() {
                     let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
                         .await
@@ -661,6 +662,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             .await
                             .map_err(|e| StageError::Storage(e.to_string()))?;
                         produced_hashes.insert(name.clone(), artifact_ref.hash);
+                        if name == "discovered-tasks" {
+                            discovered_tasks_bytes = Some(bytes.clone());
+                        }
                         tracing::info!(
                             target: "engine::stage::agent",
                             node = %p.node,
@@ -707,6 +711,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         &produced_hashes,
                     )
                     .await?;
+                    // Capture any work the agent discovered mid-task into the
+                    // ledger as pending tasks, each with a discovered_from edge
+                    // to the current task. A malformed artifact is logged and
+                    // skipped — it never fails the stage.
+                    if let Some(bytes) = discovered_tasks_bytes.as_deref() {
+                        emit_discovered_tasks(p.writer, p.node, task_id, bytes).await?;
+                    }
                 }
                 break outcome;
             },
@@ -1118,6 +1129,65 @@ async fn emit_ledger_event(
         .append_event(VersionedEventPayload::new(payload))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// Parse a produced `discovered-tasks` artifact and append one
+/// `TaskDiscovered` event per entry, attaching each to `discovered_from`.
+///
+/// Lenient: a malformed or invalid artifact is logged and skipped rather than
+/// failing the stage — discovered work is advisory, and an AFK run should not
+/// abort because a side artifact was ill-formed.
+async fn emit_discovered_tasks(
+    writer: &RunWriter,
+    node: &NodeKey,
+    discovered_from: &str,
+    bytes: &[u8],
+) -> Result<(), StageError> {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                node = %node,
+                err = %error,
+                "discovered-tasks artifact is not UTF-8 — skipping"
+            );
+            return Ok(());
+        },
+    };
+    let artifact: surge_core::DiscoveredTasksArtifact = match toml::from_str(text) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                node = %node,
+                err = %error,
+                "discovered-tasks artifact failed to parse — skipping"
+            );
+            return Ok(());
+        },
+    };
+    let issues = artifact.validate();
+    if !issues.is_empty() {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            node = %node,
+            issues = ?issues,
+            "discovered-tasks artifact is invalid — skipping"
+        );
+        return Ok(());
+    }
+    for entry in artifact.tasks {
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::TaskDiscovered {
+                task_id: entry.id,
+                discovered_from: discovered_from.to_owned(),
+                title: entry.title,
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+    }
     Ok(())
 }
 

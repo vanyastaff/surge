@@ -467,6 +467,58 @@ impl std::fmt::Display for TaskSize {
     }
 }
 
+/// The `discovered-tasks.toml` artifact — work an agent found mid-task and
+/// wants appended to the ledger. The engine attaches each entry to the current
+/// task via a `discovered_from` edge; the artifact itself carries only the new
+/// task identity, not the origin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(
+    title = "DiscoveredTasksArtifact",
+    description = "Surge `discovered-tasks.toml` artifact: tasks discovered mid-execution to append to the ledger."
+)]
+pub struct DiscoveredTasksArtifact {
+    /// Artifact contract schema version.
+    #[serde(default = "default_artifact_schema_version")]
+    pub schema_version: u32,
+    /// Newly discovered tasks.
+    #[serde(default)]
+    pub tasks: Vec<DiscoveredTaskEntry>,
+}
+
+impl DiscoveredTasksArtifact {
+    /// Validate the artifact: every entry needs a non-empty id and title, and
+    /// ids must be unique within the artifact. Returns an empty vector when
+    /// well-formed.
+    #[must_use]
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for entry in &self.tasks {
+            if entry.id.trim().is_empty() {
+                issues.push("discovered task has an empty id".to_owned());
+            } else if !seen.insert(entry.id.as_str()) {
+                issues.push(format!("duplicate discovered task id {:?}", entry.id));
+            }
+            if entry.title.trim().is_empty() {
+                issues.push(format!("discovered task {:?} has an empty title", entry.id));
+            }
+        }
+        issues
+    }
+}
+
+/// One entry in a [`DiscoveredTasksArtifact`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscoveredTaskEntry {
+    /// Stable id for the discovered task.
+    pub id: String,
+    /// Human-readable title.
+    pub title: String,
+    /// Optional short description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Directed dependency between roadmap milestones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoadmapDependency {

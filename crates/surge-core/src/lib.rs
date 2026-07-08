@@ -71,8 +71,9 @@ pub use event::{
 };
 pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
-    Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapLedgerIssue,
-    RoadmapMilestone, RoadmapRisk, RoadmapStatus, RoadmapTask, TaskSize, Timeline, TimelineBatch,
+    DiscoveredTaskEntry, DiscoveredTasksArtifact, Priority, RoadmapArtifact, RoadmapDependency,
+    RoadmapItem, RoadmapLedgerIssue, RoadmapMilestone, RoadmapRisk, RoadmapStatus, RoadmapTask,
+    TaskSize, Timeline, TimelineBatch,
 };
 pub use roadmap_patch::{
     ActivePickupPolicy, InsertionPoint, OperatorConflictChoice, ROADMAP_PATCH_SCHEMA_VERSION,

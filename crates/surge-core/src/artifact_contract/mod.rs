@@ -108,6 +108,9 @@ fn validate_artifact_text_into(
         },
         ArtifactKind::Roadmap => kinds::roadmap::validate_roadmap(report, path, content),
         ArtifactKind::RoadmapPatch => kinds::roadmap_patch::validate_roadmap_patch(report, content),
+        ArtifactKind::DiscoveredTasks => {
+            kinds::discovered_tasks::validate_discovered_tasks(report, content)
+        },
         ArtifactKind::Spec => kinds::spec::validate_spec(report, path, content),
         ArtifactKind::Adr => kinds::adr::validate_adr_markdown(report, content),
         ArtifactKind::Story => kinds::story::validate_story_markdown(report, content),
@@ -135,6 +138,7 @@ mod tests {
                 ArtifactKind::Requirements,
                 ArtifactKind::Roadmap,
                 ArtifactKind::RoadmapPatch,
+                ArtifactKind::DiscoveredTasks,
                 ArtifactKind::Spec,
                 ArtifactKind::Adr,
                 ArtifactKind::Story,
@@ -201,6 +205,50 @@ mod tests {
         assert_eq!(report.error_count(), 1);
         assert_eq!(report.warning_count(), 1);
         assert!(report.into_result().is_err());
+    }
+
+    #[test]
+    fn discovered_tasks_valid_and_invalid() {
+        let ok = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = "m1-t5"
+title = "Handle empty CSV export"
+"#,
+        );
+        assert!(ok.is_valid(), "{ok:#?}");
+
+        // Duplicate ids are rejected.
+        let dup = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = "dup"
+title = "One"
+
+[[tasks]]
+id = "dup"
+title = "Two"
+"#,
+        );
+        assert!(!dup.is_valid());
+        assert_eq!(
+            diagnostic_codes(&dup),
+            vec![ArtifactDiagnosticCode::DuplicateIdentifier]
+        );
+    }
+
+    fn diagnostic_codes(report: &ArtifactValidationReport) -> Vec<ArtifactDiagnosticCode> {
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect()
     }
 
     #[test]
