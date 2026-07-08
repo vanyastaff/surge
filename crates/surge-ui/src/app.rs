@@ -4,8 +4,6 @@ use std::path::PathBuf;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt as _;
-use gpui_component::WindowExt as _;
-use gpui_component::button::Button;
 
 use crate::actions::*;
 use crate::app_state::AppState;
@@ -22,6 +20,7 @@ use crate::screens::flow::FlowScreen;
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::inbox::{InboxAction, InboxScreen};
 use crate::screens::memory::MemoryScreen;
+use crate::screens::roadmap::RoadmapScreen;
 use crate::screens::runs::RunsScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
@@ -31,7 +30,6 @@ use crate::screens::worktrees::WorktreesScreen;
 use crate::sidebar::{AppSidebar, NavigateTo, ToggleSidebar};
 use crate::theme;
 use crate::top_bar::TopBar;
-use gpui_component::Icon;
 
 /// Application mode — Welcome picker or Main project view.
 enum AppMode {
@@ -58,6 +56,7 @@ pub struct SurgeApp {
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
+    roadmap: Option<Entity<RoadmapScreen>>,
     inbox: Option<Entity<InboxScreen>>,
     backlog: Option<Entity<BacklogScreen>>,
     agents_screen: Option<Entity<AgentsScreen>>,
@@ -141,6 +140,7 @@ impl SurgeApp {
             flow: None,
             memory: None,
             runs_screen: None,
+            roadmap: None,
             inbox: None,
             backlog: None,
             agents_screen: None,
@@ -323,6 +323,7 @@ impl SurgeApp {
         self.flow = None;
         self.memory = None;
         self.runs_screen = None;
+        self.roadmap = None;
         self.inbox = None;
         self.backlog = None;
         self.agents_screen = None;
@@ -775,6 +776,13 @@ impl SurgeApp {
                 let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
                 s.clone().into_any_element()
             },
+            Screen::Roadmap => {
+                let state = self.state.clone();
+                let s = self
+                    .roadmap
+                    .get_or_insert_with(|| cx.new(|cx| RoadmapScreen::new(state, cx)));
+                s.clone().into_any_element()
+            },
             Screen::Inbox => {
                 let state = self.state.clone();
                 let inbox = self.inbox.get_or_insert_with(|| {
@@ -932,48 +940,6 @@ impl SurgeApp {
                     ga
                 });
                 gate_approval.clone().into_any_element()
-            },
-            _ => {
-                // Placeholder for screens not yet implemented.
-                let label = self.active_screen.label();
-                let icon = self.active_screen.icon();
-                div()
-                    .flex_1()
-                    .p_6()
-                    .v_flex()
-                    .gap_4()
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_3()
-                            .items_center()
-                            .child(Icon::new(icon).size_6().text_color(theme::primary()))
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::text_primary())
-                                    .child(label.to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::text_muted())
-                            .child(format!("{} — coming soon", label)),
-                    )
-                    .child(
-                        div().h_flex().gap_2().mt_4().child(
-                            Button::new("test-notif")
-                                .label("Test Notification")
-                                .on_click(|_event, window, cx| {
-                                    window.push_notification(
-                                        SurgeNotification::agent_connected("Claude Code"),
-                                        cx,
-                                    );
-                                }),
-                        ),
-                    )
-                    .into_any_element()
             },
         }
     }

@@ -7,6 +7,7 @@ pub mod flow;
 pub mod gate_approval;
 pub mod inbox;
 pub mod memory;
+pub mod roadmap;
 pub mod runs;
 pub mod settings;
 pub mod spec_explorer;
