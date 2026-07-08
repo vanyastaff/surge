@@ -10,7 +10,6 @@ pub mod github_prs;
 pub mod init_wizard;
 pub mod insights;
 pub mod kanban;
-pub mod live_execution;
 pub mod memory;
 pub mod settings;
 pub mod spec_explorer;

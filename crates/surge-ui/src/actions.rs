@@ -4,15 +4,15 @@ use gpui::*;
 actions!(
     surge,
     [
-        // Navigation (Ctrl+1..9)
-        GoToDashboard,
-        GoToKanban,
-        GoToSpecs,
+        // Surface navigation (Ctrl+1..9)
+        GoToFleet,
+        GoToRoadmap,
+        GoToRuns,
+        GoToFlow,
+        GoToInbox,
+        GoToBacklog,
         GoToAgents,
-        GoToTerminals,
-        GoToExecution,
-        GoToDiff,
-        GoToInsights,
+        GoToMemory,
         GoToSettings,
         // UI toggles
         ToggleSidebarAction,

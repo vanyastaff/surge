@@ -23,7 +23,6 @@ use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
 use crate::screens::kanban::{KanbanScreen, TaskClicked};
-use crate::screens::live_execution::LiveExecutionScreen;
 use crate::screens::memory::MemoryScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
@@ -64,7 +63,6 @@ pub struct SurgeApp {
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
-    live_execution: Option<Entity<LiveExecutionScreen>>,
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
     diff_viewer: Option<Entity<DiffViewerScreen>>,
     file_explorer: Option<Entity<FileExplorerScreen>>,
@@ -149,7 +147,6 @@ impl SurgeApp {
             agent_hub: None,
             spec_explorer: None,
             spec_wizard: None,
-            live_execution: None,
             diff_viewer: None,
             file_explorer: None,
             worktrees: None,
@@ -265,7 +262,6 @@ impl SurgeApp {
         self.agent_terminal = None;
         self.spec_explorer = None;
         self.spec_wizard = None;
-        self.live_execution = None;
         self.diff_viewer = None;
         self.file_explorer = None;
         self.worktrees = None;
@@ -627,15 +623,15 @@ impl SurgeApp {
 
     pub fn bind_actions(cx: &mut App) {
         cx.bind_keys([
-            // Navigation: Ctrl+1..9
-            KeyBinding::new("ctrl-1", GoToDashboard, None),
-            KeyBinding::new("ctrl-2", GoToKanban, None),
-            KeyBinding::new("ctrl-3", GoToSpecs, None),
-            KeyBinding::new("ctrl-4", GoToAgents, None),
-            KeyBinding::new("ctrl-5", GoToTerminals, None),
-            KeyBinding::new("ctrl-6", GoToExecution, None),
-            KeyBinding::new("ctrl-7", GoToDiff, None),
-            KeyBinding::new("ctrl-8", GoToInsights, None),
+            // Surface navigation: Ctrl+1..9
+            KeyBinding::new("ctrl-1", GoToFleet, None),
+            KeyBinding::new("ctrl-2", GoToRoadmap, None),
+            KeyBinding::new("ctrl-3", GoToRuns, None),
+            KeyBinding::new("ctrl-4", GoToFlow, None),
+            KeyBinding::new("ctrl-5", GoToInbox, None),
+            KeyBinding::new("ctrl-6", GoToBacklog, None),
+            KeyBinding::new("ctrl-7", GoToAgents, None),
+            KeyBinding::new("ctrl-8", GoToMemory, None),
             KeyBinding::new("ctrl-9", GoToSettings, None),
             // UI toggles
             KeyBinding::new("ctrl-b", ToggleSidebarAction, None),
@@ -663,7 +659,7 @@ impl SurgeApp {
                                 this.navigate(Screen::GateApproval, cx);
                             },
                             FleetAction::OpenRun(_id) => {
-                                this.navigate(Screen::LiveExecution, cx);
+                                this.navigate(Screen::Runs, cx);
                             },
                         }
                     })
@@ -726,12 +722,6 @@ impl SurgeApp {
                     .spec_wizard
                     .get_or_insert_with(|| cx.new(SpecWizardScreen::new));
                 spec_wizard.clone().into_any_element()
-            },
-            Screen::LiveExecution => {
-                let live_exec = self
-                    .live_execution
-                    .get_or_insert_with(|| cx.new(LiveExecutionScreen::new));
-                live_exec.clone().into_any_element()
             },
             Screen::DiffViewer => {
                 let s = self
@@ -1148,31 +1138,33 @@ impl Render for SurgeApp {
                     .font_family(crate::ui::MONO)
                     .bg(theme::background())
                     .text_color(theme::text_primary())
-                    .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| {
-                        this.navigate(Screen::Dashboard, cx)
-                    }))
                     .on_action(
-                        cx.listener(|this, _: &GoToKanban, _w, cx| {
-                            this.navigate(Screen::Kanban, cx)
+                        cx.listener(|this, _: &GoToFleet, _w, cx| {
+                            this.navigate(Screen::Fleet, cx)
                         }),
                     )
-                    .on_action(cx.listener(|this, _: &GoToSpecs, _w, cx| {
-                        this.navigate(Screen::SpecExplorer, cx)
+                    .on_action(cx.listener(|this, _: &GoToRoadmap, _w, cx| {
+                        this.navigate(Screen::Roadmap, cx)
+                    }))
+                    .on_action(
+                        cx.listener(|this, _: &GoToRuns, _w, cx| this.navigate(Screen::Runs, cx)),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &GoToFlow, _w, cx| this.navigate(Screen::Flow, cx)),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &GoToInbox, _w, cx| {
+                            this.navigate(Screen::Inbox, cx)
+                        }),
+                    )
+                    .on_action(cx.listener(|this, _: &GoToBacklog, _w, cx| {
+                        this.navigate(Screen::Backlog, cx)
                     }))
                     .on_action(cx.listener(|this, _: &GoToAgents, _w, cx| {
-                        this.navigate(Screen::AgentHub, cx)
+                        this.navigate(Screen::Agents, cx)
                     }))
-                    .on_action(cx.listener(|this, _: &GoToTerminals, _w, cx| {
-                        this.navigate(Screen::AgentTerminals, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToExecution, _w, cx| {
-                        this.navigate(Screen::LiveExecution, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToDiff, _w, cx| {
-                        this.navigate(Screen::DiffViewer, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &GoToInsights, _w, cx| {
-                        this.navigate(Screen::Insights, cx)
+                    .on_action(cx.listener(|this, _: &GoToMemory, _w, cx| {
+                        this.navigate(Screen::ContextMemory, cx)
                     }))
                     .on_action(cx.listener(|this, _: &GoToSettings, _w, cx| {
                         this.navigate(Screen::Settings, cx)

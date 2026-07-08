@@ -24,26 +24,31 @@ impl Command {
     }
 }
 
-/// Build the full command list.
+/// Build the full command list. Surfaces first (with their Ctrl+N
+/// shortcuts), then secondary screens reachable only from here.
 fn all_commands() -> Vec<Command> {
     vec![
-        Command::nav("Fleet", Screen::Fleet, None),
-        Command::nav("Flow Editor", Screen::Flow, None),
-        Command::nav("Dashboard", Screen::Dashboard, Some("Ctrl+1")),
-        Command::nav("Kanban Board", Screen::Kanban, Some("Ctrl+2")),
-        Command::nav("Spec Explorer", Screen::SpecExplorer, Some("Ctrl+3")),
-        Command::nav("Agent Hub", Screen::AgentHub, Some("Ctrl+4")),
-        Command::nav("Terminals", Screen::AgentTerminals, Some("Ctrl+5")),
-        Command::nav("Live Execution", Screen::LiveExecution, Some("Ctrl+6")),
-        Command::nav("Diff Viewer", Screen::DiffViewer, Some("Ctrl+7")),
-        Command::nav("Insights", Screen::Insights, Some("Ctrl+8")),
+        Command::nav("Fleet", Screen::Fleet, Some("Ctrl+1")),
+        Command::nav("Roadmap", Screen::Roadmap, Some("Ctrl+2")),
+        Command::nav("Runs", Screen::Runs, Some("Ctrl+3")),
+        Command::nav("Flow Editor", Screen::Flow, Some("Ctrl+4")),
+        Command::nav("Inbox", Screen::Inbox, Some("Ctrl+5")),
+        Command::nav("Backlog", Screen::Backlog, Some("Ctrl+6")),
+        Command::nav("Agents", Screen::Agents, Some("Ctrl+7")),
+        Command::nav("Memory", Screen::ContextMemory, Some("Ctrl+8")),
         Command::nav("Settings", Screen::Settings, Some("Ctrl+9")),
+        Command::nav("Dashboard", Screen::Dashboard, None),
+        Command::nav("Kanban Board", Screen::Kanban, None),
+        Command::nav("Spec Explorer", Screen::SpecExplorer, None),
+        Command::nav("New Spec", Screen::SpecWizard, None),
+        Command::nav("Agent Hub (catalog)", Screen::AgentHub, None),
+        Command::nav("Terminals", Screen::AgentTerminals, None),
+        Command::nav("Diff Viewer", Screen::DiffViewer, None),
+        Command::nav("Insights", Screen::Insights, None),
         Command::nav("File Explorer", Screen::FileExplorer, None),
         Command::nav("Worktrees", Screen::Worktrees, None),
         Command::nav("GitHub Issues", Screen::GitHubIssues, None),
         Command::nav("Pull Requests", Screen::GitHubPRs, None),
-        Command::nav("Roadmap", Screen::Roadmap, None),
-        Command::nav("Context / Memory", Screen::ContextMemory, None),
         Command {
             label: "Toggle Sidebar".into(),
             category: "UI".into(),
