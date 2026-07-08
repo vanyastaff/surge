@@ -157,6 +157,12 @@ enum Commands {
     /// Queue an operator steer for a live run (delivered at the next step).
     Steer(commands::steer::SteerArgs),
 
+    /// Inspect an existing run's worktree (diff, path).
+    Run {
+        #[command(subcommand)]
+        command: commands::run::RunCommand,
+    },
+
     /// List the actionable task backlog from the cross-run task ledger.
     Ready(commands::ready::ReadyArgs),
 
@@ -349,6 +355,7 @@ async fn main() -> Result<()> {
             | Commands::Inbox(_)
             | Commands::Resolve(_)
             | Commands::Steer(_)
+            | Commands::Run { .. }
             | Commands::Ready(_)
             | Commands::Ledger(_)
             | Commands::Daemon { .. }
@@ -537,6 +544,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Steer(args) => {
             commands::steer::run(args).await?;
+        },
+
+        Commands::Run { command } => {
+            commands::run::run(command).await?;
         },
 
         Commands::Ready(args) => {

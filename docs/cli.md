@@ -24,6 +24,7 @@ surge intake ...        inspect tracker-intake state (ticket index)
 surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
 surge resolve ...       answer a run blocked on human input
 surge steer ...         queue operator guidance for a working run
+surge run diff|path     review a run's worktree changes / print its path
 surge ready             list the actionable task backlog from the task ledger
 surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
@@ -142,6 +143,18 @@ interrupted. This is deliberate: ACP v1 has no mid-turn injection channel (a
 second `session/prompt` mid-turn is unspecified and agents reject it), so Surge
 delivers at the next stage boundary. The queue is held in the daemon's memory;
 a daemon restart before delivery drops undelivered steers (re-issue them).
+
+Review what a run actually changed before merging with `surge run` (read-only,
+works whether or not the run is still active — it reads the git worktree):
+
+```text
+surge run diff <run>              # unified diff of the run's worktree vs its base
+cd "$(surge run path <run>)"      # drop into the run's worktree
+```
+
+`surge run diff` shows both committed and uncommitted changes (Surge agents edit
+the worktree without committing), including new files, against the commit the
+run branched from. Run it from inside the project repository.
 
 ## Task Ledger (`surge ready`)
 
