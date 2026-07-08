@@ -48,6 +48,9 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         theme::init();
+        // Force gpui-component's chrome (TitleBar, controls) to dark so it
+        // matches the fleet-ops shell instead of following the OS appearance.
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         SurgeApp::bind_actions(cx);
 
         cx.spawn(async move |cx| {
@@ -56,10 +59,15 @@ fn main() {
                     point(px(100.0), px(100.0)),
                     size(px(1280.0), px(800.0)),
                 ))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Surge".into()),
-                    ..Default::default()
-                }),
+                // Client-side decorations: we draw our own TitleBar (drag +
+                // min/max/close) and gpui-component's Root renders the resize
+                // border + shadow via window_border(). Server decorations
+                // aren't shown by this Wayland compositor, so the window was
+                // unmanageable without this.
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                window_decorations: Some(WindowDecorations::Client),
+                app_id: Some("surge".into()),
+                window_min_size: Some(size(px(960.0), px(640.0))),
                 ..Default::default()
             };
 

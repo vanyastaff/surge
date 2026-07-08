@@ -1088,6 +1088,43 @@ impl SurgeApp {
             div().into_any_element()
         }
     }
+
+    /// Client-side titlebar: app mark + drag region + min/max/close.
+    /// Styled to our dark chrome; window controls come from gpui-component.
+    fn render_title_bar(&self) -> impl IntoElement {
+        gpui_component::TitleBar::new()
+            .bg(theme::panel())
+            .border_color(theme::hairline())
+            .child(
+                div()
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .w(px(15.0))
+                            .h(px(15.0))
+                            .rounded_sm()
+                            .bg(theme::accent())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_size(px(9.0))
+                                    .text_color(hsla(0.0, 0.0, 0.1, 1.0))
+                                    .child("⚡"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme::text_primary())
+                            .child("Surge"),
+                    ),
+            )
+    }
 }
 
 impl Render for SurgeApp {
@@ -1095,7 +1132,7 @@ impl Render for SurgeApp {
         // Flush any queued notifications now that we have Window access.
         self.flush_notifications(window, cx);
 
-        match &self.mode {
+        let content: AnyElement = match &self.mode {
             AppMode::Welcome(welcome) => div()
                 .key_context("SurgeApp")
                 .track_focus(&self.focus)
@@ -1205,6 +1242,14 @@ impl Render for SurgeApp {
                     .children(gpui_component::Root::render_notification_layer(window, cx))
                     .into_any_element()
             },
-        }
+        };
+
+        div()
+            .size_full()
+            .v_flex()
+            .font_family(crate::ui::MONO)
+            .bg(theme::background())
+            .child(self.render_title_bar())
+            .child(div().flex_1().min_h_0().child(content))
     }
 }
