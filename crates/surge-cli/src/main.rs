@@ -151,6 +151,9 @@ enum Commands {
     /// List the actionable task backlog from the cross-run task ledger.
     Ready(commands::ready::ReadyArgs),
 
+    /// Show the full task ledger (every task) for a run or project.
+    Ledger(commands::ledger::LedgerArgs),
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -335,6 +338,7 @@ async fn main() -> Result<()> {
             | Commands::Tracker { .. }
             | Commands::Intake { .. }
             | Commands::Ready(_)
+            | Commands::Ledger(_)
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
             | Commands::Mcp { .. }
@@ -513,6 +517,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Ready(args) => {
             commands::ready::run(args).await?;
+        },
+
+        Commands::Ledger(args) => {
+            commands::ledger::run(args).await?;
         },
 
         Commands::Daemon { command } => {

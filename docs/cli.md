@@ -22,6 +22,7 @@ surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
 surge ready             list the actionable task backlog from the task ledger
+surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
 surge mcp ...           list/start/stop/logs configured MCP servers
 surge clean             clean up orphaned worktrees and merged branches
@@ -105,6 +106,15 @@ surge ready --all-projects --json    # everything, as JSON
 
 Columns: task id, status, whether a sealed verifier certified it (`verified`),
 its `discovered_from` origin, and the owning run.
+
+`surge ledger` shows the **complete** ledger instead of just the actionable
+subset — verified completions, failures, and discoveries alike:
+
+```text
+surge ledger                 # every task in the current project
+surge ledger --run <run_id>  # one run's full ledger
+surge ledger --all-projects --json
+```
 
 > **Not yet dependency-aware.** `surge ready` shows every unsettled task, not
 > only those whose `depends_on` are satisfied — the registry index does not
