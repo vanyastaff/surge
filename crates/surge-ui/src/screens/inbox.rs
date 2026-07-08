@@ -340,8 +340,13 @@ impl InboxScreen {
         if text.is_empty() {
             return;
         }
+        // Free-text responses are only valid for HumanInput requests —
+        // gates and patches expect a {decision, comment} object, which
+        // the Approve / Reject buttons build.
         if let Source::Live {
-            run_id, call_id, ..
+            run_id,
+            call_id,
+            kind: DecisionKind::HumanInput { .. },
         } = &item.source
         {
             self.resolve_live(

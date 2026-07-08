@@ -67,7 +67,7 @@ pub struct StageRow {
     pub detail: String,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StagePhase {
     Running,
     Done,
@@ -262,7 +262,15 @@ impl RunStreamState {
             | EventPayload::HumanInputTimedOut { call_id, node, .. } => {
                 self.pending.retain(|p| match &p.kind {
                     DecisionKind::HumanInput { call_id: c, .. } => {
-                        !(c == call_id || p.node == node.as_str())
+                        // Match by call_id only when both sides carry one —
+                        // `None == None` would otherwise remove unrelated
+                        // pending inputs on other nodes. Fall back to the
+                        // requesting node.
+                        let resolved = match (c, call_id) {
+                            (Some(a), Some(b)) => a == b,
+                            _ => p.node == node.as_str(),
+                        };
+                        !resolved
                     },
                     _ => true,
                 });
@@ -493,4 +501,149 @@ fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
         // session close, …) stays out of the visible log.
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use surge_core::NodeKey;
+    use surge_orchestrator::engine::handle::EngineRunEvent;
+
+    use super::*;
+
+    fn persisted(seq: u64, payload: EventPayload) -> EngineRunEvent {
+        EngineRunEvent::Persisted {
+            seq,
+            payload: Box::new(payload),
+        }
+    }
+
+    fn node(name: &str) -> NodeKey {
+        NodeKey::try_from(name).unwrap()
+    }
+
+    fn human_input(node_name: &str, call_id: Option<&str>) -> EventPayload {
+        EventPayload::HumanInputRequested {
+            node: node(node_name),
+            session: None,
+            call_id: call_id.map(str::to_string),
+            prompt: "answer me".into(),
+            schema: None,
+        }
+    }
+
+    #[test]
+    fn stage_fold_tracks_enter_complete_fail() {
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(
+            1,
+            EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 1,
+            },
+        ));
+        assert_eq!(s.stages.len(), 1);
+        assert_eq!(s.stages[0].phase, StagePhase::Running);
+
+        s.apply(&persisted(
+            2,
+            EventPayload::StageFailed {
+                node: node("implement"),
+                reason: "tests red".into(),
+                retry_available: true,
+            },
+        ));
+        assert_eq!(s.stages.len(), 1, "same node must update, not duplicate");
+        assert_eq!(s.stages[0].phase, StagePhase::Failed);
+        assert_eq!(s.stages[0].detail, "tests red");
+
+        // Retry re-enters the same stage.
+        s.apply(&persisted(
+            3,
+            EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 2,
+            },
+        ));
+        assert_eq!(s.stages[0].phase, StagePhase::Running);
+        assert_eq!(s.stages[0].attempt, 2);
+    }
+
+    #[test]
+    fn resolved_with_call_id_removes_only_that_request() {
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(1, human_input("gate_a", Some("call-1"))));
+        s.apply(&persisted(2, human_input("gate_b", Some("call-2"))));
+        assert_eq!(s.pending.len(), 2);
+
+        s.apply(&persisted(
+            3,
+            EventPayload::HumanInputResolved {
+                node: node("gate_a"),
+                call_id: Some("call-1".into()),
+                response: serde_json::Value::Null,
+            },
+        ));
+        assert_eq!(s.pending.len(), 1);
+        assert_eq!(s.pending[0].node, "gate_b");
+    }
+
+    #[test]
+    fn resolved_without_call_id_matches_by_node_only() {
+        // Regression: `None == None` on call_id must NOT remove pending
+        // inputs that belong to a different node.
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(1, human_input("gate_a", None)));
+        s.apply(&persisted(2, human_input("gate_b", None)));
+        assert_eq!(s.pending.len(), 2);
+
+        s.apply(&persisted(
+            3,
+            EventPayload::HumanInputResolved {
+                node: node("gate_a"),
+                call_id: None,
+                response: serde_json::Value::Null,
+            },
+        ));
+        assert_eq!(s.pending.len(), 1, "only gate_a's request may be removed");
+        assert_eq!(s.pending[0].node, "gate_b");
+    }
+
+    #[test]
+    fn tokens_accumulate_and_terminal_clears_pending() {
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(
+            1,
+            EventPayload::TokensConsumed {
+                session: surge_core::SessionId::new(),
+                prompt_tokens: 1000,
+                output_tokens: 200,
+                cache_hits: 0,
+                model: "m".into(),
+                cost_usd: Some(0.25),
+            },
+        ));
+        s.apply(&persisted(
+            2,
+            EventPayload::TokensConsumed {
+                session: surge_core::SessionId::new(),
+                prompt_tokens: 500,
+                output_tokens: 100,
+                cache_hits: 0,
+                model: "m".into(),
+                cost_usd: Some(0.05),
+            },
+        ));
+        assert_eq!(s.tokens_in, 1500);
+        assert_eq!(s.tokens_out, 300);
+        assert!((s.cost_usd - 0.30).abs() < 1e-9);
+
+        s.apply(&persisted(3, human_input("gate_a", None)));
+        assert_eq!(s.pending.len(), 1);
+        s.apply(&EngineRunEvent::Terminal {
+            outcome: surge_orchestrator::engine::handle::RunOutcome::Aborted {
+                reason: "operator".into(),
+            },
+        });
+        assert!(s.pending.is_empty(), "terminal run has nothing to decide");
+    }
 }
