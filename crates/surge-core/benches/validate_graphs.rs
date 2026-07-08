@@ -21,6 +21,7 @@ fn make_filler_node(id: NodeKey, done: &OutcomeKey) -> Node {
             description: "Forward".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         }],
         config: NodeConfig::Notify(NotifyConfig {
             channel: NotifyChannel::Desktop,

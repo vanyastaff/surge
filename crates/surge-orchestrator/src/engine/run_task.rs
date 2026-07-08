@@ -1515,6 +1515,7 @@ mod tests {
                     description: String::new(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 })
                 .collect(),
             config: NodeConfig::Agent(AgentConfig {

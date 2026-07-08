@@ -71,8 +71,8 @@ pub use event::{
 };
 pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
-    Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapMilestone, RoadmapRisk,
-    RoadmapStatus, RoadmapTask, Timeline, TimelineBatch,
+    Priority, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapLedgerIssue,
+    RoadmapMilestone, RoadmapRisk, RoadmapStatus, RoadmapTask, TaskSize, Timeline, TimelineBatch,
 };
 pub use roadmap_patch::{
     ActivePickupPolicy, InsertionPoint, OperatorConflictChoice, ROADMAP_PATCH_SCHEMA_VERSION,
@@ -93,9 +93,9 @@ pub use archetype::{ArchetypeMetadata, ArchetypeName};
 pub use artifact_contract::{
     ARTIFACT_SCHEMA_VERSION, ArtifactContract, ArtifactContractRef, ArtifactDiagnosticCode,
     ArtifactDiagnosticSeverity, ArtifactFormat, ArtifactKind, ArtifactValidationDiagnostic,
-    ArtifactValidationError, ArtifactValidationReport, ContractSummary, SchemaVersionOwner,
-    all_contracts, contract_for, contract_summary, json_schema_for, markdown_outline,
-    validate_artifact, validate_artifact_path, validate_artifact_text,
+    ArtifactValidationError, ArtifactValidationReport, ContractSummary, ROADMAP_SCHEMA_VERSION,
+    SchemaVersionOwner, all_contracts, contract_for, contract_summary, json_schema_for,
+    markdown_outline, validate_artifact, validate_artifact_path, validate_artifact_text,
     validate_roadmap_patch_text_with_context,
 };
 pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
@@ -106,7 +106,7 @@ pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
 pub use migrations::{IdentityV1, IdentityV2, MigrationChain, migrate_payload};
-pub use node::{Node, NodeConfig, NodeKind, OutcomeDecl, Position};
+pub use node::{LedgerEffect, Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;
 pub use profile::bundled::{BUNDLED_COUNT, BundledRegistry};
 pub use profile::keyref::{KeyRefParseError, ProfileKeyRef, parse_key_ref};

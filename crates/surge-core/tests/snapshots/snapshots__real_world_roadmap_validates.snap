@@ -29,6 +29,7 @@ Graph {
                     description: "Notification sent",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Notify(
@@ -70,6 +71,7 @@ Graph {
                     description: "All milestones implemented",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Loop(
@@ -100,6 +102,7 @@ Graph {
                     description: "Milestones breakdown ready",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Agent(
@@ -183,6 +186,7 @@ Graph {
                             description: "Milestone approved for release",
                             edge_kind_hint: Forward,
                             is_terminal: true,
+                            ledger_effect: None,
                         },
                     ],
                     config: HumanGate(
@@ -223,6 +227,7 @@ Graph {
                             description: "Phase tasks planned",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(
@@ -257,6 +262,7 @@ Graph {
                             description: "All tasks in milestone done",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Loop(
@@ -322,6 +328,7 @@ Graph {
                             description: "Task implemented",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(
@@ -356,6 +363,7 @@ Graph {
                             description: "QA passed",
                             edge_kind_hint: Forward,
                             is_terminal: true,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(
@@ -390,6 +398,7 @@ Graph {
                             description: "Task spec written",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(

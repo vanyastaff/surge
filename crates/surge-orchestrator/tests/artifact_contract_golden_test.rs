@@ -100,7 +100,7 @@ fn invalid_fixtures_emit_stable_diagnostic_codes() {
         (
             ArtifactKind::Roadmap,
             "invalid/roadmap.toml",
-            &[ArtifactDiagnosticCode::UnsupportedSchemaVersion],
+            &[ArtifactDiagnosticCode::DependencyCycle],
         ),
         (
             ArtifactKind::RoadmapPatch,

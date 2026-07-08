@@ -41,6 +41,7 @@ Graph {
                     description: "Implementation complete",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Agent(

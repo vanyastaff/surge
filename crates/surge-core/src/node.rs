@@ -92,6 +92,37 @@ pub struct OutcomeDecl {
     pub edge_kind_hint: EdgeKind,
     #[serde(default)]
     pub is_terminal: bool,
+    /// Effect this outcome has on the task ledger.
+    ///
+    /// Graph data, not prompt text: routing stays on edges, ledger
+    /// transitions stay declared here. `Verified` is only honored when the
+    /// node's resolved profile carries verification authority and a sealed
+    /// sandbox (enforced at flow load and by the engine).
+    #[serde(default, skip_serializing_if = "LedgerEffect::is_none")]
+    pub ledger_effect: LedgerEffect,
+}
+
+/// Task-ledger transition declared on an outcome port.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerEffect {
+    /// The outcome does not touch the ledger.
+    #[default]
+    None,
+    /// Implementation claims done; the task moves to `ready_for_verification`.
+    ReadyForVerification,
+    /// A verification-authority node confirmed the task; sole path to `done`.
+    Verified,
+    /// Verification rejected the implementation.
+    FailedVerification,
+}
+
+impl LedgerEffect {
+    /// True for the default no-op effect (used to skip serialization).
+    #[must_use]
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +171,7 @@ mod tests {
             description: "Success path".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         };
         let toml_s = toml::to_string(&o).unwrap();
         let parsed: OutcomeDecl = toml::from_str(&toml_s).unwrap();

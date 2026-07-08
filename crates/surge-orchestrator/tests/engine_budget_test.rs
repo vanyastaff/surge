@@ -144,6 +144,7 @@ fn one_agent_graph() -> Graph {
                 description: "stage completed".into(),
                 edge_kind_hint: EdgeKind::Forward,
                 is_terminal: false,
+                ledger_effect: Default::default(),
             }],
             config: NodeConfig::Agent(AgentConfig {
                 profile: ProfileKey::try_from("implementer@1.0").unwrap(),

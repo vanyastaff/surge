@@ -109,12 +109,14 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
                 description: "Implementation complete".into(),
                 edge_kind_hint: EdgeKind::Forward,
                 is_terminal: false,
+                ledger_effect: Default::default(),
             },
             OutcomeDecl {
                 id: outcome_blocked.clone(),
                 description: "Blocked; needs human review".into(),
                 edge_kind_hint: EdgeKind::Escalate,
                 is_terminal: false,
+                ledger_effect: Default::default(),
             },
         ],
         config: NodeConfig::Agent(AgentConfig {

@@ -188,6 +188,7 @@ fn declared_outcomes(outcomes: &[surge_core::ProfileOutcome]) -> Vec<OutcomeDecl
             description: outcome.description.clone(),
             edge_kind_hint: outcome.edge_kind_hint,
             is_terminal: false,
+            ledger_effect: Default::default(),
         })
         .collect()
 }

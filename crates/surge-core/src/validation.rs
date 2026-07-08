@@ -376,6 +376,7 @@ mod resolver_tests {
                     description: String::new(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 }],
                 config: NodeConfig::Agent(AgentConfig {
                     profile: ProfileKey::try_from(profile).unwrap(),
@@ -1581,6 +1582,7 @@ mod tests {
                     description: "done".into(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 }],
                 config: NodeConfig::Loop(LoopConfig {
                     iterates_over: IterableSource::Static(items),
@@ -1806,6 +1808,7 @@ mod tests {
                         description: format!("{o} outcome"),
                         edge_kind_hint: EdgeKind::Forward,
                         is_terminal: false,
+                        ledger_effect: Default::default(),
                     })
                     .collect(),
                 config: NodeConfig::Notify(NotifyConfig {
@@ -1906,6 +1909,7 @@ mod tests {
                     description: "wrong".into(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 }],
                 config: NodeConfig::Notify(NotifyConfig {
                     channel: NotifyChannel::Desktop,

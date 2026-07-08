@@ -51,6 +51,10 @@ pub enum ArtifactDiagnosticCode {
     MissingInsertionPoint,
     /// Roadmap patch references a missing roadmap item.
     InvalidReference,
+    /// Two roadmap items share the same identifier.
+    DuplicateIdentifier,
+    /// Task-level dependencies form a cycle.
+    DependencyCycle,
 }
 
 impl ArtifactDiagnosticCode {
@@ -73,6 +77,8 @@ impl ArtifactDiagnosticCode {
             Self::MissingOperation => "missing_operation",
             Self::MissingInsertionPoint => "missing_insertion_point",
             Self::InvalidReference => "invalid_reference",
+            Self::DuplicateIdentifier => "duplicate_identifier",
+            Self::DependencyCycle => "dependency_cycle",
         }
     }
 }

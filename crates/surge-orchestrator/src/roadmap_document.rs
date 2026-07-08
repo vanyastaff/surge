@@ -522,6 +522,8 @@ fn checkbox_marker(status: RoadmapStatus) -> &'static str {
         RoadmapStatus::Running => "~",
         RoadmapStatus::Pending
         | RoadmapStatus::Paused
+        | RoadmapStatus::ReadyForVerification
+        | RoadmapStatus::FailedVerification
         | RoadmapStatus::Failed
         | RoadmapStatus::Skipped => " ",
     }

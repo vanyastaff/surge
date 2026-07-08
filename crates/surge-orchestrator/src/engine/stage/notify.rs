@@ -110,6 +110,7 @@ mod tests {
             description: id.into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         }
     }
 

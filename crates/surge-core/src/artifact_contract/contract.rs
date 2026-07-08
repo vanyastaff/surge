@@ -10,6 +10,14 @@ use super::path::{is_adr_path, is_story_path, normalize_path};
 /// Current schema version used by Surge-owned artifact contracts.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 
+/// Current schema version of the `roadmap` artifact contract.
+///
+/// v2 adds the task-ledger fields: task-level `depends_on`,
+/// `discovered_from`, `size`, and `verified`. v1 artifacts remain valid;
+/// the roadmap validator applies v2 field rules only when the artifact
+/// declares `schema_version = 2`.
+pub const ROADMAP_SCHEMA_VERSION: u32 = 2;
+
 /// Role artifact families that Surge validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -210,6 +218,11 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
 }
 
 pub(super) const fn schema_version_for_kind(kind: ArtifactKind) -> u32 {
+    // Roadmap versions independently of the shared contract constant since
+    // v2 introduced the task-ledger fields.
+    if matches!(kind, ArtifactKind::Roadmap) {
+        return ROADMAP_SCHEMA_VERSION;
+    }
     match contract_for(kind).schema_version_owner {
         SchemaVersionOwner::Graph => crate::graph::SCHEMA_VERSION,
         SchemaVersionOwner::ArtifactContract | SchemaVersionOwner::HumanReadable => {

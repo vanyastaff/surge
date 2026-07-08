@@ -18,7 +18,8 @@ use crate::roadmap::RoadmapArtifact;
 
 pub use contract::{
     ARTIFACT_SCHEMA_VERSION, ArtifactContract, ArtifactContractRef, ArtifactFormat, ArtifactKind,
-    ParseArtifactKindError, SchemaVersionOwner, all_contracts, contract_for,
+    ParseArtifactKindError, ROADMAP_SCHEMA_VERSION, SchemaVersionOwner, all_contracts,
+    contract_for,
 };
 pub use diagnostic::{
     ArtifactDiagnosticCode, ArtifactDiagnosticSeverity, ArtifactValidationDiagnostic,

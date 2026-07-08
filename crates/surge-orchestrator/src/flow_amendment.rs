@@ -389,6 +389,7 @@ fn amendment_agent_node(
             description: "Amendment item completed".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         }],
         config: NodeConfig::Agent(AgentConfig {
             profile: profile.clone(),

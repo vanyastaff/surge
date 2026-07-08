@@ -6,12 +6,38 @@ Roadmap Planner emits a machine-readable `roadmap.toml` plus human-compatible
 Primary path: `roadmap.toml`
 Compatibility path: `roadmap.md`
 Validator kind: `roadmap`
-Schema version: `schema_version = 1`, owned by the artifact contract.
+Schema version: `schema_version = 2`, owned by the artifact contract.
+
+`schema_version = 1` roadmaps still validate: the v2 task-ledger fields
+(`depends_on`, `discovered_from`, `size`, `verified`) default when absent, and
+their validation rules apply only at `schema_version = 2`.
+
+## Task-ledger fields (schema v2)
+
+Each `[[milestones.tasks]]` entry carries:
+
+- `depends_on` — task ids (in any milestone) that must complete first.
+  Task-granularity edges the ledger uses to answer "what is unblocked".
+  Milestone-level ordering stays in `[[dependencies]]`.
+- `discovered_from` — the task id this task was discovered from mid-execution.
+  Captures work found during a task instead of dropping it.
+- `size` — `s` / `m` / `l` context-budget class. **Required at v2.** Every task
+  must be completable in one fresh agent session; split anything larger.
+- `verified` — set only when a verification-authority node reports the task
+  verified. Distinct from `status = "completed"`, which any stage can claim.
+
+`status` gains two ledger transitions: `ready_for_verification` (implementation
+done, awaiting a verifier) and `failed_verification` (verifier rejected it).
+
+Validation rejects: duplicate milestone/task ids, `depends_on` /
+`discovered_from` / `[[dependencies]]` references to unknown ids, self
+references, cycles in the task `depends_on` graph, and (at v2) a task missing
+its `size`.
 
 ## Minimal Valid TOML
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [[milestones]]
 id = "artifact-validation"
@@ -22,6 +48,18 @@ id = "validators"
 title = "Add validators"
 description = "Validate canonical generated artifacts."
 acceptance_criteria = ["Invalid schema versions fail", "Valid fixtures pass"]
+size = "m"
+
+[[milestones]]
+id = "hook-enforcement"
+title = "Hook enforcement"
+
+[[milestones.tasks]]
+id = "wire-hooks"
+title = "Wire validators into hooks"
+acceptance_criteria = ["Rejected outcomes force a retry"]
+size = "s"
+depends_on = ["validators"]
 
 [[dependencies]]
 from = "artifact-validation"
@@ -50,8 +88,11 @@ mitigation = "Keep profile prompts linked to this convention."
 
 ## Checklist
 
-- TOML has top-level `schema_version = 1`.
+- TOML has top-level `schema_version = 2` (or `1` for legacy roadmaps).
 - TOML has one or more `[[milestones]]`.
+- Every task has a `size` (`s` / `m` / `l`) sized to one agent session.
+- Task ids are unique; `depends_on` / `discovered_from` reference real task ids.
+- The task `depends_on` graph is acyclic.
 - Tasks include clear titles and testable acceptance criteria when known.
 - Markdown compatibility view has `## Milestones`, `## Dependencies`, and `## Risks`.
 

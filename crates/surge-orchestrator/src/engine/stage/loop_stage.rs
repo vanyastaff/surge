@@ -487,6 +487,7 @@ mod tests {
                     description: "ok".into(),
                     edge_kind_hint: surge_core::edge::EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 }],
                 config: NodeConfig::Loop(cfg.clone()),
             },

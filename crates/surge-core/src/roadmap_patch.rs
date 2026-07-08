@@ -763,9 +763,10 @@ fn find_task_index(milestone: &RoadmapMilestone, task_id: &str) -> Option<usize>
 
 const fn status_conflict_code(status: RoadmapStatus) -> Option<RoadmapPatchConflictCode> {
     match status {
-        RoadmapStatus::Running | RoadmapStatus::Paused => {
-            Some(RoadmapPatchConflictCode::RunningMilestone)
-        },
+        RoadmapStatus::Running
+        | RoadmapStatus::Paused
+        | RoadmapStatus::ReadyForVerification
+        | RoadmapStatus::FailedVerification => Some(RoadmapPatchConflictCode::RunningMilestone),
         RoadmapStatus::Completed | RoadmapStatus::Failed | RoadmapStatus::Skipped => {
             Some(RoadmapPatchConflictCode::CompletedHistory)
         },

@@ -3,7 +3,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
+use std::collections::{HashMap, HashSet};
+
+use crate::artifact_contract::ROADMAP_SCHEMA_VERSION;
 use crate::id::SpecId;
 use crate::spec::Complexity;
 
@@ -38,7 +40,7 @@ impl RoadmapArtifact {
     #[must_use]
     pub fn new(milestones: Vec<RoadmapMilestone>) -> Self {
         Self {
-            schema_version: ARTIFACT_SCHEMA_VERSION,
+            schema_version: ROADMAP_SCHEMA_VERSION,
             milestones,
             dependencies: Vec::new(),
             risks: Vec::new(),
@@ -103,6 +105,250 @@ impl RoadmapArtifact {
     }
 }
 
+impl RoadmapArtifact {
+    /// Validate the task-ledger invariants of this roadmap.
+    ///
+    /// Pure structural checks, independent of any I/O or diagnostics
+    /// plumbing: unique milestone/task ids, referential integrity of
+    /// task-level `depends_on` / `discovered_from` and milestone-level
+    /// `dependencies`, acyclic task dependencies, and — at schema v2 —
+    /// a required `size` on every task. Returns an empty vector when the
+    /// ledger is well-formed.
+    #[must_use]
+    pub fn validate_ledger(&self) -> Vec<RoadmapLedgerIssue> {
+        let mut issues = Vec::new();
+
+        let mut milestone_ids: HashSet<&str> = HashSet::new();
+        for milestone in &self.milestones {
+            if !milestone_ids.insert(milestone.id.as_str()) {
+                issues.push(RoadmapLedgerIssue::DuplicateMilestoneId {
+                    milestone: milestone.id.clone(),
+                });
+            }
+        }
+
+        let mut task_ids: HashSet<&str> = HashSet::new();
+        for task in self.tasks() {
+            if !task_ids.insert(task.id.as_str()) {
+                issues.push(RoadmapLedgerIssue::DuplicateTaskId {
+                    task: task.id.clone(),
+                });
+            }
+        }
+
+        for task in self.tasks() {
+            for dependency in &task.depends_on {
+                if dependency == &task.id {
+                    issues.push(RoadmapLedgerIssue::SelfDependency {
+                        task: task.id.clone(),
+                    });
+                } else if !task_ids.contains(dependency.as_str()) {
+                    issues.push(RoadmapLedgerIssue::UnknownDependsOn {
+                        task: task.id.clone(),
+                        missing: dependency.clone(),
+                    });
+                }
+            }
+            if let Some(origin) = &task.discovered_from {
+                if origin == &task.id {
+                    issues.push(RoadmapLedgerIssue::SelfDiscovery {
+                        task: task.id.clone(),
+                    });
+                } else if !task_ids.contains(origin.as_str()) {
+                    issues.push(RoadmapLedgerIssue::UnknownDiscoveredFrom {
+                        task: task.id.clone(),
+                        missing: origin.clone(),
+                    });
+                }
+            }
+            if self.schema_version >= ROADMAP_SCHEMA_VERSION && task.size.is_none() {
+                issues.push(RoadmapLedgerIssue::MissingSize {
+                    task: task.id.clone(),
+                });
+            }
+        }
+
+        for dependency in &self.dependencies {
+            for milestone in [&dependency.from, &dependency.to] {
+                if !milestone_ids.contains(milestone.as_str()) {
+                    issues.push(RoadmapLedgerIssue::UnknownMilestoneDependency {
+                        missing: milestone.clone(),
+                    });
+                }
+            }
+        }
+
+        if let Some(cycle) = self.find_task_cycle() {
+            issues.push(RoadmapLedgerIssue::DependencyCycle { cycle });
+        }
+
+        issues
+    }
+
+    /// Iterate every task across all milestones in declaration order.
+    pub fn tasks(&self) -> impl Iterator<Item = &RoadmapTask> {
+        self.milestones
+            .iter()
+            .flat_map(|milestone| milestone.tasks.iter())
+    }
+
+    /// Find one cycle in the task-level `depends_on` graph, if any.
+    ///
+    /// Deterministic: tasks are visited in declaration order, so the same
+    /// roadmap always reports the same cycle. Unknown dependency ids are
+    /// ignored here — they are reported separately as
+    /// [`RoadmapLedgerIssue::UnknownDependsOn`].
+    fn find_task_cycle(&self) -> Option<Vec<String>> {
+        let dependencies: HashMap<&str, &[String]> = self
+            .tasks()
+            .map(|task| (task.id.as_str(), task.depends_on.as_slice()))
+            .collect();
+
+        let mut marks: HashMap<&str, CycleMark> = HashMap::new();
+        let mut stack: Vec<&str> = Vec::new();
+
+        for task in self.tasks() {
+            if let Some(cycle) =
+                visit_for_cycle(task.id.as_str(), &dependencies, &mut marks, &mut stack)
+            {
+                return Some(cycle);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CycleMark {
+    Visiting,
+    Done,
+}
+
+/// Depth-first search from `node` looking for a back edge into the active
+/// stack. Returns the cycle path (first == last) on the first one found.
+fn visit_for_cycle<'a>(
+    node: &'a str,
+    dependencies: &HashMap<&'a str, &'a [String]>,
+    marks: &mut HashMap<&'a str, CycleMark>,
+    stack: &mut Vec<&'a str>,
+) -> Option<Vec<String>> {
+    match marks.get(node) {
+        Some(CycleMark::Done) => return None,
+        Some(CycleMark::Visiting) => {
+            let start = stack.iter().position(|frame| *frame == node)?;
+            let mut cycle: Vec<String> = stack[start..].iter().map(ToString::to_string).collect();
+            cycle.push(node.to_string());
+            return Some(cycle);
+        },
+        None => {},
+    }
+
+    marks.insert(node, CycleMark::Visiting);
+    stack.push(node);
+    for dependency in dependencies.get(node).copied().unwrap_or_default() {
+        let target = dependency.as_str();
+        if dependencies.contains_key(target)
+            && let Some(cycle) = visit_for_cycle(target, dependencies, marks, stack)
+        {
+            return Some(cycle);
+        }
+    }
+    stack.pop();
+    marks.insert(node, CycleMark::Done);
+    None
+}
+
+/// One structural problem found by [`RoadmapArtifact::validate_ledger`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RoadmapLedgerIssue {
+    /// Two milestones share the same id.
+    DuplicateMilestoneId {
+        /// The duplicated milestone id.
+        milestone: String,
+    },
+    /// Two tasks share the same id (across all milestones).
+    DuplicateTaskId {
+        /// The duplicated task id.
+        task: String,
+    },
+    /// A task depends on itself.
+    SelfDependency {
+        /// The task id.
+        task: String,
+    },
+    /// A task depends on a task id that does not exist.
+    UnknownDependsOn {
+        /// The task declaring the dependency.
+        task: String,
+        /// The missing task id.
+        missing: String,
+    },
+    /// A task claims to be discovered from itself.
+    SelfDiscovery {
+        /// The task id.
+        task: String,
+    },
+    /// A task's `discovered_from` references a task id that does not exist.
+    UnknownDiscoveredFrom {
+        /// The task declaring the origin.
+        task: String,
+        /// The missing task id.
+        missing: String,
+    },
+    /// A milestone-level dependency references a missing milestone id.
+    UnknownMilestoneDependency {
+        /// The missing milestone id.
+        missing: String,
+    },
+    /// The task-level `depends_on` graph contains a cycle.
+    DependencyCycle {
+        /// The cycle as a task-id path; first and last entries are equal.
+        cycle: Vec<String>,
+    },
+    /// A schema-v2 task is missing its required `size`.
+    MissingSize {
+        /// The task id.
+        task: String,
+    },
+}
+
+impl std::fmt::Display for RoadmapLedgerIssue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateMilestoneId { milestone } => {
+                write!(formatter, "duplicate milestone id {milestone:?}")
+            },
+            Self::DuplicateTaskId { task } => write!(formatter, "duplicate task id {task:?}"),
+            Self::SelfDependency { task } => {
+                write!(formatter, "task {task:?} depends on itself")
+            },
+            Self::UnknownDependsOn { task, missing } => write!(
+                formatter,
+                "task {task:?} depends on unknown task {missing:?}"
+            ),
+            Self::SelfDiscovery { task } => {
+                write!(formatter, "task {task:?} is discovered from itself")
+            },
+            Self::UnknownDiscoveredFrom { task, missing } => write!(
+                formatter,
+                "task {task:?} is discovered from unknown task {missing:?}"
+            ),
+            Self::UnknownMilestoneDependency { missing } => write!(
+                formatter,
+                "milestone dependency references unknown milestone {missing:?}"
+            ),
+            Self::DependencyCycle { cycle } => {
+                write!(formatter, "task dependency cycle: {}", cycle.join(" -> "))
+            },
+            Self::MissingSize { task } => write!(
+                formatter,
+                "task {task:?} is missing its required size (schema v2)"
+            ),
+        }
+    }
+}
+
 impl Default for RoadmapArtifact {
     fn default() -> Self {
         Self::new(Vec::new())
@@ -153,6 +399,28 @@ pub struct RoadmapTask {
     /// Acceptance criteria that downstream spec/story authors can refine.
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+    /// Task ids (in any milestone) that must complete before this task.
+    ///
+    /// Schema v2. Task-granularity edges for the ledger; milestone-level
+    /// ordering stays in [`RoadmapArtifact::dependencies`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Task id this task was discovered from while executing that task.
+    ///
+    /// Schema v2. Captures mid-task discovered work instead of dropping it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovered_from: Option<String>,
+    /// Context-budget size class.
+    ///
+    /// Schema v2, required by the validator at v2: every task must be
+    /// completable in one fresh agent session; oversized work is split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<TaskSize>,
+    /// True only when a verification-authority node reported the task
+    /// verified. Distinct from [`RoadmapStatus::Completed`], which any
+    /// stage can claim.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verified: bool,
 }
 
 impl RoadmapTask {
@@ -165,7 +433,37 @@ impl RoadmapTask {
             status: RoadmapStatus::Pending,
             description: None,
             acceptance_criteria: Vec::new(),
+            depends_on: Vec::new(),
+            discovered_from: None,
+            size: None,
+            verified: false,
         }
+    }
+}
+
+/// Context-budget size class for one roadmap task.
+///
+/// The contract is qualitative, not a token count: an `S`/`M` task fits one
+/// fresh agent session comfortably; `L` is the upper bound and a planner
+/// signal to consider splitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskSize {
+    /// Small — a focused change, well under one session.
+    S,
+    /// Medium — a typical task, fits one session with room for verification.
+    M,
+    /// Large — fills one session; anything bigger must be split.
+    L,
+}
+
+impl std::fmt::Display for TaskSize {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::S => "s",
+            Self::M => "m",
+            Self::L => "l",
+        })
     }
 }
 
@@ -244,6 +542,12 @@ pub enum RoadmapStatus {
     Running,
     /// Paused, waiting for human input or gate.
     Paused,
+    /// Implementation reported done; awaiting a verification-authority node.
+    #[serde(rename = "ready_for_verification")]
+    ReadyForVerification,
+    /// Verification rejected the implementation; routes back to execution.
+    #[serde(rename = "failed_verification")]
+    FailedVerification,
     /// Completed successfully.
     Completed,
     /// Failed — may be retried.
@@ -272,6 +576,8 @@ impl std::fmt::Display for RoadmapStatus {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Paused => "paused",
+            Self::ReadyForVerification => "ready_for_verification",
+            Self::FailedVerification => "failed_verification",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
@@ -310,7 +616,7 @@ pub struct TimelineBatch {
 }
 
 fn default_artifact_schema_version() -> u32 {
-    ARTIFACT_SCHEMA_VERSION
+    ROADMAP_SCHEMA_VERSION
 }
 
 impl Timeline {
@@ -517,7 +823,7 @@ mod tests {
         let toml_str = toml::to_string(&artifact).unwrap();
         let deserialized: RoadmapArtifact = toml::from_str(&toml_str).unwrap();
 
-        assert_eq!(deserialized.schema_version, ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(deserialized.schema_version, ROADMAP_SCHEMA_VERSION);
         assert_eq!(deserialized.milestones[0].id, "m1");
         assert_eq!(deserialized.milestones[0].tasks[0].id, "m1-t1");
         assert_eq!(deserialized.dependencies[0].to, "m2");
@@ -548,6 +854,168 @@ mod tests {
         let item = timeline.find_item_mut(spec_id).unwrap();
         item.status = RoadmapStatus::Running;
         assert_eq!(timeline.batches[0].items[0].status, RoadmapStatus::Running);
+    }
+
+    fn ledger_roadmap(tasks: Vec<RoadmapTask>) -> RoadmapArtifact {
+        let mut milestone = RoadmapMilestone::new("m1", "Ledger");
+        milestone.tasks = tasks;
+        RoadmapArtifact::new(vec![milestone])
+    }
+
+    fn sized_task(id: &str, depends_on: &[&str]) -> RoadmapTask {
+        let mut task = RoadmapTask::new(id, id);
+        task.size = Some(TaskSize::M);
+        task.depends_on = depends_on.iter().map(ToString::to_string).collect();
+        task
+    }
+
+    #[test]
+    fn validate_ledger_accepts_well_formed_v2() {
+        let roadmap = ledger_roadmap(vec![
+            sized_task("t1", &[]),
+            sized_task("t2", &["t1"]),
+            sized_task("t3", &["t1", "t2"]),
+        ]);
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+    }
+
+    #[test]
+    fn validate_ledger_flags_duplicate_ids() {
+        let mut roadmap = ledger_roadmap(vec![sized_task("t1", &[]), sized_task("t1", &[])]);
+        roadmap
+            .milestones
+            .push(RoadmapMilestone::new("m1", "Duplicate"));
+
+        let issues = roadmap.validate_ledger();
+
+        assert!(issues.contains(&RoadmapLedgerIssue::DuplicateTaskId {
+            task: "t1".to_string()
+        }));
+        assert!(issues.contains(&RoadmapLedgerIssue::DuplicateMilestoneId {
+            milestone: "m1".to_string()
+        }));
+    }
+
+    #[test]
+    fn validate_ledger_flags_unknown_and_self_references() {
+        let mut discovered = sized_task("t2", &["missing"]);
+        discovered.discovered_from = Some("t2".to_string());
+        let mut self_dep = sized_task("t1", &["t1"]);
+        self_dep.discovered_from = Some("ghost".to_string());
+        let roadmap = ledger_roadmap(vec![self_dep, discovered]);
+
+        let issues = roadmap.validate_ledger();
+
+        assert!(issues.contains(&RoadmapLedgerIssue::SelfDependency {
+            task: "t1".to_string()
+        }));
+        assert!(issues.contains(&RoadmapLedgerIssue::UnknownDependsOn {
+            task: "t2".to_string(),
+            missing: "missing".to_string()
+        }));
+        assert!(issues.contains(&RoadmapLedgerIssue::SelfDiscovery {
+            task: "t2".to_string()
+        }));
+        assert!(issues.contains(&RoadmapLedgerIssue::UnknownDiscoveredFrom {
+            task: "t1".to_string(),
+            missing: "ghost".to_string()
+        }));
+    }
+
+    #[test]
+    fn validate_ledger_reports_cycle_deterministically() {
+        let roadmap = ledger_roadmap(vec![
+            sized_task("t1", &["t3"]),
+            sized_task("t2", &["t1"]),
+            sized_task("t3", &["t2"]),
+        ]);
+
+        let issues = roadmap.validate_ledger();
+
+        assert_eq!(
+            issues,
+            vec![RoadmapLedgerIssue::DependencyCycle {
+                cycle: vec![
+                    "t1".to_string(),
+                    "t3".to_string(),
+                    "t2".to_string(),
+                    "t1".to_string()
+                ]
+            }]
+        );
+    }
+
+    #[test]
+    fn validate_ledger_requires_size_only_at_v2() {
+        let mut roadmap = ledger_roadmap(vec![RoadmapTask::new("t1", "No size")]);
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::MissingSize {
+                task: "t1".to_string()
+            }]
+        );
+
+        roadmap.schema_version = 1;
+        assert_eq!(roadmap.validate_ledger(), Vec::new());
+    }
+
+    #[test]
+    fn validate_ledger_flags_unknown_milestone_dependency() {
+        let mut roadmap = ledger_roadmap(vec![sized_task("t1", &[])]);
+        roadmap.dependencies.push(RoadmapDependency {
+            from: "m1".to_string(),
+            to: "m9".to_string(),
+            reason: String::new(),
+        });
+
+        assert_eq!(
+            roadmap.validate_ledger(),
+            vec![RoadmapLedgerIssue::UnknownMilestoneDependency {
+                missing: "m9".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn task_ledger_fields_roundtrip_via_toml() {
+        let mut task = sized_task("t2", &["t1"]);
+        task.discovered_from = Some("t1".to_string());
+        task.verified = true;
+        task.status = RoadmapStatus::ReadyForVerification;
+        let roadmap = ledger_roadmap(vec![sized_task("t1", &[]), task]);
+
+        let toml_str = toml::to_string(&roadmap).unwrap();
+        let parsed: RoadmapArtifact = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(parsed, roadmap);
+        assert!(toml_str.contains("ready_for_verification"));
+        assert!(toml_str.contains("size = \"m\""));
+    }
+
+    #[test]
+    fn v1_roadmap_toml_still_parses_with_defaulted_ledger_fields() {
+        let parsed: RoadmapArtifact = toml::from_str(
+            r#"
+schema_version = 1
+
+[[milestones]]
+id = "m1"
+title = "Legacy"
+
+[[milestones.tasks]]
+id = "t1"
+title = "Old task"
+"#,
+        )
+        .unwrap();
+
+        let task = &parsed.milestones[0].tasks[0];
+        assert_eq!(parsed.schema_version, 1);
+        assert!(task.depends_on.is_empty());
+        assert!(task.discovered_from.is_none());
+        assert!(task.size.is_none());
+        assert!(!task.verified);
+        assert_eq!(parsed.validate_ledger(), Vec::new());
     }
 
     #[test]
