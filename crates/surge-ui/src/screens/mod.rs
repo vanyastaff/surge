@@ -11,6 +11,7 @@ pub mod init_wizard;
 pub mod insights;
 pub mod kanban;
 pub mod memory;
+pub mod runs;
 pub mod settings;
 pub mod spec_explorer;
 pub mod spec_wizard;

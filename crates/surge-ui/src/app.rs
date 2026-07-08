@@ -24,6 +24,7 @@ use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
 use crate::screens::kanban::{KanbanScreen, TaskClicked};
 use crate::screens::memory::MemoryScreen;
+use crate::screens::runs::RunsScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
 use crate::screens::spec_wizard::SpecWizardScreen;
@@ -58,6 +59,7 @@ pub struct SurgeApp {
     fleet: Option<Entity<FleetScreen>>,
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
+    runs_screen: Option<Entity<RunsScreen>>,
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
@@ -141,6 +143,7 @@ impl SurgeApp {
             fleet: None,
             flow: None,
             memory: None,
+            runs_screen: None,
             dashboard: None,
             agent_terminal: None,
             kanban: None,
@@ -256,6 +259,7 @@ impl SurgeApp {
         self.fleet = None;
         self.flow = None;
         self.memory = None;
+        self.runs_screen = None;
         self.dashboard = None;
         self.kanban = None;
         self.agent_hub = None;
@@ -658,7 +662,22 @@ impl SurgeApp {
                                 this.task_detail_id = Some(id.clone());
                                 this.navigate(Screen::GateApproval, cx);
                             },
-                            FleetAction::OpenRun(_id) => {
+                            FleetAction::OpenRun(id) => {
+                                // Fleet labels runs "r-<short>"; map back to the
+                                // real RunId so the cockpit focuses it.
+                                let short = id.strip_prefix("r-").unwrap_or(id).to_uppercase();
+                                let run_id = this
+                                    .state
+                                    .read(cx)
+                                    .runs
+                                    .iter()
+                                    .find(|r| r.run_id.short() == short)
+                                    .map(|r| r.run_id);
+                                if let (Some(run_id), Some(runs_screen)) =
+                                    (run_id, this.runs_screen.clone())
+                                {
+                                    runs_screen.update(cx, |s, cx| s.select_run(run_id, cx));
+                                }
                                 this.navigate(Screen::Runs, cx);
                             },
                         }
@@ -670,6 +689,13 @@ impl SurgeApp {
             },
             Screen::Flow => {
                 let s = self.flow.get_or_insert_with(|| cx.new(FlowScreen::new));
+                s.clone().into_any_element()
+            },
+            Screen::Runs => {
+                let state = self.state.clone();
+                let s = self
+                    .runs_screen
+                    .get_or_insert_with(|| cx.new(|cx| RunsScreen::new(state, cx)));
                 s.clone().into_any_element()
             },
             Screen::ContextMemory => {
