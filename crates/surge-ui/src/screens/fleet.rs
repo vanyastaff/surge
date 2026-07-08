@@ -12,6 +12,8 @@
 //! below a horizontal trunk with straight connectors. True curved edges
 //! via `gpui::canvas` are a later polish.
 
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
@@ -81,6 +83,14 @@ struct FleetNode {
     live: bool,
 }
 
+/// A curved branch edge to paint on the canvas (trunk → card anchor).
+#[derive(Clone, Copy)]
+struct EdgeSpec {
+    x: f32,
+    card_edge_y: f32,
+    color: Hsla,
+}
+
 /// Fleet screen — reads runs from shared state, renders the constellation.
 pub struct FleetScreen {
     state: Entity<AppState>,
@@ -134,6 +144,67 @@ impl FleetScreen {
         NODE_X0 + (i as f32) * NODE_STEP
     }
 
+    /// Low-level paint layer: subtle dot-grid + curved, glowing branch
+    /// edges. Sits behind the trunk / dots / cards. Painted in stage
+    /// coordinates offset by the canvas's window-space origin.
+    fn render_stage_canvas(&self, edges: Vec<EdgeSpec>) -> impl IntoElement {
+        let dot_color = theme::graph_line().opacity(0.5);
+        canvas(
+            |_bounds, _window, _cx| {},
+            move |bounds, _prepaint, window, _cx| {
+                let ox = bounds.origin.x;
+                let oy = bounds.origin.y;
+                let stage_w = f32::from(bounds.size.width);
+                let stage_h = f32::from(bounds.size.height);
+
+                // dot grid
+                let step = 26.0_f32;
+                let mut gy = 8.0_f32;
+                while gy < stage_h {
+                    let mut gx = 8.0_f32;
+                    while gx < stage_w {
+                        let dot = Bounds::new(
+                            point(ox + px(gx), oy + px(gy)),
+                            size(px(1.5), px(1.5)),
+                        );
+                        window.paint_quad(fill(dot, dot_color));
+                        gx += step;
+                    }
+                    gy += step;
+                }
+
+                // curved branch edges: a wide faint glow pass + a bright
+                // thin pass, both following the same cubic Bézier.
+                for e in &edges {
+                    let start = point(ox + px(e.x), oy + px(TRUNK_Y));
+                    let end = point(ox + px(e.x), oy + px(e.card_edge_y));
+                    let midy = (TRUNK_Y + e.card_edge_y) / 2.0;
+                    let c1 = point(ox + px(e.x + 22.0), oy + px(midy));
+                    let c2 = point(ox + px(e.x - 22.0), oy + px(midy));
+
+                    let mut glow = PathBuilder::stroke(px(5.0));
+                    glow.move_to(start);
+                    glow.cubic_bezier_to(end, c1, c2);
+                    if let Ok(p) = glow.build() {
+                        window.paint_path(p, e.color.opacity(0.14));
+                    }
+
+                    let mut line = PathBuilder::stroke(px(1.6));
+                    line.move_to(start);
+                    line.cubic_bezier_to(end, c1, c2);
+                    if let Ok(p) = line.build() {
+                        window.paint_path(p, e.color.opacity(0.7));
+                    }
+                }
+            },
+        )
+        .absolute()
+        .left(px(0.0))
+        .top(px(0.0))
+        .w(px(STAGE_W))
+        .h(px(STAGE_H))
+    }
+
     /// Trunk pieces as direct children of the (sized, relative) stage.
     fn render_trunk(&self) -> Vec<AnyElement> {
         vec![
@@ -183,22 +254,13 @@ impl FleetScreen {
         let above = i.is_multiple_of(2);
         let color = node.kind.color();
         let card_top = if above { 84.0 } else { 316.0 };
-        let connector_top = if above { 158.0 } else { TRUNK_Y };
 
         let id_for_click = node.id.clone();
         let is_review = node.kind == NodeKind::Review;
         let is_failed = node.kind == NodeKind::Failed;
 
-        let connector = div()
-            .absolute()
-            .left(px(x - 0.75))
-            .top(px(connector_top))
-            .w(px(1.5))
-            .h(px(82.0))
-            .bg(color.opacity(0.4))
-            .into_any_element();
-
-        let dot = div()
+        // Node dot on the trunk; active / review dots gently pulse.
+        let dot_base = div()
             .absolute()
             .left(px(x - 5.0))
             .top(px(TRUNK_Y - 5.0))
@@ -207,8 +269,18 @@ impl FleetScreen {
             .rounded_full()
             .bg(color)
             .border_2()
-            .border_color(theme::panel_deep())
-            .into_any_element();
+            .border_color(theme::panel_deep());
+        let dot = if matches!(node.kind, NodeKind::Active | NodeKind::Review) {
+            dot_base
+                .with_animation(
+                    SharedString::from(format!("fleet-pulse-{}", node.id)),
+                    Animation::new(Duration::from_millis(1600)).repeat(),
+                    |el, delta| el.opacity(0.5 + 0.5 * (delta * std::f32::consts::PI).sin()),
+                )
+                .into_any_element()
+        } else {
+            dot_base.into_any_element()
+        };
 
         let card = div()
             .id(SharedString::from(format!("fleet-card-{}", node.id)))
@@ -274,7 +346,7 @@ impl FleetScreen {
             .child(ui::meta(node.meta.clone()))
             .into_any_element();
 
-        vec![connector, dot, card]
+        vec![dot, card]
     }
 
     fn render_chips(&self, active: usize, needs: usize, merged: usize, live: bool) -> Div {
@@ -454,9 +526,25 @@ impl Render for FleetScreen {
             .or_else(|| nodes.iter().find(|n| n.kind == NodeKind::Failed))
             .cloned();
 
-        // Build the stage (trunk + nodes) as one flat layer of absolute
-        // children so their coords anchor to the stage box.
-        let mut stage_children: Vec<AnyElement> = self.render_trunk();
+        // Branch edges painted on the canvas layer (behind everything).
+        let edges: Vec<EdgeSpec> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let above = i.is_multiple_of(2);
+                EdgeSpec {
+                    x: Self::node_x(i),
+                    card_edge_y: if above { 158.0 } else { 316.0 },
+                    color: n.kind.color(),
+                }
+            })
+            .collect();
+
+        // Build the stage as one flat layer of absolute children so their
+        // coords anchor to the stage box: canvas (back) → trunk → nodes.
+        let mut stage_children: Vec<AnyElement> =
+            vec![self.render_stage_canvas(edges).into_any_element()];
+        stage_children.extend(self.render_trunk());
         for (i, node) in nodes.iter().enumerate() {
             stage_children.extend(self.render_node(node, i, cx));
         }
