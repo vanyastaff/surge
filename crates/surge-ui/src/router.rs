@@ -5,6 +5,8 @@ use gpui_component::IconName;
 pub enum Screen {
     /// Fleet — the run constellation (mission-control home).
     Fleet,
+    /// Flow — the DAG editor.
+    Flow,
     Dashboard,
     Kanban,
     TaskDetail,
@@ -30,6 +32,7 @@ impl Screen {
     pub fn label(self) -> &'static str {
         match self {
             Self::Fleet => "Fleet",
+            Self::Flow => "Flow",
             Self::Dashboard => "Dashboard",
             Self::Kanban => "Kanban",
             Self::TaskDetail => "Task Detail",
@@ -55,6 +58,7 @@ impl Screen {
     pub fn icon(self) -> IconName {
         match self {
             Self::Fleet => IconName::GalleryVerticalEnd,
+            Self::Flow => IconName::Inspector,
             Self::Dashboard => IconName::LayoutDashboard,
             Self::Kanban => IconName::Frame, // columns layout
             Self::TaskDetail => IconName::File,
@@ -96,6 +100,7 @@ impl Screen {
     pub fn sidebar_items() -> &'static [Screen] {
         &[
             Self::Fleet,
+            Self::Flow,
             Self::Dashboard,
             Self::Kanban,
             Self::SpecExplorer,

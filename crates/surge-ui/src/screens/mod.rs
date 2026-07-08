@@ -4,6 +4,7 @@ pub mod dashboard;
 pub mod diff_viewer;
 pub mod file_explorer;
 pub mod fleet;
+pub mod flow;
 pub mod gate_approval;
 pub mod github_prs;
 pub mod init_wizard;

@@ -18,6 +18,7 @@ use crate::screens::dashboard::DashboardScreen;
 use crate::screens::diff_viewer::DiffViewerScreen;
 use crate::screens::file_explorer::FileExplorerScreen;
 use crate::screens::fleet::{FleetAction, FleetScreen};
+use crate::screens::flow::FlowScreen;
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
@@ -55,6 +56,7 @@ pub struct SurgeApp {
     task_detail_id: Option<String>,
     // Screen entities (created on demand).
     fleet: Option<Entity<FleetScreen>>,
+    flow: Option<Entity<FlowScreen>>,
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
@@ -137,6 +139,7 @@ impl SurgeApp {
             command_palette: None,
             task_detail_id: None,
             fleet: None,
+            flow: None,
             dashboard: None,
             agent_terminal: None,
             kanban: None,
@@ -251,6 +254,7 @@ impl SurgeApp {
 
         // Reset screen entities so they re-read from AppState.
         self.fleet = None;
+        self.flow = None;
         self.dashboard = None;
         self.kanban = None;
         self.agent_hub = None;
@@ -663,6 +667,10 @@ impl SurgeApp {
                     f
                 });
                 fleet.clone().into_any_element()
+            },
+            Screen::Flow => {
+                let s = self.flow.get_or_insert_with(|| cx.new(FlowScreen::new));
+                s.clone().into_any_element()
             },
             Screen::Dashboard => {
                 let state = self.state.clone();
