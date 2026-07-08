@@ -134,6 +134,15 @@ pub enum ValidationErrorKind {
         node: NodeKey,
         entry: String,
     },
+    /// A `Terminal { kind: Success }` node is reachable from `start` without
+    /// passing through a verification-authority node (one that declares an
+    /// outcome with [`LedgerEffect::Verified`](crate::node::LedgerEffect), or a
+    /// Loop/Subgraph whose body contains one). Warning, not error — the run is
+    /// structurally valid, but its "done" is not backed by a verifier, so it
+    /// should render differently from a verified completion (Phase 1 A2).
+    UnverifiedSuccessPath {
+        terminal: NodeKey,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,7 +164,8 @@ impl ValidationErrorKind {
             // Warnings — informational, do not block the run.
             Self::EscalateTargetNotHumanOrNotify
             | Self::OrphanSubgraph { .. }
-            | Self::NotifyFailMissingUndeliverable { .. } => Severity::Warning,
+            | Self::NotifyFailMissingUndeliverable { .. }
+            | Self::UnverifiedSuccessPath { .. } => Severity::Warning,
 
             // Errors — graph is structurally invalid or will misbehave at runtime.
             Self::StartNodeMissing
@@ -248,6 +258,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w1_escalate_target(graph, &mut findings);
     warning_w2_orphan_subgraphs(graph, &mut findings);
     warning_w3_notify_outcomes(graph, &mut findings);
+    warning_w4_unverified_success(graph, &mut findings);
     validate_loop_static_cap(graph, &mut findings);
     validate_sandbox_custom_on_agents(graph, &mut findings);
 
@@ -914,6 +925,103 @@ fn rule_17_node_key_uniqueness(graph: &Graph, out: &mut Vec<ValidationError>) {
             });
         }
     }
+}
+
+/// W4 — warn when a `Terminal { Success }` is reachable from `start` without
+/// passing a verification-authority node.
+///
+/// Forward BFS from `start`; a verification gate absorbs the path (its
+/// downstream is considered verified, so we do not expand past it). If a
+/// success terminal is still reached, some run path can declare "done" without
+/// a verifier — one warning per graph, anchored at the first such terminal.
+fn warning_w4_unverified_success(graph: &Graph, out: &mut Vec<ValidationError>) {
+    use crate::node::NodeKind;
+    use std::collections::HashSet;
+
+    if !graph.nodes.contains_key(&graph.start) {
+        return;
+    }
+    let mut visited: HashSet<NodeKey> = HashSet::new();
+    let mut frontier = vec![graph.start.clone()];
+    while let Some(key) = frontier.pop() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        let Some(node) = graph.nodes.get(&key) else {
+            continue;
+        };
+        // A verification gate absorbs the path — stop expanding here.
+        if node_is_verification_gate(graph, node, &mut HashSet::new()) {
+            continue;
+        }
+        if node.kind() == NodeKind::Terminal && is_success_terminal(node) {
+            out.push(ValidationError {
+                kind: ValidationErrorKind::UnverifiedSuccessPath {
+                    terminal: key.clone(),
+                },
+                location: ErrorLocation::Node { id: key.clone() },
+                message: format!(
+                    "success terminal `{}` is reachable without a verification node \
+                     (no outcome declares ledger_effect = verified on the path)",
+                    key.as_str()
+                ),
+            });
+            return;
+        }
+        for edge in &graph.edges {
+            if edge.from.node == key && edge.kind == EdgeKind::Forward {
+                frontier.push(edge.to.clone());
+            }
+        }
+    }
+}
+
+fn is_success_terminal(node: &crate::node::Node) -> bool {
+    use crate::terminal_config::TerminalKind;
+    matches!(
+        &node.config,
+        NodeConfig::Terminal(cfg) if cfg.kind == TerminalKind::Success
+    )
+}
+
+/// True when `node` gates verification: it declares a `LedgerEffect::Verified`
+/// outcome, or it is a Loop/Subgraph whose body (transitively) contains such a
+/// node. `seen` guards against subgraph reference cycles.
+fn node_is_verification_gate(
+    graph: &Graph,
+    node: &crate::node::Node,
+    seen: &mut std::collections::HashSet<SubgraphKey>,
+) -> bool {
+    use crate::node::LedgerEffect;
+    if node
+        .declared_outcomes
+        .iter()
+        .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+    {
+        return true;
+    }
+    match &node.config {
+        NodeConfig::Loop(cfg) => subgraph_has_verification_gate(graph, &cfg.body, seen),
+        NodeConfig::Subgraph(cfg) => subgraph_has_verification_gate(graph, &cfg.inner, seen),
+        _ => false,
+    }
+}
+
+fn subgraph_has_verification_gate(
+    graph: &Graph,
+    key: &SubgraphKey,
+    seen: &mut std::collections::HashSet<SubgraphKey>,
+) -> bool {
+    if !seen.insert(key.clone()) {
+        return false;
+    }
+    let Some(subgraph) = graph.subgraphs.get(key) else {
+        return false;
+    };
+    subgraph
+        .nodes
+        .values()
+        .any(|node| node_is_verification_gate(graph, node, seen))
 }
 
 fn warning_w1_escalate_target(graph: &Graph, out: &mut Vec<ValidationError>) {
@@ -2253,6 +2361,205 @@ mod tests {
                     | crate::validation::ValidationErrorKind::McpCommandPathUnsafe { .. }
             )),
             "happy path should not surface any MCP-specific errors; got: {errors:?}"
+        );
+    }
+}
+
+// ── W4: unverified success path ──────────────────────────────────
+
+#[cfg(test)]
+mod w4_tests {
+    use super::*;
+    use crate::agent_config::AgentConfig;
+    use crate::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
+    use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
+    use crate::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey};
+    use crate::loop_config::{
+        ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
+    };
+    use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+    use crate::terminal_config::{TerminalConfig, TerminalKind};
+    use std::collections::BTreeMap;
+
+    fn agent_node(key: &str, effect: LedgerEffect) -> Node {
+        Node {
+            id: NodeKey::try_from(key).unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![OutcomeDecl {
+                id: OutcomeKey::try_from("pass").unwrap(),
+                description: "ok".into(),
+                edge_kind_hint: EdgeKind::Forward,
+                is_terminal: false,
+                ledger_effect: effect,
+            }],
+            config: NodeConfig::Agent(AgentConfig {
+                profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+                prompt_overrides: None,
+                tool_overrides: None,
+                sandbox_override: None,
+                approvals_override: None,
+                bindings: vec![],
+                rules_overrides: None,
+                limits: Default::default(),
+                hooks: vec![],
+                custom_fields: Default::default(),
+            }),
+        }
+    }
+
+    fn success_terminal(key: &str) -> Node {
+        Node {
+            id: NodeKey::try_from(key).unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        }
+    }
+
+    fn edge(id: &str, from: &str, to: &str) -> Edge {
+        Edge {
+            id: EdgeKey::try_from(id).unwrap(),
+            from: PortRef {
+                node: NodeKey::try_from(from).unwrap(),
+                outcome: OutcomeKey::try_from("pass").unwrap(),
+            },
+            to: NodeKey::try_from(to).unwrap(),
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        }
+    }
+
+    fn graph(start: &str, nodes: Vec<Node>, edges: Vec<Edge>, subgraphs: BTreeMap<SubgraphKey, Subgraph>) -> Graph {
+        let mut map = BTreeMap::new();
+        for node in nodes {
+            map.insert(node.id.clone(), node);
+        }
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "w4".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: NodeKey::try_from(start).unwrap(),
+            nodes: map,
+            edges,
+            subgraphs,
+        }
+    }
+
+    fn w4_warnings(graph: &Graph) -> Vec<NodeKey> {
+        let mut out = Vec::new();
+        warning_w4_unverified_success(graph, &mut out);
+        out.into_iter()
+            .filter_map(|f| match f.kind {
+                ValidationErrorKind::UnverifiedSuccessPath { terminal } => Some(terminal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn warns_when_success_has_no_verifier() {
+        let g = graph(
+            "impl_1",
+            vec![agent_node("impl_1", LedgerEffect::None), success_terminal("end")],
+            vec![edge("e", "impl_1", "end")],
+            BTreeMap::new(),
+        );
+        assert_eq!(w4_warnings(&g), vec![NodeKey::try_from("end").unwrap()]);
+    }
+
+    #[test]
+    fn no_warning_when_verifier_gates_success() {
+        // impl_1 (none) → verify_1 (verified) → end
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", LedgerEffect::None),
+                agent_node("verify_1", LedgerEffect::Verified),
+                success_terminal("end"),
+            ],
+            vec![edge("e1", "impl_1", "verify_1"), edge("e2", "verify_1", "end")],
+            BTreeMap::new(),
+        );
+        assert!(w4_warnings(&g).is_empty());
+    }
+
+    #[test]
+    fn warns_when_a_bypass_path_skips_the_verifier() {
+        // impl_1 → verify_1 → end, but impl_1 also → end directly (bypass).
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", LedgerEffect::None),
+                agent_node("verify_1", LedgerEffect::Verified),
+                success_terminal("end"),
+            ],
+            vec![
+                edge("e1", "impl_1", "verify_1"),
+                edge("e2", "verify_1", "end"),
+                edge("e3", "impl_1", "end"),
+            ],
+            BTreeMap::new(),
+        );
+        assert_eq!(w4_warnings(&g), vec![NodeKey::try_from("end").unwrap()]);
+    }
+
+    #[test]
+    fn loop_body_verifier_counts_as_a_gate() {
+        // loop_1 (body = task_body containing a verified node) → end.
+        let mut subgraphs = BTreeMap::new();
+        let body_key = SubgraphKey::try_from("task_body").unwrap();
+        let mut body_nodes = BTreeMap::new();
+        let verify = agent_node("verify_in_task", LedgerEffect::Verified);
+        body_nodes.insert(verify.id.clone(), verify);
+        let body_term = success_terminal("body_end");
+        body_nodes.insert(body_term.id.clone(), body_term);
+        subgraphs.insert(
+            body_key.clone(),
+            Subgraph {
+                start: NodeKey::try_from("verify_in_task").unwrap(),
+                nodes: body_nodes,
+                edges: vec![],
+            },
+        );
+
+        let loop_node = Node {
+            id: NodeKey::try_from("loop_1").unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![OutcomeDecl {
+                id: OutcomeKey::try_from("pass").unwrap(),
+                description: "done".into(),
+                edge_kind_hint: EdgeKind::Forward,
+                is_terminal: false,
+                ledger_effect: LedgerEffect::None,
+            }],
+            config: NodeConfig::Loop(LoopConfig {
+                iterates_over: IterableSource::Static(vec![toml::Value::Integer(1)]),
+                body: body_key,
+                iteration_var_name: "item".into(),
+                exit_condition: ExitCondition::AllItems,
+                on_iteration_failure: FailurePolicy::Abort,
+                parallelism: ParallelismMode::Sequential,
+                gate_after_each: false,
+            }),
+        };
+        let g = graph(
+            "loop_1",
+            vec![loop_node, success_terminal("end")],
+            vec![edge("e", "loop_1", "end")],
+            subgraphs,
+        );
+        assert!(
+            w4_warnings(&g).is_empty(),
+            "a loop whose body verifies should gate the outer success terminal"
         );
     }
 }
