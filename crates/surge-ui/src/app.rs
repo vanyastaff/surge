@@ -24,6 +24,7 @@ use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
 use crate::screens::kanban::{KanbanScreen, TaskClicked};
 use crate::screens::live_execution::LiveExecutionScreen;
+use crate::screens::memory::MemoryScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::spec_explorer::SpecExplorerScreen;
 use crate::screens::spec_wizard::SpecWizardScreen;
@@ -57,6 +58,7 @@ pub struct SurgeApp {
     // Screen entities (created on demand).
     fleet: Option<Entity<FleetScreen>>,
     flow: Option<Entity<FlowScreen>>,
+    memory: Option<Entity<MemoryScreen>>,
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
@@ -140,6 +142,7 @@ impl SurgeApp {
             task_detail_id: None,
             fleet: None,
             flow: None,
+            memory: None,
             dashboard: None,
             agent_terminal: None,
             kanban: None,
@@ -255,6 +258,7 @@ impl SurgeApp {
         // Reset screen entities so they re-read from AppState.
         self.fleet = None;
         self.flow = None;
+        self.memory = None;
         self.dashboard = None;
         self.kanban = None;
         self.agent_hub = None;
@@ -670,6 +674,10 @@ impl SurgeApp {
             },
             Screen::Flow => {
                 let s = self.flow.get_or_insert_with(|| cx.new(FlowScreen::new));
+                s.clone().into_any_element()
+            },
+            Screen::ContextMemory => {
+                let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
                 s.clone().into_any_element()
             },
             Screen::Dashboard => {

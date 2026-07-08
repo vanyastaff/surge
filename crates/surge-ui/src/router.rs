@@ -49,7 +49,7 @@ impl Screen {
             Self::GitHubIssues => "Issues",
             Self::GitHubPRs => "Pull Requests",
             Self::Roadmap => "Roadmap",
-            Self::ContextMemory => "Context",
+            Self::ContextMemory => "Memory",
             Self::Settings => "Settings",
         }
     }
