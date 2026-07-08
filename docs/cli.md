@@ -22,6 +22,7 @@ surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
 surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
+surge resolve ...       answer a run blocked on human input
 surge ready             list the actionable task backlog from the task ledger
 surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
@@ -110,6 +111,20 @@ log (terminal runs are read cheaply from the registry). There is no persisted
 "blocked" flag today, so this opens each active run's DB; a registry-level
 attention index (making the inbox a single indexed query) and a Telegram digest
 are planned follow-ups.
+
+Answer a blocked run with `surge resolve` (the run must be hosted by a running
+daemon — the pending gate lives in the daemon's memory):
+
+```text
+surge resolve <run>                       # inspect: show the question + valid outcomes
+surge resolve <run> --outcome approve --comment "ship it"   # HumanGate
+surge resolve <run> --text "use the staging db"             # tool-driven request_human_input
+surge resolve <run> --json '{"env":"prod"}'
+```
+
+`<run>` accepts the full run id or the short suffix shown by `surge inbox`.
+Bootstrap approvals (Description / Roadmap / Flow) are answered via
+`surge bootstrap` or the Telegram cockpit, not `surge resolve`.
 
 ## Task Ledger (`surge ready`)
 

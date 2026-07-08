@@ -151,6 +151,9 @@ enum Commands {
     /// Fleet inbox: runs grouped by attention (needs input / working / done).
     Inbox(commands::inbox::InboxArgs),
 
+    /// Answer a run blocked on human input (see `surge inbox`).
+    Resolve(commands::resolve::ResolveArgs),
+
     /// List the actionable task backlog from the cross-run task ledger.
     Ready(commands::ready::ReadyArgs),
 
@@ -341,6 +344,7 @@ async fn main() -> Result<()> {
             | Commands::Tracker { .. }
             | Commands::Intake { .. }
             | Commands::Inbox(_)
+            | Commands::Resolve(_)
             | Commands::Ready(_)
             | Commands::Ledger(_)
             | Commands::Daemon { .. }
@@ -521,6 +525,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Inbox(args) => {
             commands::inbox::run(args).await?;
+        },
+
+        Commands::Resolve(args) => {
+            commands::resolve::run(args).await?;
         },
 
         Commands::Ready(args) => {

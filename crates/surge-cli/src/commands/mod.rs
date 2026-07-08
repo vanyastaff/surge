@@ -15,6 +15,8 @@ pub mod inbox;
 pub mod intake;
 pub mod ledger;
 pub mod ready;
+pub mod resolve;
+pub mod run_fold;
 pub mod mcp;
 pub mod memory;
 pub mod migrate_spec;

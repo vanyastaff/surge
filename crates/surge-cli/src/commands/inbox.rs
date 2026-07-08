@@ -13,12 +13,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use serde::Serialize;
-use surge_core::run_event::RunEvent;
-use surge_core::run_state::fold;
-use surge_core::{Attention, RunId, RunState, TerminalReason};
+use surge_core::{Attention, RunState, TerminalReason};
 use surge_persistence::runs::registry::{RunFilter, RunSummary};
-use surge_persistence::runs::seq::EventSeq;
-use surge_persistence::runs::{RunReader, Storage};
+use surge_persistence::runs::Storage;
+
+use crate::commands::run_fold::fold_run_state;
 
 /// Arguments for `surge inbox`.
 #[derive(Args, Debug)]
@@ -137,26 +136,6 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
     })
 }
 
-/// Read a run's full event log and fold it into `RunState`.
-async fn fold_run_state(reader: &RunReader, run_id: RunId) -> Result<RunState> {
-    let events = reader
-        .read_events(EventSeq(0)..EventSeq(u64::MAX))
-        .await
-        .with_context(|| format!("read events for {run_id}"))?;
-    let run_events: Vec<RunEvent> = events
-        .into_iter()
-        .map(|read| RunEvent {
-            run_id,
-            seq: read.seq.0,
-            // Fold ignores the timestamp; a lossy conversion is safe here.
-            timestamp: chrono::DateTime::from_timestamp_millis(read.timestamp_ms)
-                .unwrap_or_default(),
-            payload: read.payload.payload,
-        })
-        .collect();
-    fold(&run_events).map_err(|e| anyhow!("fold run {run_id}: {e}"))
-}
-
 fn active_node(state: &RunState) -> Option<String> {
     match state {
         RunState::Pipeline { cursor, .. } => Some(cursor.node.to_string()),
@@ -258,7 +237,7 @@ mod tests {
     use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
     use surge_core::sandbox::SandboxMode;
     use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-    use surge_core::RunStatus;
+    use surge_core::{RunId, RunStatus};
 
     fn minimal_graph() -> Graph {
         let end = NodeKey::try_from("plan").unwrap();
