@@ -100,7 +100,7 @@ needs me right now?". `surge inbox` lists every run grouped **blocked-first**:
 - **⚑ Needs input** — blocked on a human decision (HumanGate, bootstrap
   approval, or a tool-driven `request_human_input`), shown with the prompt.
 - **▶ Working** — executing, with its active node.
-- **✔ Done** — terminal (a count by default; `--all` lists them).
+- **✔ Done** — settled: reached a terminal outcome, or folded to a done state (a count by default; `--all` lists them).
 
 ```text
 surge inbox                  # current project, blocked-first

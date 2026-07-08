@@ -472,7 +472,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
 
     // Prepend any queued operator steer messages to this turn's prompt (B2).
     // Non-destructive: steering lands here, at the stage boundary, because ACP
-    // v1 offers no mid-turn injection channel. Each delivery is recorded.
+    // v1 offers no mid-turn injection channel.
     let prompt_text = if p.steers.is_empty() {
         prompt_text
     } else {
@@ -482,14 +482,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             steered.push_str("- ");
             steered.push_str(steer.message.trim());
             steered.push('\n');
-            p.writer
-                .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
-                    id: steer.id.clone(),
-                    node: p.node.clone(),
-                    message: steer.message.clone(),
-                }))
-                .await
-                .map_err(|e| StageError::Storage(e.to_string()))?;
         }
         steered.push('\n');
         steered.push_str(&prompt_text);
@@ -500,6 +492,19 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .send_message(session_id, prompt_msg)
         .await
         .map_err(|e| StageError::Bridge(format!("send_message: {e}")))?;
+
+    // Record each steer delivery only after the prompt was actually sent, so a
+    // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
+    for steer in &p.steers {
+        p.writer
+            .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
+                id: steer.id.clone(),
+                node: p.node.clone(),
+                message: steer.message.clone(),
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+    }
 
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
@@ -1117,8 +1122,9 @@ fn outcome_ledger_effect(declared: &[OutcomeDecl], outcome: &OutcomeKey) -> Ledg
 /// - `ReadyForVerification` / `FailedVerification` → `TaskStatusChanged` (the
 ///   `from` status is read from the folded ledger, defaulting to `Pending`).
 /// - `Verified` → `TaskVerified` with `evidence` = the produced
-///   `verification-report` artifact hash, else the first produced artifact,
-///   else a deterministic hash of the task id.
+///   `verification-report` artifact hash; failing that, any one produced
+///   artifact (the lowest logical name, since `produced_hashes` is keyed by
+///   name); failing that, a deterministic hash of the task id.
 /// - `None` → no event.
 async fn emit_ledger_event(
     writer: &RunWriter,

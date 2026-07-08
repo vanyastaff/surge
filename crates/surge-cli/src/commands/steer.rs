@@ -48,6 +48,12 @@ pub async fn run(args: SteerArgs) -> Result<()> {
             "nothing to do: pass a message to queue a steer, or --list / --cancel <id>"
         ));
     }
+    // A message alongside --list/--cancel would be silently dropped; reject it.
+    if message.is_some() && (args.list || args.cancel.is_some()) {
+        return Err(anyhow!(
+            "a steer message cannot be combined with --list or --cancel; run them separately"
+        ));
+    }
 
     let storage = Storage::open(&surge_home_dir()?)
         .await

@@ -115,22 +115,32 @@ impl Storage {
             .map_err(|e| OpenError::Pool(e.to_string()))?;
         let store = self.task_ledger_store();
         let observed_at_ms = self.clock.now_ms();
-        for row in &rows {
-            store
-                .upsert(&crate::task_ledger::TaskLedgerIndexUpsert {
-                    run_id: run_id.clone(),
-                    task_id: row.task_id.clone(),
-                    project_path: project_path.to_path_buf(),
-                    status: row.status,
-                    verified: row.verified,
-                    discovered_from: row.discovered_from.clone(),
-                    last_authority_node: row.last_authority_node.clone(),
-                    updated_seq: row.updated_seq.0,
-                    observed_at_ms,
-                })
-                .map_err(|e| OpenError::Pool(e.to_string()))?;
-        }
-        Ok(rows.len())
+        let project_path = project_path.to_path_buf();
+        // The upserts are blocking `rusqlite` calls; run them off the async
+        // executor (matches the rest of the persistence layer). Best-effort
+        // completion-time mirror, so row counts are small.
+        let count = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+            for row in &rows {
+                store
+                    .upsert(&crate::task_ledger::TaskLedgerIndexUpsert {
+                        run_id: run_id.clone(),
+                        task_id: row.task_id.clone(),
+                        project_path: project_path.clone(),
+                        status: row.status,
+                        verified: row.verified,
+                        discovered_from: row.discovered_from.clone(),
+                        last_authority_node: row.last_authority_node.clone(),
+                        updated_seq: row.updated_seq.0,
+                        observed_at_ms,
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(rows.len())
+        })
+        .await
+        .map_err(|e| OpenError::Pool(format!("task-ledger index join: {e}")))?
+        .map_err(OpenError::Pool)?;
+        Ok(count)
     }
 
     /// Acquire a registry-pool connection. Used by inbox subsystems that

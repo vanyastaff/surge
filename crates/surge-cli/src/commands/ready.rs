@@ -66,7 +66,12 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
     let project_path = if args.all_projects {
         None
     } else {
-        current_project_path().ok()
+        // Fail loudly rather than silently widening to all projects if the cwd
+        // can't be resolved; `--all-projects` is the explicit opt-out.
+        Some(
+            current_project_path()
+                .context("resolve current project (pass --all-projects to skip)")?,
+        )
     };
 
     let mut records = storage.task_ledger_store().list(&TaskLedgerIndexFilter {

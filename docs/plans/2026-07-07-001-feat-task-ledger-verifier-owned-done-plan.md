@@ -215,7 +215,7 @@ implementation.*
 
 **Ledger state machine** (task granularity, event-sourced):
 
-```
+```text
 pending → in_progress → ready_for_verification → done (verified)
                      ↘ failed_verification → in_progress (backtrack)
 pending → skipped | aborted
