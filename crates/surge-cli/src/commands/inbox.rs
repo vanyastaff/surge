@@ -23,7 +23,9 @@ use crate::commands::run_fold::fold_run_state;
 /// Arguments for `surge inbox`.
 #[derive(Args, Debug)]
 pub struct InboxArgs {
-    /// Include runs from every project, not just the current repo.
+    /// Accepted for compatibility; project scoping is currently always on
+    /// (runs store their worktree path, not the origin repo), so this is a
+    /// no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Also list the Done group in full (default: just a count).
@@ -64,12 +66,13 @@ pub async fn run(args: InboxArgs) -> Result<()> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;
-    let project_path = if args.all_projects {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
-    let entries = collect_entries(&storage, project_path, args.limit).await?;
+    // Per-project scoping is disabled for now: a run records its isolated
+    // worktree path as project_path, which never equals the invoking repo, so a
+    // current-dir filter silently matched nothing. Show all projects until runs
+    // record their origin repo (tracked follow-up). `--all-projects` is kept as
+    // an accepted no-op so scripts don't break.
+    let _ = args.all_projects;
+    let entries = collect_entries(&storage, None, args.limit).await?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -86,11 +89,16 @@ async fn collect_entries(
     project_path: Option<PathBuf>,
     limit: usize,
 ) -> Result<Vec<InboxEntry>> {
+    // Fetch ALL runs, not a newest-`limit` window: a run still blocked on human
+    // input can be older than `limit` more-recently-started (settled) runs, and
+    // it must never fall out of the NEEDS INPUT group — the whole point of the
+    // inbox. Classifying a terminal run is cheap (registry status, no fold), so
+    // scanning all runs is fine; only non-terminal runs are folded.
     let summaries = storage
         .list_runs(RunFilter {
             status: None,
             project_path,
-            limit: Some(limit),
+            limit: None,
         })
         .await
         .context("list runs")?;
@@ -98,6 +106,14 @@ async fn collect_entries(
     for summary in &summaries {
         entries.push(classify(storage, summary).await?);
     }
+    // Bound only the settled/Done tail: keep every NEEDS INPUT / WORKING entry,
+    // cap Done at `limit` (Done is a count/`--all` view anyway).
+    entries.sort_by_key(|e| e.attention == "done");
+    let done_start = entries
+        .iter()
+        .position(|e| e.attention == "done")
+        .unwrap_or(entries.len());
+    entries.truncate(done_start.saturating_add(limit));
     Ok(entries)
 }
 

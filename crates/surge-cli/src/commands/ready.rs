@@ -1,16 +1,18 @@
 //! `surge ready` — the actionable task backlog from the cross-run task-ledger
 //! index (Phase 1 M5).
 //!
-//! Lists ledger tasks that still need attention (not completed/failed/skipped),
-//! defaulting to the current project. The registry index is mirrored from each
-//! run's folded ledger at completion; a run that has not completed since the
-//! index was introduced will not appear until it next syncs.
+//! Lists ledger tasks that still need attention (not completed/failed/skipped)
+//! across all projects. The registry index is mirrored from each run's folded
+//! ledger at completion; a run that has not completed since the index was
+//! introduced will not appear until it next syncs.
+//!
+//! Per-project scoping is disabled until runs record their origin repo: a run's
+//! stored `project_path` is its isolated worktree, which never matches the
+//! invoking repo (a documented follow-up).
 //!
 //! Note: dependency-aware unblocking (only tasks whose `depends_on` are all
 //! satisfied) is not yet applied — the index does not carry `depends_on`, which
 //! lives in the roadmap artifact. This is a documented follow-up.
-
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -33,7 +35,8 @@ pub struct ReadyArgs {
     /// Only tasks belonging to this run id.
     #[arg(long = "run")]
     pub run_id: Option<String>,
-    /// Include tasks from every project, not just the current repo.
+    /// Accepted for compatibility; project scoping is currently always on
+    /// (see the module docs), so this is a no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.
@@ -65,29 +68,36 @@ pub async fn run(args: ReadyArgs) -> Result<()> {
         .map(parse_run_id)
         .transpose()
         .context("parse --run")?;
-    let project_path = if args.all_projects {
+    // Per-project scoping is disabled for now: a run records its isolated
+    // worktree path as project_path, which never equals the invoking repo, so a
+    // current-dir filter silently matched nothing. Show all projects until runs
+    // record their origin repo (tracked follow-up). `--all-projects` is kept as
+    // an accepted no-op so scripts don't break.
+    let _ = args.all_projects;
+    let project_path = None;
+
+    // For the default actionable view (no explicit --status) we filter out
+    // settled tasks in Rust, so the SQL LIMIT must NOT be applied first — a
+    // backlog of newer settled tasks would otherwise fill the window and hide
+    // real work. Fetch unbounded, filter, then truncate to the display limit.
+    let query_limit = if status.is_none() {
         None
     } else {
-        // Fail loudly rather than silently widening to all projects if the cwd
-        // can't be resolved; `--all-projects` is the explicit opt-out.
-        Some(
-            current_project_path()
-                .context("resolve current project (pass --all-projects to skip)")?,
-        )
+        Some(args.limit)
     };
-
     let mut records = storage.task_ledger_store().list(&TaskLedgerIndexFilter {
         status,
         project_path,
         run_id,
         discovered_only: args.discovered,
-        limit: Some(args.limit),
+        limit: query_limit,
     })?;
 
     // Default view (no explicit --status): actionable backlog only — drop
-    // tasks that have reached a terminal state.
+    // tasks that have reached a terminal state, then apply the display limit.
     if status.is_none() {
         records.retain(|r| !is_settled(r.status));
+        records.truncate(args.limit);
     }
 
     if args.json {
@@ -157,10 +167,6 @@ fn parse_run_id(value: &str) -> Result<RunId> {
     value
         .parse()
         .map_err(|error| anyhow!("invalid run id {value:?}: {error}"))
-}
-
-fn current_project_path() -> Result<PathBuf> {
-    std::env::current_dir().context("resolve current directory")
 }
 
 #[cfg(test)]

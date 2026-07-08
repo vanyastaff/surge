@@ -570,6 +570,11 @@ async fn execute_agent_node(
         let mut queue = params.pending_steers.lock().await;
         std::mem::take(&mut *queue)
     };
+    // Kept so a stage that fails before delivery doesn't silently drop them: on
+    // error we return them to the front of the queue. A post-send failure may
+    // re-deliver on the retry, which is acceptable — the operator's guidance
+    // should apply to the re-attempt too.
+    let steers_backup = steers.clone();
     let stage_result = execute_agent_stage(AgentStageParams {
         node: &state.cursor.node,
         steers,
@@ -599,6 +604,16 @@ async fn execute_agent_node(
     } else {
         stage_result
     };
+
+    // Return undelivered steers to the front of the queue if the stage failed,
+    // so operator guidance survives a stage error / retry instead of vanishing.
+    if stage_result.is_err() && !steers_backup.is_empty() {
+        let mut queue = params.pending_steers.lock().await;
+        let mut restored = steers_backup;
+        restored.append(&mut queue);
+        *queue = restored;
+    }
+
     stage_result.map(StageOutcome::Routed)
 }
 
