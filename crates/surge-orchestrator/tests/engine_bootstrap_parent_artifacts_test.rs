@@ -87,6 +87,7 @@ async fn start_run_with_bootstrap_parent_seeds_parent_artifacts() {
                 project_path: parent_worktree.path().to_path_buf(),
                 initial_prompt: "bootstrap this".into(),
                 config: RunConfig {
+                    budget: Default::default(),
                     sandbox_default: SandboxMode::WorkspaceWrite,
                     approval_default: ApprovalPolicy::OnRequest,
                     auto_pr: false,

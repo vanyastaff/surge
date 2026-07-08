@@ -28,6 +28,7 @@ async fn sync_mirrors_run_ledger_into_registry_index() {
             project_path: project.clone(),
             initial_prompt: "ledger sync".into(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,

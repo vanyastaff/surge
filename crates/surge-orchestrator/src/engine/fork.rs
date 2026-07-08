@@ -395,6 +395,7 @@ mod tests {
         let node = NodeKey::try_from("end").unwrap();
         let outcome = OutcomeKey::try_from("done").unwrap();
         let config = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -480,6 +481,7 @@ mod tests {
         let graph = minimal_graph(); // start == "end"
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -546,6 +548,7 @@ mod tests {
         let graph = minimal_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -680,6 +683,7 @@ mod tests {
         let graph = agent_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

@@ -1489,6 +1489,7 @@ async fn append_feature_run_started(
             project_path: worktree.to_path_buf(),
             initial_prompt: String::new(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,

@@ -110,6 +110,7 @@ fn hook_events_are_pass_through_in_fold() {
                 project_path: PathBuf::from("/tmp/run"),
                 initial_prompt: "fold hooks".into(),
                 config: RunConfig {
+                    budget: Default::default(),
                     sandbox_default: SandboxMode::WorkspaceWrite,
                     approval_default: ApprovalPolicy::OnRequest,
                     auto_pr: false,

@@ -2247,6 +2247,7 @@ mod tests {
             subgraphs: BTreeMap::new(),
         };
         let run_cfg = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::ReadOnly,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -2334,6 +2335,7 @@ mod tests {
         };
 
         let run_cfg = RunConfig {
+            budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

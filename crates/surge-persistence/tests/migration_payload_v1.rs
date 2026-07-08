@@ -33,6 +33,7 @@ async fn read_path_round_trips_v1_events() {
             project_path: PathBuf::from("/migration-test"),
             initial_prompt: "v1 round trip".into(),
             config: RunConfig {
+                budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,

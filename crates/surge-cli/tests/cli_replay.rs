@@ -63,6 +63,7 @@ async fn seed_completed_run(home: &Path) -> RunId {
     let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
     let end = NodeKey::try_from("end").unwrap();
     let config = RunConfig {
+        budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,
         auto_pr: false,

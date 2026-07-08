@@ -399,6 +399,9 @@ impl Engine {
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
             mcp_servers: run_config.mcp_servers.clone(),
+            // Persist the frozen budget so a daemon-restart resume re-arms spend
+            // enforcement instead of reverting to the unlimited default.
+            budget: run_config.budget,
         };
 
         Ok(vec![
@@ -633,13 +636,16 @@ impl Engine {
         self.runs.write().await.insert(run_id, active);
 
         // Reconstruct EngineRunConfig from the persisted RunConfig so that
-        // mcp_servers survive a daemon restart + resume. Falls back to an
-        // empty list for runs that predate the mcp_servers field.
+        // mcp_servers and the frozen budget survive a daemon restart + resume.
+        // Falls back to defaults (empty mcp list, unlimited budget) for runs that
+        // predate those fields.
         let mut resume_run_config = EngineRunConfig::default();
         if let Some(persisted) = &replayed.run_config {
             resume_run_config
                 .mcp_servers
                 .clone_from(&persisted.mcp_servers);
+            // Re-arm spend enforcement with the run's frozen budget.
+            resume_run_config.budget = persisted.budget;
         }
 
         // Build a per-run McpRegistry exactly like start_run does.
