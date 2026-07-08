@@ -27,6 +27,7 @@ impl Command {
 /// Build the full command list.
 fn all_commands() -> Vec<Command> {
     vec![
+        Command::nav("Fleet", Screen::Fleet, None),
         Command::nav("Dashboard", Screen::Dashboard, Some("Ctrl+1")),
         Command::nav("Kanban Board", Screen::Kanban, Some("Ctrl+2")),
         Command::nav("Spec Explorer", Screen::SpecExplorer, Some("Ctrl+3")),

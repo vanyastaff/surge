@@ -188,6 +188,48 @@ pub fn error() -> Hsla {
     get(|c| c.error)
 }
 
+// ── Fleet-ops surface tokens (concept: "Surge - Interactive") ──────
+// Fixed dark chrome surfaces for the rail / context bar / panels and
+// the constellation canvas. Neutral 234–240° hues so they read as one
+// family regardless of the active accent theme. Purely additive — the
+// accessors above are untouched, so existing screens are unaffected.
+
+/// Accent = the active theme's primary (amber by default). Alias so
+/// fleet-ops code can read intent ("accent") instead of "primary".
+pub fn accent() -> Hsla {
+    primary()
+}
+
+/// Rail / context bar / panel background.
+pub fn panel() -> Hsla {
+    hsla(235.0, 0.20, 0.065)
+}
+
+/// Raised card surface (mission cards, inspectors).
+pub fn panel_raised() -> Hsla {
+    hsla(234.0, 0.17, 0.095)
+}
+
+/// Deep canvas background (the constellation field).
+pub fn panel_deep() -> Hsla {
+    hsla(240.0, 0.25, 0.05)
+}
+
+/// Hairline divider / border.
+pub fn hairline() -> Hsla {
+    hsla(234.0, 0.14, 0.18)
+}
+
+/// Stronger hairline (keycaps, hover borders).
+pub fn hairline_strong() -> Hsla {
+    hsla(234.0, 0.14, 0.24)
+}
+
+/// Idle graph edge / trunk line.
+pub fn graph_line() -> Hsla {
+    hsla(234.0, 0.14, 0.26)
+}
+
 // ── Backwards compat aliases (will be removed) ────────────────────
 // These keep old code compiling during migration. Values are kept in
 // sync with `SurgeThemeColors::dark(ThemeName::Default.accent())` so

@@ -19,6 +19,7 @@ mod screens;
 mod sidebar;
 mod theme;
 mod top_bar;
+mod ui;
 
 use gpui::*;
 use gpui_component::Root;

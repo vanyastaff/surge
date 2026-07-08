@@ -1,10 +1,12 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::{Icon, IconName};
 
 use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::theme;
+use crate::ui;
 
 /// Events emitted by the TopBar.
 #[derive(Clone, PartialEq)]
@@ -60,12 +62,22 @@ impl TopBar {
     }
 
     fn render_breadcrumb(&self) -> Div {
-        div().h_flex().gap_1().items_center().child(
-            div()
-                .text_xs()
-                .text_color(theme::text_muted())
-                .child(self.active_screen.label().to_string()),
-        )
+        div()
+            .h_flex()
+            .gap(px(6.0))
+            .items_center()
+            .text_color(theme::text_muted())
+            .child(
+                Icon::new(IconName::ChevronRight)
+                    .size(px(11.0))
+                    .text_color(theme::text_muted().opacity(0.6)),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(self.active_screen.label().to_string()),
+            )
     }
 
     fn render_agent_dots(&self) -> Div {
@@ -187,67 +199,70 @@ impl TopBar {
 impl Render for TopBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let switcher_open = self.switcher_open;
+        let agents_online = self.agent_statuses.iter().filter(|(_, up)| *up).count();
 
         div()
             .relative()
             .h_flex()
             .w_full()
-            .h(px(40.0))
-            .px_4()
+            .h(px(44.0))
+            .gap(px(12.0))
+            .px(px(16.0))
             .items_center()
-            .justify_between()
-            .bg(theme::sidebar_bg())
+            .bg(theme::panel())
             .border_b_1()
-            .border_color(theme::surface())
-            // Left: project name (clickable) + branch
+            .border_color(theme::hairline())
+            // Left: repo chip (click to switch project)
             .child(
                 div()
                     .relative()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
                     .child(
                         div()
                             .id("project-switcher")
-                            .text_sm()
+                            .h_flex()
+                            .gap(px(7.0))
+                            .items_center()
+                            .px(px(11.0))
+                            .py(px(5.0))
+                            .rounded_lg()
+                            .bg(theme::panel_raised())
+                            .border_1()
+                            .border_color(theme::hairline_strong())
+                            .text_size(px(11.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
                             .cursor_pointer()
-                            .hover(|s: StyleRefinement| s.text_color(theme::primary()))
+                            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toggle_switcher(cx);
                             }))
-                            .child(format!("{} ▾", self.project_name)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(theme::primary().opacity(0.15))
-                            .text_color(theme::primary())
-                            .child(self.branch_name.clone()),
+                            .child(self.project_name.clone())
+                            .child(
+                                div()
+                                    .text_color(theme::text_muted())
+                                    .child("▾"),
+                            ),
                     )
                     .when(switcher_open, |el: Div| {
                         el.child(self.render_switcher_dropdown(cx))
                     }),
             )
-            // Center: breadcrumb
+            // Breadcrumb: branch → screen
             .child(self.render_breadcrumb())
-            // Right: agent dots + search hint
+            // Spacer
+            .child(div().flex_1())
+            // Right: context info + ⌘K
             .child(
                 div()
                     .h_flex()
-                    .gap_3()
+                    .gap(px(10.0))
                     .items_center()
                     .child(self.render_agent_dots())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_muted().opacity(0.5))
-                            .child("Ctrl+K".to_string()),
-                    ),
+                    .child(ui::meta(format!(
+                        "{}  ·  {} agents",
+                        self.branch_name, agents_online
+                    )))
+                    .child(ui::kbd("⌘K")),
             )
     }
 }

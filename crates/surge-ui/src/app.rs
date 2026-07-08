@@ -17,6 +17,7 @@ use crate::screens::agent_terminal::AgentTerminalScreen;
 use crate::screens::dashboard::DashboardScreen;
 use crate::screens::diff_viewer::DiffViewerScreen;
 use crate::screens::file_explorer::FileExplorerScreen;
+use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::github_prs::GithubPrsScreen;
 use crate::screens::insights::InsightsScreen;
@@ -53,6 +54,7 @@ pub struct SurgeApp {
     /// Task detail overlay — set when a kanban card is clicked.
     task_detail_id: Option<String>,
     // Screen entities (created on demand).
+    fleet: Option<Entity<FleetScreen>>,
     dashboard: Option<Entity<DashboardScreen>>,
     kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
@@ -74,8 +76,8 @@ pub struct SurgeApp {
 impl SurgeApp {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let active_screen = Screen::Dashboard;
-        let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, cx));
+        let active_screen = Screen::Fleet;
+        let sidebar = cx.new(|cx| AppSidebar::new(active_screen, false, state.clone(), cx));
 
         cx.subscribe(
             &sidebar,
@@ -134,6 +136,7 @@ impl SurgeApp {
             command_palette_open: false,
             command_palette: None,
             task_detail_id: None,
+            fleet: None,
             dashboard: None,
             agent_terminal: None,
             kanban: None,
@@ -243,10 +246,11 @@ impl SurgeApp {
 
         // Create top bar.
         let name_clone = name.clone();
-        let top_bar = cx.new(|cx| TopBar::new(&name_clone, Screen::Dashboard, cx));
+        let top_bar = cx.new(|cx| TopBar::new(&name_clone, Screen::Fleet, cx));
         self.top_bar = Some(top_bar);
 
         // Reset screen entities so they re-read from AppState.
+        self.fleet = None;
         self.dashboard = None;
         self.kanban = None;
         self.agent_hub = None;
@@ -266,9 +270,9 @@ impl SurgeApp {
             _path: path.to_path_buf(),
             _name: name,
         };
-        self.active_screen = Screen::Dashboard;
+        self.active_screen = Screen::Fleet;
         self.sidebar
-            .update(cx, |sb, cx| sb.set_active(Screen::Dashboard, cx));
+            .update(cx, |sb, cx| sb.set_active(Screen::Fleet, cx));
         cx.notify();
     }
 
@@ -640,6 +644,26 @@ impl SurgeApp {
 
     fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.active_screen {
+            Screen::Fleet => {
+                let state = self.state.clone();
+                let fleet = self.fleet.get_or_insert_with(|| {
+                    let f = cx.new(|cx| FleetScreen::new(state, cx));
+                    cx.subscribe(&f, |this: &mut Self, _f, event: &FleetAction, cx| {
+                        match event {
+                            FleetAction::OpenGate(id) => {
+                                this.task_detail_id = Some(id.clone());
+                                this.navigate(Screen::GateApproval, cx);
+                            },
+                            FleetAction::OpenRun(_id) => {
+                                this.navigate(Screen::LiveExecution, cx);
+                            },
+                        }
+                    })
+                    .detach();
+                    f
+                });
+                fleet.clone().into_any_element()
+            },
             Screen::Dashboard => {
                 let state = self.state.clone();
                 let dashboard = self
@@ -1060,6 +1084,7 @@ impl Render for SurgeApp {
                 .key_context("SurgeApp")
                 .track_focus(&self.focus)
                 .size_full()
+                .font_family(crate::ui::MONO)
                 .child(welcome.clone())
                 .into_any_element(),
             AppMode::Project { .. } => {
@@ -1067,6 +1092,7 @@ impl Render for SurgeApp {
                     .key_context("SurgeApp")
                     .track_focus(&self.focus)
                     .size_full()
+                    .font_family(crate::ui::MONO)
                     .bg(theme::background())
                     .text_color(theme::text_primary())
                     .on_action(cx.listener(|this, _: &GoToDashboard, _w, cx| {

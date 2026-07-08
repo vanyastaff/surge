@@ -3,6 +3,8 @@ use gpui_component::IconName;
 /// All screens available in Surge UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Screen {
+    /// Fleet — the run constellation (mission-control home).
+    Fleet,
     Dashboard,
     Kanban,
     TaskDetail,
@@ -27,6 +29,7 @@ impl Screen {
     /// Display name for the sidebar.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Fleet => "Fleet",
             Self::Dashboard => "Dashboard",
             Self::Kanban => "Kanban",
             Self::TaskDetail => "Task Detail",
@@ -51,6 +54,7 @@ impl Screen {
     /// Lucide icon for this screen (from gpui-component IconName).
     pub fn icon(self) -> IconName {
         match self {
+            Self::Fleet => IconName::GalleryVerticalEnd,
             Self::Dashboard => IconName::LayoutDashboard,
             Self::Kanban => IconName::Frame, // columns layout
             Self::TaskDetail => IconName::File,
@@ -91,6 +95,7 @@ impl Screen {
     /// Screens shown in main sidebar navigation (top section).
     pub fn sidebar_items() -> &'static [Screen] {
         &[
+            Self::Fleet,
             Self::Dashboard,
             Self::Kanban,
             Self::SpecExplorer,
