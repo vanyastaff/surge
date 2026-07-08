@@ -86,6 +86,10 @@ pub(crate) struct RunTaskParams {
     /// owns the writer, so amendments enter through this queue and are appended
     /// at safe graph boundaries.
     pub roadmap_amendments: mpsc::Receiver<RoadmapAmendmentCommand>,
+    /// Queued operator steer messages, shared with the `ActiveRun` entry. The
+    /// run task drains this before opening each agent stage and prepends the
+    /// messages to that stage's prompt (Phase 2 B2, non-destructive steering).
+    pub pending_steers: crate::engine::steer::SteerQueue,
     /// Engine-side tracker for in-flight ACP elevation requests. Shared with
     /// the `ActiveRun` entry so `Engine::resolve_elevation` can fire
     /// decisions from outside the stage event loop.
@@ -559,8 +563,16 @@ async fn execute_agent_node(
     node: &surge_core::node::Node,
     cfg: &surge_core::agent_config::AgentConfig,
 ) -> Result<StageOutcome, StageError> {
+    // Drain any operator steer messages queued for this run and hand them to
+    // the stage, which prepends them to the prompt and records delivery. This
+    // is the safe stage-boundary steering point (ACP v1 has no mid-turn inject).
+    let steers = {
+        let mut queue = params.pending_steers.lock().await;
+        std::mem::take(&mut *queue)
+    };
     let stage_result = execute_agent_stage(AgentStageParams {
         node: &state.cursor.node,
+        steers,
         agent_config: cfg,
         declared_outcomes: &node.declared_outcomes,
         bridge: &params.bridge,

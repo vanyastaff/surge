@@ -81,6 +81,36 @@ async fn run_stage(
     artifacts_produced: Vec<String>,
     active_task_id: Option<String>,
 ) -> (Result<OutcomeKey, String>, Vec<EventPayload>) {
+    run_stage_steered(
+        dir,
+        cfg,
+        declared,
+        node_name,
+        outcome,
+        artifacts_produced,
+        active_task_id,
+        Vec::new(),
+    )
+    .await
+    .0
+}
+
+/// Like [`run_stage`] but injects operator steer messages and also returns the
+/// mock bridge so the caller can inspect the prompt that was actually sent.
+#[allow(clippy::too_many_arguments)]
+async fn run_stage_steered(
+    dir: &std::path::Path,
+    cfg: &AgentConfig,
+    declared: &[OutcomeDecl],
+    node_name: &str,
+    outcome: &str,
+    artifacts_produced: Vec<String>,
+    active_task_id: Option<String>,
+    steers: Vec<surge_orchestrator::engine::steer::QueuedSteer>,
+) -> (
+    (Result<OutcomeKey, String>, Vec<EventPayload>),
+    Arc<fixtures::mock_bridge::MockBridge>,
+) {
     let storage = Storage::open(dir).await.unwrap();
     let run_id = surge_core::id::RunId::new();
     let writer = storage.create_run(run_id, dir, None).await.unwrap();
@@ -111,6 +141,7 @@ async fn run_stage(
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: steers.clone(),
         node: &node,
         agent_config: cfg,
         declared_outcomes: declared,
@@ -139,11 +170,11 @@ async fn run_stage(
         .read_events(EventSeq(0)..EventSeq(256))
         .await
         .unwrap();
-    let payloads = events
+    let payloads: Vec<EventPayload> = events
         .iter()
         .map(|e| e.payload.payload().clone())
         .collect();
-    (result, payloads)
+    ((result, payloads), mock)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -407,4 +438,53 @@ async fn project_memory_note_is_stamped_with_provenance() {
         1,
         "provenance marker must not be duplicated on re-run"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steer_is_injected_into_prompt_and_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = agent_cfg(None, 3);
+    let declared = [outcome_decl("implemented", LedgerEffect::None)];
+    let steers = vec![
+        surge_orchestrator::engine::steer::QueuedSteer {
+            id: "s1".into(),
+            message: "prefer axum over actix".into(),
+        },
+        surge_orchestrator::engine::steer::QueuedSteer {
+            id: "s2".into(),
+            message: "do not touch migrations".into(),
+        },
+    ];
+    let ((result, payloads), mock) = run_stage_steered(
+        dir.path(),
+        &cfg,
+        &declared,
+        "impl_1",
+        "implemented",
+        vec![],
+        None,
+        steers,
+    )
+    .await;
+    assert_eq!(result.unwrap().as_ref(), "implemented");
+
+    // The steer text was prepended to the prompt the agent actually received.
+    let prompt = mock.last_prompt().await.expect("a prompt was sent");
+    assert!(prompt.contains("Operator steering"), "prompt:\n{prompt}");
+    assert!(prompt.contains("prefer axum over actix"), "prompt:\n{prompt}");
+    assert!(prompt.contains("do not touch migrations"), "prompt:\n{prompt}");
+
+    // Both deliveries were recorded as SteerDelivered events (audit trail).
+    let delivered: Vec<(String, String)> = payloads
+        .iter()
+        .filter_map(|p| match p {
+            EventPayload::SteerDelivered { id, message, .. } => {
+                Some((id.clone(), message.clone()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivered.len(), 2);
+    assert_eq!(delivered[0].0, "s1");
+    assert_eq!(delivered[1].0, "s2");
 }

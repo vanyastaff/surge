@@ -37,6 +37,7 @@ pub mod event_tap;
 pub mod facade;
 pub mod fork;
 pub mod frames;
+pub mod steer;
 pub mod handle;
 pub mod hooks;
 pub mod ipc;

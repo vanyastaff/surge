@@ -55,6 +55,8 @@ pub struct MockBridge {
     /// Queue of SessionIds to return from `open_session` calls.
     /// When empty, `open_session` generates a fresh `SessionId::new()`.
     pinned_session_ids: Mutex<VecDeque<SessionId>>,
+    /// Text of the most recent `send_message` (for prompt-injection assertions).
+    last_prompt: Mutex<Option<String>>,
 }
 
 impl MockBridge {
@@ -65,7 +67,13 @@ impl MockBridge {
             recorded_calls: Arc::new(Mutex::new(Vec::new())),
             tx,
             pinned_session_ids: Mutex::new(VecDeque::new()),
+            last_prompt: Mutex::new(None),
         }
+    }
+
+    /// Text of the most recent `send_message` prompt, if any.
+    pub async fn last_prompt(&self) -> Option<String> {
+        self.last_prompt.lock().await.clone()
     }
 
     /// Pin the `SessionId` that the next `open_session` call will return.
@@ -161,8 +169,13 @@ impl BridgeFacade for MockBridge {
     async fn send_message(
         &self,
         session: SessionId,
-        _content: MessageContent,
+        content: MessageContent,
     ) -> Result<(), SendMessageError> {
+        let text = match content {
+            MessageContent::Text(text) => text,
+            other => format!("{other:?}"),
+        };
+        *self.last_prompt.lock().await = Some(text);
         self.recorded_calls
             .lock()
             .await

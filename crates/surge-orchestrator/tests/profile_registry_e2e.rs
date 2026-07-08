@@ -211,6 +211,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -319,6 +320,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],

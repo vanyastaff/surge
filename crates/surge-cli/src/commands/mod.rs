@@ -16,6 +16,7 @@ pub mod intake;
 pub mod ledger;
 pub mod ready;
 pub mod resolve;
+pub mod steer;
 pub mod run_fold;
 pub mod mcp;
 pub mod memory;

@@ -122,6 +122,31 @@ pub enum DaemonRequest {
         /// The human's response value, forwarded to the engine as-is.
         response: serde_json::Value,
     },
+    /// Queue an operator steer message for a live run.
+    SubmitSteer {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run to steer.
+        run_id: RunId,
+        /// The operator's steer message.
+        message: String,
+    },
+    /// List the steer messages currently queued for a run.
+    ListSteers {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run whose steer queue to read.
+        run_id: RunId,
+    },
+    /// Drop a queued (not-yet-delivered) steer by id.
+    CancelSteer {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run whose steer to drop.
+        run_id: RunId,
+        /// Queue id of the steer to drop.
+        steer_id: String,
+    },
     /// List all runs the daemon knows about.
     ListRuns {
         /// Client-assigned identifier echoed in the response.
@@ -200,6 +225,9 @@ impl DaemonRequest {
             | Self::StopRun { request_id, .. }
             | Self::SubmitRoadmapAmendment { request_id, .. }
             | Self::ResolveHumanInput { request_id, .. }
+            | Self::SubmitSteer { request_id, .. }
+            | Self::ListSteers { request_id, .. }
+            | Self::CancelSteer { request_id, .. }
             | Self::ListRuns { request_id }
             | Self::Subscribe { request_id, .. }
             | Self::Unsubscribe { request_id, .. }
@@ -298,6 +326,27 @@ pub enum DaemonResponse {
         /// Echoed `request_id` from the originating [`DaemonRequest::ResolveHumanInput`].
         request_id: RequestId,
     },
+    /// [`DaemonRequest::SubmitSteer`] accepted; the steer was queued.
+    SubmitSteerOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Queue id of the newly-queued steer.
+        steer_id: String,
+    },
+    /// [`DaemonRequest::ListSteers`] reply.
+    ListSteersOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Steer messages currently queued (not yet delivered), in FIFO order.
+        steers: Vec<crate::engine::steer::QueuedSteer>,
+    },
+    /// [`DaemonRequest::CancelSteer`] reply.
+    CancelSteerOk {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// `true` if a queued steer with the given id was found and removed.
+        removed: bool,
+    },
     /// [`DaemonRequest::ListRuns`] reply.
     ListRunsOk {
         /// Echoed `request_id` from the originating [`DaemonRequest::ListRuns`].
@@ -372,6 +421,9 @@ impl DaemonResponse {
             | Self::StopRunOk { request_id }
             | Self::SubmitRoadmapAmendmentOk { request_id, .. }
             | Self::ResolveHumanInputOk { request_id }
+            | Self::SubmitSteerOk { request_id, .. }
+            | Self::ListSteersOk { request_id, .. }
+            | Self::CancelSteerOk { request_id, .. }
             | Self::ListRunsOk { request_id, .. }
             | Self::SubscribeOk { request_id }
             | Self::UnsubscribeOk { request_id }

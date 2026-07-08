@@ -23,6 +23,7 @@ surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
 surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
 surge resolve ...       answer a run blocked on human input
+surge steer ...         queue operator guidance for a working run
 surge ready             list the actionable task backlog from the task ledger
 surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
@@ -125,6 +126,22 @@ surge resolve <run> --json '{"env":"prod"}'
 `<run>` accepts the full run id or the short suffix shown by `surge inbox`.
 Bootstrap approvals (Description / Roadmap / Flow) are answered via
 `surge bootstrap` or the Telegram cockpit, not `surge resolve`.
+
+Steer a **working** run with `surge steer` — queue operator guidance that the
+run picks up at its next agent stage (again, the run must be daemon-hosted):
+
+```text
+surge steer <run> "prefer axum over actix; don't touch migrations"
+surge steer <run> --list            # show queued (undelivered) steers
+surge steer <run> --cancel <id>     # drop a queued steer
+```
+
+Steering is **non-destructive**: the message is prepended to the next stage's
+prompt and recorded as a `SteerDelivered` event — the current agent is not
+interrupted. This is deliberate: ACP v1 has no mid-turn injection channel (a
+second `session/prompt` mid-turn is unspecified and agents reject it), so Surge
+delivers at the next stage boundary. The queue is held in the daemon's memory;
+a daemon restart before delivery drops undelivered steers (re-issue them).
 
 ## Task Ledger (`surge ready`)
 

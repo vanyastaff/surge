@@ -41,6 +41,10 @@ use crate::prompt::PromptRenderer;
 pub struct AgentStageParams<'a> {
     /// Key of the node being executed (used for tracing; wired to events in 6.2).
     pub node: &'a NodeKey,
+    /// Operator steer messages drained for this stage. When non-empty they are
+    /// prepended to the prompt and each is recorded via a `SteerDelivered`
+    /// event (Phase 2 B2). Empty on the common path.
+    pub steers: Vec<crate::engine::steer::QueuedSteer>,
     /// Agent node configuration from the spec graph.
     pub agent_config: &'a AgentConfig,
     /// Declared outcomes from the node — used to populate `SessionConfig::declared_outcomes`.
@@ -466,6 +470,31 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
+    // Prepend any queued operator steer messages to this turn's prompt (B2).
+    // Non-destructive: steering lands here, at the stage boundary, because ACP
+    // v1 offers no mid-turn injection channel. Each delivery is recorded.
+    let prompt_text = if p.steers.is_empty() {
+        prompt_text
+    } else {
+        let mut steered =
+            String::from("## Operator steering\nApply this guidance to the work below:\n");
+        for steer in &p.steers {
+            steered.push_str("- ");
+            steered.push_str(steer.message.trim());
+            steered.push('\n');
+            p.writer
+                .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
+                    id: steer.id.clone(),
+                    node: p.node.clone(),
+                    message: steer.message.clone(),
+                }))
+                .await
+                .map_err(|e| StageError::Storage(e.to_string()))?;
+        }
+        steered.push('\n');
+        steered.push_str(&prompt_text);
+        steered
+    };
     let prompt_msg = MessageContent::Text(prompt_text);
     p.bridge
         .send_message(session_id, prompt_msg)

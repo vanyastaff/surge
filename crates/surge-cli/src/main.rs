@@ -154,6 +154,9 @@ enum Commands {
     /// Answer a run blocked on human input (see `surge inbox`).
     Resolve(commands::resolve::ResolveArgs),
 
+    /// Queue an operator steer for a live run (delivered at the next step).
+    Steer(commands::steer::SteerArgs),
+
     /// List the actionable task backlog from the cross-run task ledger.
     Ready(commands::ready::ReadyArgs),
 
@@ -345,6 +348,7 @@ async fn main() -> Result<()> {
             | Commands::Intake { .. }
             | Commands::Inbox(_)
             | Commands::Resolve(_)
+            | Commands::Steer(_)
             | Commands::Ready(_)
             | Commands::Ledger(_)
             | Commands::Daemon { .. }
@@ -529,6 +533,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Resolve(args) => {
             commands::resolve::run(args).await?;
+        },
+
+        Commands::Steer(args) => {
+            commands::steer::run(args).await?;
         },
 
         Commands::Ready(args) => {

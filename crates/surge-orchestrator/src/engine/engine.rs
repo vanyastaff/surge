@@ -61,6 +61,9 @@ pub(crate) struct ActiveRun {
     /// Tracker for in-flight ACP elevation requests. `Engine::resolve_elevation`
     /// looks up entries here and fires their decision oneshot.
     pub pending_elevations: Arc<crate::engine::elevation::PendingElevations>,
+    /// Queued operator steer messages. `Engine::submit_steer` pushes here; the
+    /// run task drains at the next stage boundary and delivers into the prompt.
+    pub pending_steers: crate::engine::steer::SteerQueue,
 }
 
 impl Engine {
@@ -300,12 +303,14 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
         let pending_elevations = crate::engine::elevation::PendingElevations::new();
+        let pending_steers = crate::engine::steer::new_queue();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers: pending_steers.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -334,6 +339,7 @@ impl Engine {
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
@@ -615,12 +621,14 @@ impl Engine {
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
 
         let pending_elevations = crate::engine::elevation::PendingElevations::new();
+        let pending_steers = crate::engine::steer::new_queue();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers: pending_steers.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -671,6 +679,7 @@ impl Engine {
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
@@ -815,6 +824,50 @@ impl Engine {
                 ))
             }
         }
+    }
+
+    /// Queue an operator steer message for a live run. Non-destructive: the
+    /// message is delivered (prepended to the prompt) at the next agent stage
+    /// boundary — ACP v1 has no mid-turn injection channel. Returns the queued
+    /// steer's id.
+    pub async fn submit_steer(
+        &self,
+        run_id: RunId,
+        message: String,
+    ) -> Result<String, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let id = crate::engine::steer::new_steer_id();
+        active
+            .pending_steers
+            .lock()
+            .await
+            .push(crate::engine::steer::QueuedSteer {
+                id: id.clone(),
+                message,
+            });
+        Ok(id)
+    }
+
+    /// List the steer messages currently queued (not yet delivered) for a run.
+    pub async fn list_steers(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        Ok(active.pending_steers.lock().await.clone())
+    }
+
+    /// Drop a queued (not-yet-delivered) steer by id. Returns `true` if a steer
+    /// with that id was found and removed.
+    pub async fn cancel_steer(&self, run_id: RunId, steer_id: &str) -> Result<bool, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let mut queue = active.pending_steers.lock().await;
+        let before = queue.len();
+        queue.retain(|steer| steer.id != steer_id);
+        Ok(queue.len() != before)
     }
 
     /// Snapshot the in-process active-run map as a `Vec<RunSummary>`.

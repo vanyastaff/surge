@@ -308,6 +308,20 @@ pub enum EventPayload {
         evidence: ContentHash,
     },
 
+    /// An operator steer message (queued via `surge steer`) was delivered:
+    /// prepended to the prompt of the agent stage at `node`. Informational —
+    /// recorded for audit/replay; the fold derives no state from it. Steering
+    /// is non-destructive and lands at the next stage boundary (ACP v1 has no
+    /// mid-turn injection channel).
+    SteerDelivered {
+        /// Queue id of the delivered steer (as shown by `surge steer --list`).
+        id: String,
+        /// Agent node whose prompt the steer was prepended to.
+        node: NodeKey,
+        /// The operator's steer message.
+        message: String,
+    },
+
     // Human/sandbox/hooks/telemetry/forking
     ApprovalRequested {
         gate: NodeKey,
@@ -529,6 +543,7 @@ impl EventPayload {
             Self::TaskStatusChanged { .. } => "TaskStatusChanged",
             Self::TaskDiscovered { .. } => "TaskDiscovered",
             Self::TaskVerified { .. } => "TaskVerified",
+            Self::SteerDelivered { .. } => "SteerDelivered",
             Self::ApprovalRequested { .. } => "ApprovalRequested",
             Self::ApprovalDecided { .. } => "ApprovalDecided",
             Self::SandboxElevationRequested { .. } => "SandboxElevationRequested",

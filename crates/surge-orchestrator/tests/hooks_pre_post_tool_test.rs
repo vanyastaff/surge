@@ -131,6 +131,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -238,6 +239,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],

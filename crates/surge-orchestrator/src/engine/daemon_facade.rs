@@ -468,6 +468,53 @@ impl EngineFacade for DaemonEngineFacade {
         }
     }
 
+    async fn submit_steer(&self, run_id: RunId, message: String) -> Result<String, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::SubmitSteer {
+                request_id,
+                run_id,
+                message,
+            })
+            .await?
+        {
+            DaemonResponse::SubmitSteerOk { steer_id, .. } => Ok(steer_id),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn list_steers(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::ListSteers { request_id, run_id })
+            .await?
+        {
+            DaemonResponse::ListSteersOk { steers, .. } => Ok(steers),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn cancel_steer(&self, run_id: RunId, steer_id: String) -> Result<bool, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::CancelSteer {
+                request_id,
+                run_id,
+                steer_id,
+            })
+            .await?
+        {
+            DaemonResponse::CancelSteerOk { removed, .. } => Ok(removed),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
     async fn list_runs(&self) -> Result<Vec<RunSummary>, EngineError> {
         match self
             .inner
