@@ -670,7 +670,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             );
                             continue;
                         }
-                        let bytes = match tokio::fs::read(&canonical_path).await {
+                        let mut bytes = match tokio::fs::read(&canonical_path).await {
                             Ok(b) => b,
                             Err(e) => {
                                 tracing::warn!(
@@ -683,6 +683,19 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                 continue;
                             },
                         };
+                        // Project memory: stamp provenance (run + node) into an
+                        // agent-authored `.surge/memory/` note BEFORE it is
+                        // content-addressed and stored, so the store blob, the
+                        // recorded hash, and the worktree file all agree. The
+                        // stamped note accumulates across runs (part of the diff).
+                        if is_project_memory_note(&relative_path)
+                            && let Some(stamped) = stamp_memory_bytes(&bytes, p.run_id, p.node)
+                        {
+                            tokio::fs::write(&canonical_path, &stamped)
+                                .await
+                                .map_err(|e| StageError::Storage(e.to_string()))?;
+                            bytes = stamped;
+                        }
                         let name =
                             logical_artifact_name(&relative_path, declared_path, &stem_counts);
                         if !emitted_names.insert(name.clone()) {
@@ -698,15 +711,6 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         produced_hashes.insert(name.clone(), artifact_ref.hash);
                         if name == "discovered-tasks" {
                             discovered_tasks_bytes = Some(bytes.clone());
-                        }
-                        // Project memory: an agent-authored note under
-                        // `.surge/memory/` accumulates across runs. Stamp its
-                        // origin (run + node) in place so provenance survives
-                        // outside git history; the file is already part of the
-                        // run's diff.
-                        if is_project_memory_note(&relative_path) {
-                            stamp_project_memory_note(&canonical_path, &bytes, p.run_id, p.node)
-                                .await?;
                         }
                         tracing::info!(
                             target: "engine::stage::agent",
@@ -1184,36 +1188,22 @@ fn is_project_memory_note(relative_path: &Path) -> bool {
         && relative_path.file_name().and_then(|name| name.to_str()) != Some("MEMORY.md")
 }
 
-/// Prepend a provenance comment to a `.surge/memory/` note, in place.
-///
-/// Idempotent — a note already carrying the marker is left unchanged (a retry
-/// or replay re-runs the stage but must not double-stamp). Non-UTF-8 content is
-/// left as-is. The marker is an HTML comment, so it does not render in the
-/// markdown body but is visible in source and to the next run's memory seed.
-async fn stamp_project_memory_note(
-    path: &Path,
+/// Return `bytes` with a provenance comment prepended, or `None` when it is
+/// already stamped (idempotent across retry/replay) or not UTF-8. Pure: the
+/// caller writes the result to disk before content-addressing it. The marker is
+/// an HTML comment, invisible in rendered markdown but visible in source and to
+/// the next run's memory seed.
+fn stamp_memory_bytes(
     bytes: &[u8],
     run_id: surge_core::id::RunId,
     node: &NodeKey,
-) -> Result<(), StageError> {
+) -> Option<Vec<u8>> {
     const MARKER: &str = "<!-- surge:memory";
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return Ok(());
-    };
+    let text = std::str::from_utf8(bytes).ok()?;
     if text.trim_start().starts_with(MARKER) {
-        return Ok(());
+        return None;
     }
-    let stamped = format!("{MARKER} run={run_id} node={} -->\n{text}", node.as_str());
-    tokio::fs::write(path, stamped)
-        .await
-        .map_err(|e| StageError::Storage(e.to_string()))?;
-    tracing::info!(
-        target: "engine::stage::agent",
-        node = %node,
-        path = %path.display(),
-        "project memory note stamped"
-    );
-    Ok(())
+    Some(format!("{MARKER} run={run_id} node={} -->\n{text}", node.as_str()).into_bytes())
 }
 
 /// Parse a produced `discovered-tasks` artifact and append one

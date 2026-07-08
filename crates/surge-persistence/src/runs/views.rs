@@ -386,11 +386,20 @@ pub fn maintain(
             )?;
         },
         TaskVerified { task_id, node, .. } => {
-            // The per-run view trusts engine-emitted TaskVerified (the engine
-            // enforces verification authority before emit in M3). The
-            // authoritative rejection of an unauthorized/tampered event lives
-            // in the graph-aware fold (`run_state::apply`), which is what a
-            // from-scratch rebuild uses.
+            // The per-run view (and the cross-run index mirrored from it by
+            // `sync_task_ledger_index`) TRUSTS engine-emitted TaskVerified: the
+            // engine enforces verification authority before emit (the sealed
+            // gate in M3), so a normal run never produces an unauthorized one.
+            //
+            // The graph-aware authority rejection in `run_state::LedgerState`
+            // (`node_has_verification_authority`) applies only to the LIVE
+            // folded state — it is NOT re-applied here, and rebuild replays
+            // through this same `maintain` path (no graph). Re-checking here
+            // isn't possible today because the fold drops its ledger memory at
+            // the terminal transition, which is exactly why this persisted view
+            // exists. So a forged log would surface as verified in the CLI
+            // index; hardening that (fold-with-graph up to the last
+            // non-terminal cursor at mirror time) is a tracked follow-up.
             tx.execute(
                 "INSERT INTO task_ledger
                     (task_id, status, verified, last_authority_node, updated_seq)
@@ -507,7 +516,8 @@ pub fn rebuild(tx: &Transaction<'_>) -> Result<(), WriterError> {
          DELETE FROM pending_approvals;
          DELETE FROM cost_summary;
          DELETE FROM graph_snapshots;
-         DELETE FROM roadmap_patches;",
+         DELETE FROM roadmap_patches;
+         DELETE FROM task_ledger;",
     )?;
     Ok(())
 }

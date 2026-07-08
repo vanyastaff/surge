@@ -835,17 +835,36 @@ impl Engine {
         run_id: RunId,
         message: String,
     ) -> Result<String, EngineError> {
+        // Validate here, not only in the CLI: the SubmitSteer IPC reaches this
+        // directly. Reject empty/whitespace and oversize messages, and cap the
+        // queue so a run parked at a non-agent node can't accumulate steers
+        // unbounded in daemon memory.
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return Err(EngineError::Internal("steer message is empty".into()));
+        }
+        if message.len() > crate::engine::steer::MAX_STEER_LEN {
+            return Err(EngineError::Internal(format!(
+                "steer message is {} bytes; max is {}",
+                message.len(),
+                crate::engine::steer::MAX_STEER_LEN
+            )));
+        }
         let runs = self.runs.read().await;
         let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let mut queue = active.pending_steers.lock().await;
+        if queue.len() >= crate::engine::steer::MAX_QUEUED_STEERS {
+            return Err(EngineError::Internal(format!(
+                "steer queue for run {run_id} is full ({} pending); \
+                 deliver or cancel some before adding more",
+                queue.len()
+            )));
+        }
         let id = crate::engine::steer::new_steer_id();
-        active
-            .pending_steers
-            .lock()
-            .await
-            .push(crate::engine::steer::QueuedSteer {
-                id: id.clone(),
-                message,
-            });
+        queue.push(crate::engine::steer::QueuedSteer {
+            id: id.clone(),
+            message,
+        });
         Ok(id)
     }
 

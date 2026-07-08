@@ -461,7 +461,16 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
     };
     notes.sort();
 
+    // Cap the seed: memory accumulates across runs and is injected inline into
+    // every binding agent's prompt, so an unbounded blob would inflate tokens/
+    // cost and eventually overflow context (mirrors `ScanLimits`). Oversize
+    // notes are truncated; once the total budget is hit, remaining notes are
+    // dropped with a notice.
+    const MAX_NOTE_BYTES: usize = 32 * 1024;
+    const MAX_TOTAL_BYTES: usize = 128 * 1024;
+
     let mut body = String::new();
+    let mut dropped = 0usize;
     for path in &notes {
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
@@ -469,17 +478,37 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
         if content.trim().is_empty() {
             continue;
         }
+        if body.len() >= MAX_TOTAL_BYTES {
+            dropped += 1;
+            continue;
+        }
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("note.md");
+        let mut note = content.trim_end().to_string();
+        if note.len() > MAX_NOTE_BYTES {
+            // Truncate on a char boundary to keep the string valid UTF-8.
+            let mut end = MAX_NOTE_BYTES;
+            while end > 0 && !note.is_char_boundary(end) {
+                end -= 1;
+            }
+            note.truncate(end);
+            note.push_str("\n… (note truncated)");
+        }
         if !body.is_empty() {
             body.push_str("\n\n");
         }
-        body.push_str(&format!("## {name}\n\n{}", content.trim_end()));
+        body.push_str(&format!("## {name}\n\n{note}"));
     }
     if body.trim().is_empty() {
         return None;
+    }
+    if dropped > 0 {
+        body.push_str(&format!(
+            "\n\n… ({dropped} more note(s) omitted; project memory exceeds the {}KB seed budget — prune stale notes)",
+            MAX_TOTAL_BYTES / 1024
+        ));
     }
     let full = format!("# Project memory\n\n{body}\n");
     debug!(

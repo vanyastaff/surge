@@ -19,7 +19,9 @@ pub struct LedgerArgs {
     /// Scope to one run id.
     #[arg(long = "run")]
     pub run_id: Option<String>,
-    /// Include tasks from every project, not just the current repo.
+    /// Accepted for compatibility; project scoping is currently always on
+    /// (runs store their worktree path, not the origin repo), so this is a
+    /// no-op today.
     #[arg(long)]
     pub all_projects: bool,
     /// Maximum rows to return.
@@ -44,15 +46,16 @@ pub async fn run(args: LedgerArgs) -> Result<()> {
         .map(parse_run_id)
         .transpose()
         .context("parse --run")?;
-    let project_path = if args.all_projects {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    // Per-project scoping is disabled for now: a run records its isolated
+    // worktree path as project_path, which never equals the invoking repo, so a
+    // current-dir filter silently matched nothing (same reason inbox/ready pass
+    // None). Show all until runs record their origin repo. `--all-projects` is a
+    // no-op kept for compatibility.
+    let _ = args.all_projects;
 
     let records = storage.task_ledger_store().list(&TaskLedgerIndexFilter {
         status: None,
-        project_path,
+        project_path: None,
         run_id,
         discovered_only: false,
         limit: Some(args.limit),

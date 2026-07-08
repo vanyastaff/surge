@@ -8,6 +8,19 @@ that should carry across runs. It complements the one-shot `project.md`
 Location: `.surge/memory/*.md` in the project root.
 Optional index: `.surge/memory/MEMORY.md` (human-facing; skipped by the seed).
 
+> **Git:** `.surge/memory/` must NOT be gitignored, or notes never commit and
+> the accumulate-across-runs loop no-ops. Since the rest of `.surge/` (runs,
+> pidfiles) *should* be ignored, use a negation — ignore the contents and
+> re-include memory:
+>
+> ```gitignore
+> .surge/*
+> !.surge/memory/
+> ```
+>
+> A bare `.surge/` excludes the parent, and git cannot re-include a child of an
+> excluded directory, so the `.surge/*` form is required.
+
 ## Read path — seeded into every run
 
 At run start the engine loads `.surge/memory/*.md` (sorted, `MEMORY.md` and

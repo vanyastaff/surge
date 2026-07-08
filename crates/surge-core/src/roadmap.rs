@@ -9,6 +9,11 @@ use crate::artifact_contract::{ARTIFACT_SCHEMA_VERSION, ROADMAP_SCHEMA_VERSION};
 use crate::id::SpecId;
 use crate::spec::Complexity;
 
+/// Schema version in which a per-task `size` became mandatory. Pinned to the
+/// exact version rather than `ROADMAP_SCHEMA_VERSION` so a future bump can't
+/// silently drop the requirement for v2 roadmaps.
+const SIZE_REQUIRED_FROM_VERSION: u32 = 2;
+
 /// Machine-readable `roadmap.toml` artifact.
 ///
 /// This is the planning artifact that agents exchange before a concrete
@@ -163,7 +168,7 @@ impl RoadmapArtifact {
                     });
                 }
             }
-            if self.schema_version >= ROADMAP_SCHEMA_VERSION && task.size.is_none() {
+            if self.schema_version >= SIZE_REQUIRED_FROM_VERSION && task.size.is_none() {
                 issues.push(RoadmapLedgerIssue::MissingSize {
                     task: task.id.clone(),
                 });
