@@ -64,6 +64,7 @@ fn outcome_decl(id: &str) -> OutcomeDecl {
         description: format!("{id} outcome"),
         edge_kind_hint: EdgeKind::Forward,
         is_terminal: false,
+        ledger_effect: Default::default(),
     }
 }
 

@@ -21,6 +21,12 @@ surge migrate-spec ...  translate a legacy .spec.toml into a flow.toml
 surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
+surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
+surge resolve ...       answer a run blocked on human input
+surge steer ...         queue operator guidance for a working run
+surge run diff|path     review a run's worktree changes / print its path
+surge ready             list the actionable task backlog from the task ledger
+surge ledger            show the full task ledger for a run or project
 surge telegram ...      configure cockpit bot token / pairings / revoke
 surge mcp ...           list/start/stop/logs configured MCP servers
 surge clean             clean up orphaned worktrees and merged branches
@@ -85,6 +91,103 @@ repeatable, target Agent nodes only, and are rewritten into the child's
 materialized graph (validated all-or-nothing before the fork is created).
 
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
+
+## Fleet Inbox (`surge inbox`)
+
+The single strongest fleet-supervision pattern is a status-triaged inbox: "who
+needs me right now?". `surge inbox` lists every run grouped **blocked-first**:
+
+- **⚑ Needs input** — blocked on a human decision (HumanGate, bootstrap
+  approval, or a tool-driven `request_human_input`), shown with the prompt.
+- **▶ Working** — executing, with its active node.
+- **✔ Done** — settled: reached a terminal outcome, or folded to a done state (a count by default; `--all` lists them).
+
+```text
+surge inbox                  # current project, blocked-first
+surge inbox --all            # also list the Done group
+surge inbox --all-projects --json
+```
+
+Attention is derived authoritatively by folding each non-terminal run's event
+log (terminal runs are read cheaply from the registry). There is no persisted
+"blocked" flag today, so this opens each active run's DB; a registry-level
+attention index (making the inbox a single indexed query) and a Telegram digest
+are planned follow-ups.
+
+Answer a blocked run with `surge resolve` (the run must be hosted by a running
+daemon — the pending gate lives in the daemon's memory):
+
+```text
+surge resolve <run>                       # inspect: show the question + valid outcomes
+surge resolve <run> --outcome approve --comment "ship it"   # HumanGate
+surge resolve <run> --text "use the staging db"             # tool-driven request_human_input
+surge resolve <run> --json '{"env":"prod"}'
+```
+
+`<run>` accepts the full run id or the short suffix shown by `surge inbox`.
+Bootstrap approvals (Description / Roadmap / Flow) are answered via
+`surge bootstrap` or the Telegram cockpit, not `surge resolve`.
+
+Steer a **working** run with `surge steer` — queue operator guidance that the
+run picks up at its next agent stage (again, the run must be daemon-hosted):
+
+```text
+surge steer <run> "prefer axum over actix; don't touch migrations"
+surge steer <run> --list            # show queued (undelivered) steers
+surge steer <run> --cancel <id>     # drop a queued steer
+```
+
+Steering is **non-destructive**: the message is prepended to the next stage's
+prompt and recorded as a `SteerDelivered` event — the current agent is not
+interrupted. This is deliberate: ACP v1 has no mid-turn injection channel (a
+second `session/prompt` mid-turn is unspecified and agents reject it), so Surge
+delivers at the next stage boundary. The queue is held in the daemon's memory;
+a daemon restart before delivery drops undelivered steers (re-issue them).
+
+Review what a run actually changed before merging with `surge run` (read-only,
+works whether or not the run is still active — it reads the git worktree):
+
+```text
+surge run diff <run>              # unified diff of the run's worktree vs its base
+cd "$(surge run path <run>)"      # drop into the run's worktree
+```
+
+`surge run diff` shows both committed and uncommitted changes (Surge agents edit
+the worktree without committing), including new files, against the commit the
+run branched from. Run it from inside the project repository.
+
+## Task Ledger (`surge ready`)
+
+Each run folds its task-ledger events (`TaskStatusChanged` / `TaskDiscovered` /
+`TaskVerified`) into a per-run `task_ledger` view; at run completion the engine
+mirrors that view into a cross-run `task_ledger_index` in the registry DB.
+`surge ready` reads that index and lists the **actionable** backlog — tasks that
+are not yet settled (completed / failed / skipped).
+
+```text
+surge ready                          # actionable tasks in the current project
+surge ready --status ready_for_verification   # pin one status
+surge ready --discovered             # only tasks discovered mid-run
+surge ready --run <run_id>           # scope to one run
+surge ready --all-projects --json    # everything, as JSON
+```
+
+Columns: task id, status, whether a sealed verifier certified it (`verified`),
+its `discovered_from` origin, and the owning run.
+
+`surge ledger` shows the **complete** ledger instead of just the actionable
+subset — verified completions, failures, and discoveries alike:
+
+```text
+surge ledger                 # every task in the current project
+surge ledger --run <run_id>  # one run's full ledger
+surge ledger --all-projects --json
+```
+
+> **Not yet dependency-aware.** `surge ready` shows every unsettled task, not
+> only those whose `depends_on` are satisfied — the registry index does not
+> carry `depends_on` (it lives in the roadmap artifact). Dependency-filtered
+> readiness is a planned follow-up.
 
 ## Artifact Validation
 

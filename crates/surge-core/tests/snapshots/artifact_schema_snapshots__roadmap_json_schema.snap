@@ -1,5 +1,6 @@
 ---
 source: crates/surge-core/tests/artifact_schema_snapshots.rs
+assertion_line: 22
 expression: schema
 ---
 {
@@ -13,7 +14,7 @@ expression: schema
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "default": 1
+      "default": 2
     },
     "milestones": {
       "description": "Deliverable-focused milestones in execution order.",
@@ -90,6 +91,16 @@ expression: schema
           "const": "paused"
         },
         {
+          "description": "Implementation reported done; awaiting a verification-authority node.",
+          "type": "string",
+          "const": "ready_for_verification"
+        },
+        {
+          "description": "Verification rejected the implementation; routes back to execution.",
+          "type": "string",
+          "const": "failed_verification"
+        },
+        {
           "description": "Completed successfully.",
           "type": "string",
           "const": "completed"
@@ -136,11 +147,60 @@ expression: schema
             "type": "string"
           },
           "default": []
+        },
+        "depends_on": {
+          "description": "Task ids (in any milestone) that must complete before this task.\n\nSchema v2. Task-granularity edges for the ledger; milestone-level\nordering stays in [`RoadmapArtifact::dependencies`].",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "discovered_from": {
+          "description": "Task id this task was discovered from while executing that task.\n\nSchema v2. Captures mid-task discovered work instead of dropping it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Context-budget size class.\n\nSchema v2, required by the validator at v2: every task must be\ncompletable in one fresh agent session; oversized work is split.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verified": {
+          "description": "True only when a verification-authority node reported the task\nverified. Distinct from [`RoadmapStatus::Completed`], which any\nstage can claim.",
+          "type": "boolean"
         }
       },
       "required": [
         "id",
         "title"
+      ]
+    },
+    "TaskSize": {
+      "description": "Context-budget size class for one roadmap task.\n\nThe contract is qualitative, not a token count: an `S`/`M` task fits one\nfresh agent session comfortably; `L` is the upper bound and a planner\nsignal to consider splitting.",
+      "oneOf": [
+        {
+          "description": "Small — a focused change, well under one session.",
+          "type": "string",
+          "const": "s"
+        },
+        {
+          "description": "Medium — a typical task, fits one session with room for verification.",
+          "type": "string",
+          "const": "m"
+        },
+        {
+          "description": "Large — fills one session; anything bigger must be split.",
+          "type": "string",
+          "const": "l"
+        }
       ]
     },
     "RoadmapDependency": {

@@ -6,8 +6,12 @@
 .env.local
 .env.*.local
 
-# Surge runtime
-.surge/
+# Surge runtime — ignore everything under .surge/ EXCEPT the committable,
+# accumulating project memory (.surge/memory/). A bare `.surge/` would exclude
+# the parent, and git can't re-include a child of an excluded dir, so ignore
+# the contents (`.surge/*`) and negate the memory subtree.
+.surge/*
+!.surge/memory/
 *.pid
 
 # Agent/tool local state and generated skill packs

@@ -78,6 +78,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -95,6 +96,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();

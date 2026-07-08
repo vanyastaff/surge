@@ -211,6 +211,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -228,6 +229,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
         profile_registry: Some(registry.clone()),
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("agent stage should succeed when registry resolves to mock");
@@ -318,6 +320,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -335,6 +338,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
         profile_registry: None, // legacy path
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("legacy mock fallback path keeps working");

@@ -360,6 +360,7 @@ mod tests {
             description: "done".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         }];
         let agent_cfg = NodeConfig::Agent(surge_core::agent_config::AgentConfig {
             profile: surge_core::keys::ProfileKey::try_from("mock").unwrap(),

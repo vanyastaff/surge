@@ -76,6 +76,7 @@ fn build_linear_graph(keys: Vec<NodeKey>, outcome: OutcomeKey) -> (Graph, Vec<No
                 description: String::new(),
                 edge_kind_hint: EdgeKind::Forward,
                 is_terminal: false,
+                ledger_effect: Default::default(),
             }]
         };
         if !is_terminal {

@@ -136,6 +136,7 @@ pub async fn run_feature_planner(
     let agent_config = feature_planner_agent_config(params.request, params.roadmap)?;
 
     let outcome = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &agent_config,
         declared_outcomes: &declared_outcomes,
@@ -153,6 +154,8 @@ pub async fn run_feature_planner(
         profile_registry: Some(params.profile_registry.clone()),
         hook_executor: params.hook_executor,
         pending_elevations: crate::engine::elevation::PendingElevations::new(),
+        // The feature planner runs standalone, not inside a task loop.
+        active_task_id: None,
     })
     .await?;
 
@@ -188,6 +191,7 @@ fn declared_outcomes(outcomes: &[surge_core::ProfileOutcome]) -> Vec<OutcomeDecl
             description: outcome.description.clone(),
             edge_kind_hint: outcome.edge_kind_hint,
             is_terminal: false,
+            ledger_effect: Default::default(),
         })
         .collect()
 }

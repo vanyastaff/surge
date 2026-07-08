@@ -18,6 +18,8 @@ Detailed docs for the Surge workspace. The project landing page is [`README.md`]
 | [Tracker automation](tracker-automation.md) | Tier labels (L0/L1/L2/L3), idempotency, `surge intake list`, external state reflection |
 | [Telegram cockpit](telegram.md) | Setup, pairing, command reference, card lifecycle, snooze re-emission, recovery |
 | [MCP server lifecycle](mcp.md) | `[[mcp_servers]]` config, connection/restart/health lifecycle, stderr redaction, sandbox boundary, `surge mcp` |
+| [Product strategy](product-strategy.md) | Positioning, research-backed bets (completion machinery, fleet interaction), build-don't-bridge principle, sequencing, metrics |
+| [Agent OS and coding-agent landscape](agent-os-landscape.md) | Market survey: Pi, Herdr, BridgeMind, Factory Droid, Devin, Codex, Claude Code, 2026 manager-view convergence, orchestrator graveyard |
 | [Migrate `.spec.toml` → `flow.toml`](migrate-spec-to-flow.md) | Auto-translator (`surge migrate-spec`) reference and manual-edit guidance for the legacy pipeline retirement |
 | [Development](development.md) | `cargo` checks, ignored long-running tests, local runtime state |
 

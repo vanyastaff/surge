@@ -333,6 +333,59 @@ impl GitManager {
         Ok(String::from_utf8_lossy(&diff_text).into_owned())
     }
 
+    /// Diff a **run** worktree against the base it branched from — the unified
+    /// patch a reviewer wants before merging (`surge run diff`).
+    ///
+    /// The base is the merge-base of the run branch (`surge/run-<short>`) and the
+    /// main repo `HEAD`. When the worktree is present on disk, the diff includes
+    /// **uncommitted** working-tree and index changes (Surge runs edit the
+    /// worktree without committing), so it reflects everything the agents did.
+    /// When the worktree is gone, it falls back to the committed branch tree.
+    ///
+    /// # Errors
+    /// [`GitError::BranchNotFound`] if the run branch is absent, or a git2
+    /// failure opening the repo / computing the merge-base.
+    pub fn run_diff(&self, run_id: &surge_core::RunId) -> Result<String, GitError> {
+        let repo = self.open_repo()?;
+        let branch_name = crate::run_worktree::run_branch_name(run_id);
+        let branch = repo
+            .find_branch(&branch_name, BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound(branch_name.clone()))?;
+        let branch_commit = branch.get().peel_to_commit()?;
+        let head_commit = repo.head()?.peel_to_commit()?;
+        let merge_base = repo.merge_base(head_commit.id(), branch_commit.id())?;
+
+        let mut diff_opts = DiffOptions::new();
+        // Runs create new files without committing; surface them (and their
+        // content) as additions rather than bare "untracked" headers.
+        diff_opts
+            .include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .show_untracked_content(true);
+        // The registered worktree path (location-independent). Present while the
+        // run's worktree is on disk; gone once it's discarded.
+        match self.find_run_worktree_path(run_id) {
+            Ok(wt_path) => {
+                // Worktrees share the object store, so `merge_base` resolves here.
+                let wt_repo = Repository::open(&wt_path)?;
+                let base_tree = wt_repo.find_commit(merge_base)?.tree()?;
+                let diff = wt_repo
+                    .diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut diff_opts))?;
+                render_patch(&diff)
+            },
+            Err(_) => {
+                let base_tree = repo.find_commit(merge_base)?.tree()?;
+                let branch_tree = branch_commit.tree()?;
+                let diff = repo.diff_tree_to_tree(
+                    Some(&base_tree),
+                    Some(&branch_tree),
+                    Some(&mut diff_opts),
+                )?;
+                render_patch(&diff)
+            },
+        }
+    }
+
     /// Discard a worktree: prune it, remove the directory, delete the branch.
     pub fn discard(&self, spec_id: &str) -> Result<(), GitError> {
         let repo = self.open_repo()?;
@@ -838,6 +891,21 @@ impl GitManager {
     }
 }
 
+/// Render a git2 diff as a unified patch string, preserving the `+`/`-`/` `
+/// origin on content lines (the raw `line.content()` drops it).
+fn render_patch(diff: &git2::Diff) -> Result<String, GitError> {
+    let mut out: Vec<u8> = Vec::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        match line.origin() {
+            '+' | '-' | ' ' => out.push(line.origin() as u8),
+            _ => {},
+        }
+        out.extend_from_slice(line.content());
+        true
+    })?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,6 +1186,34 @@ mod tests {
             std::fs::canonicalize(found).unwrap(),
             std::fs::canonicalize(info.path).unwrap()
         );
+    }
+
+    #[test]
+    fn run_diff_shows_uncommitted_worktree_changes() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        let info = gm
+            .create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+
+        // An agent edits the worktree without committing (how Surge runs work).
+        std::fs::write(info.path.join("new_feature.rs"), "fn added() {}\n").unwrap();
+
+        let diff = gm.run_diff(&id).unwrap();
+        assert!(diff.contains("new_feature.rs"), "diff:\n{diff}");
+        assert!(diff.contains("+fn added() {}"), "diff:\n{diff}");
+    }
+
+    #[test]
+    fn run_diff_empty_when_no_changes() {
+        let (_dir, path) = init_test_repo();
+        let gm = GitManager::new(path.clone()).unwrap();
+        let id = surge_core::RunId::new();
+        gm.create_run_worktree(&id, None, crate::run_worktree::WorktreeLocation::Sibling)
+            .unwrap();
+        let diff = gm.run_diff(&id).unwrap();
+        assert!(diff.trim().is_empty(), "expected empty diff, got:\n{diff}");
     }
 
     #[test]

@@ -63,6 +63,34 @@ pub trait EngineFacade: Send + Sync {
         response: serde_json::Value,
     ) -> Result<(), EngineError>;
 
+    /// Queue an operator steer message for a live run (delivered at the next
+    /// agent stage boundary). Returns the queued steer id.
+    async fn submit_steer(&self, run_id: RunId, message: String) -> Result<String, EngineError> {
+        let _ = (run_id, message);
+        Err(EngineError::OperationNotSupported {
+            operation: "submit_steer",
+        })
+    }
+
+    /// List steer messages currently queued (not yet delivered) for a run.
+    async fn list_steers(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
+        let _ = run_id;
+        Err(EngineError::OperationNotSupported {
+            operation: "list_steers",
+        })
+    }
+
+    /// Drop a queued (not-yet-delivered) steer by id; `true` if one was removed.
+    async fn cancel_steer(&self, run_id: RunId, steer_id: String) -> Result<bool, EngineError> {
+        let _ = (run_id, steer_id);
+        Err(EngineError::OperationNotSupported {
+            operation: "cancel_steer",
+        })
+    }
+
     /// List runs visible to this facade. For the local facade, this
     /// is the in-memory active set. For the daemon facade, the
     /// daemon reports its full view.
@@ -130,6 +158,21 @@ impl EngineFacade for LocalEngineFacade {
         self.engine
             .resolve_human_input(run_id, call_id, response)
             .await
+    }
+
+    async fn submit_steer(&self, run_id: RunId, message: String) -> Result<String, EngineError> {
+        self.engine.submit_steer(run_id, message).await
+    }
+
+    async fn list_steers(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
+        self.engine.list_steers(run_id).await
+    }
+
+    async fn cancel_steer(&self, run_id: RunId, steer_id: String) -> Result<bool, EngineError> {
+        self.engine.cancel_steer(run_id, &steer_id).await
     }
 
     async fn list_runs(&self) -> Result<Vec<RunSummary>, EngineError> {

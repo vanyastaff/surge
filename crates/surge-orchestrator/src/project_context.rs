@@ -427,10 +427,117 @@ pub fn with_project_context_seed(
     if run_config.project_context.is_none() && config.init.project_context_auto_seed {
         run_config.project_context = load_project_context_seed(project_root, config);
     }
+    if run_config.project_memory.is_none() {
+        run_config.project_memory = load_project_memory_seed(project_root);
+    }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
     }
     run_config
+}
+
+/// Repo-relative path of the accumulating project-memory directory.
+pub const PROJECT_MEMORY_DIR: &str = ".surge/memory";
+
+/// Load `.surge/memory/*.md` into one concatenated [`ProjectContextSeed`], or
+/// `None` when the directory is absent or holds no non-empty notes.
+///
+/// Notes are sorted by filename for determinism; each is prefixed with a
+/// `## <filename>` header so agents can attribute knowledge to its source note.
+/// `MEMORY.md` (a human-facing index, if present) is skipped — the individual
+/// notes are the content.
+/// Recursively collect `*.md` notes under `dir`, skipping the `MEMORY.md` index.
+fn collect_memory_notes(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_memory_notes(&path, out);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md")
+            && path.file_name().and_then(|n| n.to_str()) != Some("MEMORY.md")
+        {
+            out.push(path);
+        }
+    }
+}
+
+#[must_use]
+pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSeed> {
+    let dir = project_root.join(PROJECT_MEMORY_DIR);
+    if !dir.is_dir() {
+        return None;
+    }
+    // Recurse: the write-side gate (`is_project_memory_note`) accepts a note at
+    // any depth under `.surge/memory/`, so the seed must read subdirectories too
+    // — otherwise a note in a subfolder is stamped as durable memory yet never
+    // loaded into any future run.
+    let mut notes: Vec<PathBuf> = Vec::new();
+    collect_memory_notes(&dir, &mut notes);
+    notes.sort();
+
+    // Cap the seed: memory accumulates across runs and is injected inline into
+    // every binding agent's prompt, so an unbounded blob would inflate tokens/
+    // cost and eventually overflow context (mirrors `ScanLimits`). Oversize
+    // notes are truncated; once the total budget is hit, remaining notes are
+    // dropped with a notice.
+    const MAX_NOTE_BYTES: usize = 32 * 1024;
+    const MAX_TOTAL_BYTES: usize = 128 * 1024;
+
+    let mut body = String::new();
+    let mut dropped = 0usize;
+    for path in &notes {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        if body.len() >= MAX_TOTAL_BYTES {
+            dropped += 1;
+            continue;
+        }
+        // Header from the path relative to `.surge/memory/`, so a note in a
+        // subfolder is attributed as `topic/note.md` rather than a bare name.
+        let name = path
+            .strip_prefix(&dir)
+            .ok()
+            .and_then(|rel| rel.to_str())
+            .or_else(|| path.file_name().and_then(|n| n.to_str()))
+            .unwrap_or("note.md");
+        let mut note = content.trim_end().to_string();
+        if note.len() > MAX_NOTE_BYTES {
+            // Truncate on a char boundary to keep the string valid UTF-8.
+            let mut end = MAX_NOTE_BYTES;
+            while end > 0 && !note.is_char_boundary(end) {
+                end -= 1;
+            }
+            note.truncate(end);
+            note.push_str("\n… (note truncated)");
+        }
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&format!("## {name}\n\n{note}"));
+    }
+    if body.trim().is_empty() {
+        return None;
+    }
+    if dropped > 0 {
+        body.push_str(&format!(
+            "\n\n… ({dropped} more note(s) omitted; project memory exceeds the {}KB seed budget — prune stale notes)",
+            MAX_TOTAL_BYTES / 1024
+        ));
+    }
+    let full = format!("# Project memory\n\n{body}\n");
+    debug!(
+        dir = %dir.display(),
+        notes = notes.len(),
+        bytes = full.len(),
+        "loaded project memory seed"
+    );
+    Some(ProjectContextSeed::new(dir, full))
 }
 
 /// Load the configured project context file as a stable run seed.
@@ -1090,4 +1197,83 @@ fn extract_scan_hash(content: &str) -> Option<ContentHash> {
         return raw.parse().ok();
     }
     None
+}
+
+#[cfg(test)]
+mod memory_seed_tests {
+    use super::*;
+
+    #[test]
+    fn no_memory_dir_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_project_memory_seed(dir.path()).is_none());
+    }
+
+    #[test]
+    fn empty_memory_dir_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PROJECT_MEMORY_DIR)).unwrap();
+        assert!(load_project_memory_seed(dir.path()).is_none());
+    }
+
+    #[test]
+    fn notes_are_concatenated_sorted_with_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem).unwrap();
+        // Written out of order; loader must sort by filename.
+        std::fs::write(mem.join("b-auth.md"), "Auth uses JWT.\n").unwrap();
+        std::fs::write(mem.join("a-db.md"), "DB is Postgres.\n").unwrap();
+        // MEMORY.md index is skipped; empty notes are dropped.
+        std::fs::write(mem.join("MEMORY.md"), "- index\n").unwrap();
+        std::fs::write(mem.join("c-empty.md"), "   \n").unwrap();
+
+        let seed = load_project_memory_seed(dir.path()).expect("seed");
+        assert!(seed.content.starts_with("# Project memory\n"));
+        // a-db before b-auth (sorted), MEMORY.md and empty note excluded.
+        let db = seed.content.find("## a-db.md").unwrap();
+        let auth = seed.content.find("## b-auth.md").unwrap();
+        assert!(db < auth, "notes sorted by filename");
+        assert!(seed.content.contains("DB is Postgres."));
+        assert!(seed.content.contains("Auth uses JWT."));
+        assert!(!seed.content.contains("MEMORY.md"));
+        assert!(!seed.content.contains("c-empty"));
+    }
+
+    #[test]
+    fn notes_in_subdirectories_are_seeded_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(mem.join("auth")).unwrap();
+        std::fs::write(mem.join("top.md"), "top-level note\n").unwrap();
+        std::fs::write(mem.join("auth/tokens.md"), "tokens are HS256\n").unwrap();
+
+        let seed = load_project_memory_seed(dir.path()).expect("seed");
+        // The subdir note is loaded and attributed by its relative path.
+        assert!(
+            seed.content.contains("tokens are HS256"),
+            "{}",
+            seed.content
+        );
+        assert!(
+            seed.content.contains("## auth/tokens.md")
+                || seed.content.contains("## auth\\tokens.md"),
+            "subdir note attributed by relative path:\n{}",
+            seed.content
+        );
+        assert!(seed.content.contains("top-level note"));
+    }
+
+    #[test]
+    fn seed_is_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem).unwrap();
+        std::fs::write(mem.join("x.md"), "one\n").unwrap();
+        std::fs::write(mem.join("y.md"), "two\n").unwrap();
+        let a = load_project_memory_seed(dir.path()).unwrap();
+        let b = load_project_memory_seed(dir.path()).unwrap();
+        assert_eq!(a.content, b.content);
+        assert_eq!(a.hash, b.hash);
+    }
 }

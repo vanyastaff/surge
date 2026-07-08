@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [[milestones]]
 id = "artifact-validation"
@@ -9,6 +9,19 @@ id = "validators"
 title = "Add validators"
 description = "Validate canonical generated artifacts."
 acceptance_criteria = ["Invalid schema versions fail", "Valid fixtures pass"]
+size = "m"
+
+[[milestones]]
+id = "hook-enforcement"
+title = "Hook enforcement"
+
+[[milestones.tasks]]
+id = "wire-hooks"
+title = "Wire validators into hooks"
+description = "Call the validators from on_outcome hooks."
+acceptance_criteria = ["Rejected outcomes force a retry"]
+size = "s"
+depends_on = ["validators"]
 
 [[dependencies]]
 from = "artifact-validation"

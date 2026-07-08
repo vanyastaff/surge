@@ -53,6 +53,7 @@ fn make_profile(name: &str) -> Profile {
             system: format!("system {name}"),
         },
         inspector_ui: surge_core::profile::InspectorUi::default(),
+        verification: Default::default(),
     }
 }
 

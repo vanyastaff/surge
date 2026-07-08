@@ -39,6 +39,7 @@ sections are surfaced explicitly instead.
 | `requirements`   | markdown       | no — required sections only             |
 | `roadmap`        | TOML           | **yes** (`roadmap.json`)                |
 | `roadmap-patch`  | TOML           | **yes** (`roadmap-patch.json`)          |
+| `discovered-tasks` | TOML         | **yes** (`discovered-tasks.json`)       |
 | `spec`           | TOML           | **yes** (`spec.json`)                   |
 | `adr`            | markdown + TOML frontmatter | **yes** (frontmatter only) |
 | `story`          | markdown       | no — required sections only             |
@@ -53,7 +54,9 @@ Each generated schema carries:
 
 `ARTIFACT_SCHEMA_VERSION` is the version baked into `schema_version` for every
 TOML artifact. Bumping this constant is a coordinated, semver-significant
-change.
+change. The `roadmap` artifact versions independently via
+`ROADMAP_SCHEMA_VERSION` (currently `2`, adding the task-ledger fields); its
+validator accepts every version from `1` up to that constant.
 
 ## How an agent should use it
 

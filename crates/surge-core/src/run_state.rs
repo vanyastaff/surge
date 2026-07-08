@@ -5,6 +5,8 @@ use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
+use crate::node::LedgerEffect;
+use crate::roadmap::RoadmapStatus;
 use crate::roadmap_patch::{
     ActivePickupPolicy, RoadmapPatchApprovalDecision, RoadmapPatchId, RoadmapPatchStatus,
     RoadmapPatchTarget,
@@ -52,6 +54,62 @@ pub enum RunState {
         kind: TerminalReason,
         reason: String,
     },
+}
+
+/// What a run needs from the operator right now — the axis the fleet inbox
+/// (`surge inbox`) triages on. A pure classification of [`RunState`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attention {
+    /// Blocked on a human decision (a HumanGate, bootstrap approval, or
+    /// tool-driven `request_human_input`). This is the "needs me right now"
+    /// bucket the inbox surfaces first.
+    NeedsInput,
+    /// Executing with no human in the loop.
+    Working,
+    /// Reached a terminal state — no further attention needed.
+    Done(TerminalReason),
+}
+
+impl RunState {
+    /// Classify what this run needs from the operator.
+    ///
+    /// A run is [`Attention::NeedsInput`] when the fold shows an unresolved
+    /// gate: a bootstrap stage awaiting approval, or a Pipeline holding a
+    /// `pending_human_input`. Everything else in-flight is
+    /// [`Attention::Working`]; a terminal run is [`Attention::Done`].
+    #[must_use]
+    pub fn attention(&self) -> Attention {
+        match self {
+            // A just-admitted run that has not folded RunStarted yet — treat
+            // as working (it is not blocked on a human).
+            Self::NotStarted => Attention::Working,
+            Self::Bootstrapping {
+                substate: BootstrapSubstate::AwaitingApproval { .. },
+                ..
+            } => Attention::NeedsInput,
+            Self::Bootstrapping { .. } => Attention::Working,
+            Self::Pipeline {
+                pending_human_input: Some(_),
+                ..
+            } => Attention::NeedsInput,
+            Self::Pipeline { .. } => Attention::Working,
+            Self::Terminal { kind, .. } => Attention::Done(*kind),
+        }
+    }
+
+    /// The prompt shown to the operator when this run is blocked on input, if
+    /// any. `None` unless [`RunState::attention`] is [`Attention::NeedsInput`]
+    /// with a captured prompt (bootstrap approvals carry no free-form prompt).
+    #[must_use]
+    pub fn pending_prompt(&self) -> Option<&str> {
+        match self {
+            Self::Pipeline {
+                pending_human_input: Some(pending),
+                ..
+            } => Some(pending.prompt.as_str()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,6 +178,114 @@ pub struct RunMemory {
     /// Latest accepted graph revision metadata, if an active amendment
     /// changed the executable graph after `PipelineMaterialized`.
     pub latest_graph_revision: Option<GraphRevisionMemory>,
+    /// Task-ledger state derived from `TaskStatusChanged` / `TaskDiscovered` /
+    /// `TaskVerified` events. Empty for runs that carry no ledger.
+    pub ledger: LedgerState,
+}
+
+/// Task-ledger view folded from ledger events. The source of truth is the
+/// event log; this is the folded projection the engine and persistence read.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LedgerState {
+    /// Per-task ledger record, keyed by task id.
+    pub tasks: BTreeMap<String, LedgerTask>,
+    /// Count of `TaskVerified` events rejected because the reporting node
+    /// lacked verification authority in the active graph. Deterministic
+    /// (folded from the log); surfaced so callers can flag tampered logs.
+    pub rejected_verifications: u64,
+}
+
+impl LedgerState {
+    /// Record a non-verified status transition (upsert).
+    ///
+    /// Clears `verified` when the new status is not `Completed`, preventing
+    /// an inconsistent state where `verified=true` but the task is not
+    /// completed (e.g. due to a reordered event log).
+    fn record_status_change(&mut self, task_id: &str, to: RoadmapStatus, node: &NodeKey, seq: u64) {
+        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+        entry.status = to;
+        if to != RoadmapStatus::Completed {
+            entry.verified = false;
+        }
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Insert a discovered task as pending with a `discovered_from` edge.
+    /// First-write-wins: a later duplicate discovery for the same id is a
+    /// no-op so replay stays idempotent.
+    fn record_discovered(&mut self, task_id: &str, discovered_from: &str, seq: u64) {
+        self.tasks
+            .entry(task_id.to_owned())
+            .or_insert_with(|| LedgerTask {
+                status: RoadmapStatus::Pending,
+                verified: false,
+                discovered_from: Some(discovered_from.to_owned()),
+                last_authority_node: None,
+                updated_seq: seq,
+            });
+    }
+
+    /// Record a verification. `authorized` is computed by the caller from the
+    /// active graph (the node must declare a `LedgerEffect::Verified` outcome).
+    /// An unauthorized verification leaves the task unverified and bumps the
+    /// rejection counter — defense in depth against a tampered log.
+    fn record_verified(&mut self, task_id: &str, node: &NodeKey, authorized: bool, seq: u64) {
+        if !authorized {
+            self.rejected_verifications += 1;
+            return;
+        }
+        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+        entry.status = RoadmapStatus::Completed;
+        entry.verified = true;
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+}
+
+/// One task's folded ledger record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerTask {
+    /// Current ledger status.
+    pub status: RoadmapStatus,
+    /// True only once a verification-authority node confirmed the task.
+    pub verified: bool,
+    /// Task id this task was discovered from, when discovered mid-run.
+    pub discovered_from: Option<String>,
+    /// Node that last transitioned this task (audit trail head).
+    pub last_authority_node: Option<NodeKey>,
+    /// Seq of the last event that touched this task.
+    pub updated_seq: u64,
+}
+
+impl Default for LedgerTask {
+    fn default() -> Self {
+        Self {
+            status: RoadmapStatus::Pending,
+            verified: false,
+            discovered_from: None,
+            last_authority_node: None,
+            updated_seq: 0,
+        }
+    }
+}
+
+/// True when `node` exists in `graph` — at the top level **or inside any
+/// subgraph** — and declares an outcome carrying [`LedgerEffect::Verified`],
+/// the graph-visible signal that the node has verification authority. Keeps the
+/// fold pure (no profile-registry access).
+///
+/// Subgraphs must be searched: bundled loop flows (e.g. `multi-milestone`) run
+/// the sealed verifier inside a task-body subgraph, so a top-level-only lookup
+/// would wrongly reject every `TaskVerified` those flows emit.
+#[must_use]
+pub fn node_has_verification_authority(graph: &Graph, node: &NodeKey) -> bool {
+    graph.find_node(node).is_some_and(|found| {
+        found
+            .declared_outcomes
+            .iter()
+            .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -476,6 +642,90 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input: None,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskStatusChanged {
+                task_id,
+                to,
+                authority_node,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                memory
+                    .ledger
+                    .record_status_change(task_id, *to, authority_node, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskDiscovered {
+                task_id,
+                discovered_from,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                memory
+                    .ledger
+                    .record_discovered(task_id, discovered_from, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (state @ RunState::Pipeline { .. }, EventPayload::TaskVerified { task_id, node, .. }) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                // Defense in depth: fold honors the verification only when the
+                // reporting node is a verification authority in the active
+                // graph (declares a `LedgerEffect::Verified` outcome). The
+                // engine (M3) already refuses to emit an unauthorized event;
+                // this rejects a tampered log on replay.
+                let authorized = node_has_verification_authority(&graph, node);
+                memory
+                    .ledger
+                    .record_verified(task_id, node, authorized, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -1651,6 +1901,402 @@ mod tests {
             },
             other => panic!("expected Pipeline, got {other:?}"),
         }
+    }
+
+    /// Build a graph whose start is a terminal node and which also contains a
+    /// `verify` node declaring a `LedgerEffect::Verified` outcome (the
+    /// graph-visible verification-authority signal) plus a plain `impl` node
+    /// with no ledger effect.
+    fn ledger_graph() -> Graph {
+        use crate::edge::EdgeKind;
+        use crate::graph::{GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::OutcomeKey;
+        use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let start = NodeKey::try_from("end").unwrap();
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let implement = NodeKey::try_from("impl_1").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(start.clone(), terminal_node(start.clone()));
+        nodes.insert(
+            verify.clone(),
+            Node {
+                id: verify.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("passed").unwrap(),
+                    description: "verified".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::Verified,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        nodes.insert(
+            implement.clone(),
+            Node {
+                id: implement.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("ready_for_verification").unwrap(),
+                    description: "impl done".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::ReadyForVerification,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "ledger".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    fn ledger_run_prefix() -> Vec<RunEvent> {
+        vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "build".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(ledger_graph()),
+                    graph_hash: ContentHash::compute(b"ledger-graph"),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn node_authority_is_graph_visible_via_verified_outcome() {
+        let graph = ledger_graph();
+        assert!(node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("verify_1").unwrap()
+        ));
+        assert!(!node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("impl_1").unwrap()
+        ));
+        assert!(!node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("missing").unwrap()
+        ));
+    }
+
+    #[test]
+    fn subgraph_verify_node_has_authority() {
+        use crate::edge::EdgeKind;
+        use crate::graph::Subgraph;
+        use crate::keys::{OutcomeKey, SubgraphKey};
+        use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        // Bundled loop flows run the sealed verifier inside a task-body
+        // subgraph; its TaskVerified must be honored (regression: top-level-only
+        // lookup rejected every subgraph verifier).
+        let mut graph = ledger_graph();
+        let verify_in_task = NodeKey::try_from("verify_in_task").unwrap();
+        let mut sg_nodes = BTreeMap::new();
+        sg_nodes.insert(
+            verify_in_task.clone(),
+            Node {
+                id: verify_in_task.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("passed").unwrap(),
+                    description: "verified".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::Verified,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        graph.subgraphs.insert(
+            SubgraphKey::try_from("task_body").unwrap(),
+            Subgraph {
+                start: verify_in_task.clone(),
+                nodes: sg_nodes,
+                edges: vec![],
+            },
+        );
+
+        assert!(
+            node_has_verification_authority(&graph, &verify_in_task),
+            "a verify node inside a subgraph must carry authority"
+        );
+    }
+
+    #[test]
+    fn task_status_change_and_discovery_fold_into_ledger() {
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t2".into(),
+                discovered_from: "m1-t1".into(),
+                title: "Handle empty input".into(),
+            },
+        ));
+        events.push(make_event(
+            5,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: verify.clone(),
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::Completed);
+        assert!(t1.verified);
+        assert_eq!(t1.last_authority_node.as_ref(), Some(&verify));
+        assert_eq!(t1.updated_seq, 5);
+
+        let t2 = &memory.ledger.tasks["m1-t2"];
+        assert_eq!(t2.status, RoadmapStatus::Pending);
+        assert!(!t2.verified);
+        assert_eq!(t2.discovered_from.as_deref(), Some("m1-t1"));
+        assert_eq!(memory.ledger.rejected_verifications, 0);
+    }
+
+    #[test]
+    fn unauthorized_task_verified_is_ignored_and_counted() {
+        // `impl_1` has a ReadyForVerification outcome but NOT Verified, so it
+        // is not a verification authority. A TaskVerified naming it must not
+        // flip the task to verified — it is rejected and counted.
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: NodeKey::try_from("impl_1").unwrap(),
+                evidence: ContentHash::compute(b"forged"),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
+        assert!(!t1.verified, "unauthorized verification must not stick");
+        assert_eq!(memory.ledger.rejected_verifications, 1);
+    }
+
+    #[test]
+    fn ledger_fold_is_deterministic() {
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "seed".into(),
+                title: "t1".into(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: verify,
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+        // Duplicate discovery must be a no-op (first-write-wins).
+        events.push(make_event(
+            5,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "other".into(),
+                title: "dup".into(),
+            },
+        ));
+
+        let RunState::Pipeline { memory: a, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let RunState::Pipeline { memory: b, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        assert_eq!(a.ledger, b.ledger);
+        assert_eq!(
+            a.ledger.tasks["m1-t1"].discovered_from.as_deref(),
+            Some("seed")
+        );
+        assert!(a.ledger.tasks["m1-t1"].verified);
+    }
+
+    #[test]
+    fn status_change_after_verified_clears_verified_flag() {
+        // If a TaskStatusChanged arrives after a TaskVerified (reordered log
+        // or engine bug), the task must not retain verified=true with a
+        // non-Completed status.
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: NodeKey::try_from("verify_1").unwrap(),
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
+        assert!(
+            !t1.verified,
+            "verified must be cleared after non-Completed status change"
+        );
+    }
+
+    #[test]
+    fn attention_classifies_pipeline_working_and_needs_input() {
+        let mut events = ledger_run_prefix();
+        // Fold with only the run prefix (RunStarted + PipelineMaterialized) →
+        // Pipeline, no pending input → Working.
+        let working = fold(&events).unwrap();
+        assert_eq!(working.attention(), Attention::Working);
+        assert_eq!(working.pending_prompt(), None);
+
+        // A HumanInputRequested puts it into NeedsInput with the prompt.
+        events.push(make_event(
+            3,
+            EventPayload::HumanInputRequested {
+                node: NodeKey::try_from("verify_1").unwrap(),
+                session: None,
+                call_id: Some("c1".into()),
+                prompt: "Approve the risky migration?".into(),
+                schema: None,
+            },
+        ));
+        let blocked = fold(&events).unwrap();
+        assert_eq!(blocked.attention(), Attention::NeedsInput);
+        assert_eq!(
+            blocked.pending_prompt(),
+            Some("Approve the risky migration?")
+        );
+
+        // Resolving it returns to Working.
+        events.push(make_event(
+            4,
+            EventPayload::HumanInputResolved {
+                node: NodeKey::try_from("verify_1").unwrap(),
+                call_id: Some("c1".into()),
+                response: serde_json::json!({"decision": "approve"}),
+            },
+        ));
+        assert_eq!(fold(&events).unwrap().attention(), Attention::Working);
+    }
+
+    #[test]
+    fn attention_classifies_terminal_as_done() {
+        assert_eq!(
+            RunState::Terminal {
+                kind: TerminalReason::Completed,
+                reason: String::new(),
+            }
+            .attention(),
+            Attention::Done(TerminalReason::Completed)
+        );
+        assert_eq!(
+            RunState::NotStarted.attention(),
+            Attention::Working,
+            "a not-yet-folded run is working, not blocked"
+        );
+    }
+
+    #[test]
+    fn attention_classifies_bootstrap_awaiting_approval_as_needs_input() {
+        let awaiting = RunState::Bootstrapping {
+            stage: BootstrapStage::Flow,
+            substate: BootstrapSubstate::AwaitingApproval {
+                artifact: ContentHash::compute(b"flow"),
+                requested_seq: 5,
+            },
+        };
+        assert_eq!(awaiting.attention(), Attention::NeedsInput);
+
+        let running = RunState::Bootstrapping {
+            stage: BootstrapStage::Description,
+            substate: BootstrapSubstate::AgentRunning {
+                session: SessionId::nil(),
+                started_seq: 1,
+            },
+        };
+        assert_eq!(running.attention(), Attention::Working);
     }
 
     #[test]

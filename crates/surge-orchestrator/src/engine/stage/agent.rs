@@ -19,7 +19,7 @@ use surge_core::agent_config::AgentConfig;
 use surge_core::artifact_contract::{ArtifactDiagnosticSeverity, validate_artifact};
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::node::OutcomeDecl;
+use surge_core::node::{LedgerEffect, OutcomeDecl};
 use surge_core::profile::registry::ResolvedProfile;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
@@ -41,6 +41,10 @@ use crate::prompt::PromptRenderer;
 pub struct AgentStageParams<'a> {
     /// Key of the node being executed (used for tracing; wired to events in 6.2).
     pub node: &'a NodeKey,
+    /// Operator steer messages drained for this stage. When non-empty they are
+    /// prepended to the prompt and each is recorded via a `SteerDelivered`
+    /// event (Phase 2 B2). Empty on the common path.
+    pub steers: Vec<crate::engine::steer::QueuedSteer>,
     /// Agent node configuration from the spec graph.
     pub agent_config: &'a AgentConfig,
     /// Declared outcomes from the node — used to populate `SessionConfig::declared_outcomes`.
@@ -89,6 +93,11 @@ pub struct AgentStageParams<'a> {
     /// replies. Shared because multiple agent stages may run concurrently
     /// against the same bridge.
     pub pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
+    /// Ledger task id for the loop iteration this stage runs inside, when the
+    /// stage executes within a task loop. When `Some` and the reported outcome
+    /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
+    /// emits the matching task-ledger event. `None` outside a task loop.
+    pub active_task_id: Option<String>,
 }
 
 /// Pick the effective [`ApprovalConfig`] for an agent stage.
@@ -461,11 +470,41 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
+    // Prepend any queued operator steer messages to this turn's prompt (B2).
+    // Non-destructive: steering lands here, at the stage boundary, because ACP
+    // v1 offers no mid-turn injection channel.
+    let prompt_text = if p.steers.is_empty() {
+        prompt_text
+    } else {
+        let mut steered =
+            String::from("## Operator steering\nApply this guidance to the work below:\n");
+        for steer in &p.steers {
+            steered.push_str("- ");
+            steered.push_str(steer.message.trim());
+            steered.push('\n');
+        }
+        steered.push('\n');
+        steered.push_str(&prompt_text);
+        steered
+    };
     let prompt_msg = MessageContent::Text(prompt_text);
     p.bridge
         .send_message(session_id, prompt_msg)
         .await
         .map_err(|e| StageError::Bridge(format!("send_message: {e}")))?;
+
+    // Record each steer delivery only after the prompt was actually sent, so a
+    // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
+    for steer in &p.steers {
+        p.writer
+            .append_event(VersionedEventPayload::new(EventPayload::SteerDelivered {
+                id: steer.id.clone(),
+                node: p.node.clone(),
+                message: steer.message.clone(),
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+    }
 
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
@@ -529,6 +568,35 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     continue;
                 }
 
+                // Sealed-verifier gate. A `Verified` outcome is the sole path
+                // to a verified `Completed` ledger status, so it may only be
+                // reported from a sealed (read-only, no-network, no-shell)
+                // sandbox — a verifier that can edit the workspace cannot be
+                // trusted to certify it. Rejecting forces the agent to pick a
+                // different outcome; a misconfigured verifier exhausts retries
+                // and the stage fails with a clear diagnostic.
+                if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified
+                    && sandbox_cfg.mode != surge_core::sandbox::SandboxMode::ReadOnly
+                {
+                    record_outcome_rejection(
+                        RejectionRecordParams {
+                            writer: p.writer,
+                            bridge: p.bridge,
+                            node: p.node,
+                            session_id,
+                            outcome: &outcome,
+                            hook_id: "verification_authority",
+                            reason: "a Verified outcome requires a sealed \
+                                     read-only sandbox (no workspace writes)",
+                            source: "verification authority",
+                            max_rejections: max_outcome_rejections,
+                        },
+                        &mut outcome_rejection_attempts,
+                    )
+                    .await?;
+                    continue;
+                }
+
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
                     &outcome,
@@ -560,6 +628,8 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // fold rule populates RunMemory.artifacts deterministically.
                 // A missing or unreadable path is logged and skipped — it
                 // does not fail the stage.
+                let mut produced_hashes: BTreeMap<String, ContentHash> = BTreeMap::new();
+                let mut discovered_tasks_bytes: Option<Vec<u8>> = None;
                 if !artifacts_produced.is_empty() {
                     let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
                         .await
@@ -600,7 +670,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             );
                             continue;
                         }
-                        let bytes = match tokio::fs::read(&canonical_path).await {
+                        let mut bytes = match tokio::fs::read(&canonical_path).await {
                             Ok(b) => b,
                             Err(e) => {
                                 tracing::warn!(
@@ -613,6 +683,19 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                 continue;
                             },
                         };
+                        // Project memory: stamp provenance (run + node) into an
+                        // agent-authored `.surge/memory/` note BEFORE it is
+                        // content-addressed and stored, so the store blob, the
+                        // recorded hash, and the worktree file all agree. The
+                        // stamped note accumulates across runs (part of the diff).
+                        if is_project_memory_note(&relative_path)
+                            && let Some(stamped) = stamp_memory_bytes(&bytes, p.run_id, p.node)
+                        {
+                            tokio::fs::write(&canonical_path, &stamped)
+                                .await
+                                .map_err(|e| StageError::Storage(e.to_string()))?;
+                            bytes = stamped;
+                        }
                         let name =
                             logical_artifact_name(&relative_path, declared_path, &stem_counts);
                         if !emitted_names.insert(name.clone()) {
@@ -625,6 +708,10 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             .put(p.run_id, &name, &bytes)
                             .await
                             .map_err(|e| StageError::Storage(e.to_string()))?;
+                        produced_hashes.insert(name.clone(), artifact_ref.hash);
+                        if name == "discovered-tasks" {
+                            discovered_tasks_bytes = Some(bytes.clone());
+                        }
                         tracing::info!(
                             target: "engine::stage::agent",
                             node = %p.node,
@@ -655,6 +742,30 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                // Task ledger: when this stage runs inside a task loop and the
+                // reported outcome carries a ledger effect, append the matching
+                // ledger event (TaskStatusChanged / TaskVerified). The
+                // sealed-verifier gate above guarantees a `Verified` effect
+                // only reaches here from a read-only sandbox.
+                if let Some(task_id) = p.active_task_id.as_deref() {
+                    emit_ledger_event(
+                        p.writer,
+                        p.node,
+                        p.run_memory,
+                        task_id,
+                        outcome_ledger_effect(p.declared_outcomes, &outcome),
+                        &produced_hashes,
+                    )
+                    .await?;
+                    // Capture any work the agent discovered mid-task into the
+                    // ledger as pending tasks, each with a discovered_from edge
+                    // to the current task. A malformed artifact is logged and
+                    // skipped — it never fails the stage.
+                    if let Some(bytes) = discovered_tasks_bytes.as_deref() {
+                        emit_discovered_tasks(p.writer, p.node, task_id, bytes).await?;
+                    }
+                }
                 break outcome;
             },
             BridgeEvent::PermissionRequested {
@@ -999,6 +1110,159 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
     Ok(outcome)
+}
+
+/// Look up the [`LedgerEffect`] declared for `outcome` on this node, defaulting
+/// to [`LedgerEffect::None`] when the outcome is not found (or declares none).
+fn outcome_ledger_effect(declared: &[OutcomeDecl], outcome: &OutcomeKey) -> LedgerEffect {
+    declared
+        .iter()
+        .find(|decl| &decl.id == outcome)
+        .map_or(LedgerEffect::None, |decl| decl.ledger_effect)
+}
+
+/// Append the task-ledger event implied by `effect` for `task_id`.
+///
+/// - `ReadyForVerification` / `FailedVerification` → `TaskStatusChanged` (the
+///   `from` status is read from the folded ledger, defaulting to `Pending`).
+/// - `Verified` → `TaskVerified` with `evidence` = the produced
+///   `verification-report` artifact hash; failing that, any one produced
+///   artifact (the lowest logical name, since `produced_hashes` is keyed by
+///   name); failing that, a deterministic hash of the task id.
+/// - `None` → no event.
+async fn emit_ledger_event(
+    writer: &RunWriter,
+    node: &NodeKey,
+    memory: &surge_core::run_state::RunMemory,
+    task_id: &str,
+    effect: LedgerEffect,
+    produced_hashes: &BTreeMap<String, ContentHash>,
+) -> Result<(), StageError> {
+    use surge_core::roadmap::RoadmapStatus;
+
+    let payload = match effect {
+        LedgerEffect::None => return Ok(()),
+        LedgerEffect::ReadyForVerification | LedgerEffect::FailedVerification => {
+            let to = if matches!(effect, LedgerEffect::ReadyForVerification) {
+                RoadmapStatus::ReadyForVerification
+            } else {
+                RoadmapStatus::FailedVerification
+            };
+            let from = memory
+                .ledger
+                .tasks
+                .get(task_id)
+                .map_or(RoadmapStatus::Pending, |task| task.status);
+            EventPayload::TaskStatusChanged {
+                task_id: task_id.to_owned(),
+                from,
+                to,
+                authority_node: node.clone(),
+            }
+        },
+        LedgerEffect::Verified => {
+            let evidence = produced_hashes
+                .get("verification-report")
+                .or_else(|| produced_hashes.values().next())
+                .copied()
+                .unwrap_or_else(|| ContentHash::compute(task_id.as_bytes()));
+            EventPayload::TaskVerified {
+                task_id: task_id.to_owned(),
+                node: node.clone(),
+                evidence,
+            }
+        },
+    };
+    writer
+        .append_event(VersionedEventPayload::new(payload))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// True when `relative_path` is an agent-authored project-memory note
+/// (`.surge/memory/*.md`, excluding the human-facing `MEMORY.md` index).
+fn is_project_memory_note(relative_path: &Path) -> bool {
+    relative_path.starts_with(".surge/memory")
+        && relative_path.extension().and_then(|ext| ext.to_str()) == Some("md")
+        && relative_path.file_name().and_then(|name| name.to_str()) != Some("MEMORY.md")
+}
+
+/// Return `bytes` with a provenance comment prepended, or `None` when it is
+/// already stamped (idempotent across retry/replay) or not UTF-8. Pure: the
+/// caller writes the result to disk before content-addressing it. The marker is
+/// an HTML comment, invisible in rendered markdown but visible in source and to
+/// the next run's memory seed.
+fn stamp_memory_bytes(
+    bytes: &[u8],
+    run_id: surge_core::id::RunId,
+    node: &NodeKey,
+) -> Option<Vec<u8>> {
+    const MARKER: &str = "<!-- surge:memory";
+    let text = std::str::from_utf8(bytes).ok()?;
+    if text.trim_start().starts_with(MARKER) {
+        return None;
+    }
+    Some(format!("{MARKER} run={run_id} node={} -->\n{text}", node.as_str()).into_bytes())
+}
+
+/// Parse a produced `discovered-tasks` artifact and append one
+/// `TaskDiscovered` event per entry, attaching each to `discovered_from`.
+///
+/// Lenient: a malformed or invalid artifact is logged and skipped rather than
+/// failing the stage — discovered work is advisory, and an AFK run should not
+/// abort because a side artifact was ill-formed.
+async fn emit_discovered_tasks(
+    writer: &RunWriter,
+    node: &NodeKey,
+    discovered_from: &str,
+    bytes: &[u8],
+) -> Result<(), StageError> {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                node = %node,
+                err = %error,
+                "discovered-tasks artifact is not UTF-8 — skipping"
+            );
+            return Ok(());
+        },
+    };
+    let artifact: surge_core::DiscoveredTasksArtifact = match toml::from_str(text) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            tracing::warn!(
+                target: "engine::stage::agent",
+                node = %node,
+                err = %error,
+                "discovered-tasks artifact failed to parse — skipping"
+            );
+            return Ok(());
+        },
+    };
+    let issues = artifact.validate();
+    if !issues.is_empty() {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            node = %node,
+            issues = ?issues,
+            "discovered-tasks artifact is invalid — skipping"
+        );
+        return Ok(());
+    }
+    for entry in artifact.tasks {
+        writer
+            .append_event(VersionedEventPayload::new(EventPayload::TaskDiscovered {
+                task_id: entry.id,
+                discovered_from: discovered_from.to_owned(),
+                title: entry.title,
+            }))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+    }
+    Ok(())
 }
 
 struct RejectionRecordParams<'a> {
@@ -2047,6 +2311,7 @@ mod tests {
                     system: "Implement".into(),
                 },
                 inspector_ui: InspectorUi::default(),
+                verification: Default::default(),
             },
             provenance: Provenance::Bundled,
             chain: vec![profile_key],

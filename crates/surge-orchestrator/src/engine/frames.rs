@@ -50,6 +50,28 @@ pub struct LoopFrame {
     pub traversal_counts: HashMap<EdgeKey, u32>,
 }
 
+/// Ledger task id of the innermost active loop iteration, if any.
+///
+/// Scans the frame stack from the top (innermost first) for a `Loop` frame
+/// whose current item is a table carrying a string `id` field — the shape of a
+/// roadmap task (`roadmap.milestones[*].tasks`). Returns the first such id, so
+/// a body stage nested inside a task loop can attribute its ledger events to
+/// the current task. `None` when no active loop iterates over identified items.
+#[must_use]
+pub fn active_task_id(frames: &[Frame]) -> Option<String> {
+    frames.iter().rev().find_map(|frame| {
+        let Frame::Loop(loop_frame) = frame else {
+            return None;
+        };
+        loop_frame
+            .items
+            .get(loop_frame.current_index as usize)
+            .and_then(|item| item.get("id"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
 /// Subgraph execution state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubgraphFrame {
@@ -148,6 +170,59 @@ mod tests {
             parallelism: ParallelismMode::Sequential,
             gate_after_each: false,
         }
+    }
+
+    fn loop_frame_over(items: Vec<toml::Value>, index: u32) -> Frame {
+        Frame::Loop(LoopFrame {
+            loop_node: NodeKey::try_from("loop_1").unwrap(),
+            config: empty_loop_config(),
+            items,
+            current_index: index,
+            attempts_remaining: 0,
+            return_to: NodeKey::try_from("after").unwrap(),
+            traversal_counts: HashMap::new(),
+        })
+    }
+
+    fn task_item(id: &str) -> toml::Value {
+        let mut table = toml::value::Table::new();
+        table.insert("id".into(), toml::Value::String(id.into()));
+        table.insert("title".into(), toml::Value::String(format!("Task {id}")));
+        toml::Value::Table(table)
+    }
+
+    #[test]
+    fn active_task_id_none_without_loop() {
+        assert_eq!(active_task_id(&[]), None);
+    }
+
+    #[test]
+    fn active_task_id_reads_current_loop_item() {
+        let frames = vec![loop_frame_over(
+            vec![task_item("m1-t1"), task_item("m1-t2")],
+            1,
+        )];
+        assert_eq!(active_task_id(&frames).as_deref(), Some("m1-t2"));
+    }
+
+    #[test]
+    fn active_task_id_prefers_innermost_loop() {
+        // Outer milestone loop, inner task loop — the innermost (last-pushed)
+        // task frame wins.
+        let frames = vec![
+            loop_frame_over(vec![task_item("m1")], 0),
+            loop_frame_over(vec![task_item("m1-t3")], 0),
+        ];
+        assert_eq!(active_task_id(&frames).as_deref(), Some("m1-t3"));
+    }
+
+    #[test]
+    fn active_task_id_ignores_items_without_id() {
+        let frames = vec![loop_frame_over(
+            vec![toml::Value::String("plain".into())],
+            0,
+        )];
+        assert_eq!(active_task_id(&frames), None);
     }
 
     #[test]

@@ -37,7 +37,9 @@ pub fn validate_key_chars(s: &str, max_len: usize, extras: &[u8]) -> Result<(), 
             max: max_len,
         });
     }
-    let first = s.chars().next().expect("non-empty checked above");
+    let Some(first) = s.chars().next() else {
+        return Err(KeyParseError::Empty);
+    };
     if !first.is_ascii_alphabetic() {
         return Err(KeyParseError::InvalidStart { ch: first });
     }

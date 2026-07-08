@@ -657,6 +657,49 @@ async fn dispatch(
             }),
         },
 
+        DaemonRequest::SubmitSteer {
+            request_id,
+            run_id,
+            message,
+        } => match facade.submit_steer(run_id, message).await {
+            Ok(steer_id) => Some(DaemonResponse::SubmitSteerOk {
+                request_id,
+                steer_id,
+            }),
+            Err(e) => Some(DaemonResponse::Error {
+                request_id,
+                code: ErrorCode::EngineError,
+                message: format!("{e}"),
+            }),
+        },
+
+        DaemonRequest::ListSteers { request_id, run_id } => {
+            match facade.list_steers(run_id).await {
+                Ok(steers) => Some(DaemonResponse::ListSteersOk { request_id, steers }),
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
+        },
+
+        DaemonRequest::CancelSteer {
+            request_id,
+            run_id,
+            steer_id,
+        } => match facade.cancel_steer(run_id, steer_id).await {
+            Ok(removed) => Some(DaemonResponse::CancelSteerOk {
+                request_id,
+                removed,
+            }),
+            Err(e) => Some(DaemonResponse::Error {
+                request_id,
+                code: ErrorCode::EngineError,
+                message: format!("{e}"),
+            }),
+        },
+
         DaemonRequest::ListRuns { request_id } => {
             // Merge two sources: the engine's view of currently
             // active runs (via the facade) plus the daemon's queued

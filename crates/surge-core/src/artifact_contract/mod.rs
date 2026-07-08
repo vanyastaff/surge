@@ -18,7 +18,8 @@ use crate::roadmap::RoadmapArtifact;
 
 pub use contract::{
     ARTIFACT_SCHEMA_VERSION, ArtifactContract, ArtifactContractRef, ArtifactFormat, ArtifactKind,
-    ParseArtifactKindError, SchemaVersionOwner, all_contracts, contract_for,
+    ParseArtifactKindError, ROADMAP_SCHEMA_VERSION, SchemaVersionOwner, all_contracts,
+    contract_for,
 };
 pub use diagnostic::{
     ArtifactDiagnosticCode, ArtifactDiagnosticSeverity, ArtifactValidationDiagnostic,
@@ -107,6 +108,12 @@ fn validate_artifact_text_into(
         },
         ArtifactKind::Roadmap => kinds::roadmap::validate_roadmap(report, path, content),
         ArtifactKind::RoadmapPatch => kinds::roadmap_patch::validate_roadmap_patch(report, content),
+        ArtifactKind::DiscoveredTasks => {
+            kinds::discovered_tasks::validate_discovered_tasks(report, content)
+        },
+        ArtifactKind::VerificationReport => {
+            kinds::verification_report::validate_verification_report(report, content)
+        },
         ArtifactKind::Spec => kinds::spec::validate_spec(report, path, content),
         ArtifactKind::Adr => kinds::adr::validate_adr_markdown(report, content),
         ArtifactKind::Story => kinds::story::validate_story_markdown(report, content),
@@ -134,6 +141,8 @@ mod tests {
                 ArtifactKind::Requirements,
                 ArtifactKind::Roadmap,
                 ArtifactKind::RoadmapPatch,
+                ArtifactKind::DiscoveredTasks,
+                ArtifactKind::VerificationReport,
                 ArtifactKind::Spec,
                 ArtifactKind::Adr,
                 ArtifactKind::Story,
@@ -200,6 +209,117 @@ mod tests {
         assert_eq!(report.error_count(), 1);
         assert_eq!(report.warning_count(), 1);
         assert!(report.into_result().is_err());
+    }
+
+    #[test]
+    fn discovered_tasks_valid_and_invalid() {
+        let ok = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = "m1-t5"
+title = "Handle empty CSV export"
+"#,
+        );
+        assert!(ok.is_valid(), "{ok:#?}");
+
+        // Duplicate ids are rejected.
+        let dup = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = "dup"
+title = "One"
+
+[[tasks]]
+id = "dup"
+title = "Two"
+"#,
+        );
+        assert!(!dup.is_valid());
+        assert_eq!(
+            diagnostic_codes(&dup),
+            vec![ArtifactDiagnosticCode::DuplicateIdentifier]
+        );
+    }
+
+    #[test]
+    fn discovered_tasks_empty_id_and_title_produce_correct_codes() {
+        let report = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = ""
+title = "No id"
+
+[[tasks]]
+id = "t2"
+title = ""
+"#,
+        );
+        assert!(!report.is_valid());
+        let codes = diagnostic_codes(&report);
+        assert!(codes.contains(&ArtifactDiagnosticCode::MissingField));
+        // Neither issue is a duplicate-id error.
+        assert!(!codes.contains(&ArtifactDiagnosticCode::DuplicateIdentifier));
+    }
+
+    #[test]
+    fn verification_report_valid_and_invalid() {
+        let ok = validate_artifact(
+            ArtifactKind::VerificationReport,
+            Some(Path::new("verification-report.toml")),
+            r#"schema_version = 1
+task_id = "m1-t3"
+outcome = "passed"
+summary = "All checks green."
+
+[[checks]]
+command = "cargo nextest run"
+result = "passed"
+"#,
+        );
+        assert!(ok.is_valid(), "{ok:#?}");
+
+        // Missing required `task_id` is rejected.
+        let missing = validate_artifact(
+            ArtifactKind::VerificationReport,
+            Some(Path::new("verification-report.toml")),
+            r#"schema_version = 1
+outcome = "passed"
+"#,
+        );
+        assert!(!missing.is_valid());
+        assert!(diagnostic_codes(&missing).contains(&ArtifactDiagnosticCode::MissingField));
+
+        // An unknown outcome value fails to deserialize.
+        let bad_outcome = validate_artifact(
+            ArtifactKind::VerificationReport,
+            Some(Path::new("verification-report.toml")),
+            r#"schema_version = 1
+task_id = "m1-t3"
+outcome = "maybe"
+"#,
+        );
+        assert!(!bad_outcome.is_valid());
+        assert_eq!(
+            diagnostic_codes(&bad_outcome),
+            vec![ArtifactDiagnosticCode::InvalidToml]
+        );
+    }
+
+    fn diagnostic_codes(report: &ArtifactValidationReport) -> Vec<ArtifactDiagnosticCode> {
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect()
     }
 
     #[test]

@@ -19,6 +19,7 @@ profile-level `on_outcome` hooks reject the outcome before it is persisted.
 | Description | `description.md` | Markdown | none | [Description](description.md) |
 | Requirements | `requirements.md` | Markdown | none | [Requirements](requirements.md) |
 | Roadmap | `roadmap.toml` | TOML | `roadmap.md` | [Roadmap](roadmap.md) |
+| Discovered Tasks | `discovered-tasks.toml` | TOML | none | [Discovered Tasks](discovered-tasks.md) |
 | Spec | `spec.toml` | TOML | `spec.md` | [Spec](spec.md) |
 | ADR | `docs/adr/<NNNN>-<slug>.md` | Markdown | none | [ADR](adr.md) |
 | Story | `stories/story-NNN.md` | Markdown | none | [Story](story.md) |

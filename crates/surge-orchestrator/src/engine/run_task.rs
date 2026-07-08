@@ -86,6 +86,10 @@ pub(crate) struct RunTaskParams {
     /// owns the writer, so amendments enter through this queue and are appended
     /// at safe graph boundaries.
     pub roadmap_amendments: mpsc::Receiver<RoadmapAmendmentCommand>,
+    /// Queued operator steer messages, shared with the `ActiveRun` entry. The
+    /// run task drains this before opening each agent stage and prepends the
+    /// messages to that stage's prompt (Phase 2 B2, non-destructive steering).
+    pub pending_steers: crate::engine::steer::SteerQueue,
     /// Engine-side tracker for in-flight ACP elevation requests. Shared with
     /// the `ActiveRun` entry so `Engine::resolve_elevation` can fire
     /// decisions from outside the stage event loop.
@@ -559,8 +563,27 @@ async fn execute_agent_node(
     node: &surge_core::node::Node,
     cfg: &surge_core::agent_config::AgentConfig,
 ) -> Result<StageOutcome, StageError> {
+    // Drain any operator steer messages queued for this run and hand them to
+    // the stage, which prepends them to the prompt and records delivery. This
+    // is the safe stage-boundary steering point (ACP v1 has no mid-turn inject).
+    //
+    // Skip the bootstrap flow-generator: an operator steering the *work* should
+    // not have their guidance consumed by graph generation. The steers stay
+    // queued for the first real implementation stage.
+    let steers = if crate::engine::bootstrap::is_flow_generator_profile(cfg.profile.as_str()) {
+        Vec::new()
+    } else {
+        let mut queue = params.pending_steers.lock().await;
+        std::mem::take(&mut queue.pending)
+    };
+    // Kept so a stage that fails before delivery doesn't silently drop them: on
+    // error we return them to the front of the queue. A post-send failure may
+    // re-deliver on the retry, which is acceptable — the operator's guidance
+    // should apply to the re-attempt too.
+    let steers_backup = steers.clone();
     let stage_result = execute_agent_stage(AgentStageParams {
         node: &state.cursor.node,
+        steers,
         agent_config: cfg,
         declared_outcomes: &node.declared_outcomes,
         bridge: &params.bridge,
@@ -577,6 +600,7 @@ async fn execute_agent_node(
         profile_registry: params.profile_registry.clone(),
         hook_executor: &state.hook_executor,
         pending_elevations: state.pending_elevations.clone(),
+        active_task_id: crate::engine::frames::active_task_id(&state.frames),
     })
     .await;
 
@@ -586,6 +610,21 @@ async fn execute_agent_node(
     } else {
         stage_result
     };
+
+    // Return undelivered steers to the front of the queue if the stage failed,
+    // so operator guidance survives a stage error / retry instead of vanishing —
+    // but drop any the operator cancelled while it was in-flight, so a cancel
+    // isn't reversed by the re-queue.
+    if stage_result.is_err() && !steers_backup.is_empty() {
+        let mut queue = params.pending_steers.lock().await;
+        let mut restored: Vec<_> = steers_backup
+            .into_iter()
+            .filter(|steer| !queue.cancelled.contains(&steer.id))
+            .collect();
+        restored.append(&mut queue.pending);
+        queue.pending = restored;
+    }
+
     stage_result.map(StageOutcome::Routed)
 }
 
@@ -1515,6 +1554,7 @@ mod tests {
                     description: String::new(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
+                    ledger_effect: Default::default(),
                 })
                 .collect(),
             config: NodeConfig::Agent(AgentConfig {

@@ -763,9 +763,10 @@ fn find_task_index(milestone: &RoadmapMilestone, task_id: &str) -> Option<usize>
 
 const fn status_conflict_code(status: RoadmapStatus) -> Option<RoadmapPatchConflictCode> {
     match status {
-        RoadmapStatus::Running | RoadmapStatus::Paused => {
-            Some(RoadmapPatchConflictCode::RunningMilestone)
-        },
+        RoadmapStatus::Running
+        | RoadmapStatus::Paused
+        | RoadmapStatus::ReadyForVerification
+        | RoadmapStatus::FailedVerification => Some(RoadmapPatchConflictCode::RunningMilestone),
         RoadmapStatus::Completed | RoadmapStatus::Failed | RoadmapStatus::Skipped => {
             Some(RoadmapPatchConflictCode::CompletedHistory)
         },
@@ -1369,20 +1370,38 @@ fn validate_replace_draft_item(
         ));
     }
     match replacement {
-        RoadmapPatchItem::Milestone { milestone } => validate_required_text(
-            &milestone.title,
-            RoadmapPatchValidationCode::MissingTitle,
-            format!("operations[{index}].replacement.milestone.title"),
-            "replacement milestone title must not be empty",
-            issues,
-        ),
-        RoadmapPatchItem::Task { task } => validate_required_text(
-            &task.title,
-            RoadmapPatchValidationCode::MissingTitle,
-            format!("operations[{index}].replacement.task.title"),
-            "replacement task title must not be empty",
-            issues,
-        ),
+        RoadmapPatchItem::Milestone { milestone } => {
+            validate_required_text(
+                &milestone.id,
+                RoadmapPatchValidationCode::MissingTargetReference,
+                format!("operations[{index}].replacement.milestone.id"),
+                "replacement milestone id must not be empty",
+                issues,
+            );
+            validate_required_text(
+                &milestone.title,
+                RoadmapPatchValidationCode::MissingTitle,
+                format!("operations[{index}].replacement.milestone.title"),
+                "replacement milestone title must not be empty",
+                issues,
+            );
+        },
+        RoadmapPatchItem::Task { task } => {
+            validate_required_text(
+                &task.id,
+                RoadmapPatchValidationCode::MissingTargetReference,
+                format!("operations[{index}].replacement.task.id"),
+                "replacement task id must not be empty",
+                issues,
+            );
+            validate_required_text(
+                &task.title,
+                RoadmapPatchValidationCode::MissingTitle,
+                format!("operations[{index}].replacement.task.title"),
+                "replacement task title must not be empty",
+                issues,
+            );
+        },
     }
 }
 

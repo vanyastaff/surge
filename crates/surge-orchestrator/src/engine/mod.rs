@@ -48,6 +48,7 @@ pub mod run_task;
 pub mod sandbox_factory;
 pub mod snapshot;
 pub mod stage;
+pub mod steer;
 pub mod tools;
 pub mod validate;
 pub mod version_probe;

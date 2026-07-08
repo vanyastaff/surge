@@ -100,6 +100,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -117,6 +118,7 @@ async fn outcome_reported_emits_artifact_produced_for_each_declared_path() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();
@@ -238,6 +240,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -255,6 +258,7 @@ async fn missing_artifact_path_logs_warning_and_skips_event() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();
@@ -346,6 +350,7 @@ subtasks = [
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -363,6 +368,7 @@ subtasks = [
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();
@@ -447,6 +453,7 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -464,6 +471,7 @@ async fn artifact_paths_that_escape_worktree_are_skipped() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();
@@ -553,6 +561,7 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let hook_executor = HookExecutor::new();
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -570,6 +579,7 @@ async fn profile_artifact_contract_rejects_invalid_adr_without_shell_hook() {
         profile_registry: Some(registry),
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("stage should retry after invalid ADR contract rejection");

@@ -1,0 +1,17 @@
+# cargo-audit configuration.
+#
+# Ignored advisories are reviewed exceptions we cannot currently remediate, not
+# dismissals. Revisit whenever the offending dependency subtree updates.
+[advisories]
+ignore = [
+    # quick-xml quadratic-attribute-parse (0194) and unbounded-namespace-alloc
+    # (0195), both fixed in >=0.41.0. quick-xml 0.30/0.37/0.39 enter the tree
+    # ONLY through the optional surge-ui GUI stack (gpui -> ashpd -> wayland-client
+    # -> wayland-scanner), which pins ^0.30/^0.37/^0.39; there is no path to
+    # 0.41 without upstream wayland/ashpd/gpui releases. The advisories are
+    # parser DoS vectors on attacker-supplied XML - not reachable from Surge's
+    # headless runtime (which never links surge-ui). Revisit when the GUI stack
+    # updates quick-xml.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

@@ -40,7 +40,8 @@ pub fn maintain(
         RoadmapPatchApprovalRequested, RoadmapPatchDrafted, RoadmapUpdated, RunAborted,
         RunCompleted, RunFailed, RunStarted, SandboxElevationDecided, SandboxElevationRequested,
         SessionClosed, SessionOpened, StageCompleted, StageEntered, StageFailed,
-        StageInputsResolved, TokensConsumed, ToolCalled, ToolResultReceived,
+        StageInputsResolved, TaskDiscovered, TaskStatusChanged, TaskVerified, TokensConsumed,
+        ToolCalled, ToolResultReceived,
     };
     match payload {
         StageEntered { node, attempt } => {
@@ -341,6 +342,76 @@ pub fn maintain(
                 ],
             )?;
         },
+        TaskStatusChanged {
+            task_id,
+            to,
+            authority_node,
+            ..
+        } => {
+            // Upsert status. Mirror the authoritative fold
+            // (`run_state::record_status_change`): a transition to any
+            // non-Completed status CLEARS `verified`, so a re-worked /
+            // re-verified task can't keep a stale verified=1 with, say,
+            // ready_for_verification. Only a →Completed transition preserves it.
+            tx.execute(
+                "INSERT INTO task_ledger
+                    (task_id, status, verified, last_authority_node, updated_seq)
+                 VALUES (?, ?, 0, ?, ?)
+                 ON CONFLICT(task_id) DO UPDATE SET
+                    status = excluded.status,
+                    verified = CASE WHEN excluded.status = 'completed'
+                                    THEN task_ledger.verified ELSE 0 END,
+                    last_authority_node = excluded.last_authority_node,
+                    updated_seq = excluded.updated_seq",
+                rusqlite::params![
+                    task_id,
+                    to.to_string(),
+                    authority_node.as_str(),
+                    seq.0 as i64,
+                ],
+            )?;
+        },
+        TaskDiscovered {
+            task_id,
+            discovered_from,
+            ..
+        } => {
+            // First-write-wins: a duplicate discovery is elided, matching the
+            // fold's `record_discovered` idempotency.
+            tx.execute(
+                "INSERT OR IGNORE INTO task_ledger
+                    (task_id, status, verified, discovered_from, updated_seq)
+                 VALUES (?, 'pending', 0, ?, ?)",
+                rusqlite::params![task_id, discovered_from, seq.0 as i64],
+            )?;
+        },
+        TaskVerified { task_id, node, .. } => {
+            // The per-run view (and the cross-run index mirrored from it by
+            // `sync_task_ledger_index`) TRUSTS engine-emitted TaskVerified: the
+            // engine enforces verification authority before emit (the sealed
+            // gate in M3), so a normal run never produces an unauthorized one.
+            //
+            // The graph-aware authority rejection in `run_state::LedgerState`
+            // (`node_has_verification_authority`) applies only to the LIVE
+            // folded state — it is NOT re-applied here, and rebuild replays
+            // through this same `maintain` path (no graph). Re-checking here
+            // isn't possible today because the fold drops its ledger memory at
+            // the terminal transition, which is exactly why this persisted view
+            // exists. So a forged log would surface as verified in the CLI
+            // index; hardening that (fold-with-graph up to the last
+            // non-terminal cursor at mirror time) is a tracked follow-up.
+            tx.execute(
+                "INSERT INTO task_ledger
+                    (task_id, status, verified, last_authority_node, updated_seq)
+                 VALUES (?, 'completed', 1, ?, ?)
+                 ON CONFLICT(task_id) DO UPDATE SET
+                    status = 'completed',
+                    verified = 1,
+                    last_authority_node = excluded.last_authority_node,
+                    updated_seq = excluded.updated_seq",
+                rusqlite::params![task_id, node.as_str(), seq.0 as i64],
+            )?;
+        },
         // All other variants currently produce no view changes.
         // Listed explicitly here so a future variant addition forces a
         // conscious decision rather than silently falling through.
@@ -445,7 +516,8 @@ pub fn rebuild(tx: &Transaction<'_>) -> Result<(), WriterError> {
          DELETE FROM pending_approvals;
          DELETE FROM cost_summary;
          DELETE FROM graph_snapshots;
-         DELETE FROM roadmap_patches;",
+         DELETE FROM roadmap_patches;
+         DELETE FROM task_ledger;",
     )?;
     Ok(())
 }
@@ -1187,11 +1259,116 @@ mod tests {
             "pending_approvals",
             "cost_summary",
             "roadmap_patches",
+            "task_ledger",
         ] {
             let n: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap();
             assert_eq!(n, 0, "table {table} should be empty");
         }
+    }
+
+    #[test]
+    fn task_ledger_events_maintain_view() {
+        use surge_core::RoadmapStatus;
+
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        // Discover a task, move it to ready_for_verification, then verify it.
+        maintain(
+            &tx,
+            EventSeq(1),
+            1_700_000_000_001,
+            &EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "seed".into(),
+                title: "Do the thing".into(),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            1_700_000_000_002,
+            &EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: n("impl_1"),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(3),
+            1_700_000_000_003,
+            &EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: n("verify_1"),
+                evidence: ContentHash::compute(b"report"),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let (status, verified, discovered_from, authority, updated_seq): (
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            i64,
+        ) = conn
+            .query_row(
+                "SELECT status, verified, discovered_from, last_authority_node, updated_seq
+                 FROM task_ledger WHERE task_id = ?",
+                rusqlite::params!["m1-t1"],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(verified, 1);
+        // discovered_from survives later status/verify upserts.
+        assert_eq!(discovered_from.as_deref(), Some("seed"));
+        assert_eq!(authority.as_deref(), Some("verify_1"));
+        assert_eq!(updated_seq, 3);
+    }
+
+    #[test]
+    fn duplicate_task_discovered_is_ignored_in_view() {
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        maintain(
+            &tx,
+            EventSeq(1),
+            1_700_000_000_001,
+            &EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "first".into(),
+                title: "one".into(),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            1_700_000_000_002,
+            &EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "second".into(),
+                title: "dup".into(),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let (count, discovered_from): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(discovered_from) FROM task_ledger WHERE task_id = ?",
+                rusqlite::params!["m1-t1"],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(discovered_from.as_deref(), Some("first"));
     }
 }

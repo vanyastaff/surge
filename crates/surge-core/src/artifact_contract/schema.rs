@@ -52,6 +52,8 @@ pub const fn markdown_outline(kind: ArtifactKind) -> Option<&'static [&'static s
         ArtifactKind::Plan => Some(&["Settings", "Tasks"]),
         ArtifactKind::Roadmap
         | ArtifactKind::RoadmapPatch
+        | ArtifactKind::DiscoveredTasks
+        | ArtifactKind::VerificationReport
         | ArtifactKind::Spec
         | ArtifactKind::Flow => None,
     }
@@ -74,6 +76,12 @@ pub fn json_schema_for(kind: ArtifactKind) -> Option<serde_json::Value> {
         ArtifactKind::Spec => Some(schema_value::<SpecArtifact>("spec.json")),
         ArtifactKind::Roadmap => Some(schema_value::<RoadmapArtifact>("roadmap.json")),
         ArtifactKind::RoadmapPatch => Some(schema_value::<RoadmapPatch>("roadmap-patch.json")),
+        ArtifactKind::DiscoveredTasks => Some(schema_value::<
+            crate::roadmap::DiscoveredTasksArtifact,
+        >("discovered-tasks.json")),
+        ArtifactKind::VerificationReport => Some(schema_value::<
+            crate::roadmap::VerificationReportArtifact,
+        >("verification-report.json")),
         ArtifactKind::Adr => Some(adr_frontmatter_schema()),
         ArtifactKind::Flow
         | ArtifactKind::Description

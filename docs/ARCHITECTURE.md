@@ -94,7 +94,9 @@ NotStarted → Bootstrapping → Pipeline → Terminal
 
 ### Event types (selected)
 
-`RunStarted`, `BootstrapStageStarted`, `StageEntered`, `ToolCalled`, `ToolReturned`, `OutcomeReported`, `StageCompleted`, `StageFailed`, `EdgeTraversed`, `ApprovalRequested`, `ApprovalDecided`, `SandboxElevationRequested`, `TokensConsumed`, `RunCompleted`, `RunFailed`, `RunAborted`.
+`RunStarted`, `BootstrapStageStarted`, `StageEntered`, `ToolCalled`, `ToolReturned`, `OutcomeReported`, `StageCompleted`, `StageFailed`, `EdgeTraversed`, `ApprovalRequested`, `ApprovalDecided`, `SandboxElevationRequested`, `TokensConsumed`, `TaskStatusChanged`, `TaskDiscovered`, `TaskVerified`, `RunCompleted`, `RunFailed`, `RunAborted`.
+
+The task-ledger events (`TaskStatusChanged` / `TaskDiscovered` / `TaskVerified`, schema v5) fold into a `LedgerState` inside `RunMemory`. `TaskVerified` is the **sole** path to a verified `Completed` ledger status, and fold honors it only when the reporting node declares a `LedgerEffect::Verified` outcome in the active graph — an unauthorized event is counted as a rejected verification and the task stays unverified (defense in depth against a tampered log; the engine enforces authority at emit time). The engine emits these events from agent stages running inside a task loop: an outcome's declared `LedgerEffect` drives `TaskStatusChanged` / `TaskVerified`, a produced `discovered-tasks.toml` artifact drives `TaskDiscovered`, and a `Verified` outcome is rejected unless the node runs a sealed read-only sandbox. See [`product-strategy.md`](product-strategy.md) Pillar A and the Phase 1 plan.
 
 Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Folding is **deterministic**: no wall-clock dependencies, no random IDs introduced during fold.
 
@@ -287,7 +289,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 ```
 
 - **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as `bincode`.
-- **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted.
+- **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, `task_ledger`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted. The registry DB additionally holds a cross-run `task_ledger_index` (mirrors each run's ledger for `surge ready` / `surge ledger`, the same pattern as `roadmap_patch_index`).
 - **Concurrency** — only the daemon writes; CLI / UI / bot are readers. WAL mode lets readers proceed without blocking the writer.
 - **Artifacts** — content-addressed files on disk, referenced from events.
 - **Worktrees** — one git worktree per run via `git2`. Cleaned up on completion; merged or discarded based on terminal outcome.
@@ -325,13 +327,20 @@ Dependencies flow downward — no cycles. `surge-core` is leaf; binaries (`surge
 
 ## 14. Open questions / direction _(intent)_
 
-> This is where we will record what we want to build next, in our own words. Everything above is the architecture as it stands today; everything below is the conversation about where it should go.
+> Product direction now has its own decision note: [`product-strategy.md`](product-strategy.md) (positioning, evidence from the 2026-07 market research, pillars, sequencing, metrics). The market survey behind it is [`agent-os-landscape.md`](agent-os-landscape.md). Summary of the bets:
+
+- **Pillar A — completion machinery** (the moat): typed task ledger with dependency + `discovered-from` edges and context-budgeted task sizing (successor of prose `roadmap.md`); verifier nodes as the sole write path to `done`, running sealed (read-only, no network); git-committed `.surge/memory/` with a staleness audit; spec deltas extending the roadmap-amendment machinery; branch summaries on fork.
+- **Pillar B — fleet interaction** (native, rendered from the event log; no PTY, no scraping): `surge inbox` triaged Needs input / Working / Done; a steering queue (`surge steer`) delivering operator messages at safe boundaries; run cockpit; `surge run checkout` promote-to-foreground; Telegram digest mode.
+- **Build, don't bridge**: Herdr / Pi / BridgeMind are design references whose best ideas are implemented natively; no adapters to third-party multiplexers or agent-specific RPC.
+
+Open questions still unresolved:
 
 - The exact sandcastle-like ergonomics we want at the CLI surface — should `surge engine run "<prompt>"` map to a default `flow.toml` template, or always go through full bootstrap? Should `surge engine run` be renamed back to `surge run` as the single execution entry point?
 - How template authorship should feel — single TOML, or split prompt + flow?
 - The story for shared profiles across projects (registry vs git-tracked).
-- AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping?
-- Loop-level token budgeting and when to split a run into chained smaller runs.
+- AFK approval ergonomics on phone vs desktop — when do we trust silently, when do we ping? (Partially answered by the inbox/digest direction: push vs poll must be user-configurable.)
+- Loop-level token budgeting and when to split a run into chained smaller runs. (Partially answered by the ledger direction: tasks are sized to a context budget at bootstrap time.)
+- Ledger representation: extend `roadmap.toml`-style artifacts, or a first-class store beside the event log?
 
 ## See Also
 

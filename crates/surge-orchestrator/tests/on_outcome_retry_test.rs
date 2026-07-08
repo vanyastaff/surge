@@ -166,6 +166,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -183,6 +184,7 @@ async fn rejected_outcome_lets_agent_retry_with_different_outcome() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("stage should complete with the retry outcome");
@@ -268,6 +270,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -285,6 +288,7 @@ async fn profile_on_outcome_hook_rejects_and_retries() {
         profile_registry: Some(registry),
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("stage should complete after profile hook rejection retry");
@@ -350,6 +354,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -367,6 +372,7 @@ async fn retry_budget_exhausted_emits_stage_failed() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await;
 

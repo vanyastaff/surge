@@ -43,6 +43,7 @@ Graph {
                     description: "All milestones processed",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Loop(
@@ -73,6 +74,7 @@ Graph {
                     description: "Roadmap produced",
                     edge_kind_hint: Forward,
                     is_terminal: false,
+                    ledger_effect: None,
                 },
             ],
             config: Agent(
@@ -142,6 +144,7 @@ Graph {
                             description: "All tasks processed",
                             edge_kind_hint: Forward,
                             is_terminal: true,
+                            ledger_effect: None,
                         },
                     ],
                     config: Loop(
@@ -172,6 +175,7 @@ Graph {
                             description: "Tasks planned",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(
@@ -227,6 +231,7 @@ Graph {
                             description: "Step implemented",
                             edge_kind_hint: Forward,
                             is_terminal: true,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(
@@ -267,6 +272,7 @@ Graph {
                             description: "All steps done",
                             edge_kind_hint: Forward,
                             is_terminal: true,
+                            ledger_effect: None,
                         },
                     ],
                     config: Loop(
@@ -297,6 +303,7 @@ Graph {
                             description: "Steps planned",
                             edge_kind_hint: Forward,
                             is_terminal: false,
+                            ledger_effect: None,
                         },
                     ],
                     config: Agent(

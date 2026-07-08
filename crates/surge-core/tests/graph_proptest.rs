@@ -74,6 +74,7 @@ fn build_linear_graph(keys: Vec<NodeKey>) -> Graph {
                 description: "Forward".into(),
                 edge_kind_hint: EdgeKind::Forward,
                 is_terminal: false,
+                ledger_effect: Default::default(),
             }]
         };
         nodes.insert(

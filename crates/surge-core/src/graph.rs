@@ -24,6 +24,22 @@ pub struct Graph {
     pub subgraphs: BTreeMap<SubgraphKey, Subgraph>,
 }
 
+impl Graph {
+    /// Find a node by key at the top level **or inside any subgraph**.
+    ///
+    /// Node keys are unique across the graph (top-level + subgraph bodies), so a
+    /// single lookup is unambiguous. Prefer this over open-coding the
+    /// top-level-plus-subgraphs walk: a top-level-only `nodes.get()` silently
+    /// misses nodes declared in a loop/subgraph body (the class of bug behind
+    /// the verification-authority and resolve-gate-options fixes).
+    #[must_use]
+    pub fn find_node(&self, key: &NodeKey) -> Option<&Node> {
+        self.nodes
+            .get(key)
+            .or_else(|| self.subgraphs.values().find_map(|sg| sg.nodes.get(key)))
+    }
+}
+
 /// A named, reusable inner graph. Lighter than `Graph` — no metadata,
 /// no nested subgraphs library.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

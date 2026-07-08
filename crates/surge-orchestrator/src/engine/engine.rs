@@ -61,6 +61,9 @@ pub(crate) struct ActiveRun {
     /// Tracker for in-flight ACP elevation requests. `Engine::resolve_elevation`
     /// looks up entries here and fires their decision oneshot.
     pub pending_elevations: Arc<crate::engine::elevation::PendingElevations>,
+    /// Queued operator steer messages. `Engine::submit_steer` pushes here; the
+    /// run task drains at the next stage boundary and delivers into the prompt.
+    pub pending_steers: crate::engine::steer::SteerQueue,
 }
 
 impl Engine {
@@ -300,15 +303,21 @@ impl Engine {
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
         let pending_elevations = crate::engine::elevation::PendingElevations::new();
+        let pending_steers = crate::engine::steer::new_queue();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers: pending_steers.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
+        // Captured before `worktree_path` moves into params — used by the
+        // post-completion task-ledger mirror. Matches the RunStarted event's
+        // `project_path` (which is the worktree path today).
+        let project_path_for_ledger = worktree_path.clone();
         let params = RunTaskParams {
             run_id,
             writer,
@@ -330,15 +339,22 @@ impl Engine {
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
         };
 
         let runs_for_cleanup = self.runs.clone();
+        // Post-completion ledger mirror: after the run task finishes, mirror
+        // its folded task-ledger into the cross-run registry index so
+        // `surge ready` / `surge ledger` see it without opening the run DB.
+        // Best-effort — a mirror failure never affects the run outcome.
+        let storage_for_ledger = self.storage.clone();
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
 
@@ -415,6 +431,11 @@ impl Engine {
         }
         if let Some(event) =
             project_context_artifact_event(artifact_store, run_id, run_config).await?
+        {
+            events.push(event);
+        }
+        if let Some(event) =
+            project_memory_artifact_event(artifact_store, run_id, run_config).await?
         {
             events.push(event);
         }
@@ -600,12 +621,14 @@ impl Engine {
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
 
         let pending_elevations = crate::engine::elevation::PendingElevations::new();
+        let pending_steers = crate::engine::steer::new_queue();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
             tool_resolutions: tool_resolutions.clone(),
             roadmap_amendments: roadmap_amendment_tx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers: pending_steers.clone(),
         };
         self.runs.write().await.insert(run_id, active);
 
@@ -632,6 +655,9 @@ impl Engine {
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
+        // Captured before `worktree_path` moves into params (post-completion
+        // task-ledger mirror; matches RunStarted's project_path).
+        let project_path_for_ledger = worktree_path.clone();
         let params = RunTaskParams {
             run_id,
             writer,
@@ -653,15 +679,18 @@ impl Engine {
             tool_resolutions,
             roadmap_amendments: roadmap_amendment_rx,
             pending_elevations: pending_elevations.clone(),
+            pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
         };
 
         let runs_for_cleanup = self.runs.clone();
+        let storage_for_ledger = self.storage.clone();
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
 
@@ -797,6 +826,74 @@ impl Engine {
         }
     }
 
+    /// Queue an operator steer message for a live run. Non-destructive: the
+    /// message is delivered (prepended to the prompt) at the next agent stage
+    /// boundary — ACP v1 has no mid-turn injection channel. Returns the queued
+    /// steer's id.
+    pub async fn submit_steer(
+        &self,
+        run_id: RunId,
+        message: String,
+    ) -> Result<String, EngineError> {
+        // Validate here, not only in the CLI: the SubmitSteer IPC reaches this
+        // directly. Reject empty/whitespace and oversize messages, and cap the
+        // queue so a run parked at a non-agent node can't accumulate steers
+        // unbounded in daemon memory.
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return Err(EngineError::Internal("steer message is empty".into()));
+        }
+        if message.len() > crate::engine::steer::MAX_STEER_LEN {
+            return Err(EngineError::Internal(format!(
+                "steer message is {} bytes; max is {}",
+                message.len(),
+                crate::engine::steer::MAX_STEER_LEN
+            )));
+        }
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let mut queue = active.pending_steers.lock().await;
+        if queue.pending.len() >= crate::engine::steer::MAX_QUEUED_STEERS {
+            return Err(EngineError::Internal(format!(
+                "steer queue for run {run_id} is full ({} pending); \
+                 deliver or cancel some before adding more",
+                queue.pending.len()
+            )));
+        }
+        let id = crate::engine::steer::new_steer_id();
+        queue.pending.push(crate::engine::steer::QueuedSteer {
+            id: id.clone(),
+            message,
+        });
+        Ok(id)
+    }
+
+    /// List the steer messages currently queued (not yet delivered) for a run.
+    pub async fn list_steers(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<crate::engine::steer::QueuedSteer>, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        Ok(active.pending_steers.lock().await.pending.clone())
+    }
+
+    /// Cancel a steer by id. Removes it from the pending queue if present, and
+    /// tombstones the id so that a steer already drained into an in-flight stage
+    /// is not resurrected by the run task's re-queue-on-error path. Returns
+    /// `true` if it was still pending; `false` means it was already delivered or
+    /// in-flight (the tombstone still prevents any re-delivery).
+    pub async fn cancel_steer(&self, run_id: RunId, steer_id: &str) -> Result<bool, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        let mut queue = active.pending_steers.lock().await;
+        let before = queue.pending.len();
+        queue.pending.retain(|steer| steer.id != steer_id);
+        let removed = queue.pending.len() != before;
+        queue.cancelled.insert(steer_id.to_owned());
+        Ok(removed)
+    }
+
     /// Snapshot the in-process active-run map as a `Vec<RunSummary>`.
     /// Used by `LocalEngineFacade::list_runs`. M7 simplification: the
     /// engine doesn't track per-run `started_at`, so we return
@@ -887,6 +984,39 @@ async fn project_context_artifact_event(
     )))
 }
 
+async fn project_memory_artifact_event(
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    let Some(seed) = &run_config.project_memory else {
+        return Ok(None);
+    };
+    let artifact = artifact_store
+        .put(
+            run_id,
+            PROJECT_MEMORY_ARTIFACT_NAME,
+            seed.content.as_bytes(),
+        )
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+        .map_err(|e| EngineError::Internal(format!("project memory producer key: {e}")))?;
+    tracing::info!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        hash = %artifact.hash,
+        "project memory captured for run"
+    );
+    Ok(Some(artifact_produced_event(
+        producer,
+        artifact.hash,
+        artifact.path,
+        PROJECT_MEMORY_ARTIFACT_NAME,
+    )))
+}
+
 async fn run_seed_artifact_events(
     run_id: RunId,
     worktree_path: &Path,
@@ -968,6 +1098,10 @@ pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
 /// Canonical artifact name for the stable project context captured at run start.
 pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
 
+/// Canonical artifact name for the accumulating project memory captured at
+/// run start (`.surge/memory/`).
+pub(crate) const PROJECT_MEMORY_ARTIFACT_NAME: &str = "project_memory";
+
 /// Synthetic producer node for the run-level project context seed.
 const PROJECT_CONTEXT_PRODUCER_NODE: &str = "project_context_seed";
 
@@ -977,6 +1111,24 @@ const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
 /// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
 /// Bootstrap graphs do not have a real `start_node` user node, so the
 /// engine attributes the prompt to a stable synthetic key.
+/// Best-effort mirror of a run's task-ledger into the cross-run registry
+/// index. Logs and swallows errors — a mirror failure never affects the run
+/// outcome (the per-run event log remains the source of truth).
+async fn mirror_task_ledger(
+    storage: &Arc<surge_persistence::runs::Storage>,
+    run_id: RunId,
+    project_path: &std::path::Path,
+) {
+    if let Err(error) = storage.sync_task_ledger_index(run_id, project_path).await {
+        tracing::warn!(
+            target: "engine::ledger",
+            run_id = %run_id,
+            err = %error,
+            "task-ledger index mirror failed; surge ready may be stale for this run"
+        );
+    }
+}
+
 const INITIAL_PROMPT_PRODUCER_NODE: &str = "start_node";
 
 /// Output of [`synthesise_initial_prompt_artifact`].

@@ -33,4 +33,8 @@ RunMemory {
     last_edit_feedback_by_stage: {},
     roadmap_patches: {},
     latest_graph_revision: None,
+    ledger: LedgerState {
+        tasks: {},
+        rejected_verifications: 0,
+    },
 }

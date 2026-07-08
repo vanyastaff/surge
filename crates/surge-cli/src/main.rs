@@ -148,6 +148,27 @@ enum Commands {
         command: commands::intake::IntakeCommand,
     },
 
+    /// Fleet inbox: runs grouped by attention (needs input / working / done).
+    Inbox(commands::inbox::InboxArgs),
+
+    /// Answer a run blocked on human input (see `surge inbox`).
+    Resolve(commands::resolve::ResolveArgs),
+
+    /// Queue an operator steer for a live run (delivered at the next step).
+    Steer(commands::steer::SteerArgs),
+
+    /// Inspect an existing run's worktree (diff, path).
+    Run {
+        #[command(subcommand)]
+        command: commands::run::RunCommand,
+    },
+
+    /// List the actionable task backlog from the cross-run task ledger.
+    Ready(commands::ready::ReadyArgs),
+
+    /// Show the full task ledger (every task) for a run or project.
+    Ledger(commands::ledger::LedgerArgs),
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -331,6 +352,12 @@ async fn main() -> Result<()> {
             | Commands::MigrateSpec(_)
             | Commands::Tracker { .. }
             | Commands::Intake { .. }
+            | Commands::Inbox(_)
+            | Commands::Resolve(_)
+            | Commands::Steer(_)
+            | Commands::Run { .. }
+            | Commands::Ready(_)
+            | Commands::Ledger(_)
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
             | Commands::Mcp { .. }
@@ -505,6 +532,30 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Intake { command } => {
             commands::intake::run(command)?;
+        },
+
+        Commands::Inbox(args) => {
+            commands::inbox::run(args).await?;
+        },
+
+        Commands::Resolve(args) => {
+            commands::resolve::run(args).await?;
+        },
+
+        Commands::Steer(args) => {
+            commands::steer::run(args).await?;
+        },
+
+        Commands::Run { command } => {
+            commands::run::run(command).await?;
+        },
+
+        Commands::Ready(args) => {
+            commands::ready::run(args).await?;
+        },
+
+        Commands::Ledger(args) => {
+            commands::ledger::run(args).await?;
         },
 
         Commands::Daemon { command } => {

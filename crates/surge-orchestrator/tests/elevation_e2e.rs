@@ -42,10 +42,21 @@ fn load_flow() -> Graph {
 fn flow_elevation_demo_parses_and_validates() {
     let graph = load_flow();
     let warnings = validate(&graph).expect("flow_elevation_demo passes graph validation");
-    // The flow declares only required fields; no warnings expected.
+    // The flow declares only required fields; the only expected warning is the
+    // W4 "unverified success path" note — this demo has no verifier node, which
+    // is fine for an elevation-focused fixture.
+    let unexpected: Vec<_> = warnings
+        .iter()
+        .filter(|w| {
+            !matches!(
+                w.kind,
+                surge_core::ValidationErrorKind::UnverifiedSuccessPath { .. }
+            )
+        })
+        .collect();
     assert!(
-        warnings.is_empty(),
-        "unexpected validation warnings: {warnings:?}"
+        unexpected.is_empty(),
+        "unexpected validation warnings: {unexpected:?}"
     );
 }
 

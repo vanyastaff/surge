@@ -33,8 +33,10 @@ const FLOW_GENERATOR_TOML: &str = include_str!("../../bundled/profiles/flow-gene
 const SPEC_AUTHOR_TOML: &str = include_str!("../../bundled/profiles/spec-author-1.0.toml");
 const ARCHITECT_TOML: &str = include_str!("../../bundled/profiles/architect-1.0.toml");
 const IMPLEMENTER_TOML: &str = include_str!("../../bundled/profiles/implementer-1.0.toml");
+const IMPLEMENTER_2_0_TOML: &str = include_str!("../../bundled/profiles/implementer-2.0.toml");
 const TEST_AUTHOR_TOML: &str = include_str!("../../bundled/profiles/test-author-1.0.toml");
 const VERIFIER_TOML: &str = include_str!("../../bundled/profiles/verifier-1.0.toml");
+const VERIFIER_2_0_TOML: &str = include_str!("../../bundled/profiles/verifier-2.0.toml");
 const REVIEWER_TOML: &str = include_str!("../../bundled/profiles/reviewer-1.0.toml");
 const PR_COMPOSER_TOML: &str = include_str!("../../bundled/profiles/pr-composer-1.0.toml");
 
@@ -53,7 +55,7 @@ const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
-pub const BUNDLED_COUNT: usize = 17;
+pub const BUNDLED_COUNT: usize = 19;
 
 /// Look-up table for compile-time bundled profiles.
 ///
@@ -84,8 +86,10 @@ impl BundledRegistry {
             parse(SPEC_AUTHOR_TOML, "spec-author"),
             parse(ARCHITECT_TOML, "architect"),
             parse(IMPLEMENTER_TOML, "implementer"),
+            parse(IMPLEMENTER_2_0_TOML, "implementer"),
             parse(TEST_AUTHOR_TOML, "test-author"),
             parse(VERIFIER_TOML, "verifier"),
+            parse(VERIFIER_2_0_TOML, "verifier"),
             parse(REVIEWER_TOML, "reviewer"),
             parse(PR_COMPOSER_TOML, "pr-composer"),
             // Specialized (Task 11).
@@ -149,13 +153,66 @@ mod tests {
     }
 
     #[test]
-    fn all_profile_ids_are_unique() {
+    fn all_profile_id_versions_are_unique() {
+        // Uniqueness is by (id, version): a role may ship multiple versions
+        // (e.g. verifier@1.0 and verifier@2.0), but never the same version
+        // twice.
         let all = BundledRegistry::all();
-        let mut ids: Vec<&str> = all.iter().map(|p| p.role.id.as_str()).collect();
-        ids.sort_unstable();
-        let original_len = ids.len();
-        ids.dedup();
-        assert_eq!(ids.len(), original_len, "duplicate bundled profile id");
+        let mut keys: Vec<(String, Version)> = all
+            .iter()
+            .map(|p| (p.role.id.as_str().to_owned(), p.role.version.clone()))
+            .collect();
+        keys.sort();
+        let original_len = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), original_len, "duplicate bundled (id, version)");
+    }
+
+    #[test]
+    fn verifier_2_0_is_sealed_and_authoritative() {
+        let p = BundledRegistry::by_name_latest("verifier").expect("verifier bundled");
+        assert_eq!(
+            p.role.version,
+            Version::new(2, 0, 0),
+            "latest verifier is 2.0"
+        );
+        assert_eq!(
+            p.sandbox.mode,
+            SandboxMode::ReadOnly,
+            "verifier@2.0 runs sealed"
+        );
+        assert!(
+            p.verification.authority,
+            "verifier@2.0 declares verification authority"
+        );
+        let passed = p
+            .outcomes
+            .iter()
+            .find(|o| o.id.as_ref() == "passed")
+            .expect("passed outcome");
+        assert!(
+            passed
+                .produced_artifacts
+                .iter()
+                .any(|a| a.contract.kind == ArtifactKind::VerificationReport),
+            "verifier@2.0 produces a verification-report"
+        );
+    }
+
+    #[test]
+    fn implementer_2_0_reports_ready_for_verification() {
+        let p = BundledRegistry::by_name_version("implementer", &Version::new(2, 0, 0))
+            .expect("implementer@2.0 bundled");
+        assert!(
+            p.outcomes
+                .iter()
+                .any(|o| o.id.as_ref() == "ready_for_verification"),
+            "implementer@2.0 reports ready_for_verification"
+        );
+        assert!(
+            !p.verification.authority,
+            "an implementer never carries verification authority"
+        );
     }
 
     #[test]
@@ -185,16 +242,22 @@ mod tests {
 
     #[test]
     fn bootstrap_profiles_declare_produced_artifact_contracts() {
-        for (profile, kind, path) in [
+        for (profile, kind, path, schema_version) in [
             (
                 "description-author",
                 ArtifactKind::Description,
                 "description.md",
+                1,
             ),
-            ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml"),
-            ("flow-generator", ArtifactKind::Flow, "flow.toml"),
-            ("spec-author", ArtifactKind::Spec, "spec.toml"),
-            ("architect", ArtifactKind::Adr, "docs/adr/<NNNN>-<slug>.md"),
+            ("roadmap-planner", ArtifactKind::Roadmap, "roadmap.toml", 2),
+            ("flow-generator", ArtifactKind::Flow, "flow.toml", 1),
+            ("spec-author", ArtifactKind::Spec, "spec.toml", 1),
+            (
+                "architect",
+                ArtifactKind::Adr,
+                "docs/adr/<NNNN>-<slug>.md",
+                1,
+            ),
         ] {
             let profile = BundledRegistry::by_name_latest(profile).expect("bundled profile");
             let drafted = profile
@@ -209,7 +272,7 @@ mod tests {
                 .expect("artifact declaration");
 
             assert_eq!(declaration.path, path);
-            assert_eq!(declaration.contract.schema_version, 1);
+            assert_eq!(declaration.contract.schema_version, schema_version);
         }
     }
 

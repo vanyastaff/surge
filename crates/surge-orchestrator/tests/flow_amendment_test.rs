@@ -195,6 +195,7 @@ fn agent_node(id: &str) -> Node {
             description: "implemented".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
+            ledger_effect: Default::default(),
         }],
         config: NodeConfig::Agent(AgentConfig {
             profile: profile_key("implementer@1.0"),

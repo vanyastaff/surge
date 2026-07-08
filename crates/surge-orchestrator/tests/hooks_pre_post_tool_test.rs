@@ -131,6 +131,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -148,6 +149,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("agent stage should still complete after pre-hook reject");
@@ -237,6 +239,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
     let hook_executor = HookExecutor::new();
 
     let result = execute_agent_stage(AgentStageParams {
+        steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
         declared_outcomes: &[],
@@ -254,6 +257,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .expect("agent stage should complete normally");

@@ -10,6 +10,14 @@ use super::path::{is_adr_path, is_story_path, normalize_path};
 /// Current schema version used by Surge-owned artifact contracts.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 
+/// Current schema version of the `roadmap` artifact contract.
+///
+/// v2 adds the task-ledger fields: task-level `depends_on`,
+/// `discovered_from`, `size`, and `verified`. v1 artifacts remain valid;
+/// the roadmap validator applies v2 field rules only when the artifact
+/// declares `schema_version = 2`.
+pub const ROADMAP_SCHEMA_VERSION: u32 = 2;
+
 /// Role artifact families that Surge validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -23,6 +31,10 @@ pub enum ArtifactKind {
     Roadmap,
     /// Roadmap amendment patch artifact.
     RoadmapPatch,
+    /// Tasks discovered mid-execution to append to the ledger.
+    DiscoveredTasks,
+    /// Sealed verifier's record of the checks run against a task.
+    VerificationReport,
     /// Spec Author artifact.
     Spec,
     /// Architect decision artifact.
@@ -44,6 +56,8 @@ impl ArtifactKind {
             Self::Requirements => "requirements",
             Self::Roadmap => "roadmap",
             Self::RoadmapPatch => "roadmap-patch",
+            Self::DiscoveredTasks => "discovered-tasks",
+            Self::VerificationReport => "verification-report",
             Self::Spec => "spec",
             Self::Adr => "adr",
             Self::Story => "story",
@@ -81,6 +95,12 @@ impl FromStr for ArtifactKind {
             "requirements" | "requirements-md" => Ok(Self::Requirements),
             "roadmap" | "roadmap-md" | "roadmap-toml" => Ok(Self::Roadmap),
             "roadmap-patch" | "roadmap_patch" | "roadmap-patch-toml" => Ok(Self::RoadmapPatch),
+            "discovered-tasks" | "discovered_tasks" | "discovered-tasks-toml" => {
+                Ok(Self::DiscoveredTasks)
+            },
+            "verification-report" | "verification_report" | "verification-report-toml" => {
+                Ok(Self::VerificationReport)
+            },
             "spec" | "spec-md" | "spec-toml" => Ok(Self::Spec),
             "adr" | "architecture-decision-record" => Ok(Self::Adr),
             "story" | "story-file" => Ok(Self::Story),
@@ -201,6 +221,8 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
         ArtifactKind::Requirements => REQUIREMENTS_CONTRACT,
         ArtifactKind::Roadmap => ROADMAP_CONTRACT,
         ArtifactKind::RoadmapPatch => ROADMAP_PATCH_CONTRACT,
+        ArtifactKind::DiscoveredTasks => DISCOVERED_TASKS_CONTRACT,
+        ArtifactKind::VerificationReport => VERIFICATION_REPORT_CONTRACT,
         ArtifactKind::Spec => SPEC_CONTRACT,
         ArtifactKind::Adr => ADR_CONTRACT,
         ArtifactKind::Story => STORY_CONTRACT,
@@ -210,6 +232,11 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
 }
 
 pub(super) const fn schema_version_for_kind(kind: ArtifactKind) -> u32 {
+    // Roadmap versions independently of the shared contract constant since
+    // v2 introduced the task-ledger fields.
+    if matches!(kind, ArtifactKind::Roadmap) {
+        return ROADMAP_SCHEMA_VERSION;
+    }
     match contract_for(kind).schema_version_owner {
         SchemaVersionOwner::Graph => crate::graph::SCHEMA_VERSION,
         SchemaVersionOwner::ArtifactContract | SchemaVersionOwner::HumanReadable => {
@@ -222,6 +249,8 @@ const DESCRIPTION_ALIASES: &[&str] = &[];
 const REQUIREMENTS_ALIASES: &[&str] = &["requirements.md"];
 const ROADMAP_ALIASES: &[&str] = &["roadmap.md"];
 const ROADMAP_PATCH_ALIASES: &[&str] = &["roadmap_patch.toml"];
+const DISCOVERED_TASKS_ALIASES: &[&str] = &["discovered_tasks.toml"];
+const VERIFICATION_REPORT_ALIASES: &[&str] = &["verification_report.toml"];
 const SPEC_ALIASES: &[&str] = &["spec.md"];
 const ADR_ALIASES: &[&str] = &["adr.md"];
 const STORY_ALIASES: &[&str] = &[];
@@ -266,6 +295,26 @@ const ROADMAP_PATCH_CONTRACT: ArtifactContract = ArtifactContract {
     schema_version_owner: SchemaVersionOwner::ArtifactContract,
     validator_kind: "roadmap-patch",
     aliases: ROADMAP_PATCH_ALIASES,
+};
+
+const DISCOVERED_TASKS_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::DiscoveredTasks,
+    canonical_path: "discovered-tasks.toml",
+    primary_format: ArtifactFormat::Toml,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::ArtifactContract,
+    validator_kind: "discovered-tasks",
+    aliases: DISCOVERED_TASKS_ALIASES,
+};
+
+const VERIFICATION_REPORT_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::VerificationReport,
+    canonical_path: "verification-report.toml",
+    primary_format: ArtifactFormat::Toml,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::ArtifactContract,
+    validator_kind: "verification-report",
+    aliases: VERIFICATION_REPORT_ALIASES,
 };
 
 const SPEC_CONTRACT: ArtifactContract = ArtifactContract {
@@ -318,11 +367,13 @@ const FLOW_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: FLOW_ALIASES,
 };
 
-const CONTRACTS: [ArtifactContract; 9] = [
+const CONTRACTS: [ArtifactContract; 11] = [
     DESCRIPTION_CONTRACT,
     REQUIREMENTS_CONTRACT,
     ROADMAP_CONTRACT,
     ROADMAP_PATCH_CONTRACT,
+    DISCOVERED_TASKS_CONTRACT,
+    VERIFICATION_REPORT_CONTRACT,
     SPEC_CONTRACT,
     ADR_CONTRACT,
     STORY_CONTRACT,

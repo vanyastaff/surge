@@ -197,10 +197,11 @@ id = "done"
 description = "Task verification complete"
 edge_kind_hint = "forward"
 is_terminal = true
+ledger_effect = "verified"
 
 [subgraphs.task_body.nodes.verify_in_task.config]
 node_kind = "agent"
-profile = "implementer@1.0"
+profile = "verifier@2.0"
 bindings = []
 hooks = []
 

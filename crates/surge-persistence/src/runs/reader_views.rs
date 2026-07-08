@@ -9,12 +9,12 @@ use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Row, params};
 use serde::de::DeserializeOwned;
-use surge_core::{ContentHash, NodeKey, RoadmapPatchId};
+use surge_core::{ContentHash, NodeKey, RoadmapPatchId, RoadmapStatus};
 
 use crate::runs::error::StorageError;
 use crate::runs::seq::EventSeq;
 use crate::runs::types::{
-    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution,
+    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution, TaskLedgerRow,
 };
 
 /// Read all rows of the `stage_executions` view ordered by `started_seq`.
@@ -150,6 +150,50 @@ pub fn roadmap_patches(
     )?;
     let iter = stmt.query_map([], row_to_roadmap_patch)?;
     iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Read all rows of the per-run `task_ledger` materialized view.
+pub fn task_ledger(
+    conn: &PooledConnection<SqliteConnectionManager>,
+) -> Result<Vec<TaskLedgerRow>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id, status, verified, discovered_from, last_authority_node, updated_seq
+         FROM task_ledger ORDER BY updated_seq, task_id",
+    )?;
+    let iter = stmt.query_map([], |row| {
+        let status_str: String = row.get(1)?;
+        let status = parse_ledger_status(&status_str).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Text,
+                format!("invalid ledger status {status_str:?}").into(),
+            )
+        })?;
+        Ok(TaskLedgerRow {
+            task_id: row.get(0)?,
+            status,
+            verified: row.get::<_, i64>(2)? != 0,
+            discovered_from: row.get(3)?,
+            last_authority_node: row.get(4)?,
+            updated_seq: EventSeq(row.get::<_, i64>(5)? as u64),
+        })
+    })?;
+    iter.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Parse the Display form of a [`RoadmapStatus`] as stored by `views::maintain`.
+fn parse_ledger_status(label: &str) -> Option<RoadmapStatus> {
+    Some(match label {
+        "pending" => RoadmapStatus::Pending,
+        "running" => RoadmapStatus::Running,
+        "paused" => RoadmapStatus::Paused,
+        "ready_for_verification" => RoadmapStatus::ReadyForVerification,
+        "failed_verification" => RoadmapStatus::FailedVerification,
+        "completed" => RoadmapStatus::Completed,
+        "failed" => RoadmapStatus::Failed,
+        "skipped" => RoadmapStatus::Skipped,
+        _ => return None,
+    })
 }
 
 /// Read one roadmap patch lifecycle row by ID.
