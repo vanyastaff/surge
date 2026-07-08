@@ -12,11 +12,9 @@ use crate::theme;
 pub enum SettingsPage {
     // App
     Appearance,
-    DisplayFonts,
     Agents,
     Keybindings,
     EditorPaths,
-    Notifications,
     General,
     // Project
     Pipeline,
@@ -33,11 +31,9 @@ impl SettingsPage {
     fn label(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
-            Self::DisplayFonts => "Display & Fonts",
             Self::Agents => "Agents",
             Self::Keybindings => "Keybindings",
             Self::EditorPaths => "Editor & Paths",
-            Self::Notifications => "Notifications",
             Self::General => "General",
             Self::Pipeline => "Pipeline",
             Self::Routing => "Routing",
@@ -53,11 +49,9 @@ impl SettingsPage {
     fn subtitle(self) -> &'static str {
         match self {
             Self::Appearance => "Theme, mode, colors",
-            Self::DisplayFonts => "Scale, terminal fonts",
             Self::Agents => "Discovery, default agent",
             Self::Keybindings => "Keyboard shortcuts",
             Self::EditorPaths => "IDE integration",
-            Self::Notifications => "Alerts & sounds",
             Self::General => "Updates, privacy, logs",
             Self::Pipeline => "Gates, parallelism, QA",
             Self::Routing => "Agent per phase",
@@ -73,11 +67,9 @@ impl SettingsPage {
     fn icon(self) -> IconName {
         match self {
             Self::Appearance => IconName::Palette,
-            Self::DisplayFonts => IconName::ALargeSmall,
             Self::Agents => IconName::Bot,
             Self::Keybindings => IconName::Asterisk,
             Self::EditorPaths => IconName::Folder,
-            Self::Notifications => IconName::Bell,
             Self::General => IconName::Settings2,
             Self::Pipeline => IconName::Loader,
             Self::Routing => IconName::Replace,
@@ -93,11 +85,9 @@ impl SettingsPage {
     fn app_pages() -> &'static [SettingsPage] {
         &[
             Self::Appearance,
-            Self::DisplayFonts,
             Self::Agents,
             Self::Keybindings,
             Self::EditorPaths,
-            Self::Notifications,
             Self::General,
         ]
     }
@@ -118,11 +108,9 @@ impl SettingsPage {
     fn content_subtitle(self) -> &'static str {
         match self {
             Self::Appearance => "Customize how Surge looks",
-            Self::DisplayFonts => "Configure UI scale and terminal fonts",
             Self::Agents => "Manage AI agent discovery and defaults",
             Self::Keybindings => "Customize keyboard shortcuts",
             Self::EditorPaths => "Configure IDE integration and file paths",
-            Self::Notifications => "Configure alerts and sounds",
             Self::General => "Updates, privacy, telemetry, and logs",
             Self::Pipeline => "Gates, parallelism, and QA configuration",
             Self::Routing => "Configure how tasks are routed to agents",
@@ -211,13 +199,9 @@ pub struct SettingsScreen {
     gate_after_plan: bool,
     gate_after_each_subtask: bool,
     gate_after_qa: bool,
-    gate_timeout: u32,
     max_parallel: usize,
     max_qa_iterations: u32,
     // Git
-    branch_prefix: String,
-    auto_commit: bool,
-    worktree_dir: String,
     remove_worktrees_on_complete: bool,
     keep_branches_days: u32,
     // IDE
@@ -225,6 +209,7 @@ pub struct SettingsScreen {
     auto_open_worktree: bool,
     // Routing
     routing_strategy: String,
+    default_agent: String,
     // Logging
     log_level: String,
     log_max_size_mb: u64,
@@ -236,17 +221,6 @@ pub struct SettingsScreen {
     prompt_timeout_secs: u64,
     prompt_retries: u32,
     circuit_breaker_threshold: u32,
-    // General
-    send_telemetry: bool,
-    crash_reports: bool,
-    auto_update: bool,
-    // Notifications
-    notify_task_completed: bool,
-    notify_task_failed: bool,
-    notify_gate_waiting: bool,
-    notify_agent_disconnect: bool,
-    notify_rate_limit: bool,
-    notify_sound: bool,
 }
 
 impl SettingsScreen {
@@ -274,13 +248,9 @@ impl SettingsScreen {
             gate_after_plan: gates.is_none_or(|g| g.after_plan),
             gate_after_each_subtask: gates.is_some_and(|g| g.after_each_subtask),
             gate_after_qa: gates.is_none_or(|g| g.after_qa),
-            gate_timeout: 3600,
             max_parallel: pipeline.map_or(3, |p| p.max_parallel),
             max_qa_iterations: pipeline.map_or(10, |p| p.max_qa_iterations),
             // Git
-            branch_prefix: "surge/".into(),
-            auto_commit: true,
-            worktree_dir: ".surge/worktrees/".into(),
             remove_worktrees_on_complete: cleanup.is_none_or(|c| c.remove_worktrees_on_complete),
             keep_branches_days: cleanup.map_or(7, |c| c.keep_branches_days),
             // IDE
@@ -292,6 +262,7 @@ impl SettingsScreen {
             routing_strategy: cfg
                 .map(|c| format!("{:?}", c.routing.strategy))
                 .unwrap_or_else(|| "Default".into()),
+            default_agent: cfg.map(|c| c.default_agent.clone()).unwrap_or_default(),
             // Logging
             log_level: log.map_or_else(|| "info".into(), |l| l.level.clone()),
             log_max_size_mb: log.map_or(50, |l| l.max_size_mb),
@@ -303,17 +274,6 @@ impl SettingsScreen {
             prompt_timeout_secs: resilience.map_or(600, |r| r.prompt_timeout_secs),
             prompt_retries: resilience.map_or(3, |r| r.prompt_retries),
             circuit_breaker_threshold: resilience.map_or(5, |r| r.circuit_breaker_threshold),
-            // General
-            send_telemetry: false,
-            crash_reports: true,
-            auto_update: true,
-            // Notifications — defaults
-            notify_task_completed: true,
-            notify_task_failed: true,
-            notify_gate_waiting: true,
-            notify_agent_disconnect: true,
-            notify_rate_limit: true,
-            notify_sound: false,
         }
     }
 
@@ -356,14 +316,15 @@ impl SettingsScreen {
             config.resilience.prompt_timeout_secs = self.prompt_timeout_secs;
             config.resilience.prompt_retries = self.prompt_retries;
             config.resilience.circuit_breaker_threshold = self.circuit_breaker_threshold;
-            // NOTE: send_telemetry / crash_reports / auto_update / the
-            // notify_* and notify_sound toggles are still UI-only —
-            // they do not have homes on `SurgeConfig` yet, so flipping
-            // them is not persisted. Wiring them through to disk is a
-            // follow-up; until then the dirty flag will report unsaved
-            // for those toggles too even after save_config completes
-            // (see `dirty` logic above) so the user knows the toggle
-            // didn't survive.
+            // Routing
+            config.routing.strategy = match self.routing_strategy.as_str() {
+                "Complexity" => surge_core::config::RoutingStrategy::Complexity,
+                "RoundRobin" => surge_core::config::RoutingStrategy::RoundRobin,
+                _ => surge_core::config::RoutingStrategy::Default,
+            };
+            if !self.default_agent.is_empty() {
+                config.default_agent = self.default_agent.clone();
+            }
 
             config
                 .save(&project_path.join("surge.toml"))
@@ -651,8 +612,9 @@ impl SettingsScreen {
                 SettingsPage::Resilience => self.render_resilience(),
                 SettingsPage::Routing => self.render_routing(cx),
                 SettingsPage::Keybindings => self.render_keybindings(),
-                SettingsPage::Notifications => self.render_notifications(cx),
-                _ => self.render_placeholder(page.subtitle()),
+                SettingsPage::McpServers => self.render_mcp_servers(cx),
+                SettingsPage::ContextMemory => self.render_context_memory(cx),
+                SettingsPage::Integrations => self.render_integrations(cx),
             })
             // Save bar at bottom when dirty
             .when(self.dirty, |el: Stateful<Div>| {
@@ -986,15 +948,19 @@ impl SettingsScreen {
 
     // ── Agents page ────────────────────────────────────────────────
 
-    fn render_agents(&self, cx: &Context<Self>) -> Div {
+    fn render_agents(&self, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
-        let default_agent = state
-            .config
-            .as_ref()
-            .map(|c| c.default_agent.as_str())
-            .unwrap_or("");
+        let default_agent = if self.default_agent.is_empty() {
+            state
+                .config
+                .as_ref()
+                .map(|c| c.default_agent.clone())
+                .unwrap_or_default()
+        } else {
+            self.default_agent.clone()
+        };
 
-        let agents: Vec<Div> = state
+        let rows: Vec<(String, bool, String, String, gpui::Hsla)> = state
             .installed_agents
             .iter()
             .map(|a| {
@@ -1005,8 +971,23 @@ impl SettingsScreen {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| "-".to_string());
+                let path = a.command_path.clone().unwrap_or_else(|| "(unknown)".into());
+                let dot = match state.health.get_health(&a.entry.id).map(|h| h.status()) {
+                    Some(surge_acp::HealthStatus::Healthy) => theme::success(),
+                    Some(surge_acp::HealthStatus::Degraded) => theme::warning(),
+                    Some(surge_acp::HealthStatus::Offline) => theme::error(),
+                    None => theme::text_muted(),
+                };
+                (a.entry.id.clone(), is_default, model, path, dot)
+            })
+            .collect();
 
+        let agents: Vec<Stateful<Div>> = rows
+            .into_iter()
+            .map(|(id, is_default, model, path, dot)| {
+                let id_for_click = id.clone();
                 div()
+                    .id(SharedString::from(format!("set-default-{id}")))
                     .h_flex()
                     .gap_3()
                     .p_4()
@@ -1014,17 +995,23 @@ impl SettingsScreen {
                     .bg(theme::panel_raised())
                     .border_1()
                     .border_color(if is_default {
-                        theme::primary().opacity(0.3)
+                        theme::accent().opacity(0.4)
                     } else {
-                        theme::text_muted().opacity(0.1)
+                        theme::hairline()
                     })
-                    // Status dot
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.3)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.default_agent = id_for_click.clone();
+                        this.mark_dirty(cx);
+                    }))
+                    // Health status dot
                     .child(
                         div()
                             .w(px(10.0))
                             .h(px(10.0))
                             .rounded_full()
-                            .bg(theme::success())
+                            .bg(dot)
                             .flex_shrink_0(),
                     )
                     // Info
@@ -1043,7 +1030,7 @@ impl SettingsScreen {
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text_primary())
-                                            .child(a.entry.id.clone()),
+                                            .child(id.clone()),
                                     )
                                     .when(is_default, |el: Div| {
                                         el.child(
@@ -1052,8 +1039,8 @@ impl SettingsScreen {
                                                 .px(px(6.0))
                                                 .py(px(1.0))
                                                 .rounded(px(4.0))
-                                                .bg(theme::primary().opacity(0.15))
-                                                .text_color(theme::primary())
+                                                .bg(theme::accent().opacity(0.14))
+                                                .text_color(theme::accent())
                                                 .child("DEFAULT"),
                                         )
                                     }),
@@ -1062,23 +1049,14 @@ impl SettingsScreen {
                                 div()
                                     .text_size(px(10.0))
                                     .text_color(theme::text_muted())
-                                    .child(format!(
-                                        "Model: {}  ·  {}",
-                                        model,
-                                        a.command_path.as_deref().unwrap_or("(unknown)")
-                                    )),
+                                    .child(format!("Model: {model}  ·  {path}")),
                             ),
                     )
-                    // Installed badge
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(theme::success().opacity(0.15))
-                            .text_color(theme::success())
-                            .child("Installed"),
+                            .text_color(theme::text_muted().opacity(0.7))
+                            .child(if is_default { "" } else { "click to set default" }),
                     )
             })
             .collect();
@@ -1163,7 +1141,6 @@ impl SettingsScreen {
             .v_flex()
             .gap_8()
             .child(self.render_pipeline_gates(cx))
-            .child(self.render_pipeline_timeout())
             .child(self.render_pipeline_execution(cx))
     }
 
@@ -1287,64 +1264,6 @@ impl SettingsScreen {
                     .bg(color)
                     .mt(px(3.0))
                     .ml(if enabled { px(23.0) } else { px(3.0) }),
-            )
-    }
-
-    fn render_pipeline_timeout(&self) -> Div {
-        div()
-            .v_flex()
-            .gap_4()
-            .child(self.section_title("Gate Timeout"))
-            .child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text_primary())
-                                    .child("Timeout"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.0))
-                                    .text_color(theme::text_muted())
-                                    .child("0 = wait forever"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(self.value_box(&format!("{}", self.gate_timeout)))
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme::text_muted())
-                                    .child("sec"),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text_primary())
-                            .child("On timeout"),
-                    )
-                    .child(self.dropdown_box("Abort")),
             )
     }
 
@@ -1507,6 +1426,17 @@ impl SettingsScreen {
         let state = self.state.read(cx);
         let current_branch = state.current_branch.clone();
 
+        let (worktree_location, worktree_root) = state
+            .config
+            .as_ref()
+            .map(|c| {
+                (
+                    format!("{:?}", c.init.worktree_location),
+                    c.init.worktree_root.display().to_string(),
+                )
+            })
+            .unwrap_or_else(|| ("—".into(), "—".into()));
+
         div()
             .v_flex()
             .gap_8()
@@ -1514,24 +1444,22 @@ impl SettingsScreen {
                 div()
                     .v_flex()
                     .gap_3()
-                    .child(self.section_title("Git Configuration"))
-                    .child(self.setting_row("Current Branch", &current_branch))
-                    .child(self.setting_row("Branch Prefix", &self.branch_prefix))
-                    .child(self.setting_row(
-                        "Auto-commit",
-                        if self.auto_commit {
-                            "Enabled"
-                        } else {
-                            "Disabled"
-                        },
-                    )),
+                    .child(self.section_title("Git"))
+                    .child(self.setting_row("Current Branch", &current_branch)),
             )
             .child(
                 div()
                     .v_flex()
                     .gap_3()
                     .child(self.section_title("Worktrees"))
-                    .child(self.setting_row("Worktree Directory", &self.worktree_dir))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::text_muted())
+                            .child("Every run executes in an isolated git worktree"),
+                    )
+                    .child(self.setting_row("Placement", &worktree_location))
+                    .child(self.setting_row("Worktree root", &worktree_root))
                     .child(self.setting_row(
                         "Remove on complete",
                         if self.remove_worktrees_on_complete {
@@ -1550,13 +1478,21 @@ impl SettingsScreen {
     // ── Editor & Paths page ────────────────────────────────────────
 
     fn render_editor_paths(&self, cx: &Context<Self>) -> Div {
-        let project_path = self
-            .state
-            .read(cx)
+        let state = self.state.read(cx);
+        let project_path = state
             .project_path
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(no project)".into());
+        let project_context_path = state
+            .config
+            .as_ref()
+            .map(|c| c.init.project_context_path.display().to_string())
+            .unwrap_or_else(|| "project.md".into());
+        let seed_context = state
+            .config
+            .as_ref()
+            .is_none_or(|c| c.init.project_context_auto_seed);
 
         div()
             .v_flex()
@@ -1583,29 +1519,93 @@ impl SettingsScreen {
                     .child(self.section_title("Paths"))
                     .child(self.setting_row("Project Path", &project_path))
                     .child(self.setting_row("Surge Directory", ".surge"))
-                    .child(self.setting_row("Spec Directory", "specs/"))
-                    .child(self.setting_row("Spec Format", "TOML")),
+                    .child(self.setting_row("Project context", &project_context_path))
+                    .child(self.setting_row(
+                        "Seed context into runs",
+                        if seed_context { "Yes" } else { "No" },
+                    )),
             )
     }
 
     // ── Routing page ───────────────────────────────────────────────
 
-    fn render_routing(&self, cx: &Context<Self>) -> Div {
-        let state = self.state.read(cx);
-        let default_agent = state
-            .config
-            .as_ref()
-            .map(|c| c.default_agent.as_str())
-            .unwrap_or("(none)");
+    fn render_routing(&self, cx: &mut Context<Self>) -> Div {
+        let strategies: [(&'static str, &'static str); 3] = [
+            ("Default", "Every task goes to the default agent"),
+            ("Complexity", "Route by task complexity"),
+            ("RoundRobin", "Rotate across available agents"),
+        ];
+        let cards: Vec<Stateful<Div>> = strategies
+            .iter()
+            .map(|&(name, desc)| {
+                let is_selected = self.routing_strategy == name;
+                div()
+                    .id(SharedString::from(format!("routing-{name}")))
+                    .flex_1()
+                    .v_flex()
+                    .gap_1()
+                    .p_4()
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .bg(if is_selected {
+                        theme::accent().opacity(0.1)
+                    } else {
+                        theme::panel_raised()
+                    })
+                    .border_1()
+                    .border_color(if is_selected {
+                        theme::accent().opacity(0.45)
+                    } else {
+                        theme::hairline()
+                    })
+                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.3)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.routing_strategy = name.to_string();
+                        this.mark_dirty(cx);
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(if is_selected {
+                                theme::accent()
+                            } else {
+                                theme::text_primary()
+                            })
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_muted())
+                            .child(desc),
+                    )
+            })
+            .collect();
 
-        div().v_flex().gap_8().child(
-            div()
-                .v_flex()
-                .gap_3()
-                .child(self.section_title("Strategy"))
-                .child(self.setting_row("Routing Strategy", &self.routing_strategy))
-                .child(self.setting_row("Default Agent", default_agent)),
-        )
+        let default_agent = if self.default_agent.is_empty() {
+            "(none — pick one on the Agents page)".to_string()
+        } else {
+            self.default_agent.clone()
+        };
+
+        div()
+            .v_flex()
+            .gap_8()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Strategy"))
+                    .child(div().h_flex().gap_2().children(cards)),
+            )
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Default Agent"))
+                    .child(self.setting_row("Agent", &default_agent)),
+            )
     }
 
     // ── Keybindings page ─────────────────────────────────────────────
@@ -1613,49 +1613,49 @@ impl SettingsScreen {
     fn render_keybindings(&self) -> Div {
         let navigation = [
             Kb {
-                action: "Dashboard",
+                action: "Fleet",
                 keys: "Ctrl+1",
-                description: "Open dashboard screen",
+                description: "The run constellation (home)",
             },
             Kb {
-                action: "Kanban",
+                action: "Roadmap",
                 keys: "Ctrl+2",
-                description: "Open kanban board",
+                description: "Milestones and delivery line",
             },
             Kb {
-                action: "Specs",
+                action: "Runs",
                 keys: "Ctrl+3",
-                description: "Open spec explorer",
+                description: "Per-run cockpit",
+            },
+            Kb {
+                action: "Flow",
+                keys: "Ctrl+4",
+                description: "DAG editor",
+            },
+            Kb {
+                action: "Inbox",
+                keys: "Ctrl+5",
+                description: "Decisions blocked on you",
+            },
+            Kb {
+                action: "Backlog",
+                keys: "Ctrl+6",
+                description: "Dispatch queue",
             },
             Kb {
                 action: "Agents",
-                keys: "Ctrl+4",
-                description: "Open agent hub",
-            },
-            Kb {
-                action: "Terminals",
-                keys: "Ctrl+5",
-                description: "Open agent terminals",
-            },
-            Kb {
-                action: "Execution",
-                keys: "Ctrl+6",
-                description: "Open live execution",
-            },
-            Kb {
-                action: "Diff",
                 keys: "Ctrl+7",
-                description: "Open diff viewer",
+                description: "The crew",
             },
             Kb {
-                action: "Insights",
+                action: "Memory",
                 keys: "Ctrl+8",
-                description: "Open insights",
+                description: "Project knowledge",
             },
             Kb {
                 action: "Settings",
                 keys: "Ctrl+9",
-                description: "Open settings",
+                description: "This screen",
             },
         ];
 
@@ -1681,17 +1681,12 @@ impl SettingsScreen {
             Kb {
                 action: "New Task",
                 keys: "Ctrl+N",
-                description: "Create a new task",
+                description: "Create a new task (lands in Backlog)",
             },
             Kb {
                 action: "Approve Gate",
                 keys: "Ctrl+Enter",
-                description: "Approve current gate",
-            },
-            Kb {
-                action: "Open Diff",
-                keys: "Ctrl+D",
-                description: "Open diff for current task",
+                description: "Approve the current gate",
             },
         ];
 
@@ -1809,157 +1804,6 @@ impl SettingsScreen {
             .collect();
 
         div().h_flex().gap_1().items_center().children(badges)
-    }
-
-    // ── Notifications page ─────────────────────────────────────────
-
-    fn render_notifications(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .v_flex()
-            .gap_8()
-            // Event notifications
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Event Notifications"))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme::text_muted())
-                            .child("Choose which events trigger notifications"),
-                    )
-                    .child(self.render_notification_toggles(cx)),
-            )
-            // Sound
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Sound"))
-                    .child(self.render_notify_toggle(
-                        "notify-sound",
-                        "Sound effects",
-                        "Play a sound when notifications appear",
-                        self.notify_sound,
-                        |this| &mut this.notify_sound,
-                        cx,
-                    )),
-            )
-            // Preview
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Preview"))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme::text_muted())
-                            .child("Test how notifications look"),
-                    )
-                    .child(self.render_notification_previews()),
-            )
-    }
-
-    fn render_notification_toggles(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .v_flex()
-            .gap_2()
-            .child(self.render_notify_toggle(
-                "notify-task-completed",
-                "Task completed",
-                "When a task finishes successfully",
-                self.notify_task_completed,
-                |this| &mut this.notify_task_completed,
-                cx,
-            ))
-            .child(self.render_notify_toggle(
-                "notify-task-failed",
-                "Task failed",
-                "When a task fails or errors out",
-                self.notify_task_failed,
-                |this| &mut this.notify_task_failed,
-                cx,
-            ))
-            .child(self.render_notify_toggle(
-                "notify-gate-waiting",
-                "Gate waiting for review",
-                "When a pipeline gate needs human approval",
-                self.notify_gate_waiting,
-                |this| &mut this.notify_gate_waiting,
-                cx,
-            ))
-            .child(self.render_notify_toggle(
-                "notify-agent-disconnect",
-                "Agent disconnected",
-                "When an agent connection is lost",
-                self.notify_agent_disconnect,
-                |this| &mut this.notify_agent_disconnect,
-                cx,
-            ))
-            .child(self.render_notify_toggle(
-                "notify-rate-limit",
-                "Rate limit warning",
-                "When an agent hits API rate limits",
-                self.notify_rate_limit,
-                |this| &mut this.notify_rate_limit,
-                cx,
-            ))
-    }
-
-    fn render_notify_toggle(
-        &self,
-        id: &str,
-        label: &str,
-        description: &str,
-        enabled: bool,
-        field: fn(&mut Self) -> &mut bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let indicator_color = if enabled {
-            theme::accent()
-        } else {
-            theme::text_muted()
-        };
-
-        div()
-            .id(SharedString::from(id.to_string()))
-            .h_flex()
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_3()
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(theme::text_muted().opacity(0.08))
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                let val = field(this);
-                *val = !*val;
-                this.mark_dirty(cx);
-            }))
-            .child(
-                div()
-                    .v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme::text_primary())
-                            .child(label.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme::text_muted().opacity(0.7))
-                            .child(description.to_string()),
-                    ),
-            )
-            .child(self.toggle_switch(enabled, indicator_color))
     }
 
     fn render_notification_previews(&self) -> Div {
@@ -2243,139 +2087,264 @@ impl SettingsScreen {
                         },
                     )),
             )
-            // Updates
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Updates"))
-                    .child(self.render_general_toggle(
-                        "general-auto-update",
-                        "Auto-update",
-                        "Automatically check for and install updates",
-                        self.auto_update,
-                        |this| &mut this.auto_update,
-                        cx,
-                    ))
-                    .child(self.setting_row("Update Channel", "Stable"))
-                    .child(self.setting_row("Current Version", env!("CARGO_PKG_VERSION"))),
-            )
-            // Privacy
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.section_title("Privacy & Telemetry"))
-                    .child(self.render_general_toggle(
-                        "general-telemetry",
-                        "Send usage data",
-                        "Help improve Surge by sending anonymous usage statistics",
-                        self.send_telemetry,
-                        |this| &mut this.send_telemetry,
-                        cx,
-                    ))
-                    .child(self.render_general_toggle(
-                        "general-crash-reports",
-                        "Crash reports",
-                        "Automatically send crash reports for debugging",
-                        self.crash_reports,
-                        |this| &mut this.crash_reports,
-                        cx,
-                    )),
-            )
             // About
             .child(
                 div()
                     .v_flex()
                     .gap_3()
                     .child(self.section_title("About"))
-                    .child(self.setting_row("Application", "Surge"))
+                    .child(self.setting_row("Version", env!("CARGO_PKG_VERSION")))
                     .child(self.setting_row("Framework", "GPUI + ACP"))
                     .child(self.setting_row("Rust Edition", "2024")),
             )
     }
 
-    fn render_general_toggle(
-        &self,
-        id: &str,
-        label: &str,
-        description: &str,
-        enabled: bool,
-        field: fn(&mut Self) -> &mut bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let indicator_color = if enabled {
-            theme::accent()
-        } else {
-            theme::text_muted()
-        };
+    // ── Placeholder ────────────────────────────────────────────────
 
-        div()
-            .id(SharedString::from(id.to_string()))
-            .h_flex()
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_3()
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(theme::text_muted().opacity(0.08))
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                let val = field(this);
-                *val = !*val;
-                this.mark_dirty(cx);
-            }))
-            .child(
+    // ── MCP Servers page (read-only view of surge.toml [[mcp_servers]]) ──
+
+    fn render_mcp_servers(&self, cx: &Context<Self>) -> Div {
+        let state = self.state.read(cx);
+        let servers: Vec<(String, String, String)> = state
+            .config
+            .as_ref()
+            .map(|c| {
+                c.mcp_servers
+                    .iter()
+                    .map(|s| {
+                        let tools = match &s.allowed_tools {
+                            Some(t) => format!("{} tools allowed", t.len()),
+                            None => "all reported tools".to_string(),
+                        };
+                        let timeout = format!("call timeout {}s", s.call_timeout.as_secs());
+                        (s.name.clone(), tools, timeout)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut list = div().v_flex().gap_2();
+        if servers.is_empty() {
+            list = list.child(
                 div()
-                    .v_flex()
-                    .gap_0p5()
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::hairline())
+                    .text_size(px(11.0))
+                    .text_color(theme::text_muted())
+                    .child(
+                        "No MCP servers configured — add [[mcp_servers]] entries to \
+                         surge.toml. Each run gets its own supervised instances.",
+                    ),
+            );
+        }
+        for (name, tools, timeout) in servers {
+            list = list.child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .items_center()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(theme::panel_raised())
+                    .border_1()
+                    .border_color(theme::hairline())
                     .child(
                         div()
                             .text_size(px(12.0))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text_primary())
-                            .child(label.to_string()),
+                            .child(name),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_muted())
+                            .child(tools),
                     )
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme::text_muted().opacity(0.7))
-                            .child(description.to_string()),
+                            .text_color(theme::text_muted())
+                            .child(timeout),
                     ),
-            )
-            .child(self.toggle_switch(enabled, indicator_color))
+            );
+        }
+
+        div().v_flex().gap_8().child(
+            div()
+                .v_flex()
+                .gap_3()
+                .child(self.section_title("Configured Servers"))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme::text_muted())
+                        .child(
+                            "Per-run scoped, supervised, sandbox-delegated (ADR-0014). \
+                                 Inspect live health with `surge mcp probe`.",
+                        ),
+                )
+                .child(list),
+        )
     }
 
-    // ── Placeholder ────────────────────────────────────────────────
+    // ── Context & Memory page (real paths + store status) ──────────
 
-    fn render_placeholder(&self, subtitle: &str) -> Div {
+    fn render_context_memory(&self, cx: &Context<Self>) -> Div {
+        let state = self.state.read(cx);
+        let context_path = state
+            .config
+            .as_ref()
+            .map(|c| c.init.project_context_path.display().to_string())
+            .unwrap_or_else(|| "project.md".into());
+        let auto_seed = state
+            .config
+            .as_ref()
+            .is_none_or(|c| c.init.project_context_auto_seed);
+
+        let (memory_db, memory_status) =
+            match surge_persistence::memory::MemoryStore::default_path() {
+                Ok(path) => {
+                    let status = match std::fs::metadata(&path) {
+                        Ok(m) => format!("{} KB", m.len() / 1024),
+                        Err(_) => "not created yet — runs write it".to_string(),
+                    };
+                    (path.display().to_string(), status)
+                },
+                Err(_) => ("~/.surge/memory.db".to_string(), "unavailable".to_string()),
+            };
+
         div()
             .v_flex()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .py_16()
+            .gap_8()
             .child(
-                Icon::new(IconName::Settings2)
-                    .size_8()
-                    .text_color(theme::text_muted().opacity(0.3)),
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Project Context"))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::text_muted())
+                            .child(
+                                "The stable context generated by `surge project describe`, \
+                                 captured into every run at start.",
+                            ),
+                    )
+                    .child(self.setting_row("Context file", &context_path))
+                    .child(
+                        self.setting_row(
+                            "Auto-seed into runs",
+                            if auto_seed { "Yes" } else { "No" },
+                        ),
+                    ),
             )
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(theme::text_muted().opacity(0.5))
-                    .child(format!("Configure: {subtitle}")),
+                    .v_flex()
+                    .gap_3()
+                    .child(self.section_title("Memory Store"))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::text_muted())
+                            .child(
+                                "SQLite + FTS5 knowledge base (discoveries, patterns, \
+                                 gotchas, file contexts). Browse it on the Memory surface.",
+                            ),
+                    )
+                    .child(self.setting_row("Database", &memory_db))
+                    .child(self.setting_row("Size", &memory_status)),
             )
-            .child(
+    }
+
+    // ── Integrations page (real surge.toml [[task_sources]]) ───────
+
+    fn render_integrations(&self, cx: &Context<Self>) -> Div {
+        let state = self.state.read(cx);
+        let sources: Vec<(String, String, String)> = state
+            .config
+            .as_ref()
+            .map(|c| {
+                c.task_sources
+                    .iter()
+                    .map(|s| match s {
+                        surge_core::config::TaskSourceConfig::Linear(l) => (
+                            l.id.clone(),
+                            format!("Linear · workspace {}", l.workspace_id),
+                            format!("poll {}s", l.poll_interval.as_secs()),
+                        ),
+                        surge_core::config::TaskSourceConfig::GithubIssues(g) => (
+                            g.id.clone(),
+                            format!("GitHub Issues · {}", g.repo),
+                            format!("poll {}s", g.poll_interval.as_secs()),
+                        ),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut list = div().v_flex().gap_2();
+        if sources.is_empty() {
+            list = list.child(
                 div()
-                    .text_size(px(10.0))
-                    .text_color(theme::text_muted().opacity(0.3))
-                    .child("Coming soon"),
-            )
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::hairline())
+                    .text_size(px(11.0))
+                    .text_color(theme::text_muted())
+                    .child(
+                        "No task sources configured — add [[task_sources]] entries \
+                         (Linear or GitHub Issues) to surge.toml. The daemon polls \
+                         them, triages tickets and routes decisions to the Inbox.",
+                    ),
+            );
+        }
+        for (id, kind, poll) in sources {
+            list = list.child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .items_center()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(theme::panel_raised())
+                    .border_1()
+                    .border_color(theme::hairline())
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text_primary())
+                            .child(id),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_muted())
+                            .child(kind),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_muted())
+                            .child(poll),
+                    ),
+            );
+        }
+
+        div().v_flex().gap_8().child(
+            div()
+                .v_flex()
+                .gap_3()
+                .child(self.section_title("Task Sources"))
+                .child(list),
+        )
     }
 
     // ── Shared helpers ─────────────────────────────────────────────
@@ -2415,32 +2384,6 @@ impl SettingsScreen {
             .border_1()
             .border_color(theme::hairline())
             .child(value.to_string())
-    }
-
-    fn dropdown_box(&self, value: &str) -> Div {
-        div()
-            .h_flex()
-            .gap_1()
-            .items_center()
-            .px_3()
-            .py(px(6.0))
-            .min_w(px(80.0))
-            .rounded_lg()
-            .bg(theme::panel_raised())
-            .border_1()
-            .border_color(theme::hairline())
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(12.0))
-                    .text_color(theme::text_primary())
-                    .child(value.to_string()),
-            )
-            .child(
-                Icon::new(IconName::ChevronDown)
-                    .size_3p5()
-                    .text_color(theme::text_muted()),
-            )
     }
 }
 
