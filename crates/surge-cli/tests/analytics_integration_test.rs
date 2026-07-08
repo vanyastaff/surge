@@ -86,7 +86,13 @@ fn create_test_db_with_data() -> (TempDir, PathBuf, Store) {
             Some(200_000),
             Some(12_000),
         )),
-        timestamp_ms: now - (1 * 24 * 60 * 60 * 1000), // 1 day ago
+        // ~2 days ago — deterministically OUTSIDE the daily window. Was
+        // exactly `now - 24h`, which sat on the boundary: the budget test's
+        // rolling-24h window and the tracker's calendar-day window each
+        // computed `now` a few ms apart, so the boundary entry flipped in/out
+        // between them and flaked the daily-cost assertions. The daily test
+        // intends this session to be excluded (only "today" counts).
+        timestamp_ms: now - (2 * 24 * 60 * 60 * 1000) - (60 * 60 * 1000), // 49 hours ago
     };
 
     // Session 3: QA review phase with claude-sonnet (today)
