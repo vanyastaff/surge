@@ -153,6 +153,8 @@ pub async fn run_feature_planner(
         profile_registry: Some(params.profile_registry.clone()),
         hook_executor: params.hook_executor,
         pending_elevations: crate::engine::elevation::PendingElevations::new(),
+        // The feature planner runs standalone, not inside a task loop.
+        active_task_id: None,
     })
     .await?;
 

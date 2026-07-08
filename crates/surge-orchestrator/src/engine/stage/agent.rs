@@ -19,7 +19,7 @@ use surge_core::agent_config::AgentConfig;
 use surge_core::artifact_contract::{ArtifactDiagnosticSeverity, validate_artifact};
 use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::node::OutcomeDecl;
+use surge_core::node::{LedgerEffect, OutcomeDecl};
 use surge_core::profile::registry::ResolvedProfile;
 use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
 use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
@@ -89,6 +89,11 @@ pub struct AgentStageParams<'a> {
     /// replies. Shared because multiple agent stages may run concurrently
     /// against the same bridge.
     pub pending_elevations: std::sync::Arc<crate::engine::elevation::PendingElevations>,
+    /// Ledger task id for the loop iteration this stage runs inside, when the
+    /// stage executes within a task loop. When `Some` and the reported outcome
+    /// carries a [`LedgerEffect`](surge_core::node::LedgerEffect), the stage
+    /// emits the matching task-ledger event. `None` outside a task loop.
+    pub active_task_id: Option<String>,
 }
 
 /// Pick the effective [`ApprovalConfig`] for an agent stage.
@@ -529,6 +534,35 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     continue;
                 }
 
+                // Sealed-verifier gate. A `Verified` outcome is the sole path
+                // to a verified `Completed` ledger status, so it may only be
+                // reported from a sealed (read-only, no-network, no-shell)
+                // sandbox — a verifier that can edit the workspace cannot be
+                // trusted to certify it. Rejecting forces the agent to pick a
+                // different outcome; a misconfigured verifier exhausts retries
+                // and the stage fails with a clear diagnostic.
+                if outcome_ledger_effect(p.declared_outcomes, &outcome) == LedgerEffect::Verified
+                    && sandbox_cfg.mode != surge_core::sandbox::SandboxMode::ReadOnly
+                {
+                    record_outcome_rejection(
+                        RejectionRecordParams {
+                            writer: p.writer,
+                            bridge: p.bridge,
+                            node: p.node,
+                            session_id,
+                            outcome: &outcome,
+                            hook_id: "verification_authority",
+                            reason: "a Verified outcome requires a sealed \
+                                     read-only sandbox (no workspace writes)",
+                            source: "verification authority",
+                            max_rejections: max_outcome_rejections,
+                        },
+                        &mut outcome_rejection_attempts,
+                    )
+                    .await?;
+                    continue;
+                }
+
                 if let Some(rejection) = validate_profile_artifact_contracts(
                     resolved_profile.as_ref(),
                     &outcome,
@@ -560,6 +594,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // fold rule populates RunMemory.artifacts deterministically.
                 // A missing or unreadable path is logged and skipped — it
                 // does not fail the stage.
+                let mut produced_hashes: BTreeMap<String, ContentHash> = BTreeMap::new();
                 if !artifacts_produced.is_empty() {
                     let canonical_worktree = tokio::fs::canonicalize(p.worktree_path)
                         .await
@@ -625,6 +660,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                             .put(p.run_id, &name, &bytes)
                             .await
                             .map_err(|e| StageError::Storage(e.to_string()))?;
+                        produced_hashes.insert(name.clone(), artifact_ref.hash);
                         tracing::info!(
                             target: "engine::stage::agent",
                             node = %p.node,
@@ -655,6 +691,23 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     }))
                     .await
                     .map_err(|e| StageError::Storage(e.to_string()))?;
+
+                // Task ledger: when this stage runs inside a task loop and the
+                // reported outcome carries a ledger effect, append the matching
+                // ledger event (TaskStatusChanged / TaskVerified). The
+                // sealed-verifier gate above guarantees a `Verified` effect
+                // only reaches here from a read-only sandbox.
+                if let Some(task_id) = p.active_task_id.as_deref() {
+                    emit_ledger_event(
+                        p.writer,
+                        p.node,
+                        p.run_memory,
+                        task_id,
+                        outcome_ledger_effect(p.declared_outcomes, &outcome),
+                        &produced_hashes,
+                    )
+                    .await?;
+                }
                 break outcome;
             },
             BridgeEvent::PermissionRequested {
@@ -999,6 +1052,73 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .map_err(|e| StageError::Storage(e.to_string()))?;
 
     Ok(outcome)
+}
+
+/// Look up the [`LedgerEffect`] declared for `outcome` on this node, defaulting
+/// to [`LedgerEffect::None`] when the outcome is not found (or declares none).
+fn outcome_ledger_effect(declared: &[OutcomeDecl], outcome: &OutcomeKey) -> LedgerEffect {
+    declared
+        .iter()
+        .find(|decl| &decl.id == outcome)
+        .map_or(LedgerEffect::None, |decl| decl.ledger_effect)
+}
+
+/// Append the task-ledger event implied by `effect` for `task_id`.
+///
+/// - `ReadyForVerification` / `FailedVerification` → `TaskStatusChanged` (the
+///   `from` status is read from the folded ledger, defaulting to `Pending`).
+/// - `Verified` → `TaskVerified` with `evidence` = the produced
+///   `verification-report` artifact hash, else the first produced artifact,
+///   else a deterministic hash of the task id.
+/// - `None` → no event.
+async fn emit_ledger_event(
+    writer: &RunWriter,
+    node: &NodeKey,
+    memory: &surge_core::run_state::RunMemory,
+    task_id: &str,
+    effect: LedgerEffect,
+    produced_hashes: &BTreeMap<String, ContentHash>,
+) -> Result<(), StageError> {
+    use surge_core::roadmap::RoadmapStatus;
+
+    let payload = match effect {
+        LedgerEffect::None => return Ok(()),
+        LedgerEffect::ReadyForVerification | LedgerEffect::FailedVerification => {
+            let to = if matches!(effect, LedgerEffect::ReadyForVerification) {
+                RoadmapStatus::ReadyForVerification
+            } else {
+                RoadmapStatus::FailedVerification
+            };
+            let from = memory
+                .ledger
+                .tasks
+                .get(task_id)
+                .map_or(RoadmapStatus::Pending, |task| task.status);
+            EventPayload::TaskStatusChanged {
+                task_id: task_id.to_owned(),
+                from,
+                to,
+                authority_node: node.clone(),
+            }
+        },
+        LedgerEffect::Verified => {
+            let evidence = produced_hashes
+                .get("verification-report")
+                .or_else(|| produced_hashes.values().next())
+                .copied()
+                .unwrap_or_else(|| ContentHash::compute(task_id.as_bytes()));
+            EventPayload::TaskVerified {
+                task_id: task_id.to_owned(),
+                node: node.clone(),
+                evidence,
+            }
+        },
+    };
+    writer
+        .append_event(VersionedEventPayload::new(payload))
+        .await
+        .map_err(|e| StageError::Storage(e.to_string()))?;
+    Ok(())
 }
 
 struct RejectionRecordParams<'a> {

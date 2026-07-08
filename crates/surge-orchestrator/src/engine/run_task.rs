@@ -577,6 +577,7 @@ async fn execute_agent_node(
         profile_registry: params.profile_registry.clone(),
         hook_executor: &state.hook_executor,
         pending_elevations: state.pending_elevations.clone(),
+        active_task_id: crate::engine::frames::active_task_id(&state.frames),
     })
     .await;
 

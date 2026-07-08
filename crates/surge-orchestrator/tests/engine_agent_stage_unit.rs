@@ -95,6 +95,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
+        active_task_id: None,
     })
     .await
     .unwrap();
