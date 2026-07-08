@@ -21,6 +21,7 @@ surge migrate-spec ...  translate a legacy .spec.toml into a flow.toml
 surge daemon ...        manage the long-running local engine host
 surge tracker ...       list configured task sources, test connectivity
 surge intake ...        inspect tracker-intake state (ticket index)
+surge ready             list the actionable task backlog from the task ledger
 surge telegram ...      configure cockpit bot token / pairings / revoke
 surge mcp ...           list/start/stop/logs configured MCP servers
 surge clean             clean up orphaned worktrees and merged branches
@@ -85,6 +86,30 @@ repeatable, target Agent nodes only, and are rewritten into the child's
 materialized graph (validated all-or-nothing before the fork is created).
 
 Bundled templates live in the binary; user templates under `${SURGE_HOME}/templates/*.toml` shadow bundled templates by filename stem or `metadata.name`.
+
+## Task Ledger (`surge ready`)
+
+Each run folds its task-ledger events (`TaskStatusChanged` / `TaskDiscovered` /
+`TaskVerified`) into a per-run `task_ledger` view; at run completion the engine
+mirrors that view into a cross-run `task_ledger_index` in the registry DB.
+`surge ready` reads that index and lists the **actionable** backlog — tasks that
+are not yet settled (completed / failed / skipped).
+
+```text
+surge ready                          # actionable tasks in the current project
+surge ready --status ready_for_verification   # pin one status
+surge ready --discovered             # only tasks discovered mid-run
+surge ready --run <run_id>           # scope to one run
+surge ready --all-projects --json    # everything, as JSON
+```
+
+Columns: task id, status, whether a sealed verifier certified it (`verified`),
+its `discovered_from` origin, and the owning run.
+
+> **Not yet dependency-aware.** `surge ready` shows every unsettled task, not
+> only those whose `depends_on` are satisfied — the registry index does not
+> carry `depends_on` (it lives in the roadmap artifact). Dependency-filtered
+> readiness is a planned follow-up.
 
 ## Artifact Validation
 
