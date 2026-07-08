@@ -7,7 +7,7 @@ use super::super::diagnostic::{
 };
 use super::super::parse::{parse_toml_value, require_toml_fields, validate_schema_version};
 use crate::artifact_contract::ARTIFACT_SCHEMA_VERSION;
-use crate::roadmap::DiscoveredTasksArtifact;
+use crate::roadmap::{DiscoveredTaskIssue, DiscoveredTasksArtifact};
 
 pub(in crate::artifact_contract) fn validate_discovered_tasks(
     report: &mut ArtifactValidationReport,
@@ -36,11 +36,22 @@ pub(in crate::artifact_contract) fn validate_discovered_tasks(
     };
 
     for issue in artifact.validate() {
+        let (code, location) = match &issue {
+            DiscoveredTaskIssue::EmptyId => {
+                (ArtifactDiagnosticCode::MissingField, None)
+            },
+            DiscoveredTaskIssue::DuplicateId { id } => {
+                (ArtifactDiagnosticCode::DuplicateIdentifier, Some(id.clone()))
+            },
+            DiscoveredTaskIssue::EmptyTitle { id } => {
+                (ArtifactDiagnosticCode::MissingField, Some(format!("{id}.title")))
+            },
+        };
         report.push(ArtifactValidationDiagnostic::error(
             report.kind,
-            ArtifactDiagnosticCode::DuplicateIdentifier,
-            None,
-            issue,
+            code,
+            location,
+            issue.to_string(),
         ));
     }
 }

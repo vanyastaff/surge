@@ -141,9 +141,16 @@ pub struct LedgerState {
 
 impl LedgerState {
     /// Record a non-verified status transition (upsert).
+    ///
+    /// Clears `verified` when the new status is not `Completed`, preventing
+    /// an inconsistent state where `verified=true` but the task is not
+    /// completed (e.g. due to a reordered event log).
     fn record_status_change(&mut self, task_id: &str, to: RoadmapStatus, node: &NodeKey, seq: u64) {
         let entry = self.tasks.entry(task_id.to_owned()).or_default();
         entry.status = to;
+        if to != RoadmapStatus::Completed {
+            entry.verified = false;
+        }
         entry.last_authority_node = Some(node.clone());
         entry.updated_seq = seq;
     }
@@ -2068,6 +2075,38 @@ mod tests {
         assert_eq!(a.ledger, b.ledger);
         assert_eq!(a.ledger.tasks["m1-t1"].discovered_from.as_deref(), Some("seed"));
         assert!(a.ledger.tasks["m1-t1"].verified);
+    }
+
+    #[test]
+    fn status_change_after_verified_clears_verified_flag() {
+        // If a TaskStatusChanged arrives after a TaskVerified (reordered log
+        // or engine bug), the task must not retain verified=true with a
+        // non-Completed status.
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: NodeKey::try_from("verify_1").unwrap(),
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
+        assert!(!t1.verified, "verified must be cleared after non-Completed status change");
     }
 
     #[test]

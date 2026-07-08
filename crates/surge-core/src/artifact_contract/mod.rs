@@ -248,6 +248,29 @@ title = "Two"
     }
 
     #[test]
+    fn discovered_tasks_empty_id_and_title_produce_correct_codes() {
+        let report = validate_artifact(
+            ArtifactKind::DiscoveredTasks,
+            Some(Path::new("discovered-tasks.toml")),
+            r#"schema_version = 1
+
+[[tasks]]
+id = ""
+title = "No id"
+
+[[tasks]]
+id = "t2"
+title = ""
+"#,
+        );
+        assert!(!report.is_valid());
+        let codes = diagnostic_codes(&report);
+        assert!(codes.contains(&ArtifactDiagnosticCode::MissingField));
+        // Neither issue is a duplicate-id error.
+        assert!(!codes.contains(&ArtifactDiagnosticCode::DuplicateIdentifier));
+    }
+
+    #[test]
     fn verification_report_valid_and_invalid() {
         let ok = validate_artifact(
             ArtifactKind::VerificationReport,

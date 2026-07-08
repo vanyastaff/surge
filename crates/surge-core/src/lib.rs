@@ -71,7 +71,7 @@ pub use event::{
 };
 pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
-    DiscoveredTaskEntry, DiscoveredTasksArtifact, Priority, RoadmapArtifact, RoadmapDependency,
+    DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, Priority, RoadmapArtifact, RoadmapDependency,
     RoadmapItem, RoadmapLedgerIssue, RoadmapMilestone, RoadmapRisk, RoadmapStatus, RoadmapTask,
     TaskSize, Timeline, TimelineBatch, VerificationCheck, VerificationReportArtifact,
     VerificationReportOutcome,

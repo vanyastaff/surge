@@ -94,7 +94,8 @@ const fn ledger_issue_code(issue: &RoadmapLedgerIssue) -> ArtifactDiagnosticCode
         | RoadmapLedgerIssue::UnknownDependsOn { .. }
         | RoadmapLedgerIssue::SelfDiscovery { .. }
         | RoadmapLedgerIssue::UnknownDiscoveredFrom { .. }
-        | RoadmapLedgerIssue::UnknownMilestoneDependency { .. } => {
+        | RoadmapLedgerIssue::UnknownMilestoneDependency { .. }
+        | RoadmapLedgerIssue::MilestoneSelfDependency { .. } => {
             ArtifactDiagnosticCode::InvalidReference
         },
         RoadmapLedgerIssue::DependencyCycle { .. } => ArtifactDiagnosticCode::DependencyCycle,
@@ -112,6 +113,7 @@ fn ledger_issue_location(issue: &RoadmapLedgerIssue) -> Option<String> {
         | RoadmapLedgerIssue::UnknownDiscoveredFrom { task, .. } => Some(task.clone()),
         RoadmapLedgerIssue::MissingSize { task } => Some(format!("{task}.size")),
         RoadmapLedgerIssue::UnknownMilestoneDependency { missing } => Some(missing.clone()),
+        RoadmapLedgerIssue::MilestoneSelfDependency { milestone } => Some(milestone.clone()),
         RoadmapLedgerIssue::DependencyCycle { cycle } => cycle.first().cloned(),
     }
 }

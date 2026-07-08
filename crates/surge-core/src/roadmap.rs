@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::{HashMap, HashSet};
 
-use crate::artifact_contract::ROADMAP_SCHEMA_VERSION;
+use crate::artifact_contract::{ARTIFACT_SCHEMA_VERSION, ROADMAP_SCHEMA_VERSION};
 use crate::id::SpecId;
 use crate::spec::Complexity;
 
@@ -127,9 +127,11 @@ impl RoadmapArtifact {
             }
         }
 
+        let mut has_duplicate_task_ids = false;
         let mut task_ids: HashSet<&str> = HashSet::new();
         for task in self.tasks() {
             if !task_ids.insert(task.id.as_str()) {
+                has_duplicate_task_ids = true;
                 issues.push(RoadmapLedgerIssue::DuplicateTaskId {
                     task: task.id.clone(),
                 });
@@ -169,6 +171,11 @@ impl RoadmapArtifact {
         }
 
         for dependency in &self.dependencies {
+            if dependency.from == dependency.to {
+                issues.push(RoadmapLedgerIssue::MilestoneSelfDependency {
+                    milestone: dependency.from.clone(),
+                });
+            }
             for milestone in [&dependency.from, &dependency.to] {
                 if !milestone_ids.contains(milestone.as_str()) {
                     issues.push(RoadmapLedgerIssue::UnknownMilestoneDependency {
@@ -178,8 +185,13 @@ impl RoadmapArtifact {
             }
         }
 
-        if let Some(cycle) = self.find_task_cycle() {
-            issues.push(RoadmapLedgerIssue::DependencyCycle { cycle });
+        // Cycle detection is unreliable when duplicate task ids exist (the
+        // HashMap in find_task_cycle uses last-write-wins, which can mask
+        // edges). Skip it so we don't report a false-negative.
+        if !has_duplicate_task_ids {
+            if let Some(cycle) = self.find_task_cycle() {
+                issues.push(RoadmapLedgerIssue::DependencyCycle { cycle });
+            }
         }
 
         issues
@@ -209,7 +221,7 @@ impl RoadmapArtifact {
 
         for task in self.tasks() {
             if let Some(cycle) =
-                visit_for_cycle(task.id.as_str(), &dependencies, &mut marks, &mut stack)
+                visit_for_cycle(task.id.as_str(), &dependencies, &mut marks, &mut stack, 0)
             {
                 return Some(cycle);
             }
@@ -217,6 +229,12 @@ impl RoadmapArtifact {
         None
     }
 }
+
+/// Maximum recursion depth for cycle detection before we conservatively
+/// report "no cycle". Prevents stack overflow on degenerate graphs (e.g. a
+/// linear chain of 10k tasks). 1024× the typical stack frame size (~200 bytes)
+/// is ~200 KB, well within the default 2 MB debug-mode stack.
+const MAX_CYCLE_SEARCH_DEPTH: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 enum CycleMark {
@@ -226,12 +244,20 @@ enum CycleMark {
 
 /// Depth-first search from `node` looking for a back edge into the active
 /// stack. Returns the cycle path (first == last) on the first one found.
+///
+/// `depth` tracks the current recursion depth; when it exceeds
+/// [`MAX_CYCLE_SEARCH_DEPTH`] the search is aborted (returns `None`) to
+/// prevent stack overflow.
 fn visit_for_cycle<'a>(
     node: &'a str,
     dependencies: &HashMap<&'a str, &'a [String]>,
     marks: &mut HashMap<&'a str, CycleMark>,
     stack: &mut Vec<&'a str>,
+    depth: usize,
 ) -> Option<Vec<String>> {
+    if depth > MAX_CYCLE_SEARCH_DEPTH {
+        return None;
+    }
     match marks.get(node) {
         Some(CycleMark::Done) => return None,
         Some(CycleMark::Visiting) => {
@@ -248,7 +274,7 @@ fn visit_for_cycle<'a>(
     for dependency in dependencies.get(node).copied().unwrap_or_default() {
         let target = dependency.as_str();
         if dependencies.contains_key(target)
-            && let Some(cycle) = visit_for_cycle(target, dependencies, marks, stack)
+            && let Some(cycle) = visit_for_cycle(target, dependencies, marks, stack, depth + 1)
         {
             return Some(cycle);
         }
@@ -301,6 +327,11 @@ pub enum RoadmapLedgerIssue {
         /// The missing milestone id.
         missing: String,
     },
+    /// A milestone dependency references itself.
+    MilestoneSelfDependency {
+        /// The milestone id.
+        milestone: String,
+    },
     /// The task-level `depends_on` graph contains a cycle.
     DependencyCycle {
         /// The cycle as a task-id path; first and last entries are equal.
@@ -320,6 +351,9 @@ impl std::fmt::Display for RoadmapLedgerIssue {
                 write!(formatter, "duplicate milestone id {milestone:?}")
             },
             Self::DuplicateTaskId { task } => write!(formatter, "duplicate task id {task:?}"),
+            Self::MilestoneSelfDependency { milestone } => {
+                write!(formatter, "milestone {milestone:?} depends on itself")
+            },
             Self::SelfDependency { task } => {
                 write!(formatter, "task {task:?} depends on itself")
             },
@@ -478,11 +512,42 @@ impl std::fmt::Display for TaskSize {
 )]
 pub struct DiscoveredTasksArtifact {
     /// Artifact contract schema version.
-    #[serde(default = "default_artifact_schema_version")]
+    #[serde(default = "default_discovered_tasks_schema_version")]
     pub schema_version: u32,
     /// Newly discovered tasks.
     #[serde(default)]
     pub tasks: Vec<DiscoveredTaskEntry>,
+}
+
+/// One issue found by [`DiscoveredTasksArtifact::validate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscoveredTaskIssue {
+    /// A task entry has an empty id.
+    EmptyId,
+    /// Two task entries share the same id.
+    DuplicateId {
+        /// The duplicated id.
+        id: String,
+    },
+    /// A task entry has an empty title.
+    EmptyTitle {
+        /// The id of the task with the empty title.
+        id: String,
+    },
+}
+
+impl std::fmt::Display for DiscoveredTaskIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyId => write!(f, "discovered task has an empty id"),
+            Self::DuplicateId { id } => {
+                write!(f, "duplicate discovered task id {id:?}")
+            },
+            Self::EmptyTitle { id } => {
+                write!(f, "discovered task {id:?} has an empty title")
+            },
+        }
+    }
 }
 
 impl DiscoveredTasksArtifact {
@@ -490,17 +555,21 @@ impl DiscoveredTasksArtifact {
     /// ids must be unique within the artifact. Returns an empty vector when
     /// well-formed.
     #[must_use]
-    pub fn validate(&self) -> Vec<String> {
+    pub fn validate(&self) -> Vec<DiscoveredTaskIssue> {
         let mut issues = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         for entry in &self.tasks {
             if entry.id.trim().is_empty() {
-                issues.push("discovered task has an empty id".to_owned());
+                issues.push(DiscoveredTaskIssue::EmptyId);
             } else if !seen.insert(entry.id.as_str()) {
-                issues.push(format!("duplicate discovered task id {:?}", entry.id));
+                issues.push(DiscoveredTaskIssue::DuplicateId {
+                    id: entry.id.clone(),
+                });
             }
             if entry.title.trim().is_empty() {
-                issues.push(format!("discovered task {:?} has an empty title", entry.id));
+                issues.push(DiscoveredTaskIssue::EmptyTitle {
+                    id: entry.id.clone(),
+                });
             }
         }
         issues
@@ -754,6 +823,10 @@ pub struct TimelineBatch {
 
 fn default_artifact_schema_version() -> u32 {
     ROADMAP_SCHEMA_VERSION
+}
+
+fn default_discovered_tasks_schema_version() -> u32 {
+    ARTIFACT_SCHEMA_VERSION
 }
 
 impl Timeline {
@@ -1111,6 +1184,21 @@ mod tests {
                 missing: "m9".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn validate_ledger_flags_self_referencing_milestone_dependency() {
+        let mut roadmap = ledger_roadmap(vec![sized_task("t1", &[])]);
+        roadmap.dependencies.push(RoadmapDependency {
+            from: "m1".to_string(),
+            to: "m1".to_string(),
+            reason: String::new(),
+        });
+
+        let issues = roadmap.validate_ledger();
+        assert!(issues.contains(&RoadmapLedgerIssue::MilestoneSelfDependency {
+            milestone: "m1".to_string()
+        }));
     }
 
     #[test]
