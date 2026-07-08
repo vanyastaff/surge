@@ -14,15 +14,9 @@ use crate::project::RecentProjects;
 use crate::router::Screen;
 use crate::screens::agent_hub::AgentHubScreen;
 use crate::screens::agent_terminal::AgentTerminalScreen;
-use crate::screens::dashboard::DashboardScreen;
-use crate::screens::diff_viewer::DiffViewerScreen;
-use crate::screens::file_explorer::FileExplorerScreen;
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
 use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
-use crate::screens::github_prs::GithubPrsScreen;
-use crate::screens::insights::InsightsScreen;
-use crate::screens::kanban::{KanbanScreen, TaskClicked};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::runs::RunsScreen;
 use crate::screens::settings::SettingsScreen;
@@ -60,17 +54,11 @@ pub struct SurgeApp {
     flow: Option<Entity<FlowScreen>>,
     memory: Option<Entity<MemoryScreen>>,
     runs_screen: Option<Entity<RunsScreen>>,
-    dashboard: Option<Entity<DashboardScreen>>,
-    kanban: Option<Entity<KanbanScreen>>,
     agent_hub: Option<Entity<AgentHubScreen>>,
     spec_explorer: Option<Entity<SpecExplorerScreen>>,
     spec_wizard: Option<Entity<SpecWizardScreen>>,
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
-    diff_viewer: Option<Entity<DiffViewerScreen>>,
-    file_explorer: Option<Entity<FileExplorerScreen>>,
     worktrees: Option<Entity<WorktreesScreen>>,
-    github_prs: Option<Entity<GithubPrsScreen>>,
-    insights: Option<Entity<InsightsScreen>>,
     settings: Option<Entity<SettingsScreen>>,
     gate_approval: Option<Entity<GateApprovalScreen>>,
     /// Queued notifications to flush on next render (needs Window access).
@@ -144,17 +132,11 @@ impl SurgeApp {
             flow: None,
             memory: None,
             runs_screen: None,
-            dashboard: None,
             agent_terminal: None,
-            kanban: None,
             agent_hub: None,
             spec_explorer: None,
             spec_wizard: None,
-            diff_viewer: None,
-            file_explorer: None,
             worktrees: None,
-            github_prs: None,
-            insights: None,
             settings: None,
             gate_approval: None,
             pending_notifications: Vec::new(),
@@ -260,17 +242,11 @@ impl SurgeApp {
         self.flow = None;
         self.memory = None;
         self.runs_screen = None;
-        self.dashboard = None;
-        self.kanban = None;
         self.agent_hub = None;
         self.agent_terminal = None;
         self.spec_explorer = None;
         self.spec_wizard = None;
-        self.diff_viewer = None;
-        self.file_explorer = None;
         self.worktrees = None;
-        self.github_prs = None;
-        self.insights = None;
         self.settings = None;
         self.gate_approval = None;
 
@@ -621,8 +597,8 @@ impl SurgeApp {
         })
         .detach();
 
-        // Navigate back to dashboard after decision
-        self.navigate(Screen::Dashboard, cx);
+        // Back to the constellation after a decision.
+        self.navigate(Screen::Fleet, cx);
     }
 
     pub fn bind_actions(cx: &mut App) {
@@ -645,8 +621,6 @@ impl SurgeApp {
             // Tasks
             KeyBinding::new("ctrl-n", NewTask, None),
             KeyBinding::new("ctrl-enter", ApproveGate, None),
-            // Diff
-            KeyBinding::new("ctrl-d", OpenDiffViewer, None),
         ]);
     }
 
@@ -702,26 +676,6 @@ impl SurgeApp {
                 let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
                 s.clone().into_any_element()
             },
-            Screen::Dashboard => {
-                let state = self.state.clone();
-                let dashboard = self
-                    .dashboard
-                    .get_or_insert_with(|| cx.new(|cx| DashboardScreen::new(state, cx)));
-                dashboard.clone().into_any_element()
-            },
-            Screen::Kanban => {
-                let state = self.state.clone();
-                let kanban = self.kanban.get_or_insert_with(|| {
-                    let k = cx.new(|cx| KanbanScreen::new(state, cx));
-                    cx.subscribe(&k, |this: &mut Self, _kanban, event: &TaskClicked, cx| {
-                        this.task_detail_id = Some(event.0.clone());
-                        cx.notify();
-                    })
-                    .detach();
-                    k
-                });
-                kanban.clone().into_any_element()
-            },
             Screen::AgentHub => {
                 let state = self.state.clone();
                 let agent_hub = self
@@ -749,35 +703,11 @@ impl SurgeApp {
                     .get_or_insert_with(|| cx.new(SpecWizardScreen::new));
                 spec_wizard.clone().into_any_element()
             },
-            Screen::DiffViewer => {
-                let s = self
-                    .diff_viewer
-                    .get_or_insert_with(|| cx.new(DiffViewerScreen::new));
-                s.clone().into_any_element()
-            },
-            Screen::FileExplorer => {
-                let s = self
-                    .file_explorer
-                    .get_or_insert_with(|| cx.new(FileExplorerScreen::new));
-                s.clone().into_any_element()
-            },
             Screen::Worktrees => {
                 let state = self.state.clone();
                 let s = self
                     .worktrees
                     .get_or_insert_with(|| cx.new(|cx| WorktreesScreen::new(state, cx)));
-                s.clone().into_any_element()
-            },
-            Screen::GitHubPRs => {
-                let s = self
-                    .github_prs
-                    .get_or_insert_with(|| cx.new(GithubPrsScreen::new));
-                s.clone().into_any_element()
-            },
-            Screen::Insights => {
-                let s = self
-                    .insights
-                    .get_or_insert_with(|| cx.new(InsightsScreen::new));
                 s.clone().into_any_element()
             },
             Screen::Settings => {
@@ -1213,9 +1143,6 @@ impl Render for SurgeApp {
                     }))
                     .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
                         this.navigate(Screen::SpecWizard, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &OpenDiffViewer, _w, cx| {
-                        this.navigate(Screen::DiffViewer, cx)
                     }))
                     .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
                         // If on gate approval screen, approve the current gate

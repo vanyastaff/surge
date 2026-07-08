@@ -22,7 +22,5 @@ actions!(
         // Tasks
         NewTask,
         ApproveGate,
-        // Diff
-        OpenDiffViewer,
     ]
 );
