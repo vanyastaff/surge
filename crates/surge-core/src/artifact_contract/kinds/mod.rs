@@ -10,3 +10,4 @@ pub(super) mod roadmap;
 pub(super) mod roadmap_patch;
 pub(super) mod spec;
 pub(super) mod story;
+pub(super) mod verification_report;

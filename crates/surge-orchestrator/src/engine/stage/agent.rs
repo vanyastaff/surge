@@ -2237,6 +2237,7 @@ mod tests {
                     system: "Implement".into(),
                 },
                 inspector_ui: InspectorUi::default(),
+                verification: Default::default(),
             },
             provenance: Provenance::Bundled,
             chain: vec![profile_key],

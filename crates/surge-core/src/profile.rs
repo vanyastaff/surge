@@ -31,6 +31,35 @@ pub struct Profile {
     pub prompt: PromptTemplate,
     #[serde(default)]
     pub inspector_ui: InspectorUi,
+    /// Verification capabilities declared by this profile. Read by graph
+    /// validation at flow-load time to decide whether a node may own a
+    /// `verified` ledger transition (R7/R8); the runtime seal is still the
+    /// sandbox mode (`read-only`), enforced in the agent stage.
+    #[serde(default, skip_serializing_if = "VerificationCfg::is_default")]
+    pub verification: VerificationCfg,
+}
+
+/// Verification capabilities declared by a profile.
+///
+/// `authority = true` marks a profile as a sealed verifier — the only role
+/// permitted to declare a `verified` ledger effect and thus the only path to
+/// a task's `done` status. The capability is monotonic across an `extends`
+/// chain: a specialized verifier that extends a profile with `authority =
+/// true` inherits it (see [`crate::profile::registry::merge_pair`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationCfg {
+    /// Whether this profile may own a `verified` ledger transition.
+    #[serde(default)]
+    pub authority: bool,
+}
+
+impl VerificationCfg {
+    /// `true` when this is the default (no authority declared) — used to keep
+    /// the serialized form of pre-verification profiles byte-identical.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        !self.authority
+    }
 }
 
 impl Profile {
@@ -241,10 +270,68 @@ mod tests {
                 system: "You are an implementer.".into(),
             },
             inspector_ui: InspectorUi::default(),
+            verification: VerificationCfg::default(),
         };
         let toml_s = toml::to_string(&p).unwrap();
         let parsed: Profile = toml::from_str(&toml_s).unwrap();
         assert_eq!(p, parsed);
+    }
+
+    #[test]
+    fn verification_authority_parses_and_defaults_false() {
+        // A profile without `[verification]` defaults to no authority.
+        let base = r#"
+            schema_version = 1
+            [role]
+            id = "implementer"
+            version = "1.0.0"
+            display_name = "Implementer"
+            category = "agents"
+            description = "Writes code."
+            when_to_use = "Default execution."
+            [runtime]
+            recommended_model = "claude-opus-4-7"
+            [[outcomes]]
+            id = "done"
+            description = "Success"
+            edge_kind_hint = "forward"
+            [prompt]
+            system = "You implement."
+        "#;
+        let parsed: Profile = toml::from_str(base).unwrap();
+        assert!(!parsed.verification.authority);
+
+        // Declaring `[verification] authority = true` opts in.
+        let sealed = r#"
+            schema_version = 1
+            [role]
+            id = "verifier"
+            version = "1.0.0"
+            display_name = "Verifier"
+            category = "agents"
+            description = "Verifies."
+            when_to_use = "After implementer."
+            [runtime]
+            recommended_model = "claude-sonnet-4-6"
+            [verification]
+            authority = true
+            [[outcomes]]
+            id = "passed"
+            description = "Green"
+            edge_kind_hint = "forward"
+            [prompt]
+            system = "You verify."
+        "#;
+        let parsed: Profile = toml::from_str(sealed).unwrap();
+        assert!(parsed.verification.authority);
+
+        // The default (no authority) is skipped on serialize, so a
+        // pre-verification profile stays byte-identical.
+        let impl_toml = toml::to_string(&toml::from_str::<Profile>(base).unwrap()).unwrap();
+        assert!(
+            !impl_toml.contains("[verification]"),
+            "default verification must not serialize, got:\n{impl_toml}"
+        );
     }
 
     #[test]

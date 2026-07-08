@@ -46,7 +46,7 @@ use crate::hooks::Hook;
 use crate::keys::ProfileKey;
 use crate::profile::{
     ExpectedBinding, InspectorUi, Profile, ProfileBindings, ProfileHooks, ProfileOutcome,
-    PromptTemplate, RuntimeCfg, ToolsCfg, default_agent_id,
+    PromptTemplate, RuntimeCfg, ToolsCfg, VerificationCfg, default_agent_id,
 };
 use crate::sandbox::SandboxConfig;
 
@@ -238,6 +238,7 @@ pub fn merge_pair(parent: &Profile, child: &Profile) -> Profile {
         hooks: merge_hooks(&parent.hooks, &child.hooks),
         prompt: merge_prompt(&parent.prompt, &child.prompt),
         inspector_ui: merge_inspector_ui(&parent.inspector_ui, &child.inspector_ui),
+        verification: merge_verification(&parent.verification, &child.verification),
     }
 }
 
@@ -376,6 +377,18 @@ fn merge_inspector_ui(parent: &InspectorUi, child: &InspectorUi) -> InspectorUi 
     }
 }
 
+/// Merge `VerificationCfg`. Authority is a **monotonic capability**: a child
+/// inherits a parent's `authority = true` and cannot revoke it. This matches
+/// how a specialized verifier (e.g. a future `security-verifier`) extends
+/// `verifier@2.0` and should keep verification authority without redeclaring
+/// it. A profile that never opts in stays at the default (`authority =
+/// false`).
+fn merge_verification(parent: &VerificationCfg, child: &VerificationCfg) -> VerificationCfg {
+    VerificationCfg {
+        authority: parent.authority || child.authority,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +436,7 @@ mod tests {
                 system: format!("system {name}"),
             },
             inspector_ui: InspectorUi::default(),
+            verification: VerificationCfg::default(),
         }
     }
 
@@ -502,6 +516,33 @@ mod tests {
         let merged = merge_pair(&parent, &child);
         assert_eq!(merged.outcomes.len(), 1);
         assert_eq!(merged.outcomes[0].id.as_str(), "done");
+    }
+
+    #[test]
+    fn verification_authority_is_inherited_and_cannot_be_revoked() {
+        // Parent declares authority; a specialized child that does not
+        // redeclare `[verification]` inherits it.
+        let mut parent = make_profile("verifier");
+        parent.verification = VerificationCfg { authority: true };
+        let child = make_profile("security-verifier");
+        let merged = merge_pair(&parent, &child);
+        assert!(merged.verification.authority, "child inherits parent authority");
+
+        // A non-verifier parent + non-verifier child stays without authority.
+        let parent = make_profile("implementer");
+        let child = make_profile("bug-fix-implementer");
+        assert!(!merge_pair(&parent, &child).verification.authority);
+
+        // A child cannot revoke a parent's authority (capabilities are
+        // monotonic).
+        let mut parent = make_profile("verifier");
+        parent.verification = VerificationCfg { authority: true };
+        let mut child = make_profile("restricted-verifier");
+        child.verification = VerificationCfg { authority: false };
+        assert!(
+            merge_pair(&parent, &child).verification.authority,
+            "authority is monotonic across extends"
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+schema_version = 1
+task_id = "m1-t3"
+outcome = "passed"
+summary = "All checks green; acceptance criteria met."
+
+[[checks]]
+command = "cargo nextest run -p surge-core"
+result = "passed"
+note = "525 tests, 0 failed"
+
+[[checks]]
+command = "cargo clippy --workspace -- -D warnings"
+result = "passed"
+
+evidence = ["sha256:abc123", "artifacts/roadmap.toml"]

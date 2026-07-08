@@ -33,6 +33,8 @@ pub enum ArtifactKind {
     RoadmapPatch,
     /// Tasks discovered mid-execution to append to the ledger.
     DiscoveredTasks,
+    /// Sealed verifier's record of the checks run against a task.
+    VerificationReport,
     /// Spec Author artifact.
     Spec,
     /// Architect decision artifact.
@@ -55,6 +57,7 @@ impl ArtifactKind {
             Self::Roadmap => "roadmap",
             Self::RoadmapPatch => "roadmap-patch",
             Self::DiscoveredTasks => "discovered-tasks",
+            Self::VerificationReport => "verification-report",
             Self::Spec => "spec",
             Self::Adr => "adr",
             Self::Story => "story",
@@ -94,6 +97,9 @@ impl FromStr for ArtifactKind {
             "roadmap-patch" | "roadmap_patch" | "roadmap-patch-toml" => Ok(Self::RoadmapPatch),
             "discovered-tasks" | "discovered_tasks" | "discovered-tasks-toml" => {
                 Ok(Self::DiscoveredTasks)
+            },
+            "verification-report" | "verification_report" | "verification-report-toml" => {
+                Ok(Self::VerificationReport)
             },
             "spec" | "spec-md" | "spec-toml" => Ok(Self::Spec),
             "adr" | "architecture-decision-record" => Ok(Self::Adr),
@@ -216,6 +222,7 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
         ArtifactKind::Roadmap => ROADMAP_CONTRACT,
         ArtifactKind::RoadmapPatch => ROADMAP_PATCH_CONTRACT,
         ArtifactKind::DiscoveredTasks => DISCOVERED_TASKS_CONTRACT,
+        ArtifactKind::VerificationReport => VERIFICATION_REPORT_CONTRACT,
         ArtifactKind::Spec => SPEC_CONTRACT,
         ArtifactKind::Adr => ADR_CONTRACT,
         ArtifactKind::Story => STORY_CONTRACT,
@@ -243,6 +250,7 @@ const REQUIREMENTS_ALIASES: &[&str] = &["requirements.md"];
 const ROADMAP_ALIASES: &[&str] = &["roadmap.md"];
 const ROADMAP_PATCH_ALIASES: &[&str] = &["roadmap_patch.toml"];
 const DISCOVERED_TASKS_ALIASES: &[&str] = &["discovered_tasks.toml"];
+const VERIFICATION_REPORT_ALIASES: &[&str] = &["verification_report.toml"];
 const SPEC_ALIASES: &[&str] = &["spec.md"];
 const ADR_ALIASES: &[&str] = &["adr.md"];
 const STORY_ALIASES: &[&str] = &[];
@@ -299,6 +307,16 @@ const DISCOVERED_TASKS_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: DISCOVERED_TASKS_ALIASES,
 };
 
+const VERIFICATION_REPORT_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::VerificationReport,
+    canonical_path: "verification-report.toml",
+    primary_format: ArtifactFormat::Toml,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::ArtifactContract,
+    validator_kind: "verification-report",
+    aliases: VERIFICATION_REPORT_ALIASES,
+};
+
 const SPEC_CONTRACT: ArtifactContract = ArtifactContract {
     kind: ArtifactKind::Spec,
     canonical_path: "spec.toml",
@@ -349,12 +367,13 @@ const FLOW_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: FLOW_ALIASES,
 };
 
-const CONTRACTS: [ArtifactContract; 10] = [
+const CONTRACTS: [ArtifactContract; 11] = [
     DESCRIPTION_CONTRACT,
     REQUIREMENTS_CONTRACT,
     ROADMAP_CONTRACT,
     ROADMAP_PATCH_CONTRACT,
     DISCOVERED_TASKS_CONTRACT,
+    VERIFICATION_REPORT_CONTRACT,
     SPEC_CONTRACT,
     ADR_CONTRACT,
     STORY_CONTRACT,
