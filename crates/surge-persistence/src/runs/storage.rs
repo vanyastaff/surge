@@ -93,6 +93,46 @@ impl Storage {
         crate::task_ledger::TaskLedgerStore::new(self.registry_pool.clone())
     }
 
+    /// Mirror a run's folded task-ledger into the cross-run registry index.
+    ///
+    /// Reads the run's per-run `task_ledger` view (maintained in the append
+    /// transaction) and upserts each row into `task_ledger_index`, keyed by
+    /// `(run_id, task_id)`. Idempotent — safe to call repeatedly (e.g. at run
+    /// completion and again after resume). Returns the number of tasks synced.
+    ///
+    /// # Errors
+    /// Returns [`OpenError`] when the run database cannot be opened, or a
+    /// wrapped [`StorageError`] when the view read or index upsert fails.
+    pub async fn sync_task_ledger_index(
+        self: &Arc<Self>,
+        run_id: RunId,
+        project_path: &std::path::Path,
+    ) -> Result<usize, OpenError> {
+        let reader = self.open_run_reader(run_id.clone()).await?;
+        let rows = reader
+            .task_ledger()
+            .await
+            .map_err(|e| OpenError::Pool(e.to_string()))?;
+        let store = self.task_ledger_store();
+        let observed_at_ms = self.clock.now_ms();
+        for row in &rows {
+            store
+                .upsert(&crate::task_ledger::TaskLedgerIndexUpsert {
+                    run_id: run_id.clone(),
+                    task_id: row.task_id.clone(),
+                    project_path: project_path.to_path_buf(),
+                    status: row.status,
+                    verified: row.verified,
+                    discovered_from: row.discovered_from.clone(),
+                    last_authority_node: row.last_authority_node.clone(),
+                    updated_seq: row.updated_seq.0,
+                    observed_at_ms,
+                })
+                .map_err(|e| OpenError::Pool(e.to_string()))?;
+        }
+        Ok(rows.len())
+    }
+
     /// Acquire a registry-pool connection. Used by inbox subsystems that
     /// share the registry DB. The caller holds the connection for the
     /// duration of one logical operation; do not hold it across awaits.

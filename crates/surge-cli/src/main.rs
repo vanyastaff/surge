@@ -148,6 +148,9 @@ enum Commands {
         command: commands::intake::IntakeCommand,
     },
 
+    /// List the actionable task backlog from the cross-run task ledger.
+    Ready(commands::ready::ReadyArgs),
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -331,6 +334,7 @@ async fn main() -> Result<()> {
             | Commands::MigrateSpec(_)
             | Commands::Tracker { .. }
             | Commands::Intake { .. }
+            | Commands::Ready(_)
             | Commands::Daemon { .. }
             | Commands::Doctor { .. }
             | Commands::Mcp { .. }
@@ -505,6 +509,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Intake { command } => {
             commands::intake::run(command)?;
+        },
+
+        Commands::Ready(args) => {
+            commands::ready::run(args).await?;
         },
 
         Commands::Daemon { command } => {

@@ -13,7 +13,7 @@ use crate::runs::error::StorageError;
 use crate::runs::reader_views as views;
 use crate::runs::seq::EventSeq;
 use crate::runs::types::{
-    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution,
+    ArtifactRecord, CostSummary, PendingApproval, RoadmapPatchRecord, StageExecution, TaskLedgerRow,
 };
 
 /// Read-only handle on a per-run database.
@@ -201,6 +201,17 @@ impl RunReader {
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
             views::cost_summary(&conn)
+        })
+        .await
+        .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read all rows of the per-run `task_ledger` materialized view.
+    pub async fn task_ledger(&self) -> Result<Vec<TaskLedgerRow>, StorageError> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+            views::task_ledger(&conn)
         })
         .await
         .map_err(|e| StorageError::Pool(e.to_string()))?

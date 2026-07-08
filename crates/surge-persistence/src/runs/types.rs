@@ -5,10 +5,27 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use surge_core::{
     ActivePickupPolicy, ContentHash, NodeKey, OperatorConflictChoice, RoadmapPatchApprovalDecision,
-    RoadmapPatchId, RoadmapPatchStatus, RoadmapPatchTarget,
+    RoadmapPatchId, RoadmapPatchStatus, RoadmapPatchTarget, RoadmapStatus,
 };
 
 use crate::runs::seq::EventSeq;
+
+/// One row of the per-run `task_ledger` materialized view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskLedgerRow {
+    /// Ledger task id.
+    pub task_id: String,
+    /// Current ledger status.
+    pub status: RoadmapStatus,
+    /// True once a verification-authority node certified the task.
+    pub verified: bool,
+    /// Task id this task was discovered from, when discovered mid-run.
+    pub discovered_from: Option<String>,
+    /// Node that last transitioned this task.
+    pub last_authority_node: Option<String>,
+    /// Seq of the last event that touched this task.
+    pub updated_seq: EventSeq,
+}
 
 /// One row of the `stage_executions` materialized view.
 #[derive(Debug, Clone, Serialize, Deserialize)]

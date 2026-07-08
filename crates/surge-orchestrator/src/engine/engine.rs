@@ -309,6 +309,10 @@ impl Engine {
         };
         self.runs.write().await.insert(run_id, active);
 
+        // Captured before `worktree_path` moves into params — used by the
+        // post-completion task-ledger mirror. Matches the RunStarted event's
+        // `project_path` (which is the worktree path today).
+        let project_path_for_ledger = worktree_path.clone();
         let params = RunTaskParams {
             run_id,
             writer,
@@ -336,9 +340,15 @@ impl Engine {
         };
 
         let runs_for_cleanup = self.runs.clone();
+        // Post-completion ledger mirror: after the run task finishes, mirror
+        // its folded task-ledger into the cross-run registry index so
+        // `surge ready` / `surge ledger` see it without opening the run DB.
+        // Best-effort — a mirror failure never affects the run outcome.
+        let storage_for_ledger = self.storage.clone();
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
 
@@ -632,6 +642,9 @@ impl Engine {
         let artifact_store =
             surge_persistence::artifacts::ArtifactStore::new(self.storage.home().join("runs"));
 
+        // Captured before `worktree_path` moves into params (post-completion
+        // task-ledger mirror; matches RunStarted's project_path).
+        let project_path_for_ledger = worktree_path.clone();
         let params = RunTaskParams {
             run_id,
             writer,
@@ -659,9 +672,11 @@ impl Engine {
         };
 
         let runs_for_cleanup = self.runs.clone();
+        let storage_for_ledger = self.storage.clone();
         let join = tokio::spawn(async move {
             let outcome = execute(params).await;
             runs_for_cleanup.write().await.remove(&run_id);
+            mirror_task_ledger(&storage_for_ledger, run_id, &project_path_for_ledger).await;
             outcome
         });
 
@@ -977,6 +992,24 @@ const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
 /// Synthetic producer node id recorded on the seeded `ArtifactProduced` event.
 /// Bootstrap graphs do not have a real `start_node` user node, so the
 /// engine attributes the prompt to a stable synthetic key.
+/// Best-effort mirror of a run's task-ledger into the cross-run registry
+/// index. Logs and swallows errors — a mirror failure never affects the run
+/// outcome (the per-run event log remains the source of truth).
+async fn mirror_task_ledger(
+    storage: &Arc<surge_persistence::runs::Storage>,
+    run_id: RunId,
+    project_path: &std::path::Path,
+) {
+    if let Err(error) = storage.sync_task_ledger_index(run_id, project_path).await {
+        tracing::warn!(
+            target: "engine::ledger",
+            run_id = %run_id,
+            err = %error,
+            "task-ledger index mirror failed; surge ready may be stale for this run"
+        );
+    }
+}
+
 const INITIAL_PROMPT_PRODUCER_NODE: &str = "start_node";
 
 /// Output of [`synthesise_initial_prompt_artifact`].
