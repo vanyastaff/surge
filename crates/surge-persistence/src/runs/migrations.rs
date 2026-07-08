@@ -69,6 +69,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0013-intake-emit-log",
         include_str!("migrations/registry/0013_intake_emit_log.sql"),
     ),
+    (
+        "registry-0014-task-ledger-index",
+        include_str!("migrations/registry/0014_task_ledger_index.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -80,6 +84,10 @@ pub const PER_RUN_MIGRATIONS: MigrationSet = &[
     (
         "per-run-0002-roadmap-patches",
         include_str!("migrations/per_run/0002_roadmap_patches.sql"),
+    ),
+    (
+        "per-run-0003-task-ledger",
+        include_str!("migrations/per_run/0003_task_ledger.sql"),
     ),
 ];
 
@@ -223,6 +231,7 @@ mod tests {
             "cost_summary",
             "graph_snapshots",
             "roadmap_patches",
+            "task_ledger",
         ] {
             let n: i64 = conn
                 .query_row(

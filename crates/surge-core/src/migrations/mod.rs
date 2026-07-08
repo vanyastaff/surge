@@ -38,7 +38,14 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// the new variants). The version is bumped so a v3-max reader rejects a
 /// budget event with a clean [`SurgeError::SchemaTooNew`] rather than an
 /// unknown-variant decode error.
-pub const MAX_SUPPORTED_VERSION: u32 = 4;
+///
+/// **v5 (introduced 2026-07):** adds the task-ledger variants
+/// [`EventPayload::TaskStatusChanged`], [`EventPayload::TaskDiscovered`], and
+/// [`EventPayload::TaskVerified`] (Phase 1 task ledger). Purely additive — old
+/// v1..v4 payloads decode cleanly (they never contain the new variants). The
+/// version is bumped so a v4-max reader rejects a ledger event with a clean
+/// [`SurgeError::SchemaTooNew`] rather than an unknown-variant decode error.
+pub const MAX_SUPPORTED_VERSION: u32 = 5;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -131,6 +138,27 @@ impl Migration for IdentityV4 {
     }
 }
 
+/// Identity migration for v5 — the schema bump that introduced the task-ledger
+/// variants (`TaskStatusChanged` / `TaskDiscovered` / `TaskVerified`). The wire
+/// shape is unchanged (same JSON-encoded [`VersionedEventPayload`] wrapper);
+/// old payloads decode cleanly because they never carry the new variants. The
+/// `schema_version` field is the only signal that distinguishes v1..v4 from v5
+/// payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV5;
+
+impl Migration for IdentityV5 {
+    fn version(&self) -> u32 {
+        5
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v5 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -138,7 +166,7 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// [`IdentityV3`], and [`IdentityV4`].
+    /// [`IdentityV3`], [`IdentityV4`], and [`IdentityV5`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -147,6 +175,7 @@ impl MigrationChain {
                 Box::new(IdentityV2),
                 Box::new(IdentityV3),
                 Box::new(IdentityV4),
+                Box::new(IdentityV5),
             ],
         }
     }
@@ -255,7 +284,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 4);
+        assert_eq!(wrapper.schema_version, 5);
     }
 
     #[test]
@@ -263,8 +292,22 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 4 }
+            SurgeError::SchemaTooNew { found: 99, max: 5 }
         ));
+    }
+
+    #[test]
+    fn v5_task_ledger_event_round_trips() {
+        use crate::content_hash::ContentHash;
+
+        let payload = EventPayload::TaskVerified {
+            task_id: "m1-t1".into(),
+            node: NodeKey::try_from("verify_1").unwrap(),
+            evidence: ContentHash::compute(b"verification-report"),
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 
     #[test]

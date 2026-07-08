@@ -88,6 +88,11 @@ impl Storage {
         RoadmapPatchStore::new(self.registry_pool.clone())
     }
 
+    /// Registry-level task-ledger index store (`surge ready` / `surge ledger`).
+    pub fn task_ledger_store(&self) -> crate::task_ledger::TaskLedgerStore {
+        crate::task_ledger::TaskLedgerStore::new(self.registry_pool.clone())
+    }
+
     /// Acquire a registry-pool connection. Used by inbox subsystems that
     /// share the registry DB. The caller holds the connection for the
     /// duration of one logical operation; do not hold it across awaits.

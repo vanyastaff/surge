@@ -94,7 +94,9 @@ NotStarted → Bootstrapping → Pipeline → Terminal
 
 ### Event types (selected)
 
-`RunStarted`, `BootstrapStageStarted`, `StageEntered`, `ToolCalled`, `ToolReturned`, `OutcomeReported`, `StageCompleted`, `StageFailed`, `EdgeTraversed`, `ApprovalRequested`, `ApprovalDecided`, `SandboxElevationRequested`, `TokensConsumed`, `RunCompleted`, `RunFailed`, `RunAborted`.
+`RunStarted`, `BootstrapStageStarted`, `StageEntered`, `ToolCalled`, `ToolReturned`, `OutcomeReported`, `StageCompleted`, `StageFailed`, `EdgeTraversed`, `ApprovalRequested`, `ApprovalDecided`, `SandboxElevationRequested`, `TokensConsumed`, `TaskStatusChanged`, `TaskDiscovered`, `TaskVerified`, `RunCompleted`, `RunFailed`, `RunAborted`.
+
+The task-ledger events (`TaskStatusChanged` / `TaskDiscovered` / `TaskVerified`, schema v5) fold into a `LedgerState` inside `RunMemory`. `TaskVerified` is the **sole** path to a verified `Completed` ledger status, and fold honors it only when the reporting node declares a `LedgerEffect::Verified` outcome in the active graph — an unauthorized event is counted as a rejected verification and the task stays unverified (defense in depth against a tampered log; the engine enforces authority at emit time). See [`product-strategy.md`](product-strategy.md) Pillar A and the Phase 1 plan.
 
 Each event has a per-run monotonic `seq`, a timestamp, and a typed payload. Folding is **deterministic**: no wall-clock dependencies, no random IDs introduced during fold.
 
@@ -287,7 +289,7 @@ Status today: GPUI desktop shell exists under `surge-ui`; full editor / replay s
 ```
 
 - **Append-only event log per run** — SQLite with WAL mode, triggers prevent UPDATE / DELETE on `events`. Payloads serialized as `bincode`.
-- **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted.
+- **Materialized views** (`stage_executions`, `pending_approvals`, `cost_summary`, `task_ledger`, …) maintained by the engine in the same transaction as the event append. Rebuildable from events if corrupted. The registry DB additionally holds a cross-run `task_ledger_index` (mirrors each run's ledger for `surge ready` / `surge ledger`, the same pattern as `roadmap_patch_index`).
 - **Concurrency** — only the daemon writes; CLI / UI / bot are readers. WAL mode lets readers proceed without blocking the writer.
 - **Artifacts** — content-addressed files on disk, referenced from events.
 - **Worktrees** — one git worktree per run via `git2`. Cleaned up on completion; merged or discarded based on terminal outcome.

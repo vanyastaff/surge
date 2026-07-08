@@ -120,7 +120,10 @@ pub use run_event::{
     BootstrapDecision, BootstrapStage, ElevationDecision, EventPayload, RunConfig, RunEvent,
     SessionDisposition, VersionedEventPayload,
 };
-pub use run_state::{Cursor, FoldError, RunMemory, RunState, TerminalReason};
+pub use run_state::{
+    Cursor, FoldError, LedgerState, LedgerTask, RunMemory, RunState, TerminalReason,
+    node_has_verification_authority,
+};
 pub use run_status::{ParseRunStatusError, RunStatus};
 pub use runtime::{RuntimeKind, RuntimeVersionPolicy, all_version_policies, version_policy};
 pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};

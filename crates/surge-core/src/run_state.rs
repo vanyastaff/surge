@@ -5,6 +5,8 @@ use crate::edge::EdgeKind;
 use crate::graph::Graph;
 use crate::id::SessionId;
 use crate::keys::{NodeKey, OutcomeKey};
+use crate::node::LedgerEffect;
+use crate::roadmap::RoadmapStatus;
 use crate::roadmap_patch::{
     ActivePickupPolicy, RoadmapPatchApprovalDecision, RoadmapPatchId, RoadmapPatchStatus,
     RoadmapPatchTarget,
@@ -120,6 +122,101 @@ pub struct RunMemory {
     /// Latest accepted graph revision metadata, if an active amendment
     /// changed the executable graph after `PipelineMaterialized`.
     pub latest_graph_revision: Option<GraphRevisionMemory>,
+    /// Task-ledger state derived from `TaskStatusChanged` / `TaskDiscovered` /
+    /// `TaskVerified` events. Empty for runs that carry no ledger.
+    pub ledger: LedgerState,
+}
+
+/// Task-ledger view folded from ledger events. The source of truth is the
+/// event log; this is the folded projection the engine and persistence read.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LedgerState {
+    /// Per-task ledger record, keyed by task id.
+    pub tasks: BTreeMap<String, LedgerTask>,
+    /// Count of `TaskVerified` events rejected because the reporting node
+    /// lacked verification authority in the active graph. Deterministic
+    /// (folded from the log); surfaced so callers can flag tampered logs.
+    pub rejected_verifications: u64,
+}
+
+impl LedgerState {
+    /// Record a non-verified status transition (upsert).
+    fn record_status_change(&mut self, task_id: &str, to: RoadmapStatus, node: &NodeKey, seq: u64) {
+        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+        entry.status = to;
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+
+    /// Insert a discovered task as pending with a `discovered_from` edge.
+    /// First-write-wins: a later duplicate discovery for the same id is a
+    /// no-op so replay stays idempotent.
+    fn record_discovered(&mut self, task_id: &str, discovered_from: &str, seq: u64) {
+        self.tasks
+            .entry(task_id.to_owned())
+            .or_insert_with(|| LedgerTask {
+                status: RoadmapStatus::Pending,
+                verified: false,
+                discovered_from: Some(discovered_from.to_owned()),
+                last_authority_node: None,
+                updated_seq: seq,
+            });
+    }
+
+    /// Record a verification. `authorized` is computed by the caller from the
+    /// active graph (the node must declare a `LedgerEffect::Verified` outcome).
+    /// An unauthorized verification leaves the task unverified and bumps the
+    /// rejection counter — defense in depth against a tampered log.
+    fn record_verified(&mut self, task_id: &str, node: &NodeKey, authorized: bool, seq: u64) {
+        if !authorized {
+            self.rejected_verifications += 1;
+            return;
+        }
+        let entry = self.tasks.entry(task_id.to_owned()).or_default();
+        entry.status = RoadmapStatus::Completed;
+        entry.verified = true;
+        entry.last_authority_node = Some(node.clone());
+        entry.updated_seq = seq;
+    }
+}
+
+/// One task's folded ledger record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerTask {
+    /// Current ledger status.
+    pub status: RoadmapStatus,
+    /// True only once a verification-authority node confirmed the task.
+    pub verified: bool,
+    /// Task id this task was discovered from, when discovered mid-run.
+    pub discovered_from: Option<String>,
+    /// Node that last transitioned this task (audit trail head).
+    pub last_authority_node: Option<NodeKey>,
+    /// Seq of the last event that touched this task.
+    pub updated_seq: u64,
+}
+
+impl Default for LedgerTask {
+    fn default() -> Self {
+        Self {
+            status: RoadmapStatus::Pending,
+            verified: false,
+            discovered_from: None,
+            last_authority_node: None,
+            updated_seq: 0,
+        }
+    }
+}
+
+/// True when `node` exists in `graph` and declares an outcome carrying
+/// [`LedgerEffect::Verified`] — the graph-visible signal that the node has
+/// verification authority. Keeps fold pure (no profile-registry access).
+#[must_use]
+pub fn node_has_verification_authority(graph: &Graph, node: &NodeKey) -> bool {
+    graph.nodes.get(node).is_some_and(|node| {
+        node.declared_outcomes
+            .iter()
+            .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -476,6 +573,93 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input: None,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskStatusChanged {
+                task_id,
+                to,
+                authority_node,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                memory
+                    .ledger
+                    .record_status_change(task_id, *to, authority_node, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskDiscovered {
+                task_id,
+                discovered_from,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                memory
+                    .ledger
+                    .record_discovered(task_id, discovered_from, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::TaskVerified { task_id, node, .. },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                mut memory,
+                pending_human_input,
+            } = state
+            {
+                // Defense in depth: fold honors the verification only when the
+                // reporting node is a verification authority in the active
+                // graph (declares a `LedgerEffect::Verified` outcome). The
+                // engine (M3) already refuses to emit an unauthorized event;
+                // this rejects a tampered log on replay.
+                let authorized = node_has_verification_authority(&graph, node);
+                memory
+                    .ledger
+                    .record_verified(task_id, node, authorized, event.seq);
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
                 })
             } else {
                 unreachable!()
@@ -1651,6 +1835,239 @@ mod tests {
             },
             other => panic!("expected Pipeline, got {other:?}"),
         }
+    }
+
+    /// Build a graph whose start is a terminal node and which also contains a
+    /// `verify` node declaring a `LedgerEffect::Verified` outcome (the
+    /// graph-visible verification-authority signal) plus a plain `impl` node
+    /// with no ledger effect.
+    fn ledger_graph() -> Graph {
+        use crate::edge::EdgeKind;
+        use crate::graph::{GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::OutcomeKey;
+        use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let start = NodeKey::try_from("end").unwrap();
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let implement = NodeKey::try_from("impl_1").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(start.clone(), terminal_node(start.clone()));
+        nodes.insert(
+            verify.clone(),
+            Node {
+                id: verify.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("passed").unwrap(),
+                    description: "verified".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::Verified,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        nodes.insert(
+            implement.clone(),
+            Node {
+                id: implement.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: OutcomeKey::try_from("ready_for_verification").unwrap(),
+                    description: "impl done".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: LedgerEffect::ReadyForVerification,
+                }],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "ledger".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start,
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    fn ledger_run_prefix() -> Vec<RunEvent> {
+        vec![
+            make_event(
+                1,
+                EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: PathBuf::from("/tmp"),
+                    initial_prompt: "build".into(),
+                    config: RunConfig {
+                        sandbox_default: SandboxMode::WorkspaceWrite,
+                        approval_default: ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: Vec::new(),
+                    },
+                },
+            ),
+            make_event(
+                2,
+                EventPayload::PipelineMaterialized {
+                    graph: Box::new(ledger_graph()),
+                    graph_hash: ContentHash::compute(b"ledger-graph"),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn node_authority_is_graph_visible_via_verified_outcome() {
+        let graph = ledger_graph();
+        assert!(node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("verify_1").unwrap()
+        ));
+        assert!(!node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("impl_1").unwrap()
+        ));
+        assert!(!node_has_verification_authority(
+            &graph,
+            &NodeKey::try_from("missing").unwrap()
+        ));
+    }
+
+    #[test]
+    fn task_status_change_and_discovery_fold_into_ledger() {
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t2".into(),
+                discovered_from: "m1-t1".into(),
+                title: "Handle empty input".into(),
+            },
+        ));
+        events.push(make_event(
+            5,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: verify.clone(),
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::Completed);
+        assert!(t1.verified);
+        assert_eq!(t1.last_authority_node.as_ref(), Some(&verify));
+        assert_eq!(t1.updated_seq, 5);
+
+        let t2 = &memory.ledger.tasks["m1-t2"];
+        assert_eq!(t2.status, RoadmapStatus::Pending);
+        assert!(!t2.verified);
+        assert_eq!(t2.discovered_from.as_deref(), Some("m1-t1"));
+        assert_eq!(memory.ledger.rejected_verifications, 0);
+    }
+
+    #[test]
+    fn unauthorized_task_verified_is_ignored_and_counted() {
+        // `impl_1` has a ReadyForVerification outcome but NOT Verified, so it
+        // is not a verification authority. A TaskVerified naming it must not
+        // flip the task to verified — it is rejected and counted.
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: NodeKey::try_from("impl_1").unwrap(),
+                evidence: ContentHash::compute(b"forged"),
+            },
+        ));
+
+        let RunState::Pipeline { memory, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let t1 = &memory.ledger.tasks["m1-t1"];
+        assert_eq!(t1.status, RoadmapStatus::ReadyForVerification);
+        assert!(!t1.verified, "unauthorized verification must not stick");
+        assert_eq!(memory.ledger.rejected_verifications, 1);
+    }
+
+    #[test]
+    fn ledger_fold_is_deterministic() {
+        let verify = NodeKey::try_from("verify_1").unwrap();
+        let mut events = ledger_run_prefix();
+        events.push(make_event(
+            3,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "seed".into(),
+                title: "t1".into(),
+            },
+        ));
+        events.push(make_event(
+            4,
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: verify,
+                evidence: ContentHash::compute(b"report"),
+            },
+        ));
+        // Duplicate discovery must be a no-op (first-write-wins).
+        events.push(make_event(
+            5,
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t1".into(),
+                discovered_from: "other".into(),
+                title: "dup".into(),
+            },
+        ));
+
+        let RunState::Pipeline { memory: a, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        let RunState::Pipeline { memory: b, .. } = fold(&events).unwrap() else {
+            panic!("expected Pipeline");
+        };
+        assert_eq!(a.ledger, b.ledger);
+        assert_eq!(a.ledger.tasks["m1-t1"].discovered_from.as_deref(), Some("seed"));
+        assert!(a.ledger.tasks["m1-t1"].verified);
     }
 
     #[test]

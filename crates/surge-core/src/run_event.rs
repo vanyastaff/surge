@@ -262,6 +262,52 @@ pub enum EventPayload {
         final_outcome: OutcomeKey,
     },
 
+    // Task ledger (schema v5)
+    /// A roadmap task changed ledger status. `authority_node` is the graph
+    /// node that drove the transition (audit trail). Verified `Completed`
+    /// transitions are recorded by `TaskVerified` instead — this variant
+    /// covers every other transition (e.g. `pending → ready_for_verification`,
+    /// `ready_for_verification → failed_verification`).
+    ///
+    /// Schema v5.
+    TaskStatusChanged {
+        /// Ledger task id (matches `RoadmapTask::id`).
+        task_id: String,
+        /// Status before the transition.
+        from: crate::roadmap::RoadmapStatus,
+        /// Status after the transition.
+        to: crate::roadmap::RoadmapStatus,
+        /// Graph node that drove the transition.
+        authority_node: NodeKey,
+    },
+    /// A new task was discovered mid-execution and appended to the ledger as
+    /// pending, with a `discovered_from` edge to the task that surfaced it.
+    ///
+    /// Schema v5.
+    TaskDiscovered {
+        /// Newly discovered task id.
+        task_id: String,
+        /// Task id this work was discovered from.
+        discovered_from: String,
+        /// Human-readable title of the discovered task.
+        title: String,
+    },
+    /// A verification-authority node confirmed a task — the sole path to a
+    /// verified `Completed` ledger status. `evidence` references the
+    /// verification-report artifact. Honored by fold only when `node` declares
+    /// an outcome with `LedgerEffect::Verified` in the active graph; otherwise
+    /// it is recorded as a rejected verification and the task stays unverified.
+    ///
+    /// Schema v5.
+    TaskVerified {
+        /// Ledger task id that was verified.
+        task_id: String,
+        /// Verification-authority node that confirmed the task.
+        node: NodeKey,
+        /// Content hash of the verification-report artifact.
+        evidence: ContentHash,
+    },
+
     // Human/sandbox/hooks/telemetry/forking
     ApprovalRequested {
         gate: NodeKey,
@@ -480,6 +526,9 @@ impl EventPayload {
             Self::LoopIterationStarted { .. } => "LoopIterationStarted",
             Self::LoopIterationCompleted { .. } => "LoopIterationCompleted",
             Self::LoopCompleted { .. } => "LoopCompleted",
+            Self::TaskStatusChanged { .. } => "TaskStatusChanged",
+            Self::TaskDiscovered { .. } => "TaskDiscovered",
+            Self::TaskVerified { .. } => "TaskVerified",
             Self::ApprovalRequested { .. } => "ApprovalRequested",
             Self::ApprovalDecided { .. } => "ApprovalDecided",
             Self::SandboxElevationRequested { .. } => "SandboxElevationRequested",
@@ -940,6 +989,37 @@ mod tests {
     }
 
     // Human / sandbox / hooks / telemetry / forking
+
+    #[test]
+    fn task_ledger_variants_roundtrip() {
+        use crate::roadmap::RoadmapStatus;
+
+        let events = [
+            EventPayload::TaskStatusChanged {
+                task_id: "m1-t1".into(),
+                from: RoadmapStatus::Pending,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: NodeKey::try_from("impl_1").unwrap(),
+            },
+            EventPayload::TaskDiscovered {
+                task_id: "m1-t2".into(),
+                discovered_from: "m1-t1".into(),
+                title: "Handle empty input".into(),
+            },
+            EventPayload::TaskVerified {
+                task_id: "m1-t1".into(),
+                node: NodeKey::try_from("verify_1").unwrap(),
+                evidence: ContentHash::compute(b"verification-report"),
+            },
+        ];
+        let discriminants = ["TaskStatusChanged", "TaskDiscovered", "TaskVerified"];
+        for (payload, expected) in events.into_iter().zip(discriminants) {
+            assert_eq!(payload.discriminant_str(), expected);
+            let bytes = payload.to_bincode().unwrap();
+            let parsed = EventPayload::from_bincode(&bytes).unwrap();
+            assert_eq!(payload, parsed);
+        }
+    }
 
     #[test]
     fn approval_request_and_decision_roundtrip() {

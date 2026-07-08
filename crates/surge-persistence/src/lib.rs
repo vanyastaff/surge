@@ -72,6 +72,9 @@ pub mod pricing;
 /// Registry-level roadmap patch lookup metadata.
 pub mod roadmap_patches;
 
+/// Registry-level task-ledger index for `surge ready` / `surge ledger`.
+pub mod task_ledger;
+
 /// SQLite-based storage implementation
 pub mod store;
 
