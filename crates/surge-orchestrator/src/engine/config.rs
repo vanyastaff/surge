@@ -78,6 +78,13 @@ pub struct EngineRunConfig {
     /// Optional stable project context captured at run start.
     #[serde(default)]
     pub project_context: Option<ProjectContextSeed>,
+    /// Optional accumulating project memory (`.surge/memory/`), captured at
+    /// run start. Repo-resident, git-committable markdown notes concatenated
+    /// into one seed so agents that bind `project_memory` carry cross-run
+    /// knowledge. Reuses the [`ProjectContextSeed`] shape (`path` is the
+    /// memory directory).
+    #[serde(default)]
+    pub project_memory: Option<ProjectContextSeed>,
     /// Additional first-class artifacts copied into a run before its first
     /// stage executes. Used by follow-up amendment runs to seed the appended
     /// roadmap slice without relying on mutable project files.
@@ -192,6 +199,7 @@ impl Default for EngineRunConfig {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            project_memory: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -245,6 +253,7 @@ mod tests {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            project_memory: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -276,6 +285,7 @@ mod tests {
             initial_prompt: "fix the broken cart-total bug".into(),
             bootstrap_parent: None,
             project_context: None,
+            project_memory: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
@@ -321,6 +331,7 @@ mod tests {
             initial_prompt: String::new(),
             bootstrap_parent: None,
             project_context: None,
+            project_memory: None,
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
             budget: surge_core::budget::BudgetGuard::default(),

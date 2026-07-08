@@ -428,6 +428,11 @@ impl Engine {
         {
             events.push(event);
         }
+        if let Some(event) =
+            project_memory_artifact_event(artifact_store, run_id, run_config).await?
+        {
+            events.push(event);
+        }
         events.extend(run_seed_artifact_events(run_id, worktree_path, run_config).await?);
         if let Some(event) =
             initial_prompt_artifact_event(run_id, worktree_path, run_config).await?
@@ -902,6 +907,35 @@ async fn project_context_artifact_event(
     )))
 }
 
+async fn project_memory_artifact_event(
+    artifact_store: &surge_persistence::artifacts::ArtifactStore,
+    run_id: RunId,
+    run_config: &EngineRunConfig,
+) -> Result<Option<VersionedEventPayload>, EngineError> {
+    let Some(seed) = &run_config.project_memory else {
+        return Ok(None);
+    };
+    let artifact = artifact_store
+        .put(run_id, PROJECT_MEMORY_ARTIFACT_NAME, seed.content.as_bytes())
+        .await
+        .map_err(|e| EngineError::Storage(e.to_string()))?;
+    let producer = surge_core::keys::NodeKey::try_from(PROJECT_CONTEXT_PRODUCER_NODE)
+        .map_err(|e| EngineError::Internal(format!("project memory producer key: {e}")))?;
+    tracing::info!(
+        target: "engine::startup",
+        run_id = %run_id,
+        path = %seed.path.display(),
+        hash = %artifact.hash,
+        "project memory captured for run"
+    );
+    Ok(Some(artifact_produced_event(
+        producer,
+        artifact.hash,
+        artifact.path,
+        PROJECT_MEMORY_ARTIFACT_NAME,
+    )))
+}
+
 async fn run_seed_artifact_events(
     run_id: RunId,
     worktree_path: &Path,
@@ -982,6 +1016,10 @@ pub(crate) const INITIAL_PROMPT_ARTIFACT_NAME: &str = "user_prompt";
 
 /// Canonical artifact name for the stable project context captured at run start.
 pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
+
+/// Canonical artifact name for the accumulating project memory captured at
+/// run start (`.surge/memory/`).
+pub(crate) const PROJECT_MEMORY_ARTIFACT_NAME: &str = "project_memory";
 
 /// Synthetic producer node for the run-level project context seed.
 const PROJECT_CONTEXT_PRODUCER_NODE: &str = "project_context_seed";

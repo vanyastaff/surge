@@ -427,10 +427,68 @@ pub fn with_project_context_seed(
     if run_config.project_context.is_none() && config.init.project_context_auto_seed {
         run_config.project_context = load_project_context_seed(project_root, config);
     }
+    if run_config.project_memory.is_none() {
+        run_config.project_memory = load_project_memory_seed(project_root);
+    }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
     }
     run_config
+}
+
+/// Repo-relative path of the accumulating project-memory directory.
+pub const PROJECT_MEMORY_DIR: &str = ".surge/memory";
+
+/// Load `.surge/memory/*.md` into one concatenated [`ProjectContextSeed`], or
+/// `None` when the directory is absent or holds no non-empty notes.
+///
+/// Notes are sorted by filename for determinism; each is prefixed with a
+/// `## <filename>` header so agents can attribute knowledge to its source note.
+/// `MEMORY.md` (a human-facing index, if present) is skipped — the individual
+/// notes are the content.
+#[must_use]
+pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSeed> {
+    let dir = project_root.join(PROJECT_MEMORY_DIR);
+    let mut notes: Vec<PathBuf> = match std::fs::read_dir(&dir) {
+        Ok(read_dir) => read_dir
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                    && path.file_name().and_then(|n| n.to_str()) != Some("MEMORY.md")
+            })
+            .collect(),
+        Err(_) => return None,
+    };
+    notes.sort();
+
+    let mut body = String::new();
+    for path in &notes {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("note.md");
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&format!("## {name}\n\n{}", content.trim_end()));
+    }
+    if body.trim().is_empty() {
+        return None;
+    }
+    let full = format!("# Project memory\n\n{body}\n");
+    debug!(
+        dir = %dir.display(),
+        notes = notes.len(),
+        bytes = full.len(),
+        "loaded project memory seed"
+    );
+    Some(ProjectContextSeed::new(dir, full))
 }
 
 /// Load the configured project context file as a stable run seed.
@@ -1090,4 +1148,59 @@ fn extract_scan_hash(content: &str) -> Option<ContentHash> {
         return raw.parse().ok();
     }
     None
+}
+
+#[cfg(test)]
+mod memory_seed_tests {
+    use super::*;
+
+    #[test]
+    fn no_memory_dir_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_project_memory_seed(dir.path()).is_none());
+    }
+
+    #[test]
+    fn empty_memory_dir_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PROJECT_MEMORY_DIR)).unwrap();
+        assert!(load_project_memory_seed(dir.path()).is_none());
+    }
+
+    #[test]
+    fn notes_are_concatenated_sorted_with_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem).unwrap();
+        // Written out of order; loader must sort by filename.
+        std::fs::write(mem.join("b-auth.md"), "Auth uses JWT.\n").unwrap();
+        std::fs::write(mem.join("a-db.md"), "DB is Postgres.\n").unwrap();
+        // MEMORY.md index is skipped; empty notes are dropped.
+        std::fs::write(mem.join("MEMORY.md"), "- index\n").unwrap();
+        std::fs::write(mem.join("c-empty.md"), "   \n").unwrap();
+
+        let seed = load_project_memory_seed(dir.path()).expect("seed");
+        assert!(seed.content.starts_with("# Project memory\n"));
+        // a-db before b-auth (sorted), MEMORY.md and empty note excluded.
+        let db = seed.content.find("## a-db.md").unwrap();
+        let auth = seed.content.find("## b-auth.md").unwrap();
+        assert!(db < auth, "notes sorted by filename");
+        assert!(seed.content.contains("DB is Postgres."));
+        assert!(seed.content.contains("Auth uses JWT."));
+        assert!(!seed.content.contains("MEMORY.md"));
+        assert!(!seed.content.contains("c-empty"));
+    }
+
+    #[test]
+    fn seed_is_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = dir.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem).unwrap();
+        std::fs::write(mem.join("x.md"), "one\n").unwrap();
+        std::fs::write(mem.join("y.md"), "two\n").unwrap();
+        let a = load_project_memory_seed(dir.path()).unwrap();
+        let b = load_project_memory_seed(dir.path()).unwrap();
+        assert_eq!(a.content, b.content);
+        assert_eq!(a.hash, b.hash);
+    }
 }
