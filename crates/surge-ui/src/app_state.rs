@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -58,6 +59,10 @@ pub struct AppState {
     /// would prevent us from synthesising a stub when a `RunAccepted` for
     /// an unknown id arrives ahead of a `ListRuns` refresh.
     pub runs: Vec<UiRun>,
+    /// Folded per-run live streams (`subscribe_to_run`). Keyed by run;
+    /// present once the UI has attached a subscription for that run.
+    /// See [`crate::run_stream`].
+    pub run_streams: HashMap<RunId, crate::run_stream::RunStreamState>,
 
     // ── Events ──
     pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
@@ -97,6 +102,20 @@ pub struct UiRun {
     pub status: RunStatus,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub last_event_seq: Option<u64>,
+    /// When the UI observed the run reach a terminal status. The engine
+    /// summary carries no end time, so this is our best truth — it lets
+    /// ELAPSED freeze instead of counting wall-time forever. `None` for
+    /// non-terminal runs, or terminal runs first seen already-finished.
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl UiRun {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
+        )
+    }
 }
 
 impl From<&RunSummary> for UiRun {
@@ -106,6 +125,7 @@ impl From<&RunSummary> for UiRun {
             status: s.status,
             started_at: s.started_at,
             last_event_seq: s.last_event_seq,
+            ended_at: None,
         }
     }
 }
@@ -137,6 +157,7 @@ impl AppState {
             agent_pool: None,
             daemon_state: ConnectionState::default(),
             runs: Vec::new(),
+            run_streams: HashMap::new(),
             _event_tx: event_tx,
             recent_events: Vec::new(),
         }
@@ -166,6 +187,7 @@ impl AppState {
                         status: RunStatus::Active,
                         started_at: chrono::Utc::now(),
                         last_event_seq: None,
+                        ended_at: None,
                     });
                 }
             },
@@ -194,6 +216,7 @@ impl AppState {
                 if let Some(existing) = self.runs.iter_mut().find(|r| &r.run_id == run_id) {
                     if let Some(status) = new_status {
                         existing.status = status;
+                        existing.ended_at.get_or_insert_with(chrono::Utc::now);
                     }
                 } else {
                     // Unknown run id AND unknown outcome — synthesize a
@@ -207,6 +230,7 @@ impl AppState {
                         status: stub_status,
                         started_at: chrono::Utc::now(),
                         last_event_seq: None,
+                        ended_at: Some(chrono::Utc::now()),
                     });
                 }
             },
@@ -220,7 +244,23 @@ impl AppState {
 
     /// Replace the run list from a fresh `ListRuns` response.
     pub fn set_runs_from_summaries(&mut self, summaries: &[RunSummary]) {
-        self.runs = summaries.iter().map(UiRun::from).collect();
+        let old_ends: HashMap<RunId, chrono::DateTime<chrono::Utc>> = self
+            .runs
+            .iter()
+            .filter_map(|r| r.ended_at.map(|t| (r.run_id, t)))
+            .collect();
+        self.runs = summaries
+            .iter()
+            .map(|s| {
+                let mut run = UiRun::from(s);
+                // Keep the end stamp we observed earlier — a list refresh
+                // must not un-freeze a finished run's elapsed time.
+                if run.is_terminal() {
+                    run.ended_at = old_ends.get(&run.run_id).copied();
+                }
+                run
+            })
+            .collect();
     }
 
     /// Load project from a directory path.
@@ -353,6 +393,25 @@ impl AppState {
     /// Count tasks by state.
     pub fn task_count_by_state(&self, state_match: fn(&TaskState) -> bool) -> usize {
         self.tasks.iter().filter(|t| state_match(&t.state)).count()
+    }
+
+    /// All pending operator decisions across live run streams, most
+    /// urgent first (kind rank, then age). Powers the Inbox and the
+    /// "needs you" counters.
+    pub fn pending_decisions(&self) -> Vec<(RunId, crate::run_stream::PendingDecision)> {
+        let mut all: Vec<(RunId, crate::run_stream::PendingDecision)> = self
+            .run_streams
+            .iter()
+            .flat_map(|(run_id, stream)| stream.pending.iter().map(move |p| (*run_id, p.clone())))
+            .collect();
+        // Deterministic total order: run_streams is a HashMap, and a
+        // (rank, seq) tie across runs would otherwise leak its random
+        // iteration order into the Inbox — while the Inbox selects by
+        // index, so a between-frame reorder could retarget a decision.
+        all.sort_by(|(ra, pa), (rb, pb)| {
+            (pa.kind.rank(), pa.seq, ra.to_string()).cmp(&(pb.kind.rank(), pb.seq, rb.to_string()))
+        });
+        all
     }
 }
 
