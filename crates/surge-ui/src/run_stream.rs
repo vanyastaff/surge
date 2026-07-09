@@ -67,6 +67,7 @@ pub struct StageRow {
     pub detail: String,
 }
 
+/// Lifecycle phase of one folded stage row.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StagePhase {
     Running,
@@ -86,18 +87,25 @@ pub struct PendingDecision {
 #[derive(Clone)]
 pub enum DecisionKind {
     /// `HumanInputRequested` — resolvable via `resolve_human_input`.
+    ///
+    /// This is the ONLY event a paused gate emits that the operator can
+    /// answer in-band. `call_id: Some` = tool-driven request (response
+    /// forwarded verbatim to the caller); `call_id: None` = a HumanGate
+    /// pause — the engine requires `{"outcome": <key>}` where the valid
+    /// keys are declared in `schema.properties.outcome.enum`. Bootstrap
+    /// gates arrive through this same event (their companion
+    /// `BootstrapApprovalRequested` is bookkeeping, not a second
+    /// decision — the fold deliberately does not surface it).
     HumanInput {
         call_id: Option<String>,
         prompt: String,
         schema: Option<serde_json::Value>,
     },
-    /// `ApprovalRequested` at a HumanGate node.
-    Gate { gate: String },
-    /// `BootstrapApprovalRequested` (description / roadmap / flow).
-    Bootstrap { stage: String },
     /// `SandboxElevationRequested` — capability grant.
     Elevation { capability: String },
-    /// `RoadmapPatchApprovalRequested`.
+    /// `RoadmapPatchApprovalRequested` — resolved via the
+    /// roadmap-amendment flow (`submit_roadmap_amendment`), not
+    /// `resolve_human_input`; surfaced as informational.
     RoadmapPatch { patch_id: String },
     /// `EscalationRequested` — the engine gave up and needs a human.
     Escalation { reason: String },
@@ -107,9 +115,10 @@ impl DecisionKind {
     /// Short badge label for queue rows.
     pub fn badge(&self) -> &'static str {
         match self {
-            Self::HumanInput { .. } => "human input",
-            Self::Gate { .. } => "review gate",
-            Self::Bootstrap { .. } => "plan gate",
+            Self::HumanInput {
+                call_id: Some(_), ..
+            } => "human input",
+            Self::HumanInput { call_id: None, .. } => "review gate",
             Self::Elevation { .. } => "elevation",
             Self::RoadmapPatch { .. } => "roadmap patch",
             Self::Escalation { .. } => "escalation",
@@ -122,10 +131,30 @@ impl DecisionKind {
             Self::Escalation { .. } => 0,
             Self::Elevation { .. } => 1,
             Self::HumanInput { .. } => 2,
-            Self::Gate { .. } => 3,
-            Self::Bootstrap { .. } => 3,
             Self::RoadmapPatch { .. } => 4,
         }
+    }
+
+    /// Valid outcome keys for a HumanGate decision, parsed from the
+    /// request schema (`properties.outcome.enum`). Empty when the gate
+    /// allows free-text outcomes or the schema is absent.
+    pub fn gate_outcomes(&self) -> Vec<String> {
+        let Self::HumanInput {
+            schema: Some(schema),
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        schema
+            .pointer("/properties/outcome/enum")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -145,6 +174,8 @@ pub struct RunStreamState {
 }
 
 impl RunStreamState {
+    /// Fold one wire event into the view state: log row, stage
+    /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         match event {
@@ -214,6 +245,13 @@ impl RunStreamState {
                     row.detail = outcome.as_str().to_string();
                 }
             },
+            EventPayload::LoopIterationStarted { .. } => {
+                // The strip shows the CURRENT iteration's pipeline. Loop
+                // bodies re-enter the same node keys, so carrying the
+                // previous iteration's Done rows forward would render a
+                // misleading mix of old and new stage states.
+                self.stages.clear();
+            },
             _ => {},
         }
     }
@@ -262,44 +300,27 @@ impl RunStreamState {
             | EventPayload::HumanInputTimedOut { call_id, node, .. } => {
                 self.pending.retain(|p| match &p.kind {
                     DecisionKind::HumanInput { call_id: c, .. } => {
-                        // Match by call_id only when both sides carry one —
-                        // `None == None` would otherwise remove unrelated
-                        // pending inputs on other nodes. Fall back to the
-                        // requesting node.
+                        // A resolution with a call_id retires exactly that
+                        // request; one without retires the (single) gate
+                        // pause on that node. Mixed Some/None never match —
+                        // a specific resolution must not sweep away a
+                        // different, still-pending request on the same node.
                         let resolved = match (c, call_id) {
                             (Some(a), Some(b)) => a == b,
-                            _ => p.node == node.as_str(),
+                            (None, None) => p.node == node.as_str(),
+                            _ => false,
                         };
                         !resolved
                     },
                     _ => true,
                 });
             },
-            EventPayload::ApprovalRequested { gate, .. } => push(
-                &mut self.pending,
-                gate.as_str().to_string(),
-                DecisionKind::Gate {
-                    gate: gate.as_str().to_string(),
-                },
-            ),
-            EventPayload::ApprovalDecided { gate, .. } => {
-                self.pending.retain(
-                    |p| !matches!(&p.kind, DecisionKind::Gate { gate: g } if g == gate.as_str()),
-                );
-            },
-            EventPayload::BootstrapApprovalRequested { stage, .. } => push(
-                &mut self.pending,
-                format!("{stage:?}").to_lowercase(),
-                DecisionKind::Bootstrap {
-                    stage: format!("{stage:?}").to_lowercase(),
-                },
-            ),
-            EventPayload::BootstrapApprovalDecided { stage, .. } => {
-                let s = format!("{stage:?}").to_lowercase();
-                self.pending.retain(
-                    |p| !matches!(&p.kind, DecisionKind::Bootstrap { stage } if *stage == s),
-                );
-            },
+            // ApprovalRequested/Decided and BootstrapApprovalRequested/
+            // Decided are bookkeeping companions of the same gate's
+            // HumanInputRequested (human_gate.rs emits both for one
+            // pause) — folding them too would double-count a single
+            // decision, and the bootstrap timeout path never emits a
+            // Decided to clear it. Log-only.
             EventPayload::SandboxElevationRequested { node, capability } => push(
                 &mut self.pending,
                 node.as_str().to_string(),
@@ -606,6 +627,84 @@ mod tests {
         ));
         assert_eq!(s.pending.len(), 1, "only gate_a's request may be removed");
         assert_eq!(s.pending[0].node, "gate_b");
+    }
+
+    #[test]
+    fn resolving_specific_call_id_keeps_none_sibling_on_same_node() {
+        // Regression: a resolution carrying call_id "c1" must not sweep
+        // away a different, still-pending request on the same node that
+        // has no call_id.
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(1, human_input("gate_a", Some("c1"))));
+        s.apply(&persisted(2, human_input("gate_a", None)));
+        assert_eq!(s.pending.len(), 2);
+
+        s.apply(&persisted(
+            3,
+            EventPayload::HumanInputResolved {
+                node: node("gate_a"),
+                call_id: Some("c1".into()),
+                response: serde_json::Value::Null,
+            },
+        ));
+        assert_eq!(s.pending.len(), 1, "only the c1 request may be removed");
+        assert!(matches!(
+            &s.pending[0].kind,
+            DecisionKind::HumanInput { call_id: None, .. }
+        ));
+    }
+
+    #[test]
+    fn loop_iteration_clears_previous_stage_rows() {
+        // Loop bodies re-enter the same node keys; the strip shows the
+        // CURRENT iteration only.
+        let mut s = RunStreamState::default();
+        s.apply(&persisted(
+            1,
+            EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 1,
+            },
+        ));
+        s.apply(&persisted(
+            2,
+            EventPayload::StageCompleted {
+                node: node("implement"),
+                outcome: surge_core::keys::OutcomeKey::try_from("done").unwrap(),
+            },
+        ));
+        assert_eq!(s.stages.len(), 1);
+
+        s.apply(&persisted(
+            3,
+            EventPayload::LoopIterationStarted {
+                loop_id: node("milestones"),
+                item: "m2".into(),
+                index: 1,
+            },
+        ));
+        assert!(
+            s.stages.is_empty(),
+            "new iteration must not mix with the previous one's rows"
+        );
+    }
+
+    #[test]
+    fn gate_outcomes_parse_schema_enum() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "outcome": { "type": "string", "enum": ["approve", "edit", "reject"] },
+                "comment": { "type": "string" },
+            },
+            "required": ["outcome"],
+        });
+        let kind = DecisionKind::HumanInput {
+            call_id: None,
+            prompt: "gate".into(),
+            schema: Some(schema),
+        };
+        assert_eq!(kind.gate_outcomes(), vec!["approve", "edit", "reject"]);
     }
 
     #[test]

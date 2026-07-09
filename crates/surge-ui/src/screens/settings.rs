@@ -208,7 +208,7 @@ pub struct SettingsScreen {
     editor: String,
     auto_open_worktree: bool,
     // Routing
-    routing_strategy: String,
+    routing_strategy: surge_core::config::RoutingStrategy,
     default_agent: String,
     // Logging
     log_level: String,
@@ -259,9 +259,7 @@ impl SettingsScreen {
                 .unwrap_or_else(|| "VS Code".into()),
             auto_open_worktree: ide.is_some_and(|i| i.auto_open_worktree),
             // Routing
-            routing_strategy: cfg
-                .map(|c| format!("{:?}", c.routing.strategy))
-                .unwrap_or_else(|| "Default".into()),
+            routing_strategy: cfg.map(|c| c.routing.strategy.clone()).unwrap_or_default(),
             default_agent: cfg.map(|c| c.default_agent.clone()).unwrap_or_default(),
             // Logging
             log_level: log.map_or_else(|| "info".into(), |l| l.level.clone()),
@@ -286,49 +284,45 @@ impl SettingsScreen {
     /// previous silent no-op.
     fn save_config(&mut self, cx: &mut Context<Self>) {
         let result: Result<(), String> = self.state.update(cx, |state, _cx| {
-            let Some(ref mut config) = state.config else {
+            if state.config.is_none() {
                 return Err("no project loaded; open a project before saving settings".into());
-            };
+            }
             let Some(project_path) = state.project_path.clone() else {
                 return Err("project has no on-disk path; cannot save settings".into());
             };
-            // Pipeline
+            let config_path = project_path.join("surge.toml");
+
+            // Merge over the FRESHEST truth: reload surge.toml so a save
+            // from this screen cannot clobber edits made on disk (CLI,
+            // editor) since the session started. Fall back to the
+            // in-memory copy if the file is missing/unreadable.
+            let mut config = surge_core::SurgeConfig::load(&config_path)
+                .ok()
+                .or_else(|| state.config.clone())
+                .ok_or_else(|| "no configuration available to save".to_string())?;
+
+            // Apply ONLY the fields this screen actually edits. The
+            // read-only pages (budgets, resilience, cleanup, IDE) display
+            // values but have no controls — writing their session
+            // snapshots back would be a silent overwrite channel.
             config.pipeline.gates.after_spec = self.gate_after_spec;
             config.pipeline.gates.after_plan = self.gate_after_plan;
             config.pipeline.gates.after_each_subtask = self.gate_after_each_subtask;
             config.pipeline.gates.after_qa = self.gate_after_qa;
             config.pipeline.max_parallel = self.max_parallel;
             config.pipeline.max_qa_iterations = self.max_qa_iterations;
-            // Cleanup
-            config.cleanup.remove_worktrees_on_complete = self.remove_worktrees_on_complete;
-            config.cleanup.keep_branches_days = self.keep_branches_days;
-            // IDE
-            config.ide.editor = Some(self.editor.clone());
-            config.ide.auto_open_worktree = self.auto_open_worktree;
-            // Log
             config.log.level = self.log_level.clone();
             config.log.max_size_mb = self.log_max_size_mb;
-            // Analytics
-            config.analytics.budget_usd = self.budget_usd;
-            config.analytics.budget_tokens = self.budget_tokens;
-            // Resilience
-            config.resilience.connect_timeout_secs = self.connect_timeout_secs;
-            config.resilience.prompt_timeout_secs = self.prompt_timeout_secs;
-            config.resilience.prompt_retries = self.prompt_retries;
-            config.resilience.circuit_breaker_threshold = self.circuit_breaker_threshold;
-            // Routing
-            config.routing.strategy = match self.routing_strategy.as_str() {
-                "Complexity" => surge_core::config::RoutingStrategy::Complexity,
-                "RoundRobin" => surge_core::config::RoutingStrategy::RoundRobin,
-                _ => surge_core::config::RoutingStrategy::Default,
-            };
+            config.routing.strategy = self.routing_strategy.clone();
             if !self.default_agent.is_empty() {
                 config.default_agent = self.default_agent.clone();
             }
 
             config
-                .save(&project_path.join("surge.toml"))
-                .map_err(|e| format!("failed to save settings: {e}"))
+                .save(&config_path)
+                .map_err(|e| format!("failed to save settings: {e}"))?;
+            state.config = Some(config);
+            Ok(())
         });
 
         match result {
@@ -1530,15 +1524,29 @@ impl SettingsScreen {
     // ── Routing page ───────────────────────────────────────────────
 
     fn render_routing(&self, cx: &mut Context<Self>) -> Div {
-        let strategies: [(&'static str, &'static str); 3] = [
-            ("Default", "Every task goes to the default agent"),
-            ("Complexity", "Route by task complexity"),
-            ("RoundRobin", "Rotate across available agents"),
+        use surge_core::config::RoutingStrategy;
+        let strategies: [(RoutingStrategy, &'static str, &'static str); 3] = [
+            (
+                RoutingStrategy::Default,
+                "Default",
+                "Every task goes to the default agent",
+            ),
+            (
+                RoutingStrategy::Complexity,
+                "Complexity",
+                "Route by task complexity",
+            ),
+            (
+                RoutingStrategy::RoundRobin,
+                "RoundRobin",
+                "Rotate across available agents",
+            ),
         ];
         let cards: Vec<Stateful<Div>> = strategies
             .iter()
-            .map(|&(name, desc)| {
-                let is_selected = self.routing_strategy == name;
+            .map(|(strategy, name, desc)| {
+                let (strategy, name, desc) = (strategy.clone(), *name, *desc);
+                let is_selected = self.routing_strategy == strategy;
                 div()
                     .id(SharedString::from(format!("routing-{name}")))
                     .flex_1()
@@ -1560,7 +1568,7 @@ impl SettingsScreen {
                     })
                     .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.3)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.routing_strategy = name.to_string();
+                        this.routing_strategy = strategy.clone();
                         this.mark_dirty(cx);
                     }))
                     .child(

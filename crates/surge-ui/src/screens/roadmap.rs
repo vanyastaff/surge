@@ -68,14 +68,39 @@ enum SourceKind {
     Sample,
 }
 
+/// Roadmap screen — milestones, delivery line and project context.
 pub struct RoadmapScreen {
     state: Entity<AppState>,
+    // Cached per state-change, NOT per frame: render used to re-read
+    // project.md + roadmap.toml from disk and re-parse all bundled flow
+    // TOMLs on every repaint.
+    cached_project_md: Option<String>,
+    cached_milestones: (Vec<MilestoneRow>, SourceKind),
+    line: Vec<LineStep>,
 }
 
 impl RoadmapScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self { state }
+        cx.observe(&state, |this: &mut Self, _state, cx| {
+            this.reload(cx);
+            cx.notify();
+        })
+        .detach();
+        let mut this = Self {
+            state,
+            cached_project_md: None,
+            cached_milestones: (Vec::new(), SourceKind::Sample),
+            line: Self::compute_line_steps(),
+        };
+        this.reload(cx);
+        this
+    }
+
+    /// Refresh disk-backed data. Called on construction and whenever
+    /// AppState changes (project switch, daemon events).
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        self.cached_project_md = self.project_md(cx);
+        self.cached_milestones = self.milestones(cx);
     }
 
     /// Read `project.md` from the project root (or `.surge/`).
@@ -197,7 +222,7 @@ impl RoadmapScreen {
 
     /// Walk the bundled linear-with-review flow from its start node
     /// along forward edges — the real default delivery pipeline.
-    fn line_steps(&self) -> Vec<LineStep> {
+    fn compute_line_steps() -> Vec<LineStep> {
         let Some(flow) = BundledFlows::by_name_latest("linear-with-review") else {
             return Vec::new();
         };
@@ -265,7 +290,7 @@ impl RoadmapScreen {
     }
 
     fn render_project_card(&self, cx: &Context<Self>) -> Div {
-        let (body, is_real): (String, bool) = match self.project_md(cx) {
+        let (body, is_real): (String, bool) = match self.cached_project_md.clone() {
             Some(text) => {
                 // Skip markdown headers; take the first paragraphs.
                 let plain: String = text
@@ -315,7 +340,7 @@ impl RoadmapScreen {
     }
 
     fn render_line(&self) -> Div {
-        let steps = self.line_steps();
+        let steps = &self.line;
 
         let mut row = div()
             .h_flex()
@@ -542,7 +567,7 @@ impl RoadmapScreen {
 
 impl Render for RoadmapScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (milestones, source) = self.milestones(cx);
+        let (milestones, source) = self.cached_milestones.clone();
 
         let mut list = div().v_flex().gap(px(10.0));
         for (i, m) in milestones.iter().enumerate() {

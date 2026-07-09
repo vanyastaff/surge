@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::router::Screen;
 use crate::theme;
@@ -63,6 +64,8 @@ pub struct CommandPalette {
     commands: Vec<Command>,
     filtered: Vec<usize>,
     selected_index: usize,
+    /// Search field — created lazily on first render (needs a Window).
+    input: Option<Entity<InputState>>,
 }
 
 impl CommandPalette {
@@ -74,7 +77,37 @@ impl CommandPalette {
             commands,
             filtered,
             selected_index: 0,
+            input: None,
         }
+    }
+
+    /// Lazily build + focus the search input so the palette is
+    /// immediately typeable when it opens.
+    fn ensure_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        if let Some(input) = &self.input {
+            return input.clone();
+        }
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Type to search commands…"));
+        cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, input, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    this.query = input.read(cx).value().to_string();
+                    this.filter();
+                    cx.notify();
+                },
+                InputEvent::PressEnter { .. } => {
+                    this.select_current(cx);
+                },
+                _ => {},
+            },
+        )
+        .detach();
+        window.focus(&input.focus_handle(cx));
+        self.input = Some(input.clone());
+        input
     }
 
     fn filter(&mut self) {
@@ -103,22 +136,28 @@ impl CommandPalette {
         }
     }
 
-    fn render_item(&self, list_idx: usize, _cx: &mut Context<Self>) -> Div {
+    fn render_item(&self, list_idx: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let cmd_idx = self.filtered[list_idx];
         let cmd = &self.commands[cmd_idx];
         let is_selected = list_idx == self.selected_index;
 
         let base = div()
+            .id(("palette-cmd", list_idx))
             .h_flex()
             .justify_between()
             .px_3()
             .py(px(6.0))
-            .rounded_md();
+            .rounded_md()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _e, _w, cx| {
+                this.selected_index = list_idx;
+                this.select_current(cx);
+            }));
 
         let base = if is_selected {
             base.bg(theme::primary().opacity(0.15))
         } else {
-            base
+            base.hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
         };
 
         let mut row = base.child(
@@ -157,9 +196,10 @@ impl CommandPalette {
 }
 
 impl Render for CommandPalette {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = self.ensure_input(window, cx);
         let item_count = self.filtered.len();
-        let items: Vec<Div> = (0..item_count).map(|i| self.render_item(i, cx)).collect();
+        let items: Vec<Stateful<Div>> = (0..item_count).map(|i| self.render_item(i, cx)).collect();
 
         div()
             .v_flex()
@@ -185,17 +225,7 @@ impl Render for CommandPalette {
                             .text_color(theme::text_muted())
                             .child("⌘ ".to_string()),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .text_color(theme::text_primary())
-                            .child(if self.query.is_empty() {
-                                "Type to search commands...".to_string()
-                            } else {
-                                self.query.clone()
-                            }),
-                    ),
+                    .child(div().flex_1().child(Input::new(&input).appearance(false))),
             )
             // Results
             .child(div().v_flex().px_1().py_1().gap_0p5().children(items))
@@ -218,7 +248,7 @@ impl Render for CommandPalette {
                         div()
                             .text_xs()
                             .text_color(theme::text_muted().opacity(0.5))
-                            .child("↑↓ Navigate  ⏎ Select  Esc Close".to_string()),
+                            .child("type to filter · ⏎ select · click to open · Ctrl+K close".to_string()),
                     ),
             )
     }

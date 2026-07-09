@@ -203,7 +203,7 @@ impl BacklogScreen {
                     .px(px(14.0))
                     .rounded_lg()
                     .bg(theme::accent())
-                    .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+                    .text_color(theme::on_accent())
                     .text_size(px(11.0))
                     .font_weight(FontWeight::BOLD)
                     .cursor_pointer()

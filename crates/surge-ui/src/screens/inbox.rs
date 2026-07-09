@@ -78,6 +78,7 @@ struct InboxItem {
     source: Source,
 }
 
+/// Inbox screen — the urgency-ranked operator decision queue.
 pub struct InboxScreen {
     state: Entity<AppState>,
     selected: usize,
@@ -125,34 +126,35 @@ impl InboxScreen {
                                 .to_string(),
                         )],
                     ),
-                    DecisionKind::HumanInput { prompt, schema, .. } => {
+                    DecisionKind::HumanInput {
+                        prompt,
+                        schema,
+                        call_id,
+                    } => {
                         let mut ev = Vec::new();
-                        if let Some(schema) = schema {
+                        let outcomes = p.kind.gate_outcomes();
+                        if !outcomes.is_empty() {
+                            ev.push(("OUTCOMES".to_string(), outcomes.join(" · ")));
+                        } else if let Some(schema) = schema {
                             ev.push((
                                 "EXPECTED RESPONSE (SCHEMA)".to_string(),
                                 serde_json::to_string_pretty(schema)
                                     .unwrap_or_else(|_| schema.to_string()),
                             ));
                         }
+                        let _ = call_id;
                         (theme::accent(), prompt.clone(), ev)
                     },
-                    DecisionKind::Gate { gate } => {
-                        (theme::accent(), format!("Review gate @ {gate}"), Vec::new())
-                    },
-                    DecisionKind::Bootstrap { stage } => (
-                        theme::accent(),
-                        format!("Bootstrap {stage} artifact awaits approval"),
-                        vec![(
-                            "ACTIONS".to_string(),
-                            "approve → continue · request changes → agent re-runs with \
-                             your feedback · reject → run fails"
-                                .to_string(),
-                        )],
-                    ),
                     DecisionKind::RoadmapPatch { patch_id } => (
                         theme::accent(),
                         format!("Roadmap patch {patch_id} awaits approval"),
-                        Vec::new(),
+                        vec![(
+                            "NOTE".to_string(),
+                            "Roadmap patches resolve through the amendment flow \
+                             (`surge feature` → submit_roadmap_amendment) — no in-UI \
+                             seam yet."
+                                .to_string(),
+                        )],
                     ),
                 };
             let call_id = match &p.kind {
@@ -242,7 +244,7 @@ impl InboxScreen {
                 meta: format!(
                     "run r-{} · started {}",
                     run.run_id.short().to_lowercase(),
-                    run.started_at.format("%H:%M")
+                    run.started_at.with_timezone(&chrono::Local).format("%H:%M")
                 ),
                 age: String::new(),
                 evidence,
@@ -293,18 +295,37 @@ impl InboxScreen {
         .detach();
     }
 
-    fn decide(&mut self, item: &InboxItem, decision: &str, cx: &mut Context<Self>) {
-        let comment = self
-            .response_input
-            .as_ref()
-            .map(|i| i.read(cx).value().trim().to_string())
-            .unwrap_or_default();
+    /// Read the shared comment box and clear it — a comment belongs to
+    /// exactly one decision, never the next one too.
+    fn take_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> String {
+        let Some(input) = self.response_input.clone() else {
+            return String::new();
+        };
+        let text = input.read(cx).value().trim().to_string();
+        if !text.is_empty() {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        text
+    }
+
+    fn decide(
+        &mut self,
+        item: &InboxItem,
+        outcome: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let comment = self.take_comment(window, cx);
 
         match &item.source {
             Source::Live {
                 run_id, call_id, ..
             } => {
-                let mut payload = serde_json::json!({ "decision": decision });
+                // HumanGate resolution contract (engine.rs
+                // resolve_human_input): `{"outcome": <declared key>}`,
+                // free-form fields ride along — the bootstrap driver
+                // sends the comment as `comment`.
+                let mut payload = serde_json::json!({ "outcome": outcome });
                 if !comment.is_empty() {
                     payload["comment"] = serde_json::Value::String(comment);
                 }
@@ -313,10 +334,8 @@ impl InboxScreen {
             Source::Task { task_id } => {
                 cx.emit(InboxAction::TaskDecision {
                     task_id: task_id.clone(),
-                    approved: decision == "approve",
+                    approved: outcome == "approve",
                 });
-                self.action_note = Some(format!("gate decision written · {decision}"));
-                cx.notify();
             },
             Source::FailedRun { run_id } => {
                 cx.emit(InboxAction::OpenRun(*run_id));
@@ -330,31 +349,23 @@ impl InboxScreen {
         }
     }
 
-    /// Send the free-text response for a live human-input item.
-    fn send_response(&mut self, item: &InboxItem, cx: &mut Context<Self>) {
-        let text = self
-            .response_input
-            .as_ref()
-            .map(|i| i.read(cx).value().trim().to_string())
-            .unwrap_or_default();
-        if text.is_empty() {
-            return;
-        }
-        // Free-text responses are only valid for HumanInput requests —
-        // gates and patches expect a {decision, comment} object, which
-        // the Approve / Reject buttons build.
+    /// Send the free-text response for a live tool-driven human-input
+    /// item (`call_id: Some`). Gate pauses (`call_id: None`) go through
+    /// the outcome buttons instead — the engine requires `{"outcome"}`.
+    fn send_response(&mut self, item: &InboxItem, window: &mut Window, cx: &mut Context<Self>) {
         if let Source::Live {
             run_id,
-            call_id,
+            call_id: Some(call_id),
             kind: DecisionKind::HumanInput { .. },
         } = &item.source
         {
-            self.resolve_live(
-                *run_id,
-                call_id.clone(),
-                serde_json::Value::String(text),
-                cx,
-            );
+            let run_id = *run_id;
+            let call_id = call_id.clone();
+            let text = self.take_comment(window, cx);
+            if text.is_empty() {
+                return;
+            }
+            self.resolve_live(run_id, Some(call_id), serde_json::Value::String(text), cx);
         }
     }
 
@@ -430,7 +441,14 @@ impl InboxScreen {
                 })
                 .cursor_pointer()
                 .hover(|s: StyleRefinement| s.border_color(theme::hairline_strong()))
-                .on_click(cx.listener(move |this, _e, _w, cx| {
+                .on_click(cx.listener(move |this, _e, window, cx| {
+                    if this.selected != i {
+                        // A half-typed comment belongs to the item it was
+                        // written for — never carry it to the next one.
+                        if let Some(input) = this.response_input.clone() {
+                            input.update(cx, |s, cx| s.set_value("", window, cx));
+                        }
+                    }
                     this.selected = i;
                     this.action_note = None;
                     cx.notify();
@@ -551,14 +569,14 @@ impl InboxScreen {
             cx.subscribe_in(
                 &input,
                 window,
-                |this: &mut Self, _input, event: &InputEvent, _window, cx| {
+                |this: &mut Self, _input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
                         let (items, _) = this.items(cx);
                         if let Some(item) = items
                             .get(this.selected.min(items.len().saturating_sub(1)))
                             .cloned()
                         {
-                            this.send_response(&item, cx);
+                            this.send_response(&item, window, cx);
                         }
                     }
                 },
@@ -567,9 +585,21 @@ impl InboxScreen {
             self.response_input = Some(input);
         }
 
-        let is_live_input = matches!(
+        // Tool-driven request (call_id present): the caller defines the
+        // response shape — free-text send. Gate pause (call_id absent):
+        // the engine requires {"outcome": <declared key>} — buttons.
+        let is_tool_input = matches!(
             &item.source,
             Source::Live {
+                call_id: Some(_),
+                kind: DecisionKind::HumanInput { .. },
+                ..
+            }
+        );
+        let is_gate_input = matches!(
+            &item.source,
+            Source::Live {
+                call_id: None,
                 kind: DecisionKind::HumanInput { .. },
                 ..
             }
@@ -581,10 +611,10 @@ impl InboxScreen {
                 ..
             }
         );
-        let is_bootstrap = matches!(
+        let is_roadmap_patch = matches!(
             &item.source,
             Source::Live {
-                kind: DecisionKind::Bootstrap { .. },
+                kind: DecisionKind::RoadmapPatch { .. },
                 ..
             }
         );
@@ -596,6 +626,7 @@ impl InboxScreen {
                 ..
             }
         );
+        let is_task = matches!(&item.source, Source::Task { .. });
 
         let mut pane = div()
             .flex_1()
@@ -665,8 +696,8 @@ impl InboxScreen {
             );
         }
 
-        // response / comment input (not for failure triage or elevation)
-        if !is_failure && !is_elevation && !is_escalation {
+        // response / comment input — only where a decision can carry it
+        if is_tool_input || is_gate_input || is_task {
             pane =
                 pane.child(
                     div()
@@ -683,15 +714,11 @@ impl InboxScreen {
                         .child(div().flex_1().child(
                             Input::new(self.response_input.as_ref().unwrap()).appearance(false),
                         ))
-                        .when(is_live_input, |el| el.child(ui::kbd("↵ send"))),
+                        .when(is_tool_input, |el| el.child(ui::kbd("↵ send"))),
                 );
         }
 
         // action row
-        let item_for_approve = item.clone();
-        let item_for_reject = item.clone();
-        let item_for_edit = item.clone();
-
         let mut actions = div()
             .mt(px(18.0))
             .mb(px(22.0))
@@ -699,7 +726,7 @@ impl InboxScreen {
             .gap(px(10.0))
             .items_center();
 
-        let primary = |id: &'static str, label: String| {
+        let primary = |id: SharedString, label: String| {
             div()
                 .id(id)
                 .h(px(38.0))
@@ -709,14 +736,14 @@ impl InboxScreen {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+                .text_color(theme::on_accent())
                 .text_size(px(12.0))
                 .font_weight(FontWeight::BOLD)
                 .cursor_pointer()
                 .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
                 .child(label)
         };
-        let secondary = |id: &'static str, label: &'static str| {
+        let secondary = |id: SharedString, label: String| {
             div()
                 .id(id)
                 .h(px(38.0))
@@ -733,61 +760,112 @@ impl InboxScreen {
                 .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
                 .child(label)
         };
+        let danger = |id: SharedString, label: String| {
+            div()
+                .id(id)
+                .h(px(38.0))
+                .px(px(16.0))
+                .rounded_lg()
+                .border_1()
+                .border_color(theme::error().opacity(0.35))
+                .flex()
+                .items_center()
+                .text_color(theme::error().opacity(0.95))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::BOLD)
+                .cursor_pointer()
+                .hover(|s: StyleRefinement| s.border_color(theme::error().opacity(0.7)))
+                .child(label)
+        };
+        let looks_destructive =
+            |o: &str| o.contains("reject") || o.contains("abort") || o.contains("fail");
 
         if is_failure {
+            let item_open = item.clone();
             actions = actions.child(
-                primary("inbox-open-run", "Open cockpit".to_string()).on_click(cx.listener(
-                    move |this, _e, _w, cx| {
-                        this.decide(&item_for_approve, "open", cx);
+                primary("inbox-open-run".into(), "Open cockpit".to_string()).on_click(cx.listener(
+                    move |this, _e, window, cx| {
+                        this.decide(&item_open, "open", window, cx);
                     },
                 )),
             );
-        } else if is_elevation || is_escalation {
+        } else if is_elevation || is_escalation || is_roadmap_patch {
             if let Source::Live { run_id, .. } = item.source {
-                actions = actions.child(secondary("inbox-open-run-2", "Open cockpit").on_click(
-                    cx.listener(move |this, _e, _w, cx| {
-                        cx.emit(InboxAction::OpenRun(run_id));
+                actions = actions.child(
+                    secondary("inbox-open-run-2".into(), "Open cockpit".to_string()).on_click(
+                        cx.listener(move |_this, _e, _w, cx| {
+                            cx.emit(InboxAction::OpenRun(run_id));
+                        }),
+                    ),
+                );
+            }
+        } else if is_tool_input {
+            let item_send = item.clone();
+            actions = actions.child(
+                primary("inbox-send-response".into(), "Send response".to_string()).on_click(
+                    cx.listener(move |this, _e, window, cx| {
+                        this.send_response(&item_send, window, cx);
                     }),
-                ));
+                ),
+            );
+        } else if is_gate_input {
+            // One button per outcome the gate actually declares
+            // (schema.properties.outcome.enum) — destructive-looking
+            // keys pushed right and styled red.
+            let mut outcomes = match &item.source {
+                Source::Live { kind, .. } => kind.gate_outcomes(),
+                _ => Vec::new(),
+            };
+            if outcomes.is_empty() {
+                // Free-text gate (allow_freetext) — offer the canonical pair.
+                outcomes = vec!["approve".to_string(), "reject".to_string()];
+            }
+            let (destructive, normal): (Vec<String>, Vec<String>) =
+                outcomes.into_iter().partition(|o| looks_destructive(o));
+            for (i, outcome) in normal.into_iter().enumerate() {
+                let item_o = item.clone();
+                let outcome_for_click = outcome.clone();
+                let button = if i == 0 {
+                    primary(format!("inbox-outcome-{outcome}").into(), outcome.clone())
+                } else {
+                    secondary(format!("inbox-outcome-{outcome}").into(), outcome.clone())
+                };
+                actions =
+                    actions.child(button.on_click(cx.listener(move |this, _e, window, cx| {
+                        this.decide(&item_o, &outcome_for_click, window, cx);
+                    })));
+            }
+            actions = actions.child(div().flex_1());
+            for outcome in destructive {
+                let item_o = item.clone();
+                let outcome_for_click = outcome.clone();
+                actions = actions.child(
+                    danger(format!("inbox-outcome-{outcome}").into(), outcome.clone()).on_click(
+                        cx.listener(move |this, _e, window, cx| {
+                            this.decide(&item_o, &outcome_for_click, window, cx);
+                        }),
+                    ),
+                );
             }
         } else {
+            // Task review gates + samples: canonical approve / reject.
+            let item_approve = item.clone();
+            let item_reject = item.clone();
             actions = actions
                 .child(
-                    primary("inbox-approve", "Approve".to_string()).on_click(cx.listener(
-                        move |this, _e, _w, cx| {
-                            this.decide(&item_for_approve, "approve", cx);
+                    primary("inbox-approve".into(), "Approve".to_string()).on_click(cx.listener(
+                        move |this, _e, window, cx| {
+                            this.decide(&item_approve, "approve", window, cx);
                         },
                     )),
                 )
-                .when(is_bootstrap, |el| {
-                    el.child(
-                        secondary("inbox-edit", "Request changes").on_click(cx.listener(
-                            move |this, _e, _w, cx| {
-                                this.decide(&item_for_edit, "edit", cx);
-                            },
-                        )),
-                    )
-                })
                 .child(div().flex_1())
                 .child(
-                    div()
-                        .id("inbox-reject")
-                        .h(px(38.0))
-                        .px(px(16.0))
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::error().opacity(0.35))
-                        .flex()
-                        .items_center()
-                        .text_color(theme::error().opacity(0.95))
-                        .text_size(px(11.5))
-                        .font_weight(FontWeight::BOLD)
-                        .cursor_pointer()
-                        .hover(|s: StyleRefinement| s.border_color(theme::error().opacity(0.7)))
-                        .on_click(cx.listener(move |this, _e, _w, cx| {
-                            this.decide(&item_for_reject, "reject", cx);
-                        }))
-                        .child("Reject"),
+                    danger("inbox-reject".into(), "Reject".to_string()).on_click(cx.listener(
+                        move |this, _e, window, cx| {
+                            this.decide(&item_reject, "reject", window, cx);
+                        },
+                    )),
                 );
         }
 

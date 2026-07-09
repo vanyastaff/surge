@@ -34,8 +34,9 @@ const CARD_W: f32 = 188.0;
 /// What the operator can trigger from the Fleet surface.
 #[derive(Clone)]
 pub enum FleetAction {
-    /// Open a run's cockpit (live execution).
-    OpenRun(String),
+    /// Open a run's cockpit. `None` = sample node (no real run) —
+    /// the cockpit opens unfocused.
+    OpenRun(Option<surge_core::id::RunId>),
     /// Open the review gate for a run awaiting the operator.
     OpenGate(String),
 }
@@ -46,6 +47,7 @@ impl EventEmitter<FleetAction> for FleetScreen {}
 enum NodeKind {
     Merged,
     Failed,
+    Aborted,
     Active,
     Review,
     Queued,
@@ -55,7 +57,7 @@ impl NodeKind {
     fn color(self) -> Hsla {
         match self {
             Self::Merged => theme::success(),
-            Self::Failed => theme::error(),
+            Self::Failed | Self::Aborted => theme::error(),
             Self::Active | Self::Review => theme::accent(),
             Self::Queued => theme::text_muted(),
         }
@@ -65,6 +67,9 @@ impl NodeKind {
         match self {
             Self::Merged => "merged",
             Self::Failed => "failed",
+            // Same word the Runs rail and Inbox use for this status —
+            // one run must not read "failed" here and "aborted" there.
+            Self::Aborted => "aborted",
             Self::Active => "active",
             Self::Review => "review gate",
             Self::Queued => "queued",
@@ -76,6 +81,8 @@ impl NodeKind {
 #[derive(Clone)]
 struct FleetNode {
     id: String,
+    /// Real daemon run id (None for sample nodes).
+    run_id: Option<surge_core::id::RunId>,
     title: String,
     meta: String,
     kind: NodeKind,
@@ -118,17 +125,22 @@ impl FleetScreen {
                 let kind = match r.status {
                     RunStatus::Active => NodeKind::Active,
                     RunStatus::Completed => NodeKind::Merged,
-                    RunStatus::Failed | RunStatus::Aborted => NodeKind::Failed,
+                    RunStatus::Failed => NodeKind::Failed,
+                    RunStatus::Aborted => NodeKind::Aborted,
                     _ => NodeKind::Queued,
                 };
-                let short = r.run_id.short();
+                let short = r.run_id.short().to_lowercase();
                 let seq = r
                     .last_event_seq
                     .map(|s| format!("seq {s}"))
                     .unwrap_or_else(|| "—".to_string());
                 FleetNode {
                     id: format!("r-{short}"),
-                    title: format!("started {}", r.started_at.format("%H:%M")),
+                    run_id: Some(r.run_id),
+                    title: format!(
+                        "started {}",
+                        r.started_at.with_timezone(&chrono::Local).format("%H:%M")
+                    ),
                     meta: seq,
                     kind,
                     live: true,
@@ -254,8 +266,9 @@ impl FleetScreen {
         let card_top = if above { 84.0 } else { 316.0 };
 
         let id_for_click = node.id.clone();
+        let run_id_for_click = node.run_id;
         let is_review = node.kind == NodeKind::Review;
-        let is_failed = node.kind == NodeKind::Failed;
+        let is_failed = matches!(node.kind, NodeKind::Failed | NodeKind::Aborted);
 
         // Node dot on the trunk; active / review dots gently pulse.
         let dot_base = div()
@@ -305,7 +318,7 @@ impl FleetScreen {
                 if is_review || is_failed {
                     cx.emit(FleetAction::OpenGate(id_for_click.clone()));
                 } else {
-                    cx.emit(FleetAction::OpenRun(id_for_click.clone()));
+                    cx.emit(FleetAction::OpenRun(run_id_for_click));
                 }
             }))
             // header
@@ -407,7 +420,7 @@ impl FleetScreen {
             .h(px(36.0))
             .rounded_lg()
             .bg(theme::accent())
-            .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+            .text_color(theme::on_accent())
             .text_size(px(12.0))
             .font_weight(FontWeight::BOLD)
             .cursor_pointer()
@@ -516,7 +529,12 @@ impl Render for FleetScreen {
         let active = nodes.iter().filter(|n| n.kind == NodeKind::Active).count();
         let needs = nodes
             .iter()
-            .filter(|n| matches!(n.kind, NodeKind::Failed | NodeKind::Review))
+            .filter(|n| {
+                matches!(
+                    n.kind,
+                    NodeKind::Failed | NodeKind::Aborted | NodeKind::Review
+                )
+            })
             .count();
         let merged = nodes.iter().filter(|n| n.kind == NodeKind::Merged).count();
 
@@ -525,7 +543,11 @@ impl Render for FleetScreen {
         let attention = nodes
             .iter()
             .find(|n| n.kind == NodeKind::Review)
-            .or_else(|| nodes.iter().find(|n| n.kind == NodeKind::Failed))
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .find(|n| matches!(n.kind, NodeKind::Failed | NodeKind::Aborted))
+            })
             .cloned();
 
         // Branch edges painted on the canvas layer (behind everything).
@@ -585,6 +607,7 @@ fn sample_nodes() -> Vec<FleetNode> {
     vec![
         FleetNode {
             id: "r-01aa".into(),
+            run_id: None,
             title: "OAuth token refresh".into(),
             meta: "verifier-1 · +98 −12".into(),
             kind: NodeKind::Merged,
@@ -592,6 +615,7 @@ fn sample_nodes() -> Vec<FleetNode> {
         },
         FleetNode {
             id: "r-4f2a".into(),
+            run_id: None,
             title: "Session cache".into(),
             meta: "claude-1 · +214 −40".into(),
             kind: NodeKind::Merged,
@@ -599,6 +623,7 @@ fn sample_nodes() -> Vec<FleetNode> {
         },
         FleetNode {
             id: "r-77b0".into(),
+            run_id: None,
             title: "Config loader refactor".into(),
             meta: "claude-1 · qa 3/6".into(),
             kind: NodeKind::Failed,
@@ -606,6 +631,7 @@ fn sample_nodes() -> Vec<FleetNode> {
         },
         FleetNode {
             id: "r-b2e8".into(),
+            run_id: None,
             title: "Retry logic patch".into(),
             meta: "gpt-runner · qa 5/6".into(),
             kind: NodeKind::Active,
@@ -613,6 +639,7 @@ fn sample_nodes() -> Vec<FleetNode> {
         },
         FleetNode {
             id: "r-9c1e".into(),
+            run_id: None,
             title: "Rate limiter middleware".into(),
             meta: "claude-1 · +142 −18".into(),
             kind: NodeKind::Review,

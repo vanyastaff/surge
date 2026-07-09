@@ -71,6 +71,10 @@ pub struct SurgeApp {
     pending_notifications: Vec<gpui_component::notification::Notification>,
     /// Runs we already attached a per-run event subscription for.
     stream_subscribed: HashSet<surge_core::id::RunId>,
+    /// Run to focus when the Runs cockpit next renders. Deep links land
+    /// here because the RunsScreen entity is created lazily — calling
+    /// select_run before it exists would silently drop the selection.
+    pending_run_selection: Option<surge_core::id::RunId>,
 }
 
 impl SurgeApp {
@@ -153,15 +157,44 @@ impl SurgeApp {
             gate_approval: None,
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
+            pending_run_selection: None,
         }
+    }
+
+    /// Deep-link into the Runs cockpit, focusing `run_id` if given.
+    /// Selection is parked in `pending_run_selection` and applied when
+    /// the (lazily created) RunsScreen renders.
+    fn open_run_cockpit(&mut self, run_id: Option<surge_core::id::RunId>, cx: &mut Context<Self>) {
+        self.pending_run_selection = run_id;
+        self.navigate(Screen::Runs, cx);
     }
 
     /// Attach per-run event subscriptions for every active run we are
     /// not already streaming. The per-run broadcast has no history
     /// replay, so the earlier we attach, the more the cockpit sees —
     /// we sync right after `list_runs` and on every `RunAccepted`.
+    ///
+    /// Lifecycle: `stream_subscribed` marks in-flight/attached pumps.
+    /// The mark is REMOVED when a subscribe attempt fails or the pump
+    /// exits, so the next sync (any global event / list_runs) retries a
+    /// run that is still Active — a transient failure must not silence
+    /// a run for the whole session. Orphan folds for runs the daemon no
+    /// longer lists are pruned so their pending decisions can't inflate
+    /// the Inbox forever.
     fn sync_run_subscriptions(&mut self, cx: &mut Context<Self>) {
         use surge_orchestrator::engine::handle::RunStatus;
+
+        // Prune bookkeeping for runs that vanished from the daemon's list.
+        let known: HashSet<surge_core::id::RunId> =
+            self.state.read(cx).runs.iter().map(|r| r.run_id).collect();
+        self.stream_subscribed.retain(|id| known.contains(id));
+        self.state.update(cx, |s, cx| {
+            let before = s.run_streams.len();
+            s.run_streams.retain(|id, _| known.contains(id));
+            if s.run_streams.len() != before {
+                cx.notify();
+            }
+        });
 
         let Some(facade) = self.state.read(cx).daemon_state.facade() else {
             return;
@@ -178,19 +211,31 @@ impl SurgeApp {
 
         for run_id in to_subscribe {
             self.stream_subscribed.insert(run_id);
-            let state = self.state.clone();
+            // Weak handles only — an immortal pump must not pin the app
+            // state alive, and a dead entity ends the loop naturally.
+            let state = self.state.downgrade();
             let facade = facade.clone();
-            cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let unmark = |cx: &mut AsyncApp, this: &WeakEntity<Self>| {
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |t, _| {
+                            t.stream_subscribed.remove(&run_id);
+                        });
+                    });
+                };
+
                 let mut rx = match facade.subscribe_to_run(run_id).await {
                     Ok(rx) => rx,
                     Err(e) => {
                         tracing::debug!(run_id = %run_id, "subscribe_to_run failed: {e}");
+                        // Allow the next sync pass to retry.
+                        unmark(cx, &this);
                         return;
                     },
                 };
                 tracing::info!(run_id = %run_id, "per-run event stream attached");
                 let _ = cx.update(|cx| {
-                    state.update(cx, |s, cx| {
+                    let _ = state.update(cx, |s, cx| {
                         s.run_streams.entry(run_id).or_default().live = true;
                         cx.notify();
                     });
@@ -198,12 +243,17 @@ impl SurgeApp {
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
-                            let _ = cx.update(|cx| {
-                                state.update(cx, |s, cx| {
-                                    s.run_streams.entry(run_id).or_default().apply(&event);
-                                    cx.notify();
-                                });
+                            let alive = cx.update(|cx| {
+                                state
+                                    .update(cx, |s, cx| {
+                                        s.run_streams.entry(run_id).or_default().apply(&event);
+                                        cx.notify();
+                                    })
+                                    .is_ok()
                             });
+                            if !matches!(alive, Ok(true)) {
+                                return;
+                            }
                         },
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -212,13 +262,16 @@ impl SurgeApp {
                     }
                 }
                 let _ = cx.update(|cx| {
-                    state.update(cx, |s, cx| {
+                    let _ = state.update(cx, |s, cx| {
                         if let Some(st) = s.run_streams.get_mut(&run_id) {
                             st.live = false;
                         }
                         cx.notify();
                     });
                 });
+                // Channel closed — if the run is somehow still listed as
+                // active, the next sync may re-attach.
+                unmark(cx, &this);
             })
             .detach();
         }
@@ -654,50 +707,41 @@ impl SurgeApp {
 
     /// Persist an operator gate decision to `.surge/gates/<task>.json`
     /// where the engine's gate poller picks it up. Shared by the Gate
-    /// Approval screen and the Inbox.
+    /// Approval screen and the Inbox. Synchronous on purpose: it is a
+    /// tiny local write, and the operator must SEE a failure — a
+    /// fire-and-forget task that only logs would silently lose the
+    /// decision. Does not navigate; callers decide what happens next.
     fn write_gate_decision(&mut self, task_id: String, approved: bool, cx: &mut Context<Self>) {
-        // Get project path from AppMode
         let project_path = match &self.mode {
             AppMode::Project { _path, .. } => _path.clone(),
             _ => return,
         };
 
-        // Write gate decision file
         let gate_dir = project_path.join(".surge").join("gates");
-        let decision_file = gate_dir.join(format!("{}.json", task_id));
+        let decision_file = gate_dir.join(format!("{task_id}.json"));
 
-        // Spawn async task to write decision
-        cx.spawn(async move |_this, _cx| {
-            if let Err(e) = std::fs::create_dir_all(&gate_dir) {
-                eprintln!("Failed to create gates directory: {}", e);
-                return;
-            }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let decision_data = serde_json::json!({
+            "task_id": task_id,
+            "approved": approved,
+            "timestamp": timestamp.to_string(),
+        });
 
-            let decision_data = format!(
-                r#"{{"task_id":"{}","approved":{},"timestamp":"{}"}}"#,
-                task_id,
-                approved,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            );
+        let result = std::fs::create_dir_all(&gate_dir)
+            .and_then(|()| std::fs::write(&decision_file, decision_data.to_string()));
 
-            if let Err(e) = std::fs::write(&decision_file, decision_data) {
-                eprintln!("Failed to write gate decision: {}", e);
-                return;
-            }
-
-            println!(
-                "Gate decision written: {} {}",
-                task_id,
-                if approved { "approved" } else { "rejected" }
-            );
-        })
-        .detach();
-
-        // Back to the constellation after a decision.
-        self.navigate(Screen::Fleet, cx);
+        let notification = match result {
+            Ok(()) => SurgeNotification::gate_decision_recorded(&task_id, approved),
+            Err(e) => {
+                tracing::error!("failed to write gate decision for {task_id}: {e}");
+                SurgeNotification::gate_decision_failed(&task_id, &e.to_string())
+            },
+        };
+        self.pending_notifications.push(notification);
+        cx.notify();
     }
 
     pub fn bind_actions(cx: &mut App) {
@@ -736,23 +780,8 @@ impl SurgeApp {
                                 // the most urgent item automatically.
                                 this.navigate(Screen::Inbox, cx);
                             },
-                            FleetAction::OpenRun(id) => {
-                                // Fleet labels runs "r-<short>"; map back to the
-                                // real RunId so the cockpit focuses it.
-                                let short = id.strip_prefix("r-").unwrap_or(id).to_uppercase();
-                                let run_id = this
-                                    .state
-                                    .read(cx)
-                                    .runs
-                                    .iter()
-                                    .find(|r| r.run_id.short() == short)
-                                    .map(|r| r.run_id);
-                                if let (Some(run_id), Some(runs_screen)) =
-                                    (run_id, this.runs_screen.clone())
-                                {
-                                    runs_screen.update(cx, |s, cx| s.select_run(run_id, cx));
-                                }
-                                this.navigate(Screen::Runs, cx);
+                            FleetAction::OpenRun(run_id) => {
+                                this.open_run_cockpit(*run_id, cx);
                             },
                         }
                     })
@@ -769,8 +798,14 @@ impl SurgeApp {
                 let state = self.state.clone();
                 let s = self
                     .runs_screen
-                    .get_or_insert_with(|| cx.new(|cx| RunsScreen::new(state, cx)));
-                s.clone().into_any_element()
+                    .get_or_insert_with(|| cx.new(|cx| RunsScreen::new(state, cx)))
+                    .clone();
+                // Apply a parked deep-link selection now that the screen
+                // entity is guaranteed to exist.
+                if let Some(run_id) = self.pending_run_selection.take() {
+                    s.update(cx, |screen, cx| screen.select_run(run_id, cx));
+                }
+                s.into_any_element()
             },
             Screen::ContextMemory => {
                 let s = self.memory.get_or_insert_with(|| cx.new(MemoryScreen::new));
@@ -791,11 +826,7 @@ impl SurgeApp {
                         &i,
                         |this: &mut Self, _i, event: &InboxAction, cx| match event {
                             InboxAction::OpenRun(run_id) => {
-                                let run_id = *run_id;
-                                if let Some(runs_screen) = this.runs_screen.clone() {
-                                    runs_screen.update(cx, |s, cx| s.select_run(run_id, cx));
-                                }
-                                this.navigate(Screen::Runs, cx);
+                                this.open_run_cockpit(Some(*run_id), cx);
                             },
                             InboxAction::TaskDecision { task_id, approved } => {
                                 this.write_gate_decision(task_id.clone(), *approved, cx);

@@ -125,8 +125,13 @@ fn humanize_age(started: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
-fn humanize_elapsed(started: chrono::DateTime<chrono::Utc>) -> String {
-    let secs = (chrono::Utc::now() - started).num_seconds().max(0);
+/// Elapsed between start and `end` (or now, for runs still going).
+fn humanize_elapsed(
+    started: chrono::DateTime<chrono::Utc>,
+    ended: Option<chrono::DateTime<chrono::Utc>>,
+) -> String {
+    let end = ended.unwrap_or_else(chrono::Utc::now);
+    let secs = (end - started).num_seconds().max(0);
     if secs < 3600 {
         format!("{}:{:02}", secs / 60, secs % 60)
     } else {
@@ -134,11 +139,29 @@ fn humanize_elapsed(started: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Wall-clock label in the operator's local timezone — the event log
+/// stamps rows with local time, so every clock in the cockpit must
+/// agree.
+fn local_hm(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.with_timezone(&chrono::Local).format("%H:%M").to_string()
+}
+
+/// Token counter that never truncates real usage to "0k".
+fn fmt_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 100_000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        format!("{}k", n / 1000)
+    }
+}
+
 /// Lifecycle pipeline for a real run: what we truthfully know from
 /// `RunStatus` alone. Per-node graph stages arrive with the per-run
 /// event stream (follow-up daemon phase).
 fn lifecycle_stages(run: &UiRun) -> Vec<Stage> {
-    let accepted_sub = run.started_at.format("%H:%M").to_string();
+    let accepted_sub = local_hm(run.started_at);
     let (exec, exec_sub): (StageState, &str) = match run.status {
         RunStatus::Active => (StageState::Running, "in flight"),
         RunStatus::Awaiting => (StageState::Queued, "admission queue"),
@@ -182,14 +205,24 @@ impl RunRow {
         Self {
             run_id: Some(run.run_id),
             id_label: format!("r-{}", run.run_id.short().to_lowercase()),
-            title: format!("started {}", run.started_at.format("%H:%M")),
+            title: format!("started {}", local_hm(run.started_at)),
             age: humanize_age(run.started_at),
             status_label,
             color,
             active,
             rank,
-            started: run.started_at.format("%H:%M").to_string(),
-            elapsed: humanize_elapsed(run.started_at),
+            started: local_hm(run.started_at),
+            // Terminal runs freeze at the observed end; if we never saw
+            // the finish (already-terminal at first list), "—" is more
+            // honest than a counter that keeps growing.
+            elapsed: if run.is_terminal() {
+                match run.ended_at {
+                    Some(end) => humanize_elapsed(run.started_at, Some(end)),
+                    None => "—".to_string(),
+                }
+            } else {
+                humanize_elapsed(run.started_at, None)
+            },
             events,
             stages: lifecycle_stages(run),
             event_rows: Vec::new(),
@@ -243,11 +276,21 @@ impl RunsScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
 
-        // 1s ticker so ELAPSED / age counters move while runs are active.
+        // 1s ticker so ELAPSED / age counters move. Notifies only while
+        // a non-terminal run exists — terminal-only lists are frozen, so
+        // waking the renderer for them is pure waste.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                let alive = cx.update(|cx| this.update(cx, |_, cx| cx.notify()).is_ok());
+                let alive = cx.update(|cx| {
+                    this.update(cx, |screen, cx| {
+                        let ticking = screen.state.read(cx).runs.iter().any(|r| !r.is_terminal());
+                        if ticking {
+                            cx.notify();
+                        }
+                    })
+                    .is_ok()
+                });
                 if !matches!(alive, Ok(true)) {
                     break;
                 }
@@ -616,7 +659,11 @@ impl RunsScreen {
                 .child(sep())
                 .child(div().pl(px(26.0)).child(cell(
                     "TOKENS",
-                    format!("{}k in · {}k out", tokens_in / 1000, tokens_out / 1000),
+                    format!(
+                        "{} in · {} out",
+                        fmt_tokens(tokens_in),
+                        fmt_tokens(tokens_out)
+                    ),
                     theme::text_primary(),
                 )))
                 .child(sep())

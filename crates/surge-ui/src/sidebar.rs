@@ -149,7 +149,7 @@ impl AppSidebar {
                         .bg(theme::accent())
                         .text_size(px(9.5))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(gpui::hsla(0.0, 0.0, 0.08, 1.0))
+                        .text_color(theme::on_accent())
                         .child(n.to_string()),
                 );
             }

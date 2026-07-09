@@ -85,6 +85,7 @@ struct EdgeSeg {
     strong: bool,
 }
 
+/// Memory screen — project knowledge list · graph · inspector.
 pub struct MemoryScreen {
     nodes: Vec<MemNode>,
     selected: usize,
@@ -94,6 +95,9 @@ pub struct MemoryScreen {
     /// Current nodes come from a live store query (vs preview set).
     live: bool,
     query: String,
+    /// Last FTS error, shown in the source pill — a bad query must not
+    /// silently freeze the results.
+    search_error: Option<String>,
 }
 
 impl MemoryScreen {
@@ -109,6 +113,7 @@ impl MemoryScreen {
             search_input: None,
             live: false,
             query: String::new(),
+            search_error: None,
         }
     }
 
@@ -123,6 +128,7 @@ impl MemoryScreen {
         self.query = query.clone();
         self.selected = 0;
 
+        self.search_error = None;
         let Some(store) = &self.store else {
             self.nodes = sample_nodes();
             self.live = false;
@@ -196,6 +202,9 @@ impl MemoryScreen {
             },
             Err(e) => {
                 tracing::warn!("memory search failed: {e}");
+                // Keep the previous results but SAY so — FTS5 chokes on
+                // unbalanced quotes / trailing operators while typing.
+                self.search_error = Some("query not valid FTS5 yet — results unchanged".into());
             },
         }
         cx.notify();
@@ -221,7 +230,13 @@ impl MemoryScreen {
             self.search_input = Some(input);
         }
 
-        let pill = if self.store.is_none() {
+        let pill = if let Some(err) = &self.search_error {
+            ui::pill(
+                err.clone(),
+                theme::warning(),
+                theme::warning().opacity(0.12),
+            )
+        } else if self.store.is_none() {
             ui::pill(
                 "no memory.db yet — runs write it",
                 theme::text_muted(),

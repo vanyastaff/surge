@@ -35,6 +35,8 @@ pub enum AgentsAction {
 
 impl EventEmitter<AgentsAction> for AgentsScreen {}
 
+/// Agents screen — crew cards + per-agent health, config and
+/// sandbox-delegation detail.
 pub struct AgentsScreen {
     state: Entity<AppState>,
     /// Selected agent id; defaults to the first detected.
@@ -602,7 +604,7 @@ impl AgentsScreen {
                         .bg(theme::accent())
                         .flex()
                         .items_center()
-                        .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+                        .text_color(theme::on_accent())
                         .text_size(px(12.0))
                         .font_weight(FontWeight::BOLD)
                         .cursor_pointer()
@@ -665,7 +667,7 @@ impl Render for AgentsScreen {
                     .px(px(14.0))
                     .rounded_lg()
                     .bg(theme::accent())
-                    .text_color(hsla(0.0, 0.0, 0.08, 1.0))
+                    .text_color(theme::on_accent())
                     .text_size(px(11.0))
                     .font_weight(FontWeight::BOLD)
                     .cursor_pointer()
