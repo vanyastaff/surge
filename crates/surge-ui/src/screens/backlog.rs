@@ -33,6 +33,9 @@ pub enum BacklogAction {
     OpenTask(String),
     /// Start the Spec wizard (New task).
     NewTask,
+    /// Dispatch a Ready task as a real bootstrap run (prompt = title +
+    /// description).
+    Dispatch { prompt: String },
 }
 
 impl EventEmitter<BacklogAction> for BacklogScreen {}
@@ -91,6 +94,8 @@ impl Column {
 struct Card {
     /// Real task id (None in sample mode).
     task_id: Option<String>,
+    /// Dispatchable prompt (real Triage/Ready tasks only).
+    dispatch_prompt: Option<String>,
     id_label: String,
     title: String,
     /// Status pill: label + color (state-specific truth).
@@ -138,8 +143,17 @@ fn card_from_task(task: &crate::app_state::TaskEntry) -> Card {
         _ => format!("{} · {}", agent, task.complexity),
     };
 
+    let dispatch_prompt = (column == Column::Ready || column == Column::Triage).then(|| {
+        if task.description.is_empty() {
+            task.title.clone()
+        } else {
+            format!("{}\n\n{}", task.title, task.description)
+        }
+    });
+
     Card {
         task_id: Some(task.id.to_string()),
+        dispatch_prompt,
         id_label: format!("t-{}", task.id.short().to_lowercase()),
         title: task.title.clone(),
         pill,
@@ -340,6 +354,31 @@ impl BacklogScreen {
                     .child(card.title.clone()),
             );
 
+        if let Some(prompt) = card.dispatch_prompt.clone() {
+            el = el.child(
+                div().h_flex().child(div().flex_1()).child(
+                    div()
+                        .id(SharedString::from(format!("bl-dispatch-{}", card.id_label)))
+                        .px(px(10.0))
+                        .py(px(3.0))
+                        .rounded_md()
+                        .bg(theme::accent())
+                        .text_color(theme::on_accent())
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::BOLD)
+                        .cursor_pointer()
+                        .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
+                        .on_click(cx.listener(move |_this, _e, _w, cx| {
+                            cx.emit(BacklogAction::Dispatch {
+                                prompt: prompt.clone(),
+                            });
+                            cx.stop_propagation();
+                        }))
+                        .child("Dispatch ▸"),
+                ),
+            );
+        }
+
         if let Some((done, total)) = card.progress {
             let pct = done as f32 / total as f32;
             el = el.child(
@@ -473,6 +512,7 @@ fn sample_cards() -> Vec<Card> {
         |id: &str, title: &str, pill: (&str, Hsla), meta: &str, needs_you: bool, column: Column| {
             Card {
                 task_id: None,
+                dispatch_prompt: None,
                 id_label: id.to_string(),
                 title: title.to_string(),
                 pill: (pill.0.to_string(), pill.1),

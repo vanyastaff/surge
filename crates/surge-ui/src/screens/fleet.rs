@@ -19,6 +19,8 @@ use gpui::*;
 use gpui_component::StyledExt;
 use surge_orchestrator::engine::handle::RunStatus;
 
+use gpui_component::input::{Input, InputEvent, InputState};
+
 use crate::app_state::AppState;
 use crate::theme;
 use crate::ui;
@@ -37,6 +39,9 @@ pub enum FleetAction {
     /// Open a run's cockpit. `None` = sample node (no real run) —
     /// the cockpit opens unfocused.
     OpenRun(Option<surge_core::id::RunId>),
+    /// Operator described new work in the command bar — dispatch a
+    /// bootstrap run with this prompt.
+    Dispatch(String),
     /// Open the review gate for a run awaiting the operator.
     OpenGate(String),
 }
@@ -99,15 +104,34 @@ struct EdgeSpec {
 }
 
 /// Fleet screen — reads runs from shared state, renders the constellation.
+/// Fleet screen — reads runs from shared state, renders the constellation.
 pub struct FleetScreen {
     state: Entity<AppState>,
+    /// Command-bar input (created lazily; needs a Window).
+    command_input: Option<Entity<InputState>>,
 }
 
 impl FleetScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         // Re-render when the run list / daemon link changes.
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self { state }
+        Self {
+            state,
+            command_input: None,
+        }
+    }
+
+    /// Read the command bar, clear it, and emit a dispatch.
+    fn submit_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.command_input.clone() else {
+            return;
+        };
+        let prompt = input.read(cx).value().trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        input.update(cx, |s, cx| s.set_value("", window, cx));
+        cx.emit(FleetAction::Dispatch(prompt));
     }
 
     /// Build nodes from real runs, or a labelled sample when offline.
@@ -480,7 +504,31 @@ impl FleetScreen {
             .child(primary)
     }
 
-    fn render_command_bar(&self, agents: usize) -> Div {
+    fn render_command_bar(
+        &mut self,
+        agents: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        if self.command_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(
+                    "Describe new work — bootstrap plans it; gates land in your Inbox…",
+                )
+            });
+            cx.subscribe_in(
+                &input,
+                window,
+                |this: &mut Self, _input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.submit_command(window, cx);
+                    }
+                },
+            )
+            .detach();
+            self.command_input = Some(input);
+        }
+
         div()
             .h(px(60.0))
             .flex_shrink_0()
@@ -504,16 +552,14 @@ impl FleetScreen {
                     .border_1()
                     .border_color(theme::hairline_strong())
                     .child(ui::pill(
-                        "@all",
+                        "bootstrap",
                         theme::accent(),
                         theme::accent().opacity(0.12),
                     ))
                     .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(12.0))
-                            .text_color(theme::text_muted())
-                            .child("Direct the fleet…  @ to target a run or agent"),
+                        div().flex_1().child(
+                            Input::new(self.command_input.as_ref().unwrap()).appearance(false),
+                        ),
                     )
                     .child(ui::kbd("↵")),
             )
@@ -522,7 +568,7 @@ impl FleetScreen {
 }
 
 impl Render for FleetScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (nodes, live) = self.nodes(cx);
         let agents = self.state.read(cx).installed_agents.len();
 
@@ -596,7 +642,7 @@ impl Render for FleetScreen {
                     .child(self.render_chips(active, needs, merged, live))
                     .children(attention.map(|n| self.render_inspector(n, cx))),
             )
-            .child(self.render_command_bar(agents))
+            .child(self.render_command_bar(agents, window, cx))
     }
 }
 

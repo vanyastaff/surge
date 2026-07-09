@@ -22,6 +22,12 @@ pub struct ToggleSidebar;
 
 impl EventEmitter<ToggleSidebar> for AppSidebar {}
 
+/// Operator clicked the offline daemon footer — start the daemon.
+#[derive(Clone, PartialEq)]
+pub struct StartDaemon;
+
+impl EventEmitter<StartDaemon> for AppSidebar {}
+
 /// The fleet-ops navigation rail: logo, destinations, live daemon
 /// footer. Restyled from the classic sidebar per the "Surge -
 /// Interactive" concept — same nav model, new chrome.
@@ -171,13 +177,17 @@ impl AppSidebar {
 
     /// Live daemon status footer — color + text derived from the real
     /// connection state; run counts from the real run list.
-    fn render_footer(&self, cx: &Context<Self>) -> Div {
+    fn render_footer(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let state = self.state.read(cx);
+        let offline = matches!(
+            &state.daemon_state,
+            ConnectionState::Failed(_) | ConnectionState::Disconnected
+        );
         let (dot, label): (Hsla, &str) = match &state.daemon_state {
             ConnectionState::Connected(_) => (theme::success(), "DAEMON · LIVE"),
             ConnectionState::Connecting => (theme::warning(), "DAEMON · SYNC"),
             ConnectionState::Failed(_) | ConnectionState::Disconnected => {
-                (theme::text_muted(), "DAEMON · OFFLINE")
+                (theme::text_muted(), "DAEMON · OFFLINE — START")
             },
         };
 
@@ -191,21 +201,32 @@ impl AppSidebar {
 
         if self.collapsed {
             return div()
+                .id("daemon-footer")
                 .py(px(12.0))
                 .flex()
                 .justify_center()
                 .border_t_1()
                 .border_color(theme::hairline())
+                .when(offline, |el| {
+                    el.cursor_pointer()
+                        .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(StartDaemon)))
+                })
                 .child(ui::status_dot(dot));
         }
 
         div()
+            .id("daemon-footer")
             .v_flex()
             .gap(px(8.0))
             .px(px(14.0))
             .py(px(12.0))
             .border_t_1()
             .border_color(theme::hairline())
+            .when(offline, |el| {
+                el.cursor_pointer()
+                    .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
+                    .on_click(cx.listener(|_this, _e, _w, cx| cx.emit(StartDaemon)))
+            })
             .child(
                 div()
                     .h_flex()

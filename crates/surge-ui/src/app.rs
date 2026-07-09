@@ -99,6 +99,14 @@ impl SurgeApp {
         )
         .detach();
 
+        cx.subscribe(
+            &sidebar,
+            |this: &mut Self, _sidebar, _event: &crate::sidebar::StartDaemon, cx| {
+                this.start_daemon(cx);
+            },
+        )
+        .detach();
+
         // Subscribe to SurgeEvents from AppState → queue notifications.
         // (Currently dormant — no in-process emitter; kept for the
         // in-process orchestrator path that may surface later.)
@@ -167,6 +175,203 @@ impl SurgeApp {
     fn open_run_cockpit(&mut self, run_id: Option<surge_core::id::RunId>, cx: &mut Context<Self>) {
         self.pending_run_selection = run_id;
         self.navigate(Screen::Runs, cx);
+    }
+
+    /// Spawn the daemon via the `surge` CLI (which owns detachment,
+    /// pidfile and readiness polling), then retry the connection.
+    /// Falls back to launching `surge-daemon` directly when the CLI
+    /// binary is not next to us.
+    fn start_daemon(&mut self, cx: &mut Context<Self>) {
+        fn sibling(name: &str) -> Option<std::path::PathBuf> {
+            let exe = std::env::current_exe().ok()?;
+            let candidate = exe.parent()?.join(name);
+            candidate.exists().then_some(candidate)
+        }
+
+        let spawn_result = if let Some(surge) = sibling("surge") {
+            std::process::Command::new(surge)
+                .args(["daemon", "start"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map(|_| ())
+        } else if let Some(daemon) = sibling("surge-daemon") {
+            std::process::Command::new(daemon)
+                .arg("--detached")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map(|_| ())
+        } else {
+            // PATH fallback — the CLI handles "already running" itself.
+            std::process::Command::new("surge")
+                .args(["daemon", "start"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map(|_| ())
+        };
+
+        match spawn_result {
+            Ok(()) => {
+                self.pending_notifications
+                    .push(SurgeNotification::agent_connected("surge-daemon starting"));
+                // Give the daemon up to ~8s to bind its socket.
+                Self::spawn_daemon_link_with_retries(&self.state.clone(), 8, cx);
+            },
+            Err(e) => {
+                tracing::error!("failed to spawn daemon: {e}");
+                self.pending_notifications
+                    .push(SurgeNotification::task_failed(
+                        "surge-daemon",
+                        &format!("could not spawn: {e} (is `surge` on PATH?)"),
+                    ));
+            },
+        }
+        cx.notify();
+    }
+
+    /// Start a REAL engine run through the daemon: resolve a flow
+    /// template, seed project context + budget from surge.toml, pass
+    /// the operator's prompt as `initial_prompt`, and attach the
+    /// returned event stream so gates land in the Inbox immediately.
+    ///
+    /// `template` is an archetype name (`"bootstrap"` for the full
+    /// describe → roadmap → flow pipeline).
+    fn dispatch_run(&mut self, prompt: String, template: &'static str, cx: &mut Context<Self>) {
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        let Some(project_path) = self.state.read(cx).project_path.clone() else {
+            self.pending_notifications
+                .push(SurgeNotification::task_failed(
+                    "dispatch",
+                    "open a project first",
+                ));
+            cx.notify();
+            return;
+        };
+        let Some(facade) = self.state.read(cx).daemon_state.facade() else {
+            self.pending_notifications
+                .push(SurgeNotification::task_failed(
+                    "dispatch",
+                    "daemon offline — click the DAEMON footer to start it",
+                ));
+            cx.notify();
+            return;
+        };
+
+        // Resolve the flow graph like `surge engine run --template` does
+        // (bundled archetypes + any disk overrides).
+        let graph = match surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
+            .map_err(|e| e.to_string())
+            .and_then(|reg| {
+                reg.resolve(template)
+                    .map(|r| r.graph)
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(graph) => graph,
+            Err(e) => {
+                tracing::error!("template {template} failed to resolve: {e}");
+                self.pending_notifications
+                    .push(SurgeNotification::task_failed("dispatch", &e));
+                cx.notify();
+                return;
+            },
+        };
+
+        let app_config = self
+            .state
+            .read(cx)
+            .config
+            .clone()
+            .unwrap_or_default();
+        let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
+            surge_orchestrator::engine::EngineRunConfig::default(),
+            &project_path,
+            &app_config,
+        );
+        run_config.budget = app_config.analytics.budget_guard();
+        run_config.initial_prompt = prompt.clone();
+
+        let run_id = surge_core::id::RunId::new();
+        // Mark before the await so a racing RunAccepted-driven sync
+        // doesn't double-subscribe; the handle's receiver misses nothing.
+        self.stream_subscribed.insert(run_id);
+        self.pending_run_selection = Some(run_id);
+
+        let state = self.state.downgrade();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            use surge_orchestrator::engine::facade::EngineFacade as _;
+            match facade
+                .start_run(run_id, graph, project_path, run_config)
+                .await
+            {
+                Ok(handle) => {
+                    let mut rx = handle.events;
+                    let _ = cx.update(|cx| {
+                        let _ = state.update(cx, |s, cx| {
+                            s.run_streams.entry(run_id).or_default().live = true;
+                            cx.notify();
+                        });
+                        let _ = this.update(cx, |t, cx| {
+                            t.pending_notifications
+                                .push(SurgeNotification::run_accepted(
+                                    &run_id.short().to_lowercase(),
+                                ));
+                            t.navigate(Screen::Runs, cx);
+                        });
+                    });
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let alive = cx.update(|cx| {
+                                    state
+                                        .update(cx, |s, cx| {
+                                            s.run_streams.entry(run_id).or_default().apply(&event);
+                                            cx.notify();
+                                        })
+                                        .is_ok()
+                                });
+                                if !matches!(alive, Ok(true)) {
+                                    return;
+                                }
+                            },
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(run_id = %run_id, dropped = n, "run stream lagged");
+                            },
+                        }
+                    }
+                    let _ = cx.update(|cx| {
+                        let _ = state.update(cx, |s, cx| {
+                            if let Some(st) = s.run_streams.get_mut(&run_id) {
+                                st.live = false;
+                            }
+                            cx.notify();
+                        });
+                        let _ = this.update(cx, |t, _| {
+                            t.stream_subscribed.remove(&run_id);
+                        });
+                    });
+                },
+                Err(e) => {
+                    tracing::error!("start_run failed: {e}");
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |t, cx| {
+                            t.stream_subscribed.remove(&run_id);
+                            t.pending_run_selection = None;
+                            t.pending_notifications
+                                .push(SurgeNotification::task_failed("dispatch", &e.to_string()));
+                            cx.notify();
+                        });
+                    });
+                },
+            }
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Attach per-run event subscriptions for every active run we are
@@ -525,6 +730,30 @@ impl SurgeApp {
     ///      queues an in-app banner, and `os_notify_global` fires an
     ///      OS toast.
     fn spawn_daemon_link(state: &Entity<AppState>, cx: &mut Context<Self>) {
+        Self::spawn_daemon_link_with_retries(state, 1, cx);
+    }
+
+    /// Connect (or reconnect) to the daemon, retrying `attempts` times
+    /// one second apart — enough to cover a daemon that was *just*
+    /// spawned by [`Self::start_daemon`] and is still binding its
+    /// socket. Safe to call again after a `Failed`/`Disconnected`
+    /// state; a link that is already `Connecting`/`Connected` is left
+    /// alone.
+    fn spawn_daemon_link_with_retries(
+        state: &Entity<AppState>,
+        attempts: u32,
+        cx: &mut Context<Self>,
+    ) {
+        {
+            let current = &state.read(cx).daemon_state;
+            if matches!(
+                current,
+                crate::daemon_link::ConnectionState::Connecting
+                    | crate::daemon_link::ConnectionState::Connected(_)
+            ) {
+                return;
+            }
+        }
         let state_for_task = state.downgrade();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             // Set Connecting.
@@ -535,20 +764,33 @@ impl SurgeApp {
                 });
             });
 
-            // Try to connect.
-            let facade = match crate::daemon_link::try_connect().await {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::info!("daemon not reachable on startup ({e}); UI continues offline");
-                    let _ = cx.update(|cx| {
-                        let _ = state_for_task.update(cx, |state, cx| {
-                            state.daemon_state =
-                                crate::daemon_link::ConnectionState::Failed(e.to_string());
-                            cx.notify();
-                        });
+            // Try to connect (with retries for freshly spawned daemons).
+            let mut last_err = String::new();
+            let mut facade = None;
+            for attempt in 0..attempts.max(1) {
+                if attempt > 0 {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                }
+                match crate::daemon_link::try_connect().await {
+                    Ok(f) => {
+                        facade = Some(f);
+                        break;
+                    },
+                    Err(e) => last_err = e.to_string(),
+                }
+            }
+            let Some(facade) = facade else {
+                tracing::info!("daemon not reachable ({last_err}); UI continues offline");
+                let _ = cx.update(|cx| {
+                    let _ = state_for_task.update(cx, |state, cx| {
+                        state.daemon_state =
+                            crate::daemon_link::ConnectionState::Failed(last_err.clone());
+                        cx.notify();
                     });
-                    return;
-                },
+                });
+                return;
             };
 
             // Connected — flip state, then list runs once.
@@ -783,6 +1025,9 @@ impl SurgeApp {
                             FleetAction::OpenRun(run_id) => {
                                 this.open_run_cockpit(*run_id, cx);
                             },
+                            FleetAction::Dispatch(prompt) => {
+                                this.dispatch_run(prompt.clone(), "bootstrap", cx);
+                            },
                         }
                     })
                     .detach();
@@ -851,6 +1096,9 @@ impl SurgeApp {
                             },
                             BacklogAction::NewTask => {
                                 this.navigate(Screen::SpecWizard, cx);
+                            },
+                            BacklogAction::Dispatch { prompt } => {
+                                this.dispatch_run(prompt.clone(), "bootstrap", cx);
                             },
                         },
                     )
