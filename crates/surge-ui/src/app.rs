@@ -281,12 +281,7 @@ impl SurgeApp {
             },
         };
 
-        let app_config = self
-            .state
-            .read(cx)
-            .config
-            .clone()
-            .unwrap_or_default();
+        let app_config = self.state.read(cx).config.clone().unwrap_or_default();
         let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
             surge_orchestrator::engine::EngineRunConfig::default(),
             &project_path,
