@@ -59,7 +59,15 @@ impl TicketStateSync {
         }
     }
 
-    #[allow(clippy::unused_async)]
+    // `on_terminal` (the other FSM-transition method on this type) awaits
+    // real I/O (`self.source.post_comment(...)`); `async fn` here keeps both
+    // transition methods uniform rather than exposing which one happens to
+    // await nothing today.
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "matches `on_terminal`'s async signature on this type; `std::future::ready`/`async move` alternatives would make this eagerly evaluate the registry write instead of lazily-until-polled like its sibling"
+    )]
     async fn set_state(&self, to: TicketState) -> Result<(), String> {
         let conn = self
             .storage

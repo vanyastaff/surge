@@ -444,6 +444,7 @@ fn body_subgraph_start(graph: &Graph, lf: &LoopFrame) -> Result<NodeKey, StageEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::LedgerEffect;
     use surge_core::graph::{GraphMetadata, SCHEMA_VERSION, Subgraph};
     use surge_core::keys::{NodeKey, SubgraphKey};
     use surge_core::loop_config::{ExitCondition, FailurePolicy, ParallelismMode};
@@ -487,7 +488,7 @@ mod tests {
                     description: "ok".into(),
                     edge_kind_hint: surge_core::edge::EdgeKind::Forward,
                     is_terminal: false,
-                    ledger_effect: Default::default(),
+                    ledger_effect: LedgerEffect::default(),
                 }],
                 config: NodeConfig::Loop(cfg.clone()),
             },

@@ -613,7 +613,7 @@ impl RecoveryEffects for DaemonRecoveryEffects {
 /// Default threshold after which a run with no new events is considered
 /// stuck rather than resumable: 24 hours (per the roadmap's stuck-run
 /// detection bullet).
-pub const DEFAULT_STUCK_THRESHOLD: Duration = Duration::from_secs(24 * 3600);
+pub const DEFAULT_STUCK_THRESHOLD: Duration = Duration::from_hours(24);
 
 /// Mark a run failed in BOTH the event log and the registry.
 ///
@@ -862,7 +862,7 @@ mod plan_recovery_tests {
 
     fn opts(worktrees_root: std::path::PathBuf) -> RecoveryOptions {
         RecoveryOptions {
-            stuck_threshold: Duration::from_secs(24 * 3600),
+            stuck_threshold: Duration::from_hours(24),
             worktrees_root,
             now_ms: NOW,
         }
@@ -876,25 +876,16 @@ mod plan_recovery_tests {
 
         // Run A — candidate with a present worktree → Resume.
         let run_a = RunId::new();
-        let _wa = storage
-            .create_run(run_a.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wa = storage.create_run(run_a, "/proj", None).await.unwrap();
         std::fs::create_dir_all(wt_root.join(run_a.to_string())).unwrap();
 
         // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
         let run_b = RunId::new();
-        let _wb = storage
-            .create_run(run_b.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
 
         // Run C — terminal (Completed) → not a candidate, no decision.
         let run_c = RunId::new();
-        let _wc = storage
-            .create_run(run_c.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wc = storage.create_run(run_c, "/proj", None).await.unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
             conn.execute(
@@ -934,14 +925,11 @@ mod plan_recovery_tests {
         let wt_root = tmp.path().join("worktrees");
 
         let run = RunId::new();
-        let _w = storage
-            .create_run(run.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _w = storage.create_run(run, "/proj", None).await.unwrap();
         std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
 
         let mut active = HashSet::new();
-        active.insert(run.clone());
+        active.insert(run);
 
         let report = plan_recovery(&storage, &opts(wt_root), &active)
             .await
@@ -960,7 +948,7 @@ mod decide_action_tests {
 
     const HOUR_MS: i64 = 3_600_000;
     const NOW: i64 = 1_700_000_000_000;
-    const STUCK: Duration = Duration::from_secs(24 * 3600);
+    const STUCK: Duration = Duration::from_hours(24);
 
     /// Baseline: a Crashed run, worktree present, fresh event, not active.
     fn healthy_crashed() -> RunRecoveryFacts {

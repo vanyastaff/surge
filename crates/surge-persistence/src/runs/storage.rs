@@ -36,6 +36,17 @@ impl Storage {
     }
 
     /// Open with a caller-supplied clock (used by tests and snapshot fixtures).
+    // No `.await` in this body (it's plain sync I/O). Both clippy-clean
+    // alternatives change the moment of execution: `fn -> impl Future { ready(..) }`
+    // runs the body eagerly at call time instead of at `.await`;
+    // `fn -> impl Future { async move { .. } }` trips `manual_async_fn`.
+    // Async is part of the contract here (matches sibling constructors and
+    // keeps call sites lazy-until-awaited), so the lint's suggestion is
+    // declined deliberately rather than worked around.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn open_with(
         home: impl AsRef<Path>,
         clock: Arc<dyn Clock>,
@@ -237,6 +248,11 @@ impl Storage {
     }
 
     /// Open a read-only handle to an existing run.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
         let events_path = self.events_db_path(&run_id);
         if !events_path.exists() {
@@ -294,25 +310,29 @@ impl Storage {
     }
 
     /// List runs matching the filter, with stale-pid detection.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn list_runs(
         &self,
         filter: RunFilter,
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
         let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
         for r in &mut runs {
-            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping) {
-                if let Some(pid) = r.daemon_pid {
-                    if !self.process_probe.is_alive(pid) {
-                        r.status = RunStatus::Crashed;
-                        r.ended_at_ms = Some(self.clock.now_ms());
-                        let _ = registry::update_status(
-                            &self.registry_pool,
-                            &r.id,
-                            RunStatus::Crashed,
-                            r.ended_at_ms,
-                        );
-                    }
-                }
+            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping)
+                && let Some(pid) = r.daemon_pid
+                && !self.process_probe.is_alive(pid)
+            {
+                r.status = RunStatus::Crashed;
+                r.ended_at_ms = Some(self.clock.now_ms());
+                let _ = registry::update_status(
+                    &self.registry_pool,
+                    &r.id,
+                    RunStatus::Crashed,
+                    r.ended_at_ms,
+                );
             }
         }
         Ok(runs)
@@ -327,6 +347,11 @@ impl Storage {
     /// `ticket_index` join would require resolving cross-table foreign
     /// keys not yet materialised in this code path. Layer 2's engine
     /// integration will populate it.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn snapshot_active_runs(
         &self,
         limit: usize,
@@ -360,6 +385,11 @@ impl Storage {
     }
 
     /// Get a single run summary, with stale-pid detection.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn get_run(
         &self,
         run_id: &RunId,
@@ -370,19 +400,17 @@ impl Storage {
         if matches!(
             summary.status,
             RunStatus::Running | RunStatus::Bootstrapping
-        ) {
-            if let Some(pid) = summary.daemon_pid {
-                if !self.process_probe.is_alive(pid) {
-                    summary.status = RunStatus::Crashed;
-                    summary.ended_at_ms = Some(self.clock.now_ms());
-                    let _ = registry::update_status(
-                        &self.registry_pool,
-                        &summary.id,
-                        RunStatus::Crashed,
-                        summary.ended_at_ms,
-                    );
-                }
-            }
+        ) && let Some(pid) = summary.daemon_pid
+            && !self.process_probe.is_alive(pid)
+        {
+            summary.status = RunStatus::Crashed;
+            summary.ended_at_ms = Some(self.clock.now_ms());
+            let _ = registry::update_status(
+                &self.registry_pool,
+                &summary.id,
+                RunStatus::Crashed,
+                summary.ended_at_ms,
+            );
         }
         Ok(Some(summary))
     }
@@ -419,6 +447,11 @@ impl Storage {
     /// reconcile a run whose event log reached a terminal state that the
     /// registry never recorded. Thin wrapper over
     /// [`registry::update_status`].
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn set_run_status(
         &self,
         run_id: &RunId,

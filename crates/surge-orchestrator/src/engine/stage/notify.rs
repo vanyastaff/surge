@@ -102,6 +102,7 @@ pub(crate) fn compute_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::LedgerEffect;
     use surge_core::edge::EdgeKind;
 
     fn outcome_decl(id: &str) -> OutcomeDecl {
@@ -110,7 +111,7 @@ mod tests {
             description: id.into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
-            ledger_effect: Default::default(),
+            ledger_effect: LedgerEffect::default(),
         }
     }
 

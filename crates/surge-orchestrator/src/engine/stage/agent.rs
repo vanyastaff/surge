@@ -390,10 +390,10 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                     // Per-server allowed_tools whitelist: outer Some = entry
                     // exists in the HashMap; inner Some = the field is set.
                     // If allowed_tools is None, no filtering is applied.
-                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str()) {
-                        if !whitelist.iter().any(|w| w == &t.tool) {
-                            return false;
-                        }
+                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str())
+                        && !whitelist.iter().any(|w| w == &t.tool)
+                    {
+                        return false;
                     }
                     true
                 })
@@ -2015,7 +2015,7 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
 /// operator's explicit choice wins). No-op for non-Claude runtimes or when
 /// the agent id is unknown.
 ///
-/// Synchronous std::fs by design: `std::fs::File::write_all` writes through to
+/// Synchronous `std::fs` by design: `std::fs::File::write_all` writes through to
 /// the OS (no userspace buffering), so the bytes are durable and immediately
 /// visible to a subsequent read once it returns — unlike a `tokio::fs::File`,
 /// whose buffered writes can be lost on drop without an explicit flush. The
@@ -2023,6 +2023,8 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
 /// async agent-launch path wrap this in `spawn_blocking` so the executor is
 /// never blocked.
 fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
+    use std::io::Write as _;
+
     let registry = surge_acp::Registry::builtin();
     let is_claude = registry
         .normalize_agent_id(agent_id)
@@ -2058,7 +2060,6 @@ fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
     // concurrent creator (another stage in the same worktree, or the operator)
     // could be clobbered. An already-present file is the operator's explicit
     // choice and is left untouched — `AlreadyExists` is a benign no-op.
-    use std::io::Write as _;
     let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
     let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
         let mut file = std::fs::OpenOptions::new()
@@ -2145,6 +2146,7 @@ fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::Sandb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::profile::VerificationCfg;
 
     #[test]
     fn seed_headless_settings_writes_default_mode_for_claude() {
@@ -2311,7 +2313,7 @@ mod tests {
                     system: "Implement".into(),
                 },
                 inspector_ui: InspectorUi::default(),
-                verification: Default::default(),
+                verification: VerificationCfg::default(),
             },
             provenance: Provenance::Bundled,
             chain: vec![profile_key],

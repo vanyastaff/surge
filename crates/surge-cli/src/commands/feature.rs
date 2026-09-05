@@ -1075,10 +1075,10 @@ fn parse_conflict_choice_input(
     input: &str,
     choices: &[OperatorConflictChoice],
 ) -> Result<OperatorConflictChoice> {
-    if let Ok(index) = input.parse::<usize>() {
-        if (1..=choices.len()).contains(&index) {
-            return Ok(choices[index - 1]);
-        }
+    if let Ok(index) = input.parse::<usize>()
+        && (1..=choices.len()).contains(&index)
+    {
+        return Ok(choices[index - 1]);
     }
     choices
         .iter()

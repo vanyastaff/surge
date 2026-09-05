@@ -128,19 +128,19 @@ fn build_default_config() -> SurgeConfig {
     let selected = select_default_registry_id(&detected)
         .or_else(|| registry.find("claude-acp").map(|entry| entry.id.clone()));
 
-    if let Some(agent_id) = selected {
-        if let Some(entry) = registry.find(&agent_id) {
-            config.default_agent = entry.id.clone();
-            config
-                .agents
-                .insert(entry.id.clone(), entry.to_agent_config());
-            if !detected.iter().any(|agent| agent.entry.id == entry.id) {
-                warn!(
-                    agent_id = %entry.id,
-                    reason = "no_detected_agent",
-                    "using installable registry fallback for default agent"
-                );
-            }
+    if let Some(agent_id) = selected
+        && let Some(entry) = registry.find(&agent_id)
+    {
+        config.default_agent = entry.id.clone();
+        config
+            .agents
+            .insert(entry.id.clone(), entry.to_agent_config());
+        if !detected.iter().any(|agent| agent.entry.id == entry.id) {
+            warn!(
+                agent_id = %entry.id,
+                reason = "no_detected_agent",
+                "using installable registry fallback for default agent"
+            );
         }
     }
 

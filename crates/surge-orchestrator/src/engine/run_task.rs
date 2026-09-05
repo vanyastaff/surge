@@ -142,10 +142,10 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
     };
 
     loop {
-        if state.frames.is_empty() {
-            if let Err(error) = drain_roadmap_queue(&mut params, &mut state).await {
-                return failed(&params, format!("apply queued roadmap amendments: {error}")).await;
-            }
+        if state.frames.is_empty()
+            && let Err(error) = drain_roadmap_queue(&mut params, &mut state).await
+        {
+            return failed(&params, format!("apply queued roadmap amendments: {error}")).await;
         }
 
         apply_pending_revisions(&mut state);
@@ -245,108 +245,139 @@ async fn enforce_budget(
     ) {
         BudgetAction::Continue => Ok(None),
         BudgetAction::Warn { dimension, pct } => {
-            // Advisory: on a failed append leave the flag unset so the next
-            // boundary retries, rather than losing the warning and silencing
-            // all future ones.
-            if let Err(error) = params
-                .writer
-                .append_event(VersionedEventPayload::new(
-                    EventPayload::BudgetWarningRaised {
-                        dimension,
-                        pct,
-                        cost_usd,
-                        total_tokens,
-                    },
-                ))
-                .await
-            {
-                tracing::warn!(
-                    target: "engine::budget",
-                    run_id = %params.run_id,
-                    %error,
-                    "failed to append BudgetWarningRaised; will retry at next boundary"
-                );
-                return Ok(None);
-            }
-            state.budget_warned = true;
-            tracing::warn!(
-                target: "engine::budget",
-                run_id = %params.run_id,
-                ?dimension,
+            record_budget_warning(params, state, dimension, pct, cost_usd, total_tokens).await
+        },
+        BudgetAction::NoteExceeded { dimension } => {
+            record_budget_exceeded_noted(params, state, dimension, cost_usd, total_tokens).await
+        },
+        BudgetAction::Abort { dimension } => {
+            abort_run_for_budget(params, dimension, cost_usd, total_tokens).await
+        },
+    }
+}
+
+/// One-time `BudgetWarningRaised` advisory. On a failed append the flag is
+/// left unset so the next boundary retries, rather than losing the warning
+/// and silencing all future ones.
+async fn record_budget_warning(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    dimension: surge_core::budget::BudgetDimension,
+    pct: u8,
+    cost_usd: f64,
+    total_tokens: u64,
+) -> Result<Option<RunOutcome>, String> {
+    if let Err(error) = params
+        .writer
+        .append_event(VersionedEventPayload::new(
+            EventPayload::BudgetWarningRaised {
+                dimension,
                 pct,
                 cost_usd,
                 total_tokens,
-                "run budget warning threshold crossed"
-            );
-            Ok(None)
-        },
-        BudgetAction::NoteExceeded { dimension } => {
-            // WarnOnly breach record — advisory, same retry-on-failure posture.
-            if let Err(error) = params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
-                    dimension,
-                    cost_usd,
-                    total_tokens,
-                }))
-                .await
-            {
-                tracing::warn!(
-                    target: "engine::budget",
-                    run_id = %params.run_id,
-                    %error,
-                    "failed to append BudgetExceeded (warn-only); will retry at next boundary"
-                );
-                return Ok(None);
-            }
-            state.budget_exceeded_noted = true;
-            tracing::warn!(
-                target: "engine::budget",
-                run_id = %params.run_id,
-                ?dimension,
-                cost_usd,
-                total_tokens,
-                "run budget exceeded (warn-only policy; run continues)"
-            );
-            Ok(None)
-        },
-        BudgetAction::Abort { dimension } => {
-            // Mandatory: the breach record and the terminal abort MUST be
-            // durable, or replay/audit cannot explain why the run stopped.
-            params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
-                    dimension,
-                    cost_usd,
-                    total_tokens,
-                }))
-                .await
-                .map_err(|e| format!("persist BudgetExceeded for abort: {e}"))?;
-            let reason = format!(
-                "budget exceeded ({dimension:?}): cost=${cost_usd:.4}, tokens={total_tokens}"
-            );
-            params
-                .writer
-                .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
-                    reason: reason.clone(),
-                }))
-                .await
-                .map_err(|e| format!("persist RunAborted for budget breach: {e}"))?;
-            tracing::warn!(
-                target: "engine::budget",
-                run_id = %params.run_id,
-                ?dimension,
-                cost_usd,
-                total_tokens,
-                "run budget exceeded; aborting run"
-            );
-            let outcome = RunOutcome::Aborted { reason };
-            let _ = params.event_tx.send(EngineRunEvent::Terminal {
-                outcome: outcome.clone(),
-            });
-            Ok(Some(outcome))
-        },
+            },
+        ))
+        .await
+    {
+        tracing::warn!(
+            target: "engine::budget",
+            run_id = %params.run_id,
+            %error,
+            "failed to append BudgetWarningRaised; will retry at next boundary"
+        );
+        return Ok(None);
     }
+    state.budget_warned = true;
+    tracing::warn!(
+        target: "engine::budget",
+        run_id = %params.run_id,
+        ?dimension,
+        pct,
+        cost_usd,
+        total_tokens,
+        "run budget warning threshold crossed"
+    );
+    Ok(None)
+}
+
+/// One-time `BudgetExceeded` record under the `WarnOnly` policy — surfaces
+/// the limit crossing without stopping the run. Same retry-on-failure
+/// posture as [`record_budget_warning`].
+async fn record_budget_exceeded_noted(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    dimension: surge_core::budget::BudgetDimension,
+    cost_usd: f64,
+    total_tokens: u64,
+) -> Result<Option<RunOutcome>, String> {
+    if let Err(error) = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
+            dimension,
+            cost_usd,
+            total_tokens,
+        }))
+        .await
+    {
+        tracing::warn!(
+            target: "engine::budget",
+            run_id = %params.run_id,
+            %error,
+            "failed to append BudgetExceeded (warn-only); will retry at next boundary"
+        );
+        return Ok(None);
+    }
+    state.budget_exceeded_noted = true;
+    tracing::warn!(
+        target: "engine::budget",
+        run_id = %params.run_id,
+        ?dimension,
+        cost_usd,
+        total_tokens,
+        "run budget exceeded (warn-only policy; run continues)"
+    );
+    Ok(None)
+}
+
+/// Mandatory budget-breach abort: the breach record and the terminal abort
+/// MUST be durable, or replay/audit cannot explain why the run stopped.
+async fn abort_run_for_budget(
+    params: &RunTaskParams,
+    dimension: surge_core::budget::BudgetDimension,
+    cost_usd: f64,
+    total_tokens: u64,
+) -> Result<Option<RunOutcome>, String> {
+    params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::BudgetExceeded {
+            dimension,
+            cost_usd,
+            total_tokens,
+        }))
+        .await
+        .map_err(|e| format!("persist BudgetExceeded for abort: {e}"))?;
+    let reason =
+        format!("budget exceeded ({dimension:?}): cost=${cost_usd:.4}, tokens={total_tokens}");
+    params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunAborted {
+            reason: reason.clone(),
+        }))
+        .await
+        .map_err(|e| format!("persist RunAborted for budget breach: {e}"))?;
+    tracing::warn!(
+        target: "engine::budget",
+        run_id = %params.run_id,
+        ?dimension,
+        cost_usd,
+        total_tokens,
+        "run budget exceeded; aborting run"
+    );
+    let outcome = RunOutcome::Aborted { reason };
+    let _ = params.event_tx.send(EngineRunEvent::Terminal {
+        outcome: outcome.clone(),
+    });
+    Ok(Some(outcome))
 }
 
 struct RunExecutionState {
@@ -1529,6 +1560,7 @@ async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::LedgerEffect;
     use surge_core::agent_config::AgentConfig;
     use surge_core::edge::EdgeKind;
     use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
@@ -1554,7 +1586,7 @@ mod tests {
                     description: String::new(),
                     edge_kind_hint: EdgeKind::Forward,
                     is_terminal: false,
-                    ledger_effect: Default::default(),
+                    ledger_effect: LedgerEffect::default(),
                 })
                 .collect(),
             config: NodeConfig::Agent(AgentConfig {

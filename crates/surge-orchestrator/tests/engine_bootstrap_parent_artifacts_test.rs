@@ -155,12 +155,11 @@ async fn start_run_with_bootstrap_parent_seeds_parent_artifacts() {
             path,
             name,
         } = &payload
+            && ["description", "roadmap", "flow"].contains(&name.as_str())
         {
-            if ["description", "roadmap", "flow"].contains(&name.as_str()) {
-                assert_eq!(node.as_ref(), "bootstrap_parent");
-                assert_eq!(path.file_name().unwrap(), artifact.to_hex().as_str());
-                inherited.insert(name.clone(), std::fs::read(path).unwrap());
-            }
+            assert_eq!(node.as_ref(), "bootstrap_parent");
+            assert_eq!(path.file_name().unwrap(), artifact.to_hex().as_str());
+            inherited.insert(name.clone(), std::fs::read(path).unwrap());
         }
         memory.apply_event(&RunEvent {
             run_id: child_run_id,

@@ -5,10 +5,13 @@
 
 use std::fs;
 use std::path::Path;
+#[cfg(windows)]
 use std::time::Duration;
 
 use git2::{BranchType, Repository};
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(windows)]
+use tracing::warn;
 
 use crate::audit::CleanupAudit;
 use crate::worktree::{GitError, GitManager};
@@ -23,9 +26,11 @@ pub struct CleanupReport {
 }
 
 /// Maximum number of retry attempts for Windows locked file deletion.
+#[cfg(windows)]
 const MAX_RETRY_ATTEMPTS: u32 = 5;
 
 /// Initial delay in milliseconds before retrying file deletion.
+#[cfg(windows)]
 const INITIAL_RETRY_DELAY_MS: u64 = 100;
 
 /// Remove a directory with retry logic for Windows locked file issues.

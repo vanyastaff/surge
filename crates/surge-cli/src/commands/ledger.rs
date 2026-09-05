@@ -75,8 +75,8 @@ fn print_ledger_table(records: &[TaskLedgerIndexRecord]) {
         return;
     }
     println!(
-        "{:<20} {:<22} {:<9} {:<16} {}",
-        "TASK", "STATUS", "VERIFIED", "DISCOVERED_FROM", "RUN"
+        "{:<20} {:<22} {:<9} {:<16} RUN",
+        "TASK", "STATUS", "VERIFIED", "DISCOVERED_FROM"
     );
     for r in records {
         println!(

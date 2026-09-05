@@ -106,13 +106,13 @@ async fn wait_for_terminal_state(
                 .ok()
                 .flatten()
         };
-        if let Some(row) = row_opt {
-            if matches!(
+        if let Some(row) = row_opt
+            && matches!(
                 row.state,
                 TicketState::Completed | TicketState::Failed | TicketState::Aborted
-            ) {
-                return Some(row);
-            }
+            )
+        {
+            return Some(row);
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

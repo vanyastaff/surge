@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 
 /// Maximum byte length of a single steer message. Guards against an oversize
 /// message blowing up the next agent prompt (the CLI also checks, but the
-/// SubmitSteer IPC reaches the engine directly).
+/// `SubmitSteer` IPC reaches the engine directly).
 pub const MAX_STEER_LEN: usize = 4096;
 
 /// Maximum number of undelivered steers a run may hold. A run parked at a

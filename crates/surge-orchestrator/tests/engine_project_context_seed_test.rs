@@ -91,13 +91,12 @@ async fn start_run_seeds_project_context_artifact() {
             path,
             name,
         } = &payload
+            && name == "project_context"
         {
-            if name == "project_context" {
-                assert_eq!(node.as_ref(), "project_context_seed");
-                assert_eq!(*artifact, seed.hash);
-                assert_eq!(std::fs::read(path).unwrap(), seed.content.as_bytes());
-                saw_seed = true;
-            }
+            assert_eq!(node.as_ref(), "project_context_seed");
+            assert_eq!(*artifact, seed.hash);
+            assert_eq!(std::fs::read(path).unwrap(), seed.content.as_bytes());
+            saw_seed = true;
         }
         memory.apply_event(&RunEvent {
             run_id,
@@ -161,17 +160,16 @@ async fn start_run_seeds_configured_run_artifacts() {
             path,
             name,
         } = &payload
+            && name == "roadmap_amendment"
         {
-            if name == "roadmap_amendment" {
-                assert_eq!(node.as_ref(), "roadmap_amendment_seed");
-                assert_eq!(*artifact, seed.hash);
-                assert_eq!(path, &seed.relative_path);
-                assert_eq!(
-                    std::fs::read(worktree.path().join(path)).unwrap(),
-                    seed.content.as_bytes()
-                );
-                saw_seed = true;
-            }
+            assert_eq!(node.as_ref(), "roadmap_amendment_seed");
+            assert_eq!(*artifact, seed.hash);
+            assert_eq!(path, &seed.relative_path);
+            assert_eq!(
+                std::fs::read(worktree.path().join(path)).unwrap(),
+                seed.content.as_bytes()
+            );
+            saw_seed = true;
         }
         memory.apply_event(&RunEvent {
             run_id,

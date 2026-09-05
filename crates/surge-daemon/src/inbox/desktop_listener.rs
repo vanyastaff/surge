@@ -162,28 +162,25 @@ fn show_and_wait(
             },
         };
         handle.wait_for_action(|action_id| {
-            let action_kind = match parse_desktop_action_id(action_id) {
-                Some(k) => k,
-                None => {
-                    debug!(action_id, "ignored desktop action (dismiss/expired)");
-                    return;
-                },
+            let Some(action_kind) = parse_desktop_action_id(action_id) else {
+                debug!(action_id, "ignored desktop action (dismiss/expired)");
+                return;
             };
             // Bridge into async via the current tokio runtime handle.
             let storage = Arc::clone(&storage);
             let token = token.clone();
-            if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                rt.spawn(async move {
-                    if let Err(e) =
-                        tg_bot::handle_action(&storage, action_kind, &token, ActionChannel::Desktop)
-                            .await
-                    {
-                        warn!(error = ?e, "desktop action enqueue failed");
-                    }
-                });
-            } else {
+            let Ok(rt) = tokio::runtime::Handle::try_current() else {
                 warn!("no tokio runtime available for desktop action; lost");
-            }
+                return;
+            };
+            rt.spawn(async move {
+                if let Err(e) =
+                    tg_bot::handle_action(&storage, action_kind, &token, ActionChannel::Desktop)
+                        .await
+                {
+                    warn!(error = ?e, "desktop action enqueue failed");
+                }
+            });
         });
         info!(task_id = %task_id_for_log, "desktop card dismissed/answered");
     }

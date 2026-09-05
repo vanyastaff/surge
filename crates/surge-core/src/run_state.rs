@@ -379,7 +379,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
             },
         }),
         (
-            RunState::Bootstrapping { stage: _, .. },
+            RunState::Bootstrapping { .. },
             EventPayload::BootstrapApprovalDecided {
                 stage,
                 decision: BootstrapDecision::Approve,

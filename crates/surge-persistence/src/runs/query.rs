@@ -136,6 +136,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use surge_core::approvals::ApprovalPolicy;
+    use surge_core::budget::BudgetGuard;
     use surge_core::keys::{NodeKey, OutcomeKey};
     use surge_core::migrations::MAX_SUPPORTED_VERSION;
     use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
@@ -147,7 +148,7 @@ mod tests {
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
             mcp_servers: Vec::new(),
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
         }
     }
 

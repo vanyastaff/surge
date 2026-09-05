@@ -283,22 +283,22 @@ fn apply_edits_to_graph(graph: &mut Graph, edits: &ForkEdits) -> Result<(), Engi
     }
 
     for (node_key, text) in &edits.prompt_appends {
-        if let Some(node) = graph.nodes.get_mut(node_key) {
-            if let NodeConfig::Agent(cfg) = &mut node.config {
-                cfg.prompt_overrides
-                    .get_or_insert_with(|| PromptOverride {
-                        system: None,
-                        append_system: None,
-                    })
-                    .append_system = Some(text.clone());
-            }
+        if let Some(node) = graph.nodes.get_mut(node_key)
+            && let NodeConfig::Agent(cfg) = &mut node.config
+        {
+            cfg.prompt_overrides
+                .get_or_insert(PromptOverride {
+                    system: None,
+                    append_system: None,
+                })
+                .append_system = Some(text.clone());
         }
     }
     for (node_key, profile) in &edits.profile_overrides {
-        if let Some(node) = graph.nodes.get_mut(node_key) {
-            if let NodeConfig::Agent(cfg) = &mut node.config {
-                cfg.profile = profile.clone();
-            }
+        if let Some(node) = graph.nodes.get_mut(node_key)
+            && let NodeConfig::Agent(cfg) = &mut node.config
+        {
+            cfg.profile = profile.clone();
         }
     }
     Ok(())
@@ -310,6 +310,7 @@ mod tests {
     use std::collections::BTreeMap;
     use surge_core::agent_config::{AgentConfig, NodeLimits};
     use surge_core::approvals::ApprovalPolicy;
+    use surge_core::budget::BudgetGuard;
     use surge_core::content_hash::ContentHash;
     use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
     use surge_core::keys::{NodeKey, OutcomeKey, ProfileKey};
@@ -395,7 +396,7 @@ mod tests {
         let node = NodeKey::try_from("end").unwrap();
         let outcome = OutcomeKey::try_from("done").unwrap();
         let config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -481,7 +482,7 @@ mod tests {
         let graph = minimal_graph(); // start == "end"
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -548,7 +549,7 @@ mod tests {
         let graph = minimal_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -683,7 +684,7 @@ mod tests {
         let graph = agent_graph();
         let graph_hash = ContentHash::compute(&serde_json::to_vec(&graph).unwrap());
         let config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

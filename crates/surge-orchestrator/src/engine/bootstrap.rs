@@ -329,6 +329,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use surge_core::LedgerEffect;
     use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
     use surge_core::graph::{GraphMetadata, SCHEMA_VERSION};
     use surge_core::id::RunId;
@@ -360,7 +361,7 @@ mod tests {
             description: "done".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
-            ledger_effect: Default::default(),
+            ledger_effect: LedgerEffect::default(),
         }];
         let agent_cfg = NodeConfig::Agent(surge_core::agent_config::AgentConfig {
             profile: surge_core::keys::ProfileKey::try_from("mock").unwrap(),

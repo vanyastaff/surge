@@ -71,7 +71,12 @@ impl MockBridge {
         }
     }
 
-    /// Text of the most recent `send_message` prompt, if any.
+    /// Text of the most recent `send_message` prompt, if any. Used by tests
+    /// that assert on prompt content (e.g. operator-steering injection in
+    /// `engine_task_ledger_test.rs`); see also
+    /// [`tests::last_prompt_reflects_last_send_message`] below, which
+    /// exercises it directly so every binary sharing this fixture module
+    /// (not just the one asserting on steering) sees it as used.
     pub async fn last_prompt(&self) -> Option<String> {
         self.last_prompt.lock().await.clone()
     }
@@ -305,6 +310,17 @@ mod tests {
             RecordedCall::ReplyToTool { call_id, .. } => assert_eq!(call_id, "call-1"),
             other => panic!("expected ReplyToTool, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn last_prompt_reflects_last_send_message() {
+        let m = MockBridge::new();
+        assert_eq!(m.last_prompt().await, None, "nothing sent yet");
+        let session = SessionId::new();
+        m.send_message(session, MessageContent::Text("hello from test".into()))
+            .await
+            .unwrap();
+        assert_eq!(m.last_prompt().await.as_deref(), Some("hello from test"));
     }
 
     #[tokio::test]

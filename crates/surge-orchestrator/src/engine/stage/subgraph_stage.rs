@@ -214,6 +214,7 @@ fn project_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::LedgerEffect;
     use surge_core::agent_config::{ArtifactSource, TemplateVar};
     use surge_core::graph::{GraphMetadata, SCHEMA_VERSION, Subgraph};
     use surge_core::keys::{NodeKey, OutcomeKey, SubgraphKey};
@@ -265,7 +266,7 @@ mod tests {
                 description: "ok".into(),
                 edge_kind_hint: surge_core::edge::EdgeKind::Forward,
                 is_terminal: false,
-                ledger_effect: Default::default(),
+                ledger_effect: LedgerEffect::default(),
             }],
             config: NodeConfig::Subgraph(SubgraphConfig {
                 inner: inner_key.clone(),

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::mcp_config::McpServerRef;
 use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
@@ -279,19 +280,8 @@ impl Engine {
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-        // Per-run MCP registry: prefer the run-config-supplied list over
-        // the engine-level fallback. If `run_config.mcp_servers` is
-        // non-empty a fresh `McpRegistry` is built for this run; otherwise
-        // we fall back to the engine-wide registry (typically `None` for
-        // daemon mode, where the per-run list is the only source).
-        let per_run_mcp_registry = if run_config.mcp_servers.is_empty() {
-            self.mcp_registry.clone()
-        } else {
-            Some(Arc::new(surge_mcp::McpRegistry::from_config(
-                &run_config.mcp_servers,
-                Some(worktree_path.as_path()),
-            )))
-        };
+        let per_run_mcp_registry =
+            self.resolve_run_mcp_registry(&run_config.mcp_servers, &worktree_path);
         let mcp_servers_clone = run_config.mcp_servers.clone();
 
         let (event_tx, event_rx) = broadcast::channel(256);
@@ -363,6 +353,26 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    /// Resolve the per-run MCP registry: prefer the run-config-supplied list
+    /// over the engine-level fallback. If `mcp_servers` is non-empty a fresh
+    /// `McpRegistry` is built for this run; otherwise fall back to the
+    /// engine-wide registry (typically `None` for daemon mode, where the
+    /// per-run list is the only source).
+    fn resolve_run_mcp_registry(
+        &self,
+        mcp_servers: &[McpServerRef],
+        worktree_path: &Path,
+    ) -> Option<Arc<surge_mcp::McpRegistry>> {
+        if mcp_servers.is_empty() {
+            self.mcp_registry.clone()
+        } else {
+            Some(Arc::new(surge_mcp::McpRegistry::from_config(
+                mcp_servers,
+                Some(worktree_path),
+            )))
+        }
     }
 
     async fn build_startup_events(

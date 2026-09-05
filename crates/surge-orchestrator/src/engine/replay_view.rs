@@ -197,37 +197,12 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
         }
     }
 
-    // Promote the run-level terminal disposition onto the node table. Terminal
-    // stages emit `RunCompleted`/`RunFailed`/`RunAborted` directly (no
-    // `StageCompleted`/`StageFailed`), so without this the terminal/frontier
-    // node would be misclassified.
-    match terminal {
-        Some(TerminalKind::Completed) => {
-            if let Some(tn) = &terminal_node {
-                status
-                    .entry(tn.clone())
-                    .or_insert((NodeStatus::Future, 0, None))
-                    .0 = NodeStatus::Completed;
-            }
-        },
-        Some(TerminalKind::Failed) => {
-            // A direct `RunFailed` (no preceding `StageFailed`) means the live
-            // frontier failed; mark it (still-`Active`) `Failed`.
-            if let Some(frontier) = &active_node {
-                if let Some(e) = status.get_mut(frontier) {
-                    if e.0 == NodeStatus::Active {
-                        e.0 = NodeStatus::Failed;
-                    }
-                }
-            }
-        },
-        _ => {},
-    }
-
-    // A terminal run has no live frontier.
-    if terminal.is_some() {
-        active_node = None;
-    }
+    apply_terminal_disposition(
+        &mut status,
+        terminal,
+        terminal_node.as_deref(),
+        &mut active_node,
+    );
 
     let nodes = status
         .into_iter()
@@ -246,6 +221,44 @@ pub fn build_replay_view(graph: &Graph, events: &[ReadEvent]) -> ReplayView {
         nodes,
         edges_traversed,
         cost,
+    }
+}
+
+/// Promote the run-level terminal disposition onto the node table and clear
+/// the frontier. Terminal stages emit `RunCompleted`/`RunFailed`/`RunAborted`
+/// directly (no `StageCompleted`/`StageFailed`), so without this the
+/// terminal/frontier node would be misclassified.
+fn apply_terminal_disposition(
+    status: &mut BTreeMap<String, (NodeStatus, u32, Option<String>)>,
+    terminal: Option<TerminalKind>,
+    terminal_node: Option<&str>,
+    active_node: &mut Option<String>,
+) {
+    match terminal {
+        Some(TerminalKind::Completed) => {
+            if let Some(tn) = terminal_node {
+                status
+                    .entry(tn.to_owned())
+                    .or_insert((NodeStatus::Future, 0, None))
+                    .0 = NodeStatus::Completed;
+            }
+        },
+        Some(TerminalKind::Failed) => {
+            // A direct `RunFailed` (no preceding `StageFailed`) means the live
+            // frontier failed; mark it (still-`Active`) `Failed`.
+            if let Some(frontier) = active_node.as_deref()
+                && let Some(e) = status.get_mut(frontier)
+                && e.0 == NodeStatus::Active
+            {
+                e.0 = NodeStatus::Failed;
+            }
+        },
+        _ => {},
+    }
+
+    // A terminal run has no live frontier.
+    if terminal.is_some() {
+        *active_node = None;
     }
 }
 

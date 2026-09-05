@@ -699,11 +699,18 @@ async fn stderr_forwarder(stderr: tokio::process::ChildStderr, server: String, p
     // it 0600 (atomic for a fresh file), then also tighten an
     // already-existing one: a prior probe/run may have left it with a
     // broader umask default, and `mode()` only applies on creation.
+    // Truncate: this call runs once per spawned child (including
+    // restarts), and the path is stable across restarts — without
+    // truncation a restarted child's log would start by showing the
+    // previous (possibly crashed) child's stderr tail until its own
+    // first line arrives, which is exactly the moment `surge mcp logs`
+    // is most likely to be read for a diagnosis.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if tokio::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .mode(0o600)
             .open(&path)
