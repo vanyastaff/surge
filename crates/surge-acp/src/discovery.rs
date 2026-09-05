@@ -208,15 +208,21 @@ impl AgentDiscovery {
         // Use cli_binary from registry entry if available, otherwise use command
         let binary_name = if let Some(cli_binary) = &entry.cli_binary {
             cli_binary.as_str()
+        } else if entry.is_npx() || entry.is_uvx() {
+            // No separately-installed binary exists to probe (e.g. a
+            // developer-preview npx-only runtime like `dsh`): the launched
+            // artifact IS `<command> <default_args...>`, so "found" means
+            // the launcher itself is on PATH — not a same-named binary that
+            // may not exist and, if it did, would not be what surge spawns.
+            // A full PATH search (not the hardcoded standard directories
+            // below) matches how the launcher is actually resolved at spawn
+            // time, so this returns here instead of falling through.
+            debug!(
+                "No cli_binary for {}; resolving launcher {} on PATH",
+                entry.id, entry.command
+            );
+            return which::which(&entry.command).ok();
         } else {
-            // For npx/uvx commands, don't probe standard paths
-            if entry.is_npx() || entry.is_uvx() {
-                debug!(
-                    "Skipping standard path detection for {}: npx/uvx command",
-                    entry.id
-                );
-                return None;
-            }
             entry.command.as_str()
         };
 
@@ -456,6 +462,63 @@ mod tests {
                 },
             }
         }
+    }
+
+    #[test]
+    fn from_standard_paths_resolves_npx_launcher_for_entry_with_no_cli_binary() {
+        // dsh-acp (cli_binary = None, launched via npx) must resolve to
+        // wherever `npx` actually is on PATH — not `None` regardless of
+        // environment, and not a same-named `dsh` binary that isn't what
+        // surge would spawn.
+        use crate::registry::Registry;
+
+        let discovery = AgentDiscovery::new();
+        let registry = Registry::builtin();
+        let dsh = registry.find("dsh-acp").expect("dsh-acp must be builtin");
+        assert!(dsh.cli_binary.is_none());
+        assert!(dsh.is_npx());
+
+        let expected = which::which(&dsh.command).ok();
+        assert_eq!(discovery.from_standard_paths(dsh), expected);
+    }
+
+    #[test]
+    fn from_standard_paths_resolves_npx_launcher_for_any_user_configured_entry_too() {
+        // Not a dsh-only special case: this is a genuine behavior change for
+        // existing configs — a user-authored registry entry (or a future
+        // remote-fetched one) with `command = "npx"` and no `cli_binary`
+        // previously always reported "not found" here; it now reports found
+        // iff `npx` is on PATH. Covered independently of the builtin dsh-acp
+        // entry so a change to that one entry can't accidentally leave this
+        // path untested.
+        use crate::registry::{AgentCapability, RegistryEntry};
+        use surge_core::config::Transport;
+
+        let entry = RegistryEntry {
+            id: "custom-npx-tool".to_string(),
+            display_name: "Custom npx tool".to_string(),
+            description: String::new(),
+            version: "0.0.0".to_string(),
+            authors: vec![],
+            license: "MIT".to_string(),
+            command: "npx".to_string(),
+            default_args: vec!["-y".to_string(), "@example/some-acp-tool".to_string()],
+            transport: Transport::Stdio,
+            install_instructions: String::new(),
+            cli_binary: None,
+            website: None,
+            tags: vec![],
+            capabilities: vec![AgentCapability::Code],
+            models: vec![],
+            long_description: String::new(),
+            runtime: None,
+            version_probe_args: vec![],
+        };
+        assert!(entry.is_npx());
+
+        let discovery = AgentDiscovery::new();
+        let expected = which::which(&entry.command).ok();
+        assert_eq!(discovery.from_standard_paths(&entry), expected);
     }
 
     #[test]

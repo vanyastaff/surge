@@ -42,6 +42,7 @@ Surge declares awareness of these runtimes but has not yet tested the live launc
 | `copilot` | all 4 modes | GitHub Copilot CLI ACP is in public preview; flag forms pending GA. |
 | `opencode` | all 4 modes | OpenCode delegates to a configured provider; surge has not yet mapped the host-side flags. |
 | `goose` | all 4 modes | Goose ACP surface stable; sandbox CLI flags not yet enumerated. |
+| `dsh` | all 4 modes | **Developer preview.** DeepSeek Harness's ACP profile (`dsh --profile acp`) is a documented zero-option command — no CLI sandbox-tier flags exist to verify. See [`RuntimeVersionPolicy`](../crates/surge-core/bundled/sandbox/versions.toml) for the separate (and, for this runtime, exact) version pin. |
 
 ## How surge picks a row
 

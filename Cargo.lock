@@ -7345,6 +7345,7 @@ dependencies = [
  "owo-colors",
  "predicates",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "surge-acp",

@@ -13,6 +13,7 @@ and known quirks.
 | Codex | `codex-acp` | `npx @zed-industries/codex-acp` | `codex acp` | ⬜ wired + arg-tested; operator-pending |
 | Gemini CLI | `gemini` | `npx @google/gemini-cli --acp` | `gemini --acp` | ⬜ wired + arg-tested; operator-pending |
 | GitHub Copilot | `github-copilot-cli` | `npx @github/copilot --acp` | (via npx) | ⬜ wired; operator-pending |
+| DeepSeek Harness (**developer preview**) | `dsh-acp` | `npx -y @deepseek-ai/dsh --profile acp` | (via npx) | ⬜ wired + arg-tested; scheduled CI canary only (`.github/workflows/dsh-canary.yml`: a hard pin+handshake gate plus a soft full-flow step that needs model credentials), not the PR gate |
 
 The registry ([`crates/surge-acp/builtin_registry.json`](../crates/surge-acp/builtin_registry.json))
 is the default launch path: `command = "npx"` and `default_args` already encode
@@ -88,3 +89,20 @@ outcome and touch no files). A failure pinpoints which stage broke.
   `description.md` / `roadmap.toml` / `flow.toml` across runtimes) is verified
   by the artifact-contract golden tests; a live cross-agent golden compare is
   operator-pending where a second runtime is available.
+- **DeepSeek Harness (`dsh`)** ships only pre-release npm versions, so
+  `RuntimeVersionPolicy` pins an exact build (`versions.toml`) rather than a
+  floor. `dsh` has no separately-installed binary (`cli_binary = null`) —
+  surge always launches and probes it via npx, never a same-named `dsh`
+  binary that may not exist. `RegistryEntry::version_probe_args` carries the
+  extra `npx` args (`-y @deepseek-ai/dsh`) needed to probe the actually-
+  launched package's version rather than npx's own. `surge doctor agent
+  dsh-acp --real` refuses loudly — both on a version mismatch *and* on "no
+  data to compare" — instead of the warn-only path floor-style runtimes take
+  (`is_exact_pin` in `crates/surge-cli/src/commands/doctor.rs` decides which
+  path a runtime gets). `--handshake-only` stops that smoke after spawn + the
+  ACP handshake, before sending a prompt — the version check and the
+  handshake both need only the runtime installed, not its own model
+  credentials, which is what `.github/workflows/dsh-canary.yml`'s hard gate
+  relies on. Its ACP profile (`dsh --profile acp`) is a documented
+  zero-option command, so every sandbox-matrix row stays declared-unverified
+  — there is no CLI flag to verify a tier against.

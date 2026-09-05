@@ -76,6 +76,16 @@ pub struct RegistryEntry {
     /// with older registry files; loaders emit `tracing::warn!` when absent.
     #[serde(default)]
     pub runtime: Option<surge_core::RuntimeKind>,
+    /// Extra arguments to insert before `--version` when probing this
+    /// entry's *actual* running version, for entries with no standalone
+    /// binary that understands a bare `--version` (an npx-launched
+    /// developer preview like `dsh`, always spawned as `npx -y
+    /// @deepseek-ai/dsh --profile acp`). Empty (the default) means "probe
+    /// the resolved `command_path` directly" — the existing behavior for
+    /// every entry that has a real installable binary. See
+    /// `surge_orchestrator::engine::version_probe::probe_version_with_args`.
+    #[serde(default)]
+    pub version_probe_args: Vec<String>,
 }
 
 impl RegistryEntry {
@@ -102,17 +112,19 @@ impl RegistryEntry {
         }
     }
 
-    /// Check if this agent's binary is installed on PATH.
-    /// npx/uvx agents are never "installed" — they run on-demand.
+    /// Check whether this agent can actually be found: a dedicated
+    /// `cli_binary` if one is declared (e.g. "claude" for claude-acp), else
+    /// whether the launch command itself (`command`, e.g. "npx") is on
+    /// `PATH`. A pure npx/uvx entry with no `cli_binary` (a developer-preview
+    /// runtime like `dsh` that has no separately-installed binary) is
+    /// launched entirely through its launcher, so the launcher's presence
+    /// *is* the "found" signal — treating it as permanently "not installed"
+    /// would measure a same-named binary that is neither expected to exist
+    /// nor what surge would ever spawn.
     #[must_use]
     pub fn is_installed(&self) -> bool {
-        // Check the real CLI binary if specified (e.g. "claude" for claude-acp)
         if let Some(bin) = &self.cli_binary {
             return which(bin);
-        }
-        // For npx/uvx without cli_binary — not locally installed
-        if self.is_npx() || self.is_uvx() {
-            return false;
         }
         which(&self.command)
     }
@@ -166,7 +178,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Create the registry with the 4 supported agents.
+    /// Create the registry with the 5 supported agents.
     #[must_use]
     pub fn builtin() -> Self {
         Self {
@@ -421,6 +433,7 @@ impl Registry {
                     },
                     models: vec![],
                     long_description: String::new(),
+                    version_probe_args: vec![],
                 }
             })
             .collect();
@@ -551,6 +564,7 @@ const REGISTRY_ID_ALIASES: &[(&str, &str)] = &[
     ("gemini-cli", "gemini"),
     ("github-copilot", "github-copilot-cli"),
     ("copilot", "github-copilot-cli"),
+    ("dsh", "dsh-acp"),
 ];
 
 fn registry_alias_target(id: &str) -> Option<&'static str> {
@@ -740,9 +754,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builtin_has_4_agents() {
+    fn test_builtin_has_5_agents() {
         let reg = Registry::builtin();
-        assert_eq!(reg.len(), 4);
+        assert_eq!(reg.len(), 5);
     }
 
     #[test]
@@ -776,6 +790,64 @@ mod tests {
     }
 
     #[test]
+    fn test_find_dsh() {
+        // Launch-arg coverage (the ab6de54 pattern, applied at the registry
+        // layer since DSH resolves to `AgentKind::Custom` — the same
+        // verbatim-passthrough path every npx-wrapped builtin agent uses,
+        // so there is no DSH-specific `build_agent_command` arm to pin).
+        // The exact subcommand (`--profile acp`) comes from
+        // `packages/bundle/acp-app/src/index.ts` upstream, not guesswork.
+        let reg = Registry::builtin();
+        let entry = reg.find("dsh-acp").unwrap();
+        assert_eq!(entry.command, "npx");
+        assert_eq!(
+            entry.default_args,
+            vec!["-y", "@deepseek-ai/dsh", "--profile", "acp"],
+        );
+        assert_eq!(
+            entry.runtime,
+            Some(surge_core::RuntimeKind::DeepSeekHarness)
+        );
+        // No separately-installed `dsh` binary is assumed — surge always
+        // launches DSH via npx, so a same-named global binary would measure
+        // the wrong artifact for both discovery and version probing.
+        assert_eq!(entry.cli_binary, None);
+        // What actually runs when surge probes the version: `npx -y
+        // @deepseek-ai/dsh --version` — verified live to print the pinned
+        // `0.1.2-rc.1` (see docs/agent-runtimes.md), not npx's own version.
+        assert_eq!(entry.version_probe_args, vec!["-y", "@deepseek-ai/dsh"]);
+    }
+
+    #[test]
+    fn dsh_pinned_version_matches_declared_policy() {
+        // The pin is declared in two places surge's own tooling can check
+        // directly (this registry's `version` field and surge-core's
+        // `RuntimeVersionPolicy` in versions.toml); a third copy lives in
+        // `.github/workflows/dsh-canary.yml` and is read directly out of
+        // versions.toml at CI run time rather than duplicated as a literal,
+        // so there is nothing left for that copy to drift from.
+        let reg = Registry::builtin();
+        let entry = reg.find("dsh-acp").unwrap();
+        let policy = surge_core::version_policy(surge_core::RuntimeKind::DeepSeekHarness)
+            .expect("dsh version policy must exist");
+        assert_eq!(
+            policy.min_version.to_string(),
+            format!("={}", entry.version),
+            "versions.toml's dsh pin must match builtin_registry.json's dsh-acp.version",
+        );
+    }
+
+    #[test]
+    fn test_dsh_alias_normalizes_to_dsh_acp() {
+        // The short alias is what an operator actually writes in a profile's
+        // `runtime.agent_id` — this is the "runtime = dsh" ergonomics the
+        // brief describes, resolved through the same alias table every
+        // other short-form runtime name uses.
+        let reg = Registry::builtin();
+        assert_eq!(reg.normalize_agent_id("dsh").as_deref(), Some("dsh-acp"),);
+    }
+
+    #[test]
     fn test_installed_checks_cli_binary() {
         let reg = Registry::builtin();
         let claude = reg.find("claude-acp").unwrap();
@@ -783,6 +855,17 @@ mod tests {
         assert_eq!(claude.cli_binary.as_deref(), Some("claude"));
         // Actual result depends on system — just check it doesn't panic
         let _ = claude.is_installed();
+    }
+
+    #[test]
+    fn is_installed_for_npx_only_entry_checks_the_launcher_not_a_same_named_binary() {
+        // dsh-acp has no cli_binary — "installed" must fall back to whether
+        // `npx` (the actual launch command) is on PATH, not silently report
+        // `false` forever regardless of the environment.
+        let reg = Registry::builtin();
+        let dsh = reg.find("dsh-acp").unwrap();
+        assert_eq!(dsh.cli_binary, None);
+        assert_eq!(dsh.is_installed(), which::which(&dsh.command).is_ok());
     }
 
     #[test]
@@ -795,6 +878,7 @@ mod tests {
             ("codex-acp", surge_core::RuntimeKind::Codex),
             ("gemini", surge_core::RuntimeKind::Gemini),
             ("github-copilot-cli", surge_core::RuntimeKind::CopilotCli),
+            ("dsh-acp", surge_core::RuntimeKind::DeepSeekHarness),
         ];
         for (id, expected) in cases {
             let entry = reg.find(id).unwrap_or_else(|| panic!("missing entry {id}"));
@@ -859,7 +943,7 @@ mod tests {
     fn test_all_are_code_capable() {
         let reg = Registry::builtin();
         let coders = reg.by_capability(&AgentCapability::Code);
-        assert_eq!(coders.len(), 4);
+        assert_eq!(coders.len(), 5);
     }
 
     #[test]
@@ -918,6 +1002,7 @@ mod tests {
             models: vec![],
             long_description: String::new(),
             runtime: None,
+            version_probe_args: vec![],
         }
     }
 
@@ -1395,8 +1480,8 @@ max_qa_iterations = 5
         assert!(merged.find("codex-acp").is_some());
         assert!(merged.find("gemini").is_some());
 
-        // Total: 1 custom + 4 builtin = 5 agents
-        assert_eq!(merged.len(), 5);
+        // Total: 1 custom + 5 builtin = 6 agents
+        assert_eq!(merged.len(), 6);
 
         // Verify custom agent has correct metadata
         let custom = merged.find("custom-agent").unwrap();

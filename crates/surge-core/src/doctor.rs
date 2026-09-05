@@ -80,8 +80,16 @@ pub enum VersionStatus {
     ProbeFailed,
     /// Detected version satisfies the policy.
     Ok,
-    /// Detected version is below the declared minimum (warn-only).
+    /// Detected version is below a declared **floor** (`>=`-style minimum;
+    /// warn-only).
     BelowMinimum,
+    /// Detected version does not satisfy a declared **exact** pin
+    /// (`=`-style — see [`crate::runtime::RuntimeVersionPolicy`]). Distinct
+    /// from [`VersionStatus::BelowMinimum`] because an exact pin has no
+    /// floor to be "below": the mismatch can be either direction (older or
+    /// newer than the pin), and calling it "below minimum" would misname a
+    /// newer-than-pinned version as deficient.
+    Mismatched,
 }
 
 /// Matrix lookup result for a single `(runtime, mode)` pair.
@@ -264,5 +272,30 @@ mod tests {
     fn version_status_serializes_snake_case() {
         let v = serde_json::to_value(VersionStatus::BelowMinimum).unwrap();
         assert_eq!(v, serde_json::Value::String("below_minimum".into()));
+    }
+
+    #[test]
+    fn version_status_mismatched_serializes_snake_case() {
+        let v = serde_json::to_value(VersionStatus::Mismatched).unwrap();
+        assert_eq!(v, serde_json::Value::String("mismatched".into()));
+    }
+
+    #[test]
+    fn report_is_not_clean_with_mismatched_entry() {
+        // An exact-pin mismatch (e.g. `dsh` newer or older than the pinned
+        // developer-preview build) must fail `is_clean()` exactly like
+        // `BelowMinimum` does for floor-style policies.
+        let r = DoctorReport {
+            entries: vec![DoctorEntry {
+                agent_name: "dsh-acp".into(),
+                runtime: Some(RuntimeKind::DeepSeekHarness),
+                binary_path: Some("/usr/bin/npx".into()),
+                detected_version: Some("0.1.3-alpha.1".into()),
+                policy: None,
+                version_status: VersionStatus::Mismatched,
+                matrix: vec![],
+            }],
+        };
+        assert!(!r.is_clean());
     }
 }

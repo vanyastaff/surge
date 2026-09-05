@@ -42,6 +42,13 @@ pub enum RuntimeKind {
     /// Block Goose CLI (`goose` binary).
     #[serde(rename = "goose")]
     Goose,
+    /// DeepSeek Harness's automation-only ACP server (`dsh --profile acp`,
+    /// launched via `npx @deepseek-ai/dsh`). **Developer preview**: the
+    /// upstream package ships only pre-release versions, so
+    /// [`version_policy`] pins an exact version rather than a floor — see
+    /// that policy's `note` for the protocol-drift rationale.
+    #[serde(rename = "dsh")]
+    DeepSeekHarness,
 }
 
 impl RuntimeKind {
@@ -60,6 +67,7 @@ impl RuntimeKind {
             Self::CopilotCli => "copilot",
             Self::OpenCode => "opencode",
             Self::Goose => "goose",
+            Self::DeepSeekHarness => "dsh",
         }
     }
 }
@@ -151,6 +159,7 @@ mod tests {
         RuntimeKind::CopilotCli,
         RuntimeKind::OpenCode,
         RuntimeKind::Goose,
+        RuntimeKind::DeepSeekHarness,
     ];
 
     #[test]
@@ -227,5 +236,31 @@ mod tests {
                 p.runtime,
             );
         }
+    }
+
+    #[test]
+    fn dsh_version_policy_is_developer_preview_and_exactly_pinned() {
+        // DSH ships only pre-release versions upstream, so drift can happen
+        // between any two publishes — an exact pin (not a `>=` floor) is the
+        // only honest policy, and the note must say so for `surge doctor`
+        // readers who don't know that upstream detail.
+        let policy = version_policy(RuntimeKind::DeepSeekHarness)
+            .expect("dsh must declare a version policy — developer preview needs a pin");
+        assert!(
+            policy.note.to_lowercase().contains("developer preview"),
+            "dsh policy note must flag developer-preview status: {:?}",
+            policy.note,
+        );
+        assert_eq!(
+            policy.min_version.comparators.len(),
+            1,
+            "dsh pin should be a single comparator, not a range: {:?}",
+            policy.min_version,
+        );
+        assert_eq!(
+            policy.min_version.comparators[0].op,
+            semver::Op::Exact,
+            "dsh pin must be exact (`=`), not a floor — protocol drift on either side must fail loudly",
+        );
     }
 }

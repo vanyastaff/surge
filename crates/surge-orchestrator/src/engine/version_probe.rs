@@ -8,6 +8,10 @@
 //! This module owns:
 //! - [`probe_version`] — invokes `<binary> --version` with a tight timeout
 //!   and parses semver out of the first stdout line.
+//! - [`probe_version_with_args`] — the same probe with extra leading args
+//!   before `--version`, for runtimes launched through a wrapper command
+//!   (e.g. `npx -y @deepseek-ai/dsh --version`) that has no standalone
+//!   binary of its own to probe.
 //! - [`VersionCache`] — per-daemon-lifetime cache, keyed by canonicalised
 //!   binary path, so the engine probes each runtime at most once per
 //!   process start.
@@ -85,10 +89,33 @@ pub enum ProbeError {
 ///
 /// See [`ProbeError`].
 pub async fn probe_version(binary: &Path) -> Result<Version, ProbeError> {
-    let started = std::time::Instant::now();
-    let binary_str = binary.display().to_string();
+    probe_version_with_args(binary, &[]).await
+}
 
-    let mut cmd = Command::new(binary);
+/// Run `<program> <leading_args...> --version` and parse a semver from the
+/// first line of stdout.
+///
+/// [`probe_version`] is the common case (`leading_args = &[]`): a real,
+/// standalone binary that understands a bare `--version`. This variant
+/// exists for runtimes with no such binary — an npx-launched developer
+/// preview like `dsh` is always spawned as `npx -y @deepseek-ai/dsh
+/// --profile acp`, so probing bare `npx --version` would report npx's own
+/// version, not the launched package's. Probing `npx -y @deepseek-ai/dsh
+/// --version` instead asks the actually-launched artifact, matching
+/// production spawn behaviour except for the trailing subcommand.
+///
+/// # Errors
+///
+/// See [`ProbeError`].
+pub async fn probe_version_with_args(
+    program: &Path,
+    leading_args: &[String],
+) -> Result<Version, ProbeError> {
+    let started = std::time::Instant::now();
+    let binary_str = program.display().to_string();
+
+    let mut cmd = Command::new(program);
+    cmd.args(leading_args);
     cmd.arg("--version");
     cmd.stdin(std::process::Stdio::null());
 
@@ -276,6 +303,49 @@ mod tests {
         // Cargo versions are stable semver — just assert the major is at
         // least 1 to confirm we parsed something sensible.
         assert!(version.major >= 1);
+    }
+
+    #[tokio::test]
+    async fn probe_version_with_args_places_leading_args_before_version_not_after() {
+        // Order-sensitive by construction, unlike `cargo --color never
+        // --version` (accepted either way, since `--color`'s position is
+        // irrelevant to cargo's parser — that shape cannot tell "leading
+        // args before --version" apart from "after", so a passing result
+        // there proves nothing about order). `git -C <dir> --version`
+        // succeeds and prints a normal version line; `git --version -C
+        // <dir>` fails outright (`error: unknown switch 'C'`) because
+        // `--version` short-circuits git's own option parsing before `-C`
+        // is ever seen. A pass here is only possible when leading_args truly
+        // land before `--version`, so a future regression that reordered
+        // them (e.g. appending `--version` first) would fail this test.
+        let git = which::which("git").ok();
+        let Some(git) = git else {
+            eprintln!("skipping: git not on PATH");
+            return;
+        };
+        let existing_dir = std::env::temp_dir();
+        let leading = vec![
+            "-C".to_string(),
+            existing_dir.to_string_lossy().into_owned(),
+        ];
+        let version = probe_version_with_args(&git, &leading)
+            .await
+            .expect("`git -C <dir> --version` must succeed when leading args precede --version");
+        assert!(version.major >= 2, "git versions are 2.x+: {version}");
+    }
+
+    #[tokio::test]
+    async fn probe_version_delegates_to_probe_version_with_args_and_no_leading_args() {
+        let cargo = which::which("cargo").ok();
+        let Some(cargo) = cargo else {
+            eprintln!("skipping: cargo not on PATH");
+            return;
+        };
+        let a = probe_version(&cargo).await.expect("probe_version");
+        let b = probe_version_with_args(&cargo, &[])
+            .await
+            .expect("probe_version_with_args");
+        assert_eq!(a, b);
     }
 
     #[tokio::test]

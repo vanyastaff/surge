@@ -11,6 +11,21 @@
 #
 # Declared-unverified runtimes (Cursor / Copilot / OpenCode / Goose) omit a
 # policy entry until surge has tested at least one version against them.
+#
+# `dsh` is the one exception to that rule: it is also declared-unverified in
+# matrix.toml (its ACP profile exposes no CLI sandbox-tier flags to verify),
+# but it still carries a policy entry — an exact pin rather than a floor,
+# because the upstream package ships only pre-release versions and any two
+# publishes may differ in wire protocol. `dsh` has no separately-installed
+# binary (its registry entry's `cli_binary` is null); surge probes it via
+# `npx -y @deepseek-ai/dsh --version` (`RegistryEntry::version_probe_args`),
+# the actually-launched artifact, not a same-named binary that may not exist.
+# `surge doctor agent dsh-acp --real` (SURGE_DOCTOR_REAL=1) refuses loudly —
+# on a version mismatch *and* on "no data to compare" — instead of following
+# the warn-only path above; `--handshake-only` exercises that check plus the
+# spawn/ACP-handshake legs without needing the runtime's own model
+# credentials (see `crates/surge-cli/src/commands/doctor.rs` and
+# `.github/workflows/dsh-canary.yml`).
 
 [[policies]]
 runtime = "claude-code"
@@ -26,3 +41,8 @@ note = "Codex 0.5.0 stabilized the --sandbox flag set (read-only / workspace-wri
 runtime = "gemini"
 min_version = ">=0.4.0"
 note = "Gemini CLI 0.4.0 exposes the docker-sandbox flag surge maps SandboxMode::FullAccess against."
+
+[[policies]]
+runtime = "dsh"
+min_version = "=0.1.2-rc.1"
+note = "Developer preview: DeepSeek Harness (@deepseek-ai/dsh) has published only pre-release versions; pinned to the exact tested build so protocol drift fails loudly instead of degrading silently."
