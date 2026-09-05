@@ -1,7 +1,11 @@
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
-use surge_persistence::memory::{MemoryStore, models::*};
+use surge_core::MemoryClaimId;
+use surge_persistence::memory::{AuditReport, MemoryStore, StaleReason, models::*, run_audit};
+use surge_persistence::runs::SystemClock;
+use surge_persistence::runs::registry::open_registry_pool;
 
+use super::common::surge_home_dir;
 use super::load_spec_by_id;
 
 /// Memory entry category
@@ -16,6 +20,16 @@ pub enum MemoryCategory {
     Gotcha,
     /// File-level context
     File,
+}
+
+/// Output format for `surge memory audit`.
+#[derive(Debug, Clone, ValueEnum, Default)]
+pub(crate) enum AuditFormat {
+    /// Human-readable text output
+    #[default]
+    Text,
+    /// JSON output
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -68,6 +82,27 @@ pub enum MemoryCommands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
+
+    /// Show what has gone stale and what hindered past runs. Proposes
+    /// pruning candidates — deletes nothing; pruning is `surge memory
+    /// forget`, invoked explicitly by the operator.
+    Audit {
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        format: AuditFormat,
+    },
+
+    /// Delete the named memory claim(s) by id. This is the only way a
+    /// claim is ever removed — `surge memory audit` only proposes;
+    /// this command, invoked explicitly with explicit ids, is what
+    /// actually deletes.
+    Forget {
+        /// One or more claim ids to delete (the `claim_id` field from
+        /// `surge memory audit`'s output). Accepts either the prefixed
+        /// form (`claim-01ARZ...`) or the bare ULID.
+        #[arg(required = true, value_name = "CLAIM_ID")]
+        ids: Vec<String>,
+    },
 }
 
 pub fn run(command: MemoryCommands) -> Result<()> {
@@ -87,6 +122,8 @@ pub fn run(command: MemoryCommands) -> Result<()> {
             tags,
             limit,
         } => search_memory(query, spec, tags, limit),
+        MemoryCommands::Audit { format } => audit_memory(format),
+        MemoryCommands::Forget { ids } => forget_claims(ids),
     }
 }
 
@@ -403,4 +440,219 @@ fn search_memory(
     }
 
     Ok(())
+}
+
+/// `surge memory audit`: flags what has drifted stale and what claims
+/// trace back to a failed run. Read-only — it proposes candidates for
+/// pruning but never deletes anything itself; deletion is a separate,
+/// explicit command an operator issues.
+fn audit_memory(format: AuditFormat) -> Result<()> {
+    let store_path = MemoryStore::default_path()?;
+
+    if !store_path.exists() {
+        match format {
+            AuditFormat::Json => {
+                let empty = AuditReport {
+                    stale: Vec::new(),
+                    unverifiable: Vec::new(),
+                    run_correlated: Vec::new(),
+                    caveats: vec![
+                        surge_persistence::memory::audit::LOOPING_CORRELATION_UNAVAILABLE
+                            .to_string(),
+                    ],
+                };
+                println!("{}", serde_json::to_string_pretty(&empty)?);
+            },
+            AuditFormat::Text => {
+                println!("⚠️  No memory data available yet.");
+                println!("   Add entries using 'surge memory add' to build your knowledge base.");
+            },
+        }
+        return Ok(());
+    }
+
+    let store = MemoryStore::open(&store_path)?;
+    let claims = store.list_claims()?;
+
+    let home = surge_home_dir()?;
+    let pool = open_registry_pool(&home, &SystemClock)
+        .map_err(|e| anyhow::anyhow!("open run registry: {e}"))?;
+    let report = run_audit(&claims, &pool)?;
+
+    match format {
+        AuditFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        AuditFormat::Text => print_audit_report(&report),
+    }
+
+    Ok(())
+}
+
+/// Human-readable rendering of an [`AuditReport`].
+fn print_audit_report(report: &AuditReport) {
+    println!("⚡ Memory Audit");
+    println!();
+
+    let nothing_found = report.stale.is_empty()
+        && report.unverifiable.is_empty()
+        && report.run_correlated.is_empty();
+
+    if nothing_found {
+        println!("✅ Nothing stale, nothing correlated with a failed run.");
+    } else {
+        if !report.stale.is_empty() {
+            println!("═══ Stale ({}) ═══", report.stale.len());
+            for finding in &report.stale {
+                let reason = match finding.reason {
+                    StaleReason::ContentChanged => "source content changed",
+                    StaleReason::SourceMissing => "source no longer exists",
+                };
+                println!("  {}  ({reason})", finding.claim_id);
+                println!("     source: {}", finding.source);
+            }
+            println!();
+        }
+
+        if !report.unverifiable.is_empty() {
+            println!("═══ Could not verify ({}) ═══", report.unverifiable.len());
+            for finding in &report.unverifiable {
+                println!("  {}  — {}", finding.claim_id, finding.reason);
+                println!("     source: {}", finding.source);
+            }
+            println!();
+        }
+
+        if !report.run_correlated.is_empty() {
+            println!(
+                "═══ Correlated with failed runs ({}) ═══",
+                report.run_correlated.len()
+            );
+            for finding in &report.run_correlated {
+                println!(
+                    "  {}  ← {} ({})",
+                    finding.claim_id, finding.run_id, finding.run_status
+                );
+            }
+            println!();
+        }
+
+        let proposed = count_proposed_claims(report);
+        if proposed > 0 {
+            println!(
+                "🔎 Proposing {proposed} entr{} for pruning. Nothing was deleted — run \
+                 `surge memory forget <CLAIM_ID>...` to remove one explicitly.",
+                if proposed == 1 { "y" } else { "ies" }
+            );
+        }
+    }
+
+    if !report.caveats.is_empty() {
+        println!();
+        println!("ℹ️  Notes");
+        for note in &report.caveats {
+            println!("   - {note}");
+        }
+    }
+}
+
+/// Count of distinct claims proposed for pruning across both finding
+/// lists — a claim flagged both stale and run-correlated is proposed
+/// once, not twice.
+fn count_proposed_claims(report: &AuditReport) -> usize {
+    let mut ids = std::collections::HashSet::new();
+    ids.extend(report.stale.iter().map(|finding| finding.claim_id));
+    ids.extend(report.run_correlated.iter().map(|finding| finding.claim_id));
+    ids.len()
+}
+
+/// `surge memory forget <CLAIM_ID>...`: delete exactly the named claim(s).
+/// The only place a claim is ever removed — `audit_memory` above only ever
+/// reads. Every id is parsed up front so a typo anywhere in the list
+/// cannot cause a partial deletion of the ids that did parse.
+fn forget_claims(ids: Vec<String>) -> Result<()> {
+    let store_path = MemoryStore::default_path()?;
+    forget_claims_at(&store_path, &ids)
+}
+
+/// Testable core of [`forget_claims`], parameterized on the store path so
+/// the all-ids-parsed-before-anything-is-opened guarantee can be exercised
+/// against an isolated store rather than the real `~/.surge/memory.db`.
+///
+/// Every id in `ids` is parsed before [`MemoryStore::open`] is ever
+/// called: a single malformed id anywhere in the list fails the whole
+/// call with zero claims touched, not a partial run that deleted
+/// everything before the bad one. This function contains no `DELETE`
+/// beyond the one `MemoryStore::delete_claim` call per already-parsed,
+/// already-named id — nothing here can remove a claim the caller did not
+/// explicitly name.
+fn forget_claims_at(store_path: &std::path::Path, ids: &[String]) -> Result<()> {
+    if !store_path.exists() {
+        anyhow::bail!(
+            "no memory store found at {}; nothing to forget",
+            store_path.display()
+        );
+    }
+
+    let parsed_ids = ids
+        .iter()
+        .map(|raw| {
+            raw.parse::<MemoryClaimId>()
+                .map(|id| (raw.as_str(), id))
+                .map_err(|e| anyhow::anyhow!("invalid claim id {raw:?}: {e}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let store = MemoryStore::open(store_path)?;
+    for (raw, id) in parsed_ids {
+        if store.delete_claim(id)? {
+            println!("🗑️  forgot {raw}");
+        } else {
+            println!("⚠️  {raw} was not found; nothing to forget");
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_core::ContentHash;
+    use surge_core::memory::MemoryClaim;
+
+    /// The exact property a reviewer flagged as code-shaped but
+    /// test-unenforced: a garbage id anywhere in the request must leave
+    /// every existing claim exactly as it was — zero deletions, not a
+    /// partial run that stopped partway through. If a future edit
+    /// reordered `MemoryStore::open` ahead of id parsing, this test would
+    /// catch it (the valid claim would vanish).
+    #[test]
+    fn forget_leaves_every_claim_in_place_when_one_id_in_the_list_is_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("memory.db");
+
+        let store = MemoryStore::open(&store_path).unwrap();
+        let claim = MemoryClaim::from_transcript(
+            "keep me",
+            "transcript:run-01ARZ3NDEKTSV4RRFFQ69G5FAV#turn-1",
+            ContentHash::compute(b"turn 1"),
+        );
+        store.add_claim(&claim).unwrap();
+        drop(store);
+
+        let ids = vec![claim.id().to_string(), "not-a-valid-id".to_string()];
+        let result = forget_claims_at(&store_path, &ids);
+        assert!(
+            result.is_err(),
+            "a garbage id anywhere in the list must fail the whole call"
+        );
+
+        let reopened = MemoryStore::open(&store_path).unwrap();
+        let remaining = reopened.list_claims().unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "the valid claim must still be present: zero deletions, not a partial one"
+        );
+        assert_eq!(remaining[0].id(), claim.id());
+    }
 }

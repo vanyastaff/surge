@@ -47,6 +47,7 @@ pub mod human_gate_config;
 pub mod keys;
 pub mod loop_config;
 pub mod mcp_config;
+pub mod memory;
 pub mod migrations;
 pub mod node;
 pub mod notify_config;
@@ -58,6 +59,7 @@ pub mod run_status;
 pub mod runtime;
 pub mod sandbox;
 pub mod sandbox_matrix;
+pub mod skill;
 pub mod subgraph_config;
 pub mod terminal_config;
 pub mod validation;
@@ -69,7 +71,7 @@ pub use event::{
     PlanEntry, PlanPriority, PlanStatus, SurgeEvent, ToolCallStatus, ToolDiff, ToolKind,
     ToolLocation, VersionedEvent,
 };
-pub use id::{RunId, SessionId, SpecId, SubtaskId, TaskId};
+pub use id::{MemoryClaimId, RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
     DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, Priority, RoadmapArtifact,
     RoadmapDependency, RoadmapItem, RoadmapLedgerIssue, RoadmapMilestone, RoadmapRisk,
@@ -107,6 +109,14 @@ pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
+// `memory::Provenance` is deliberately not re-exported here: the name
+// collides with `profile::registry::Provenance` (an unrelated "where a
+// profile resolved from" enum), which already owns the flat `Provenance`
+// re-export below. Reach it via `surge_core::memory::Provenance`. The
+// `Parse*Error` string-parse error types (`ParseConfidenceError`,
+// `ParseClaimStatusError`) stay reachable via `surge_core::memory::` too —
+// no consumer needs to name them directly, so they are not flattened here.
+pub use memory::{ClaimStatus, Confidence, MemoryClaim, UnprovenVerifiedStatus};
 pub use migrations::{IdentityV1, IdentityV2, MigrationChain, migrate_payload};
 pub use node::{LedgerEffect, Node, NodeConfig, NodeKind, OutcomeDecl, Position};
 pub use notify_config::NotifyChannelKind;

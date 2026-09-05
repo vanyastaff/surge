@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Memory as claims: per-entry provenance and confidence
+
+- **`surge_core::memory`** — a memory entry is now a claim, not free text:
+  `MemoryClaim { id, text, provenance, confidence, status }`, with
+  `Provenance { source, hash, verified_by, verified_at }` and a three-level
+  `Confidence` (`verified` / `name_matched` / `asserted` — never a bool).
+  `ClaimStatus::Verified` requires both `verified_by` and `verified_at` to
+  be set; `MemoryClaim::new` rejects the combination otherwise
+  (`UnprovenVerifiedStatus`). Anything ingested from a transcript or
+  conversation starts `unverified` at capture time (`MemoryClaim::from_transcript`).
+- **Memory DB schema bumped v1 → v2** (`surge_persistence::memory::schema::SCHEMA_VERSION`)
+  — adds the `memory_claims` table. Opening a v1 database backfills every
+  existing discovery/pattern/gotcha/file-context row into an unverified,
+  `Asserted`-confidence claim in one atomic migration step; the v1 tables
+  and their rows are left in place. See
+  [docs/schema-versioning.md](docs/schema-versioning.md#memory-db-surge-persistence).
+
 ### Added — Crash recovery (v0.1 blocker)
 
 - **New `surge-daemon::recovery` module** — daemon startup brings runs the

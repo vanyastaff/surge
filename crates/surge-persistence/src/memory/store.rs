@@ -1,10 +1,13 @@
 //! SQLite-based storage for project memory and knowledge base.
 
 use crate::memory::models::{Discovery, FileContext, Gotcha, Pattern};
-use crate::memory::schema::{SCHEMA_DDL, SCHEMA_VERSION};
+use crate::memory::schema::{CREATE_MEMORY_CLAIMS_TABLE, SCHEMA_DDL, SCHEMA_VERSION};
 use crate::{PersistenceError, Result};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use surge_core::memory::{ClaimStatus, Confidence, MemoryClaim, Provenance};
+use surge_core::{ContentHash, MemoryClaimId};
 
 // ── Store ───────────────────────────────────────────────────────────
 
@@ -81,13 +84,17 @@ impl MemoryStore {
             )
             .optional()?;
 
-        if let Some(version) = current_version {
+        if let Some(mut version) = current_version {
             if version > SCHEMA_VERSION {
                 return Err(PersistenceError::Storage(format!(
                     "Database schema version {version} is newer than supported version {SCHEMA_VERSION}"
                 )));
             }
-            // Future: handle migrations here if version < SCHEMA_VERSION
+            // Climb one version at a time so migration steps compose —
+            // never delete a step, only add the next one.
+            while version < SCHEMA_VERSION {
+                version = self.migrate_one_step(version)?;
+            }
         } else {
             // Initialize new database - execute all DDL statements
             for ddl in SCHEMA_DDL {
@@ -101,6 +108,110 @@ impl MemoryStore {
         }
 
         Ok(())
+    }
+
+    /// Apply exactly one schema migration step, returning the version
+    /// reached. Each historical version gets its own arm; a database
+    /// several versions behind climbs one step at a time rather than
+    /// jumping straight to `SCHEMA_VERSION`.
+    ///
+    /// The whole step commits as a single transaction: `CREATE TABLE`,
+    /// backfill, and the version-row insert either all land or none do.
+    /// A crash or error partway through never leaves the database at the
+    /// old version with some claims already inserted — the next open just
+    /// retries the same step from `from_version` again. That retry (or a
+    /// legacy row visited twice for any other reason) is additionally a
+    /// safe no-op on its own terms: [`insert_legacy_claim`] recognizes a
+    /// reused id backed by the *same* legacy `source` and skips it, rather
+    /// than relying solely on transaction rollback to prevent duplicates.
+    fn migrate_one_step(&mut self, from_version: i32) -> Result<i32> {
+        match from_version {
+            1 => {
+                // v1 -> v2: add `memory_claims` (a v1 database predates it)
+                // and materialize every existing discovery/pattern/gotcha/
+                // file-context row as an unverified, `Asserted`-confidence
+                // claim. The v1 tables and their rows are left untouched —
+                // no existing text is lost, and every pre-v2 caller keeps
+                // working against them.
+                let tx = self.conn.transaction()?;
+                tx.execute(CREATE_MEMORY_CLAIMS_TABLE, [])?;
+                backfill_legacy_claims(&tx)?;
+                let next_version = 2;
+                tx.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    [next_version],
+                )?;
+                tx.commit()?;
+                Ok(next_version)
+            },
+            other => Err(PersistenceError::Storage(format!(
+                "no migration step defined for memory schema version {other}"
+            ))),
+        }
+    }
+
+    // ── Memory Claim Operations (v2) ─────────────────────────────────────
+
+    /// Add a new memory claim to the store. Fails if `claim.id` already
+    /// exists — a conflicting id here signals an actual bug, not something
+    /// to paper over (contrast the migration backfill's `INSERT OR IGNORE`,
+    /// where a repeat visit to the same legacy row is expected and benign).
+    ///
+    /// No `#[must_use]`: `Result` is already `#[must_use]` itself, so the
+    /// attribute would be redundant here and trip `clippy::double_must_use`
+    /// — consistent with every other `Result`-returning function in this
+    /// crate (none of them carry it either).
+    pub fn add_claim(&self, claim: &MemoryClaim) -> Result<()> {
+        insert_claim(&self.conn, claim, ClaimConflictPolicy::Fail)
+    }
+
+    /// Fetch a memory claim by ID, if one exists.
+    pub fn get_claim(&self, id: MemoryClaimId) -> Result<Option<MemoryClaim>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, text, source, source_hash, verified_by, verified_at,
+                       confidence, status
+                FROM memory_claims WHERE id = ?1
+                "#,
+                [id.to_string()],
+                row_to_claim,
+            )
+            .optional()
+            .map_err(PersistenceError::from)
+    }
+
+    /// List every memory claim in the store, in insertion order.
+    pub fn list_claims(&self) -> Result<Vec<MemoryClaim>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, text, source, source_hash, verified_by, verified_at,
+                   confidence, status
+            FROM memory_claims ORDER BY rowid
+            "#,
+        )?;
+        let claims = stmt
+            .query_map([], row_to_claim)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(claims)
+    }
+
+    /// Delete the memory claim named by `id` — the *only* way a claim is
+    /// ever removed from this store. `surge memory audit` (and everything
+    /// in `crate::memory::audit`) only proposes candidates; this explicit,
+    /// human-issued call is what actually deletes one, and it deletes
+    /// exactly the row named by `id` — never a range, a filter, or "every
+    /// claim the last audit flagged".
+    ///
+    /// Returns whether a row was actually removed. `false` (not an error)
+    /// means `id` did not name an existing claim — already gone, or never
+    /// existed — since deleting something already absent still achieves
+    /// the caller's goal.
+    pub fn delete_claim(&self, id: MemoryClaimId) -> Result<bool> {
+        let removed = self
+            .conn
+            .execute("DELETE FROM memory_claims WHERE id = ?1", [id.to_string()])?;
+        Ok(removed > 0)
     }
 
     // ── Discovery Operations ────────────────────────────────────────────
@@ -531,11 +642,276 @@ impl MemoryStore {
     }
 }
 
+/// Map a `memory_claims` row to a [`MemoryClaim`].
+fn row_to_claim(row: &Row<'_>) -> rusqlite::Result<MemoryClaim> {
+    let id: String = row.get(0)?;
+    let text: String = row.get(1)?;
+    let source: String = row.get(2)?;
+    let source_hash: String = row.get(3)?;
+    let verified_by: Option<String> = row.get(4)?;
+    let verified_at: Option<i64> = row.get(5)?;
+    let confidence: String = row.get(6)?;
+    let status: String = row.get(7)?;
+
+    let id = MemoryClaimId::from_str(&id).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let hash = ContentHash::from_str(&source_hash).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let confidence = Confidence::from_str(&confidence).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let status = ClaimStatus::from_str(&status).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+
+    MemoryClaim::new(
+        id,
+        text,
+        Provenance {
+            source,
+            hash,
+            verified_by,
+            verified_at: verified_at.map(|ms| ms as u64),
+        },
+        confidence,
+        status,
+    )
+    .map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+/// Look up the `source` of an existing `memory_claims` row by id, if any.
+fn claim_source_by_id(conn: &Connection, id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT source FROM memory_claims WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(PersistenceError::from)
+}
+
+/// How to handle a `memory_claims` primary-key conflict on insert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimConflictPolicy {
+    /// A conflicting id is an error. The normal, real-usage path
+    /// ([`MemoryStore::add_claim`]); also what [`insert_legacy_claim`] falls
+    /// back to once it has already decided a fresh id is needed, so an
+    /// unexpected further conflict there surfaces loudly rather than
+    /// silently swallowing data.
+    Fail,
+    /// A conflicting id is silently skipped. [`insert_legacy_claim`] uses
+    /// this only for the "no existing row with this id" case, where no
+    /// conflict is expected in the first place — belt-and-suspenders
+    /// against a row appearing between its own lookup and this insert,
+    /// not the mechanism that makes a retried backfill idempotent (that is
+    /// `insert_legacy_claim`'s own same-`source` check).
+    Ignore,
+}
+
+/// Insert a claim into `memory_claims` under the given conflict policy.
+fn insert_claim(
+    conn: &Connection,
+    claim: &MemoryClaim,
+    on_conflict: ClaimConflictPolicy,
+) -> Result<()> {
+    let or_ignore = match on_conflict {
+        ClaimConflictPolicy::Fail => "",
+        ClaimConflictPolicy::Ignore => "OR IGNORE ",
+    };
+    conn.execute(
+        &format!(
+            r#"
+            INSERT {or_ignore}INTO memory_claims (
+                id, text, source, source_hash, verified_by, verified_at,
+                confidence, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#
+        ),
+        rusqlite::params![
+            claim.id().to_string(),
+            claim.text(),
+            claim.provenance().source,
+            claim.provenance().hash.to_string(),
+            claim.provenance().verified_by,
+            claim.provenance().verified_at.map(|ms| ms as i64),
+            claim.confidence().as_str(),
+            claim.status().as_str(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Materialize every existing discovery/pattern/gotcha/file-context row as
+/// a `MemoryClaim`. Legacy rows carry no source hash or verification
+/// history, so migration cannot invent one: every migrated claim starts at
+/// `Confidence::Asserted` / `ClaimStatus::Unverified` rather than silently
+/// inheriting trust it never earned. Runs against whatever `Connection` (or
+/// `Transaction`) it is given, so the caller controls the commit boundary.
+fn backfill_legacy_claims(conn: &Connection) -> Result<()> {
+    for (legacy_id, text) in raw_discoveries_for_migration(conn)? {
+        insert_legacy_claim(conn, legacy_claim(&legacy_id, "discoveries", text)?)?;
+    }
+    for (legacy_id, text) in raw_patterns_for_migration(conn)? {
+        insert_legacy_claim(conn, legacy_claim(&legacy_id, "patterns", text)?)?;
+    }
+    for (legacy_id, text) in raw_gotchas_for_migration(conn)? {
+        insert_legacy_claim(conn, legacy_claim(&legacy_id, "gotchas", text)?)?;
+    }
+    for (legacy_id, text) in raw_file_contexts_for_migration(conn)? {
+        insert_legacy_claim(conn, legacy_claim(&legacy_id, "file_contexts", text)?)?;
+    }
+    Ok(())
+}
+
+/// Insert a claim materialized from a legacy row without ever silently
+/// dropping its text.
+///
+/// A migrated claim's id is deterministically reused from its legacy row
+/// (see [`legacy_claim`]) — unique *within* that legacy table, courtesy of
+/// its own `PRIMARY KEY`, but not *across* the four of them: two
+/// independently generated legacy ULIDs could still coincide. If the id
+/// already names a `memory_claims` row:
+/// - the same `source` means this is the very same legacy row visited
+///   again (a retried migration step, or a second backfill pass) — a
+///   no-op, not a duplicate;
+/// - a *different* `source` means an unrelated row happens to share the
+///   id — it is inserted anyway, under a freshly minted id, rather than
+///   silently dropped by an `INSERT OR IGNORE` conflict.
+fn insert_legacy_claim(conn: &Connection, claim: MemoryClaim) -> Result<()> {
+    match claim_source_by_id(conn, &claim.id().to_string())? {
+        Some(existing_source) if existing_source == claim.provenance().source => Ok(()),
+        Some(_different_source) => insert_claim(
+            conn,
+            &claim.with_id(MemoryClaimId::new()),
+            ClaimConflictPolicy::Fail,
+        ),
+        None => insert_claim(conn, &claim, ClaimConflictPolicy::Ignore),
+    }
+}
+
+/// Read every discovery's id and full text (title + content — nothing
+/// dropped) for migration into `memory_claims`, oldest first.
+fn raw_discoveries_for_migration(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, title, content FROM discoveries ORDER BY rowid")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            Ok((id, format!("{title}\n\n{content}")))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Read every pattern's id and full text (name + description + example —
+/// nothing dropped) for migration into `memory_claims`, oldest first.
+fn raw_patterns_for_migration(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt =
+        conn.prepare("SELECT id, name, description, example FROM patterns ORDER BY rowid")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let description: String = row.get(2)?;
+            let example: Option<String> = row.get(3)?;
+            let text = match example {
+                Some(example) => format!("{name}\n\n{description}\n\nExample:\n{example}"),
+                None => format!("{name}\n\n{description}"),
+            };
+            Ok((id, text))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Read every gotcha's id and full text (title + description + symptom +
+/// solution — nothing dropped) for migration into `memory_claims`, oldest
+/// first.
+fn raw_gotchas_for_migration(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn
+        .prepare("SELECT id, title, description, symptom, solution FROM gotchas ORDER BY rowid")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let description: String = row.get(2)?;
+            let symptom: Option<String> = row.get(3)?;
+            let solution: String = row.get(4)?;
+            let mut text = format!("{title}\n\n{description}");
+            if let Some(symptom) = symptom {
+                text.push_str(&format!("\n\nSymptom: {symptom}"));
+            }
+            text.push_str(&format!("\n\nSolution: {solution}"));
+            Ok((id, text))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Read every file context's id and full text (path + summary + description
+/// — nothing dropped) for migration into `memory_claims`, oldest first.
+fn raw_file_contexts_for_migration(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn
+        .prepare("SELECT id, file_path, summary, description FROM file_contexts ORDER BY rowid")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let file_path: String = row.get(1)?;
+            let summary: String = row.get(2)?;
+            let description: Option<String> = row.get(3)?;
+            let text = match description {
+                Some(description) => format!("{file_path}\n\n{summary}\n\n{description}"),
+                None => format!("{file_path}\n\n{summary}"),
+            };
+            Ok((id, text))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Build the [`MemoryClaim`] a migrated legacy row becomes.
+///
+/// Legacy rows predate provenance entirely, so the honest source locator is
+/// the row's own origin (`legacy:<table>:<id>`), the hash is computed over
+/// the composed text itself, and confidence/status start at the lowest
+/// tier — nothing here was ever verified.
+///
+/// Returns `Result` rather than unwrapping/expecting even though `status`
+/// is hardcoded to `Unverified` here (which can never trip
+/// `UnprovenVerifiedStatus`): `MemoryClaim::new`'s private infallible
+/// sibling constructor lives in `surge-core` and isn't reachable across the
+/// crate boundary, so this propagates the always-`Ok` result with `?`
+/// instead of panicking — library code does not panic on a reachable
+/// `Result`, regardless of how provably unreachable the error arm is.
+fn legacy_claim(legacy_id: &str, table: &str, text: String) -> Result<MemoryClaim> {
+    let hash = ContentHash::compute(text.as_bytes());
+    let source = format!("legacy:{table}:{legacy_id}");
+    // Legacy ids are bare ULID strings, which `MemoryClaimId::from_str`
+    // parses directly (no "claim-" prefix to strip) — reusing them keeps
+    // the migrated claim traceable to its origin row. Fall back to a fresh
+    // id on the (unexpected) off chance a legacy id isn't a valid ULID.
+    let id = MemoryClaimId::from_str(legacy_id).unwrap_or_else(|_| MemoryClaimId::new());
+    MemoryClaim::new(
+        id,
+        text,
+        Provenance::unverified(source, hash),
+        Confidence::Asserted,
+        ClaimStatus::Unverified,
+    )
+    .map_err(|e| PersistenceError::Storage(e.to_string()))
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ulid::Ulid;
 
     fn test_timestamp() -> u64 {
         1640000000000 // Fixed timestamp for testing
@@ -994,5 +1370,481 @@ mod tests {
         assert_eq!(results.patterns.len(), 1);
         assert_eq!(results.gotchas.len(), 1);
         assert_eq!(results.total_count(), 3);
+    }
+
+    // ── Memory Claim Tests (v2) ──────────────────────────────────────
+
+    #[test]
+    fn add_claim_then_get_claim_roundtrips_every_field() {
+        let store = MemoryStore::in_memory().unwrap();
+        let hash = ContentHash::compute(b"src/lib.rs");
+        let claim = MemoryClaim::new(
+            MemoryClaimId::new(),
+            "the retry budget is 3 attempts",
+            Provenance::verified("src/lib.rs", hash, "cargo test", 1_700_000_000_000),
+            Confidence::Verified,
+            ClaimStatus::Verified,
+        )
+        .unwrap();
+
+        store.add_claim(&claim).unwrap();
+        let fetched = store.get_claim(claim.id()).unwrap().unwrap();
+
+        assert_eq!(fetched, claim);
+    }
+
+    #[test]
+    fn get_claim_returns_none_for_unknown_id() {
+        let store = MemoryStore::in_memory().unwrap();
+        assert!(store.get_claim(MemoryClaimId::new()).unwrap().is_none());
+    }
+
+    #[test]
+    fn list_claims_includes_every_added_claim() {
+        let store = MemoryStore::in_memory().unwrap();
+        let a = MemoryClaim::from_transcript(
+            "uses tokio for the runtime",
+            "transcript:run-1#turn-1",
+            ContentHash::compute(b"turn 1"),
+        );
+        let b = MemoryClaim::from_transcript(
+            "errors are thiserror in library crates",
+            "transcript:run-1#turn-2",
+            ContentHash::compute(b"turn 2"),
+        );
+        store.add_claim(&a).unwrap();
+        store.add_claim(&b).unwrap();
+
+        let listed = store.list_claims().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|c| c.id() == a.id()));
+        assert!(listed.iter().any(|c| c.id() == b.id()));
+    }
+
+    #[test]
+    fn delete_claim_removes_only_the_named_claim_and_leaves_others_intact() {
+        let store = MemoryStore::in_memory().unwrap();
+        let keep = MemoryClaim::from_transcript(
+            "uses tokio for the runtime",
+            "transcript:run-1#turn-1",
+            ContentHash::compute(b"turn 1"),
+        );
+        let remove = MemoryClaim::from_transcript(
+            "errors are thiserror in library crates",
+            "transcript:run-1#turn-2",
+            ContentHash::compute(b"turn 2"),
+        );
+        store.add_claim(&keep).unwrap();
+        store.add_claim(&remove).unwrap();
+
+        let removed = store.delete_claim(remove.id()).unwrap();
+        assert!(removed, "delete_claim must report that a row was removed");
+
+        let remaining = store.list_claims().unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "exactly the named claim must be gone, not both or neither"
+        );
+        assert_eq!(remaining[0].id(), keep.id());
+        assert!(store.get_claim(remove.id()).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_claim_returns_false_for_an_unknown_id() {
+        let store = MemoryStore::in_memory().unwrap();
+        assert!(!store.delete_claim(MemoryClaimId::new()).unwrap());
+    }
+
+    /// Create all four v1 legacy tables plus the schema_version table on a
+    /// fresh in-memory connection, leaving the caller to insert rows and
+    /// set `schema_version` to 1.
+    fn seed_v1_legacy_tables(conn: &Connection) {
+        conn.execute(crate::memory::schema::CREATE_SCHEMA_VERSION_TABLE, [])
+            .unwrap();
+        conn.execute(crate::memory::schema::CREATE_DISCOVERIES_TABLE, [])
+            .unwrap();
+        conn.execute(crate::memory::schema::CREATE_PATTERNS_TABLE, [])
+            .unwrap();
+        conn.execute(crate::memory::schema::CREATE_GOTCHAS_TABLE, [])
+            .unwrap();
+        conn.execute(crate::memory::schema::CREATE_FILE_CONTEXTS_TABLE, [])
+            .unwrap();
+    }
+
+    #[test]
+    fn migration_v1_to_v2_backfills_all_four_legacy_tables_with_and_without_optional_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v1_legacy_tables(&conn);
+
+        let discovery_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO discoveries (id, title, content, created_at, updated_at)
+             VALUES (?1, 'ADR-0002', 'Profile trust reuses the existing approval path.', 1000, 1000)",
+            [&discovery_id],
+        )
+        .unwrap();
+
+        let pattern_with_example_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO patterns (id, name, description, example, created_at, updated_at)
+             VALUES (?1, 'Retry Pattern', 'Retry with backoff', 'let x = retry(3);', 1000, 1000)",
+            [&pattern_with_example_id],
+        )
+        .unwrap();
+        let pattern_without_example_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO patterns (id, name, description, example, created_at, updated_at)
+             VALUES (?1, 'Simple Pattern', 'Just do it', NULL, 1000, 1000)",
+            [&pattern_without_example_id],
+        )
+        .unwrap();
+
+        let gotcha_with_symptom_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO gotchas (id, title, description, symptom, solution, created_at, updated_at)
+             VALUES (?1, 'Blocking Gotcha', 'Do not block the runtime', 'Runtime panics under load', 'Use spawn_blocking', 1000, 1000)",
+            [&gotcha_with_symptom_id],
+        )
+        .unwrap();
+        let gotcha_without_symptom_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO gotchas (id, title, description, symptom, solution, created_at, updated_at)
+             VALUES (?1, 'Silent Gotcha', 'Fails without a message', NULL, 'Log the error explicitly', 1000, 1000)",
+            [&gotcha_without_symptom_id],
+        )
+        .unwrap();
+
+        let file_with_description_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO file_contexts (id, file_path, summary, description, created_at, updated_at)
+             VALUES (?1, 'src/lib.rs', 'Crate root', 'Re-exports the public surface', 1000, 1000)",
+            [&file_with_description_id],
+        )
+        .unwrap();
+        let file_without_description_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO file_contexts (id, file_path, summary, description, created_at, updated_at)
+             VALUES (?1, 'src/main.rs', 'Entry point', NULL, 1000, 1000)",
+            [&file_without_description_id],
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+            .unwrap();
+
+        let mut store = MemoryStore {
+            conn,
+            path: PathBuf::from(":memory:"),
+        };
+        store.initialize_schema().unwrap();
+
+        let claims = store.list_claims().unwrap();
+        assert_eq!(claims.len(), 7);
+        let find = |legacy_id: &str| -> &MemoryClaim {
+            let expected: MemoryClaimId = legacy_id.parse().unwrap();
+            claims.iter().find(|c| c.id() == expected).unwrap()
+        };
+
+        let discovery_claim = find(&discovery_id);
+        assert!(discovery_claim.text().contains("ADR-0002"));
+        assert!(
+            discovery_claim
+                .text()
+                .contains("Profile trust reuses the existing approval path.")
+        );
+
+        let pattern_with = find(&pattern_with_example_id);
+        assert!(pattern_with.text().contains("Retry Pattern"));
+        assert!(pattern_with.text().contains("Retry with backoff"));
+        assert!(pattern_with.text().contains("Example:"));
+        assert!(pattern_with.text().contains("let x = retry(3);"));
+
+        let pattern_without = find(&pattern_without_example_id);
+        assert!(pattern_without.text().contains("Simple Pattern"));
+        assert!(pattern_without.text().contains("Just do it"));
+        assert!(!pattern_without.text().contains("Example:"));
+
+        let gotcha_with = find(&gotcha_with_symptom_id);
+        assert!(gotcha_with.text().contains("Blocking Gotcha"));
+        assert!(
+            gotcha_with
+                .text()
+                .contains("Symptom: Runtime panics under load")
+        );
+        assert!(gotcha_with.text().contains("Solution: Use spawn_blocking"));
+
+        let gotcha_without = find(&gotcha_without_symptom_id);
+        assert!(gotcha_without.text().contains("Silent Gotcha"));
+        assert!(!gotcha_without.text().contains("Symptom:"));
+        assert!(
+            gotcha_without
+                .text()
+                .contains("Solution: Log the error explicitly")
+        );
+
+        let file_with = find(&file_with_description_id);
+        assert!(file_with.text().contains("src/lib.rs"));
+        assert!(file_with.text().contains("Crate root"));
+        assert!(file_with.text().contains("Re-exports the public surface"));
+
+        let file_without = find(&file_without_description_id);
+        assert_eq!(file_without.text(), "src/main.rs\n\nEntry point");
+
+        for claim in &claims {
+            assert_eq!(claim.status(), ClaimStatus::Unverified);
+            assert_eq!(claim.confidence(), Confidence::Asserted);
+        }
+    }
+
+    #[test]
+    fn migration_v1_to_v2_reuses_legacy_ulid_and_records_legacy_source() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v1_legacy_tables(&conn);
+
+        let legacy_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO discoveries (id, title, content, created_at, updated_at)
+             VALUES (?1, 'ADR-0002', 'Profile trust reuses the existing approval path.', 1000, 1000)",
+            [&legacy_id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+            .unwrap();
+
+        let mut store = MemoryStore {
+            conn,
+            path: PathBuf::from(":memory:"),
+        };
+        store.initialize_schema().unwrap();
+
+        let claims = store.list_claims().unwrap();
+        assert_eq!(claims.len(), 1);
+        let claim = &claims[0];
+
+        let expected_id: MemoryClaimId = legacy_id.parse().unwrap();
+        assert_eq!(claim.id(), expected_id, "legacy ULID must be reused as-is");
+        assert_eq!(
+            claim.provenance().source,
+            format!("legacy:discoveries:{legacy_id}")
+        );
+    }
+
+    #[test]
+    fn migration_v1_to_v2_step_rolls_back_atomically_when_backfill_fails_partway() {
+        // A v1 database missing the `patterns` table entirely: backfill
+        // processes `discoveries` first (succeeds, inserting a claim) and
+        // then hits a genuine SQL error scanning the missing `patterns`
+        // table, partway through the same migration step.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(crate::memory::schema::CREATE_SCHEMA_VERSION_TABLE, [])
+            .unwrap();
+        conn.execute(crate::memory::schema::CREATE_DISCOVERIES_TABLE, [])
+            .unwrap();
+        let discovery_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO discoveries (id, title, content, created_at, updated_at)
+             VALUES (?1, 'ADR-0002', 'Profile trust reuses the existing approval path.', 1000, 1000)",
+            [&discovery_id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+            .unwrap();
+
+        let mut store = MemoryStore {
+            conn,
+            path: PathBuf::from(":memory:"),
+        };
+        let result = store.initialize_schema();
+        assert!(
+            result.is_err(),
+            "missing `patterns` table must fail the migration step"
+        );
+
+        // Still v1: the failed step's version-row insert never committed.
+        let version: i32 = store
+            .conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 1);
+
+        // `memory_claims` was created (and the discoveries claim inserted
+        // into it) inside the very same transaction that then failed on
+        // `patterns` — so neither the table nor the row survives rollback.
+        let claims_table_exists: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_claims'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            claims_table_exists, 0,
+            "a partial migration attempt must leave no trace, not a half-populated table"
+        );
+    }
+
+    #[test]
+    fn migration_v1_to_v2_disambiguates_a_cross_table_ulid_collision_without_losing_text() {
+        // Two different legacy rows, in different tables, that happen to
+        // share a ULID (simulating the astronomically unlikely but
+        // possible case of two independently generated ids colliding).
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v1_legacy_tables(&conn);
+
+        let shared_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO discoveries (id, title, content, created_at, updated_at)
+             VALUES (?1, 'Discovery Title', 'Discovery body text', 1000, 1000)",
+            [&shared_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO patterns (id, name, description, example, created_at, updated_at)
+             VALUES (?1, 'Pattern Name', 'Pattern description text', NULL, 1000, 1000)",
+            [&shared_id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+            .unwrap();
+
+        let mut store = MemoryStore {
+            conn,
+            path: PathBuf::from(":memory:"),
+        };
+        store.initialize_schema().unwrap();
+
+        let claims = store.list_claims().unwrap();
+        assert_eq!(
+            claims.len(),
+            2,
+            "both rows must survive despite sharing a legacy ULID"
+        );
+
+        let discovery_claim = claims
+            .iter()
+            .find(|c| c.text().contains("Discovery body text"))
+            .unwrap();
+        let pattern_claim = claims
+            .iter()
+            .find(|c| c.text().contains("Pattern description text"))
+            .unwrap();
+
+        assert_ne!(
+            discovery_claim.id(),
+            pattern_claim.id(),
+            "colliding ids must be disambiguated, not merged"
+        );
+        assert!(discovery_claim.text().contains("Discovery Title"));
+        assert!(pattern_claim.text().contains("Pattern Name"));
+    }
+
+    #[test]
+    fn backfill_legacy_claims_is_a_noop_when_run_again_over_the_same_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v1_legacy_tables(&conn);
+        let discovery_id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO discoveries (id, title, content, created_at, updated_at)
+             VALUES (?1, 'ADR-0002', 'Profile trust reuses the existing approval path.', 1000, 1000)",
+            [&discovery_id],
+        )
+        .unwrap();
+        conn.execute(crate::memory::schema::CREATE_MEMORY_CLAIMS_TABLE, [])
+            .unwrap();
+
+        backfill_legacy_claims(&conn).unwrap();
+        backfill_legacy_claims(&conn).unwrap(); // second pass, same rows
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_claims", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "re-running backfill over the same legacy rows must not duplicate claims"
+        );
+    }
+
+    #[test]
+    fn add_claim_fails_on_duplicate_id() {
+        let store = MemoryStore::in_memory().unwrap();
+        let hash = ContentHash::compute(b"src/lib.rs");
+        let claim_a = MemoryClaim::new(
+            MemoryClaimId::new(),
+            "first text",
+            Provenance::unverified("src/lib.rs", hash),
+            Confidence::Asserted,
+            ClaimStatus::Unverified,
+        )
+        .unwrap();
+        store.add_claim(&claim_a).unwrap();
+
+        let claim_b = MemoryClaim::new(
+            claim_a.id(),
+            "different text, same id",
+            Provenance::unverified("src/lib.rs", hash),
+            Confidence::Asserted,
+            ClaimStatus::Unverified,
+        )
+        .unwrap();
+
+        let err = store
+            .add_claim(&claim_b)
+            .expect_err("add_claim must fail on a duplicate id, not silently ignore it");
+        // Assert *why* it failed, not just that it did: this must be
+        // SQLite rejecting the repeated `id` under the table's `PRIMARY
+        // KEY` constraint specifically, not some unrelated database error
+        // (a malformed statement, a lock timeout) that would leave this
+        // test green even if the uniqueness check itself stopped firing.
+        match err {
+            PersistenceError::Database(rusqlite::Error::SqliteFailure(sqlite_err, _)) => {
+                assert_eq!(
+                    sqlite_err.code,
+                    rusqlite::ErrorCode::ConstraintViolation,
+                    "duplicate id must fail as a uniqueness constraint violation, got: {sqlite_err:?}"
+                );
+            },
+            other => panic!(
+                "expected a SQLite uniqueness-constraint violation, got a different error: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn insert_claim_with_ignore_policy_silently_keeps_the_first_write_on_conflict() {
+        let store = MemoryStore::in_memory().unwrap();
+        let hash = ContentHash::compute(b"src/lib.rs");
+        let id = MemoryClaimId::new();
+        let original = MemoryClaim::new(
+            id,
+            "original text",
+            Provenance::unverified("src/lib.rs", hash),
+            Confidence::Asserted,
+            ClaimStatus::Unverified,
+        )
+        .unwrap();
+        insert_claim(&store.conn, &original, ClaimConflictPolicy::Fail).unwrap();
+
+        let conflicting = MemoryClaim::new(
+            id,
+            "conflicting text, must be dropped",
+            Provenance::unverified("src/lib.rs", hash),
+            Confidence::Asserted,
+            ClaimStatus::Unverified,
+        )
+        .unwrap();
+        insert_claim(&store.conn, &conflicting, ClaimConflictPolicy::Ignore).unwrap();
+
+        let fetched = store.get_claim(id).unwrap().unwrap();
+        assert_eq!(
+            fetched.text(),
+            "original text",
+            "Ignore policy must not overwrite an existing row"
+        );
     }
 }
