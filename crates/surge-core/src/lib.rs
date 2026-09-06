@@ -39,6 +39,7 @@ pub mod branch_config;
 pub mod budget;
 pub mod bundled_flows;
 pub mod content_hash;
+pub mod context_pack;
 pub mod doctor;
 pub mod edge;
 pub mod graph;
@@ -130,8 +131,8 @@ pub use profile::{
     Profile, ProfileArtifactDeclaration, ProfileOutcome, Role, RoleCategory, RuntimeCfg,
 };
 pub use run_event::{
-    BootstrapDecision, BootstrapStage, ElevationDecision, EventPayload, RunConfig, RunEvent,
-    SessionDisposition, VersionedEventPayload,
+    BootstrapDecision, BootstrapStage, ElevationDecision, EscalationCause, EventPayload, RunConfig,
+    RunEvent, SessionDisposition, VersionedEventPayload,
 };
 pub use run_state::{
     Attention, Cursor, FoldError, LedgerState, LedgerTask, RunMemory, RunState, TerminalReason,

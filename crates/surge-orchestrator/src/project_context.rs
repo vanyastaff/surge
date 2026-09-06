@@ -11,9 +11,12 @@ use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
 use surge_core::ContentHash;
+use surge_core::MemoryClaim;
 use surge_core::agent_config::{ArtifactSource, Binding, TemplateVar};
+use surge_core::context_pack::{ContextPack, ContextPackConfig, PackReceipt};
 use surge_core::keys::OutcomeKey;
 use surge_core::profile::keyref::parse_key_ref;
+use surge_persistence::memory::MemoryStore;
 use tracing::{debug, info, warn};
 
 use crate::engine::config::{EngineRunConfig, ProjectContextSeed};
@@ -413,6 +416,11 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 /// - **`project_context`** — read from the configured `project.md` when
 ///   `init.project_context_auto_seed` is enabled and the run config
 ///   does not already carry one.
+/// - **`project_memory`** — repo-resident `.surge/memory/` notes, same as
+///   before, now with a confidence-ordered, budget-limited selection of
+///   memory claims from the claim store appended (`context_pack`'s
+///   selection — `.autopilot/competitive-waves/spec.md` §8, §23; see
+///   [`merged_project_memory_seed`]). Either half may be absent.
 /// - **`mcp_servers`** — cloned from `SurgeConfig::mcp_servers` so the
 ///   engine can build its `Arc<McpRegistry>` per run. This is a
 ///   structural copy (no I/O), but keeping it next to the file-backed
@@ -441,7 +449,7 @@ pub fn with_project_context_seed(
         run_config.project_context = load_project_context_seed(project_root, config);
     }
     if run_config.project_memory.is_none() {
-        run_config.project_memory = load_project_memory_seed(project_root);
+        run_config.project_memory = merged_project_memory_seed(project_root, config);
     }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
@@ -557,6 +565,115 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
         "loaded project memory seed"
     );
     Some(ProjectContextSeed::new(dir, full))
+}
+
+/// Build the combined `project_memory` seed: repo-resident `.surge/memory/`
+/// notes ([`load_project_memory_seed`], unchanged) plus, appended, a
+/// confidence-ordered, budget-limited selection of memory claims from the
+/// claim store (`.autopilot/competitive-waves/spec.md` §8, §23 —
+/// `surge_core::context_pack::ContextPack::build`'s selection feeds this
+/// seed instead of a project accumulating unbounded raw notes as the only
+/// form of cross-run memory). Either half may be absent; the result is
+/// `None` only when both are.
+fn merged_project_memory_seed(
+    project_root: &Path,
+    config: &surge_core::SurgeConfig,
+) -> Option<ProjectContextSeed> {
+    let notes = load_project_memory_seed(project_root);
+    let claims_pack = load_memory_claims_seed(config);
+
+    let mut body = String::new();
+    if let Some(notes) = &notes {
+        body.push_str(&notes.content);
+    }
+    if let Some(claims_pack) = &claims_pack {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(claims_pack);
+    }
+    if body.is_empty() {
+        return None;
+    }
+
+    // The notes directory stays the seed's nominal `path` when notes
+    // contributed (unchanged from before this function existed); fall back
+    // to the project root when only the claims pack did.
+    let path = notes.map_or_else(|| project_root.join(PROJECT_MEMORY_DIR), |seed| seed.path);
+    Some(ProjectContextSeed::new(path, body))
+}
+
+/// Render a confidence-ordered, budget-limited selection of `claims` into
+/// the markdown block [`merged_project_memory_seed`] appends to the
+/// `project_memory` seed.
+///
+/// Pure: the actual selection is
+/// [`surge_core::context_pack::ContextPack::build`]; this only formats the
+/// result. Returns `None` for the body when nothing was selected (an empty
+/// `claims`, or a budget too small to admit even the cheapest candidate) —
+/// the receipt is still returned so the caller can log it either way.
+fn render_memory_claims_pack(
+    claims: Vec<MemoryClaim>,
+    budget: ContextPackConfig,
+) -> (Option<String>, PackReceipt) {
+    let (pack, receipt) = ContextPack::build(claims, budget);
+    if pack.is_empty() {
+        return (None, receipt);
+    }
+
+    let mut body = String::from("## Memory claims (confidence-ordered, budget-limited)\n\n");
+    for claim in pack.claims() {
+        body.push_str(&format!(
+            "- [{confidence}] {text} (source: {source})\n",
+            confidence = claim.confidence(),
+            text = claim.text(),
+            source = claim.provenance().source,
+        ));
+    }
+    (Some(body), receipt)
+}
+
+/// Load memory claims from the default claim store and select them into a
+/// pack under `config.context_pack`'s budget. Tolerant of every failure —
+/// a missing/unreadable store yields no claims, exactly like
+/// [`load_project_memory_seed`] tolerates a missing `.surge/memory/`
+/// directory; memory-claim recall must never be the reason a run fails to
+/// start.
+///
+/// The receipt this produces is not yet persisted to the run event log
+/// (`surge_core::run_event` is out of scope for the task that added this —
+/// see `.autopilot/competitive-waves/tickets/06-context-pack.md`); it is
+/// logged here so it is at least operator-visible in the interim.
+fn load_memory_claims_seed(config: &surge_core::SurgeConfig) -> Option<String> {
+    let store_path = MemoryStore::default_path().ok()?;
+    if !store_path.exists() {
+        return None;
+    }
+    let store = MemoryStore::open(&store_path)
+        .inspect_err(
+            |error| warn!(%error, "memory claim store unreadable; run starts without memory claims"),
+        )
+        .ok()?;
+    let claims = store
+        .list_claims()
+        .inspect_err(
+            |error| warn!(%error, "failed to list memory claims; run starts without memory claims"),
+        )
+        .ok()?;
+    if claims.is_empty() {
+        return None;
+    }
+
+    let (body, receipt) = render_memory_claims_pack(claims, config.context_pack);
+    info!(
+        selected = receipt.selected.len(),
+        dropped = receipt.dropped.len(),
+        reason = ?receipt.reason,
+        budget = receipt.budget,
+        used = receipt.used,
+        "context pack assembled from memory claims"
+    );
+    body
 }
 
 /// Load the configured project context file as a stable run seed.
@@ -1294,6 +1411,190 @@ mod memory_seed_tests {
         let b = load_project_memory_seed(dir.path()).unwrap();
         assert_eq!(a.content, b.content);
         assert_eq!(a.hash, b.hash);
+    }
+}
+
+#[cfg(test)]
+mod render_memory_claims_pack_tests {
+    use super::*;
+    use surge_core::MemoryClaimId;
+    use surge_core::content_hash::ContentHash;
+    use surge_core::memory::{ClaimStatus, Confidence, Provenance};
+
+    fn claim(text: &str, confidence: Confidence) -> MemoryClaim {
+        let hash = ContentHash::compute(text.as_bytes());
+        MemoryClaim::new(
+            MemoryClaimId::new(),
+            text,
+            Provenance::unverified("test:fixture", hash),
+            confidence,
+            ClaimStatus::Unverified,
+        )
+        .expect("Unverified status is always constructible")
+    }
+
+    #[test]
+    fn renders_selected_claims_and_omits_dropped_ones() {
+        // Verified costs exactly 25 estimated tokens (100 chars / 4); a
+        // cheap Asserted claim would fit on its own but must lose to the
+        // budget once the verified claim is admitted first (confidence
+        // order, not size, decides admission).
+        let verified = claim(&"v".repeat(100), Confidence::Verified);
+        let asserted = claim("cheap and dropped", Confidence::Asserted);
+
+        let (body, receipt) = render_memory_claims_pack(
+            vec![asserted.clone(), verified.clone()],
+            ContextPackConfig { budget_tokens: 25 },
+        );
+
+        let body = body.expect("at least the verified claim was selected");
+        assert!(body.contains(verified.text()), "{body}");
+        assert!(body.contains("[verified]"), "{body}");
+        assert!(!body.contains(asserted.text()), "{body}");
+        assert_eq!(receipt.selected, vec![verified.id()]);
+        assert_eq!(receipt.dropped, vec![asserted.id()]);
+    }
+
+    #[test]
+    fn returns_no_body_when_nothing_fits_the_budget() {
+        let oversized = claim(&"x".repeat(400), Confidence::Asserted);
+
+        let (body, receipt) =
+            render_memory_claims_pack(vec![oversized], ContextPackConfig { budget_tokens: 1 });
+
+        assert!(body.is_none());
+        assert!(receipt.selected.is_empty());
+    }
+}
+
+/// Proves `ContextPack::build` is reachable from a real production entry
+/// point, not just called directly from a test: `with_project_context_seed`
+/// is the choke point all four run-start callers (CLI in-process, daemon
+/// IPC, daemon ticket launcher, and this crate's own tests above) funnel
+/// through, per its own doc comment. This test drives it end to end
+/// against a real, on-disk `MemoryStore` — the same one
+/// `load_memory_claims_seed` opens in production via
+/// `MemoryStore::default_path()` — rather than calling
+/// `ContextPack::build`/`render_memory_claims_pack` directly.
+#[cfg(test)]
+mod with_project_context_seed_memory_claims_tests {
+    use super::*;
+    use crate::engine::config::EngineRunConfig;
+    use surge_core::MemoryClaimId;
+    use surge_core::content_hash::ContentHash;
+    use surge_core::memory::{ClaimStatus, Confidence, Provenance};
+
+    fn claim(text: &str, confidence: Confidence) -> MemoryClaim {
+        let hash = ContentHash::compute(text.as_bytes());
+        MemoryClaim::new(
+            MemoryClaimId::new(),
+            text,
+            Provenance::unverified("test:fixture", hash),
+            confidence,
+            ClaimStatus::Unverified,
+        )
+        .expect("Unverified status is always constructible")
+    }
+
+    /// Points `MemoryStore::default_path()` (which resolves `$HOME` via
+    /// `dirs::home_dir()`) at a throwaway directory for the duration of
+    /// `f`, then restores the previous value.
+    ///
+    /// Safe under this project's test runner, `cargo nextest`
+    /// (`.autopilot/competitive-waves/interfaces.md`), whose defining
+    /// feature is one process per test — mutating a process-global env var
+    /// is only safe when nothing else in the process reads or writes it
+    /// concurrently, which per-test process isolation guarantees here. It
+    /// would NOT be safe under threaded `cargo test`, which is not this
+    /// project's gate.
+    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let previous = std::env::var_os("HOME");
+        // SAFETY: `set_var`/`remove_var` are unsound only under a
+        // concurrent unsynchronized read of the process environment on
+        // another thread (a data race). This process has exactly one
+        // thread touching `HOME`: cargo-nextest runs each test in its own
+        // process, this function and `f` are the only code running in it,
+        // and `f` (a call into `with_project_context_seed` /
+        // `MemoryStore::open`) does only synchronous file/SQLite I/O — it
+        // spawns no threads and reads no env var itself. The mutate here
+        // happens-before `f` runs and the restore happens-after, all on
+        // this one thread, so there is no concurrent access to race.
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        let result = f();
+        match previous {
+            // SAFETY: see above.
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        result
+    }
+
+    #[test]
+    fn with_project_context_seed_folds_a_confidence_ordered_claims_pack_into_project_memory() {
+        let home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+
+        // Verified costs exactly 25 estimated tokens (100 chars / 4); the
+        // cheap Asserted claim would fit the budget on its own, but must
+        // lose out once the verified claim is admitted first — proving
+        // the real store -> `ContextPack::build` -> seed path preserves
+        // confidence order, not just budget arithmetic.
+        let verified = claim(&"v".repeat(100), Confidence::Verified);
+        let asserted = claim("cheap and dropped", Confidence::Asserted);
+        let verified_text = verified.text().to_string();
+        let asserted_text = asserted.text().to_string();
+
+        with_home(home.path(), || {
+            let store_path = MemoryStore::default_path().expect("home dir resolves");
+            let store = MemoryStore::open(&store_path).expect("open memory store");
+            store.add_claim(&verified).expect("add verified claim");
+            store.add_claim(&asserted).expect("add asserted claim");
+        });
+
+        let config = surge_core::SurgeConfig {
+            context_pack: ContextPackConfig { budget_tokens: 25 },
+            ..surge_core::SurgeConfig::default()
+        };
+
+        let seeded = with_home(home.path(), || {
+            with_project_context_seed(EngineRunConfig::default(), project_root.path(), &config)
+        });
+
+        let seed = seeded
+            .project_memory
+            .expect("claims pack seeds project_memory");
+        assert!(
+            seed.content.contains(&verified_text),
+            "selected (verified) claim text missing from seed:\n{}",
+            seed.content
+        );
+        assert!(
+            !seed.content.contains(&asserted_text),
+            "dropped (over-budget) claim text must not appear in seed:\n{}",
+            seed.content
+        );
+    }
+
+    #[test]
+    fn with_project_context_seed_falls_back_to_notes_only_when_the_claim_store_is_empty() {
+        let home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let mem_dir = project_root.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("note.md"), "a curated note\n").unwrap();
+
+        let config = surge_core::SurgeConfig::default();
+        let seeded = with_home(home.path(), || {
+            with_project_context_seed(EngineRunConfig::default(), project_root.path(), &config)
+        });
+
+        let seed = seeded
+            .project_memory
+            .expect("notes alone seed project_memory");
+        assert!(seed.content.contains("a curated note"));
+        assert!(!seed.content.contains("Memory claims"));
     }
 }
 

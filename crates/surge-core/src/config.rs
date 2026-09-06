@@ -1,6 +1,7 @@
 //! Surge configuration.
 
 use crate::approvals::{ApprovalChannelKind, ApprovalPolicy};
+use crate::context_pack::ContextPackConfig;
 use crate::loop_config::ToolCallLoopGuardConfig;
 use crate::mcp_config::McpServerRef;
 use crate::sandbox::SandboxMode;
@@ -191,6 +192,14 @@ pub struct SurgeConfig {
     /// `surge_orchestrator::spill`. Conservative default when absent.
     #[serde(default)]
     pub output_spill: OutputSpillConfig,
+    /// Hard token budget for a memory-claims context pack, folded into the
+    /// `project_memory` run seed by
+    /// `surge_orchestrator::project_context::with_project_context_seed` via
+    /// `surge_core::context_pack::ContextPack::build`
+    /// (`.autopilot/competitive-waves/spec.md` §8, §23). Conservative
+    /// default when absent.
+    #[serde(default)]
+    pub context_pack: ContextPackConfig,
 }
 
 /// Project initialization defaults used by first-run onboarding.
@@ -996,6 +1005,7 @@ impl Default for SurgeConfig {
             mcp_servers: Vec::new(),
             tool_call_loop_guard: ToolCallLoopGuardConfig::default(),
             output_spill: OutputSpillConfig::default(),
+            context_pack: ContextPackConfig::default(),
         }
     }
 }
