@@ -11,7 +11,9 @@ use std::time::Duration;
 use surge_core::approvals::ApprovalChannel;
 use surge_core::human_gate_config::{HumanGateConfig, HumanGateMode, TimeoutAction};
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::run_event::{BootstrapDecision, EventPayload, VersionedEventPayload};
+use surge_core::run_event::{
+    BootstrapDecision, EscalationCause, EventPayload, VersionedEventPayload,
+};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::oneshot;
@@ -234,6 +236,7 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
                         EventPayload::EscalationRequested {
                             stage: Some(stage),
                             reason: reason.clone(),
+                            cause: EscalationCause::BootstrapEditLoopExhausted,
                         },
                     ))
                     .await

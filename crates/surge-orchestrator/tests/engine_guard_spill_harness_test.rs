@@ -268,7 +268,9 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
     // Deliberately no `ToolCall` scripted at all — `check_loop_guard` (which
     // only runs from inside `dispatch`) never gets a chance to see the
     // deadline. Only the timer-driven poll inside the stage's event loop can
-    // catch it.
+    // catch it. No `OutcomeReported` is scripted either: a wall-clock trip
+    // now ends the stage itself (ticket 17), so the run reaches a terminal
+    // failure without the agent ever reporting anything.
     let mock_for_pump = mock.clone();
     let pump = tokio::spawn(async move {
         mock_for_pump.wait_for_subscribe_count(1).await;
@@ -298,42 +300,57 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
         .expect("start_run");
     pump.await.unwrap();
 
-    // Poll the event log instead of a blind sleep: the periodic check runs
-    // on a 1s timer, so give it a bounded number of tries.
-    let mut saw_escalation = false;
-    for _ in 0..50 {
-        let reader = storage.open_run_reader(run_id).await.unwrap();
-        let events = reader.read_events(EventSeq(0)..EventSeq(64)).await.unwrap();
-        if events.iter().any(|re| {
-            matches!(
-                re.payload.payload,
-                surge_core::run_event::EventPayload::EscalationRequested { .. }
-            )
-        }) {
-            saw_escalation = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        saw_escalation,
-        "a node past its wall-clock deadline must escalate even without any tool call"
-    );
-
-    // End the run cleanly now that the assertion above is proven.
-    mock.enqueue_event(BridgeEvent::OutcomeReported {
-        session: session_id,
-        outcome: OutcomeKey::try_from("done").unwrap(),
-        summary: "ok".into(),
-        artifacts_produced: vec![],
-    })
-    .await;
-    mock.pump_scripted_events().await;
-    let outcome = handle.await_completion().await.unwrap();
+    // A node already past its wall-clock budget must fail the run outright —
+    // not merely leave a mark while the turn keeps burning tokens (the bug
+    // ticket 17 fixes: "raising EscalationRequested rather than burning
+    // budget" required the budget to actually stop, not just get a log line).
+    //
+    // Explicit timeout, not a bare `.await`: a regression to the old
+    // `continue`-past-the-trip behavior has no scripted `OutcomeReported` to
+    // fall back on, so the run never terminates at all. Without this bound
+    // that regression reads as a hang nextest's `terminate-after` catches
+    // only after 120s (`.config/nextest.toml`) — indistinguishable in CI from
+    // a flaky test. This turns it into an immediate, named assertion failure.
+    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+        .await
+        .expect(
+            "run did not terminate within 10s — the wall-clock trip must end the stage \
+             (StageError::LoopGuardTripped), not merely log and `continue`",
+        )
+        .unwrap();
     match outcome {
-        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
-        other => panic!("expected Completed, got {other:?}"),
+        RunOutcome::Failed { error } => assert!(
+            error.contains("wall-clock"),
+            "failure reason should name the wall-clock trip: {error}"
+        ),
+        other => panic!("a node past its wall-clock deadline must fail the run, got {other:?}"),
     }
+
+    // The guard's verdict must leave a durable, queryable trace — answered by
+    // a query against the typed `cause`, never by scanning `reason` prose
+    // (`.autopilot/competitive-waves/spec.md` §15 / History 45).
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let escalations = surge_persistence::runs::read_escalations(&reader)
+        .await
+        .unwrap();
+    let guard_escalations: Vec<_> = escalations
+        .iter()
+        .filter(|e| surge_persistence::runs::is_loop_guard_cause(e.cause))
+        .collect();
+    assert_eq!(
+        guard_escalations.len(),
+        1,
+        "expected exactly one loop-guard-caused escalation, got {escalations:?}"
+    );
+    assert_eq!(
+        guard_escalations[0].cause,
+        surge_core::run_event::EscalationCause::LoopGuardNodeDeadline
+    );
+    assert_eq!(
+        guard_escalations[0].node.as_ref().map(|n| n.as_str()),
+        Some("implement"),
+        "the query must name the node that looped, not just that some run escalated"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

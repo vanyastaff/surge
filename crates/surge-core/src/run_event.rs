@@ -483,6 +483,21 @@ pub enum EventPayload {
         /// Free-form operator-readable explanation (e.g., the cap value
         /// and the failure mode).
         reason: String,
+        /// Typed origin of this escalation (`.autopilot/competitive-waves/spec.md`
+        /// §15, History 45). Five independent paths raise this event today —
+        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, and two
+        /// distinct edit-loop caps (bootstrap flow validation, roadmap
+        /// amendment approval) — and `reason` alone does not let a consumer
+        /// tell them apart without parsing prose back apart, which is
+        /// exactly what a durable, queryable trace must not require.
+        /// `#[serde(default)]` keeps every pre-existing `EscalationRequested`
+        /// log decodable as `Unspecified` — additive optional field, no
+        /// schema bump (`docs/schema-versioning.md`'s "Principles": an
+        /// old reader tolerating an unrecognized field is not the same
+        /// change as rewriting already-stored rows; `EdgeTraversed::kind`
+        /// shipped the same way, unversioned).
+        #[serde(default)]
+        cause: EscalationCause,
     },
 
     /// A skill pack was bound onto `node` at stage entry (skills bind once,
@@ -602,6 +617,50 @@ pub enum BootstrapStage {
     Description,
     Roadmap,
     Flow,
+}
+
+/// Typed origin of an [`EventPayload::EscalationRequested`] event — see that
+/// variant's doc for why free-form `reason` prose cannot carry this
+/// distinction on its own.
+///
+/// **Adding a variant here needs a schema bump; adding a field to an
+/// existing `EventPayload` variant does not (see `docs/schema-versioning.md`).
+/// Do not assume the same exception covers both.** `#[serde(default)]` on
+/// `EscalationRequested::cause` only rescues a *missing* key — an old
+/// reader's `EventPayload` decode still succeeds because it never expected
+/// the key at all. It does nothing for an *unrecognized value* once the key
+/// is present: `#[serde(rename_all = "snake_case")]` on this enum has no
+/// `#[serde(other)]` fallback, so a 7th variant's snake_case tag is a value
+/// an old reader's `EscalationCause` deserializer has never heard of, and
+/// deserializing it fails the same way an unknown `EventPayload` variant
+/// tag does. Bump `MAX_SUPPORTED_VERSION` when this enum grows.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationCause {
+    /// No typed cause recorded: either a payload written before this field
+    /// existed, or (should one ever exist) an escalation path not yet
+    /// migrated to a specific variant. Never emitted by current code — every
+    /// call site names its cause explicitly.
+    #[default]
+    Unspecified,
+    /// `LoopGuard` observed the same tool call repeated past
+    /// `max_repeat_tool_calls`.
+    LoopGuardRepeatedToolCall,
+    /// `LoopGuard` observed the node running past `node_wall_clock_limit_secs`.
+    LoopGuardNodeDeadline,
+    /// An MCP server's restart policy exhausted its reconnect-attempt budget.
+    McpRestartsExhausted,
+    /// The bootstrap flow's edit-loop cap was exceeded for a stage (either
+    /// the Flow Generator's validation-retry path, or the operator
+    /// repeatedly choosing `Edit` at a `HumanGate`).
+    BootstrapEditLoopExhausted,
+    /// A roadmap-amendment patch's operator-approval edit-loop cap was
+    /// exceeded. Distinct from `BootstrapEditLoopExhausted`: a different
+    /// subsystem (mid-run roadmap patch approval, not pipeline bootstrap),
+    /// so collapsing the two would reintroduce the exact "conflates
+    /// unrelated escalation causes" problem this field exists to remove.
+    RoadmapAmendmentEditLoopExhausted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1279,6 +1338,38 @@ mod tests {
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn escalation_requested_roundtrips_with_typed_cause() {
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "node loop guard: node has run for 3600s, past its 3600s wall-clock budget; \
+                      escalating"
+                .into(),
+            cause: EscalationCause::LoopGuardNodeDeadline,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "EscalationRequested");
+    }
+
+    #[test]
+    fn escalation_requested_legacy_json_defaults_cause_to_unspecified() {
+        // Every `EscalationRequested` ever persisted before this field
+        // existed omits `cause` entirely. `#[serde(default)]` must keep
+        // those logs decodable, distinguishable from a genuinely-typed
+        // escalation only by carrying `Unspecified`.
+        let legacy_json = r#"{"type":"escalation_requested","reason":"cap exceeded"}"#;
+        let parsed: EventPayload = serde_json::from_str(legacy_json).unwrap();
+        match parsed {
+            EventPayload::EscalationRequested { stage, cause, .. } => {
+                assert_eq!(stage, None);
+                assert_eq!(cause, EscalationCause::Unspecified);
+            },
+            other => panic!("expected EscalationRequested, got {other:?}"),
+        }
     }
 
     #[test]

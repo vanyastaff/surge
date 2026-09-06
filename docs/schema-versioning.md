@@ -61,6 +61,24 @@ a CHANGELOG entry should say the latter, not just the former — see the
 Memory DB v1→v2 entry below for the same caution applied to a different
 kind of change (a backfill, not a new variant).
 
+**The additive-field exception itself is not a general rule — it is tied to
+one property of the durable encoding, and stops holding the moment that
+property does.** An additive `#[serde(default)]` field on an *existing*
+variant of `EventPayload` does not require a bump because the durable write
+goes through `serde_json::to_vec` (`runs/writer.rs:161,185`) — JSON is
+self-describing, and an old reader's `serde_json::from_slice` silently
+ignores a key it doesn't recognize. A **new variant** requires a bump
+regardless (see above): that is a different failure mode (no representation
+to decode into at all, not an ignorable key) and the field-addition
+exception was never about it. `EventPayload::to_bincode`/`from_bincode`
+(`surge_core::run_event`) exist only for in-memory and test round-trips
+today, despite the name — they are not the durable encoding. If the durable
+write path ever moves onto true bincode (or any non-self-describing
+format), this exception stops applying **in that same commit**: bincode's
+enum/struct encoding is positional, so an unrecognized field is not
+ignorable, it desyncs the decode. Rewrite this paragraph then, don't carry
+it forward on the strength of the *last* format's guarantee.
+
 ## Memory DB (`surge-persistence`)
 
 A separate, locally-scoped SQLite database (`~/.surge/memory.db`) versioned

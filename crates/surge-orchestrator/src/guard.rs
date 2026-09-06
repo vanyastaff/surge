@@ -14,6 +14,7 @@
 //! (a `surge.toml` key); this module hides the repeat-window bookkeeping and
 //! counters behind [`LoopGuard`]'s private fields.
 
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use surge_core::content_hash::ContentHash;
@@ -70,6 +71,15 @@ impl LoopGuardTrip {
                 limit_secs = limit.as_secs(),
             ),
         }
+    }
+}
+
+impl fmt::Display for LoopGuardTrip {
+    /// Delegates to [`Self::operator_message`] — the two must never drift
+    /// apart, so `StageError::LoopGuardTripped`'s `#[error("{0}")]` and any
+    /// other `Display` consumer render the exact same text.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.operator_message())
     }
 }
 

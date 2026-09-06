@@ -224,7 +224,7 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
                 error: error.clone(),
             },
         }),
-        EventPayload::EscalationRequested { stage, reason } => Some(CardAction {
+        EventPayload::EscalationRequested { stage, reason, .. } => Some(CardAction {
             event_kind: "EscalationRequested",
             kind: CardKind::Escalation,
             node_key: "__escalation__",
@@ -571,6 +571,7 @@ mod tests {
                 EventPayload::EscalationRequested {
                     stage: Some(BootstrapStage::Flow),
                     reason: "edit loop cap exceeded".into(),
+                    cause: surge_core::run_event::EscalationCause::BootstrapEditLoopExhausted,
                 },
             ),
             &ctx,

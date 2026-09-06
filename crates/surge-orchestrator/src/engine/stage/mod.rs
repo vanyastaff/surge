@@ -21,6 +21,17 @@ pub type StageResult = Result<OutcomeKey, StageError>;
 /// Errors that can occur during a single stage's execution.
 #[derive(Debug, Error)]
 pub enum StageError {
+    /// A `LoopGuard` trip ended this stage (`.autopilot/competitive-waves/spec.md`
+    /// §15). Distinct from `AgentCrashed`: nothing crashed — the engine
+    /// deliberately stops a node that stopped making progress ("escalating
+    /// instead of burning budget", R39). Returned only after the session has
+    /// already been closed and the matching `SessionClosed { disposition:
+    /// ForcedClose }` event recorded. Carries the typed
+    /// [`crate::guard::LoopGuardTrip`] so a caller does not have to parse
+    /// this error's `Display` text apart to tell which guard tripped.
+    #[error("{0}")]
+    LoopGuardTripped(crate::guard::LoopGuardTrip),
+
     /// The ACP agent process crashed or the session ended abnormally.
     #[error("agent crashed: {0}")]
     AgentCrashed(String),

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::run_event::{BootstrapStage, EventPayload, VersionedEventPayload};
+use surge_core::run_event::{BootstrapStage, EscalationCause, EventPayload, VersionedEventPayload};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 
@@ -275,6 +275,7 @@ async fn route_validation_failure(
                 EventPayload::EscalationRequested {
                     stage: Some(BootstrapStage::Flow),
                     reason,
+                    cause: EscalationCause::BootstrapEditLoopExhausted,
                 },
             ))
             .await

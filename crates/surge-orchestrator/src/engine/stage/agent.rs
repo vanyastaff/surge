@@ -21,7 +21,9 @@ use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::{LedgerEffect, OutcomeDecl};
 use surge_core::profile::registry::ResolvedProfile;
-use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
+use surge_core::run_event::{
+    EscalationCause, EventPayload, SessionDisposition, VersionedEventPayload,
+};
 use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
@@ -35,6 +37,7 @@ use crate::engine::stage::{StageError, StageResult};
 use crate::engine::tools::{
     ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
 };
+use crate::guard::LoopGuardTrip;
 use crate::prompt::PromptRenderer;
 
 /// Parameters for executing a single agent stage.
@@ -225,27 +228,40 @@ fn append_bound_skills(
 }
 
 /// Drain `dispatcher`'s pending loop-guard escalations and append each as an
-/// `EscalationRequested` event. Shared by the two call sites that can
-/// observe a trip: right after a tool dispatch, and the timer-driven
-/// wall-clock poll inside the stage's event loop — both need the same
-/// drain-then-append behavior, and a shared helper keeps them from drifting
-/// apart the way a second hand-rolled loop would risk.
+/// `EscalationRequested` event, typed by [`EscalationCause::LoopGuardRepeatedToolCall`]
+/// / [`EscalationCause::LoopGuardNodeDeadline`] per trip kind. Shared by the
+/// two call sites that can observe a trip: right after a tool dispatch, and
+/// the timer-driven wall-clock poll inside the stage's event loop — both need
+/// the same drain-then-append behavior, and a shared helper keeps them from
+/// drifting apart the way a second hand-rolled loop would risk.
+///
+/// Returns the drained trips (in append order) so a caller that must react
+/// to *which* trip fired — the wall-clock poll ends the stage on a
+/// `NodeDeadlineExceeded`, see its call site — does not have to re-derive
+/// that from the just-written event.
 async fn append_loop_escalations(
     writer: &RunWriter,
     dispatcher: &Arc<dyn crate::engine::tools::ToolDispatcher>,
-) -> Result<(), StageError> {
+) -> Result<Vec<LoopGuardTrip>, StageError> {
+    let mut trips = Vec::new();
     for esc in dispatcher.drain_loop_escalations() {
+        let cause = match &esc.trip {
+            LoopGuardTrip::RepeatedToolCall { .. } => EscalationCause::LoopGuardRepeatedToolCall,
+            LoopGuardTrip::NodeDeadlineExceeded { .. } => EscalationCause::LoopGuardNodeDeadline,
+        };
         writer
             .append_event(VersionedEventPayload::new(
                 EventPayload::EscalationRequested {
                     stage: None,
                     reason: esc.trip.operator_message(),
+                    cause,
                 },
             ))
             .await
             .map_err(|e| StageError::Storage(e.to_string()))?;
+        trips.push(esc.trip);
     }
-    Ok(())
+    Ok(trips)
 }
 
 /// Execute a single agent stage.
@@ -639,7 +655,33 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             },
             _ = deadline_poll.tick() => {
                 session_dispatcher.poll_wall_clock_deadline();
-                append_loop_escalations(p.writer, &session_dispatcher).await?;
+                let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
+                // A repeated-tool-call trip only blocks the next dispatch —
+                // the turn itself may still be mid-stream and recovers once
+                // the agent stops repeating. A wall-clock trip has no such
+                // recovery: the node is already past its budget and a turn
+                // burning tokens with no tool calls at all would otherwise
+                // run to its own end (`.autopilot/competitive-waves/spec.md`
+                // §15 / ticket 17: "raising EscalationRequested rather than
+                // burning budget" — a mark that lets the burn continue is
+                // not that). So this trip ends the stage; the other does not.
+                if let Some(trip) = trips
+                    .into_iter()
+                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
+                {
+                    p.bridge
+                        .close_session(session_id)
+                        .await
+                        .map_err(|e| StageError::Bridge(format!("close_session: {e}")))?;
+                    p.writer
+                        .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
+                            session: session_id,
+                            disposition: SessionDisposition::ForcedClose,
+                        }))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    return Err(StageError::LoopGuardTripped(trip));
+                }
                 continue;
             },
         };
@@ -1041,6 +1083,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                      calls to it fail until the run is restarted",
                                     esc.server, esc.attempts
                                 ),
+                                cause: EscalationCause::McpRestartsExhausted,
                             },
                         ))
                         .await
@@ -1053,7 +1096,11 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // EscalationRequested ... rather than burning budget").
                 // Emitted before the fallible `ToolResultReceived` append
                 // for the same reason: a storage failure must not silently
-                // drop the escalation.
+                // drop the escalation. The drained trips are discarded here
+                // (unlike the timer-poll call site): a repeated-tool-call
+                // trip already stopped this exact dispatch by refusing to
+                // route the call (see `check_loop_guard` above); it does not
+                // need to also end the stage.
                 append_loop_escalations(p.writer, &session_dispatcher).await?;
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
