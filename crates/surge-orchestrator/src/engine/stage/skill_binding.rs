@@ -214,7 +214,7 @@ fn resolve_declared<'a>(
 ) -> Result<DeclaredResolution<'a>, StageError> {
     if declared.hash.is_some() {
         match catalog.resolve(declared) {
-            Ok(resolved) => {
+            Ok((_, resolved)) => {
                 return Ok(DeclaredResolution {
                     declared,
                     resolved,
@@ -233,7 +233,7 @@ fn resolve_declared<'a>(
         ..declared.clone()
     };
     match catalog.resolve(&unpinned_lookup) {
-        Ok(resolved) => {
+        Ok((_, resolved)) => {
             let approval_reason = Some(match declared.hash {
                 Some(previous_pin) => ApprovalReason::Drifted { previous_pin },
                 None => ApprovalReason::Unpinned,
@@ -276,7 +276,7 @@ fn resolve_declared<'a>(
             };
             // Cannot itself be `Ambiguous`: `chosen` is a specific hash, and
             // a hash-pinned lookup only ever matches identical content.
-            let resolved = catalog.resolve(&pinned_lookup)?;
+            let (_, resolved) = catalog.resolve(&pinned_lookup)?;
             Ok(DeclaredResolution {
                 declared,
                 resolved,
@@ -566,7 +566,7 @@ mod tests {
             version: None,
             hash: None,
         };
-        let real = catalog.resolve(&probe).unwrap();
+        let (_, real) = catalog.resolve(&probe).unwrap();
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
@@ -842,7 +842,7 @@ mod tests {
             version: None,
             hash: None,
         };
-        let pinned = catalog_at_pin_time.resolve(&probe).unwrap();
+        let (_, pinned) = catalog_at_pin_time.resolve(&probe).unwrap();
 
         // The pack changes on disk between pin and run — a real edit, not a
         // substituted foreign hash.
@@ -853,7 +853,7 @@ mod tests {
             "Edited body.",
         );
         let catalog_at_run_time = SkillCatalog::discover(&[project_root(skills_dir.path())]);
-        let fresh = catalog_at_run_time.resolve(&probe).unwrap();
+        let (_, fresh) = catalog_at_run_time.resolve(&probe).unwrap();
         assert_ne!(
             pinned.hash, fresh.hash,
             "editing the pack must change its hash for this test to mean anything"
@@ -1045,6 +1045,7 @@ mod tests {
                 hash: None,
             })
             .unwrap()
+            .1
             .hash;
         let planner_hash = catalog
             .resolve(&SkillRef {
@@ -1054,6 +1055,7 @@ mod tests {
                 hash: None,
             })
             .unwrap()
+            .1
             .hash;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1352,6 +1354,7 @@ mod tests {
                 hash: None,
             })
             .unwrap()
+            .1
             .hash;
 
         // The originally-pinned content is replaced (not just edited), and

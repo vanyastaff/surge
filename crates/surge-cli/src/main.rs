@@ -199,6 +199,14 @@ enum Commands {
         command: ProjectCommands,
     },
 
+    /// Inspect skill packs available to the project (Agent Skills / Agent
+    /// Plugins): what's discoverable, what's inside one, and whether its
+    /// content still matches a pin.
+    Skill {
+        #[command(subcommand)]
+        command: commands::skill::SkillCommands,
+    },
+
     /// Configure and inspect the Telegram cockpit (bot token, pairings).
     Telegram {
         #[command(subcommand)]
@@ -363,6 +371,7 @@ async fn main() -> Result<()> {
             | Commands::Mcp { .. }
             | Commands::Profile { .. }
             | Commands::Project { .. }
+            | Commands::Skill { .. }
     );
 
     if should_check_orphans {
@@ -575,6 +584,10 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Project { command } => {
             commands::project::run(command).await?;
+        },
+
+        Commands::Skill { command } => {
+            commands::skill::run(command)?;
         },
 
         Commands::Telegram { command } => {

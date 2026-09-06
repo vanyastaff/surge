@@ -35,7 +35,7 @@ fn discover_resolves_agent_skills_and_agent_plugins_packs_unmodified() {
         .expect("code-reviewer discovered from the ProjectDir root");
     assert_eq!(code_reviewer.provider, SkillProvider::ProjectDir);
     assert_eq!(code_reviewer.version.as_deref(), Some("1.0.0"));
-    let resolved = catalog
+    let (_, resolved) = catalog
         .resolve(code_reviewer)
         .expect("code-reviewer resolves");
     assert_eq!(
@@ -55,7 +55,7 @@ fn discover_resolves_agent_skills_and_agent_plugins_packs_unmodified() {
         .expect("commit-helper discovered from the UserDir root's nested plugin package");
     assert_eq!(commit_helper.provider, SkillProvider::UserDir);
     assert_eq!(commit_helper.version.as_deref(), Some("2.3.1"));
-    let resolved = catalog
+    let (_, resolved) = catalog
         .resolve(commit_helper)
         .expect("commit-helper resolves");
     assert_eq!(
@@ -224,7 +224,7 @@ fn identical_content_across_two_roots_is_not_ambiguous() {
         version: None,
         hash: None, // unpinned: match by name/provider only
     };
-    let resolved = catalog
+    let (_, resolved) = catalog
         .resolve(&probe)
         .expect("byte-identical duplicates must resolve, not be Ambiguous");
     assert_eq!(resolved.instructions, "Identical content in both copies.");
@@ -266,7 +266,7 @@ fn pinned_hash_selects_exact_pack_among_differing_candidates() {
     );
 
     let pinned = candidates[1].clone();
-    let resolved = catalog
+    let (_, resolved) = catalog
         .resolve(&pinned)
         .expect("a pinned hash must resolve to its exact pack, not Ambiguous");
     assert_eq!(Some(resolved.hash), pinned.hash);
@@ -384,7 +384,7 @@ fn resolve_rereads_from_disk_and_does_not_serve_a_discover_time_cache() {
         .expect("live-pack discovered")
         .clone();
 
-    let first = catalog
+    let (_, first) = catalog
         .resolve(&skill_ref)
         .expect("resolves before the on-disk edit");
     assert_eq!(first.instructions, "Original instructions.");
@@ -397,7 +397,7 @@ fn resolve_rereads_from_disk_and_does_not_serve_a_discover_time_cache() {
     )
     .expect("write edited SKILL.md");
 
-    let second = catalog
+    let (_, second) = catalog
         .resolve(&skill_ref)
         .expect("resolves again after the on-disk edit");
     assert_eq!(
@@ -407,6 +407,65 @@ fn resolve_rereads_from_disk_and_does_not_serve_a_discover_time_cache() {
     assert_ne!(
         second.hash, first.hash,
         "resolve() must reflect the edit's new hash, not a discover()-time cache"
+    );
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn resolve_returns_fresh_identity_even_when_the_pack_changes_between_discover_and_resolve() {
+    // The race a caller-side reverse hash lookup used to lose to: `resolve()`
+    // must hand back the resolved pack's *own* identity (name/provider/
+    // version/hash, all read together in this call), not something the
+    // caller has to reconstruct by cross-referencing `discover()`'s
+    // now-stale `skills()` snapshot. A pack edited on disk *between*
+    // `discover()` and `resolve()` changes both its version and its hash, so
+    // no entry in that stale snapshot carries the freshly-read hash any
+    // longer — a caller that looked up "which catalog entry has this hash"
+    // would find none and report the version as unknown. The returned
+    // `SkillRef` must still carry the correct, current version regardless.
+    let scratch = unique_scratch_dir("race-fresh-identity");
+    let pack_dir = scratch.join("race-pack");
+    std::fs::create_dir_all(&pack_dir).expect("create scratch pack dir");
+    std::fs::write(
+        pack_dir.join("SKILL.md"),
+        "---\nname: race-pack\nversion: \"1.0.0\"\n---\n\nOriginal.\n",
+    )
+    .expect("write initial SKILL.md");
+
+    let roots = [SkillRoot {
+        provider: SkillProvider::ProjectDir,
+        path: scratch.clone(),
+    }];
+    let catalog = SkillCatalog::discover(&roots);
+    let lookup = SkillRef {
+        name: "race-pack".to_string(),
+        provider: SkillProvider::ProjectDir,
+        version: None, // unpinned — the same shape a flow node's `skills = [...]` declaration uses
+        hash: None,
+    };
+
+    // The pack changes on disk *between* `discover()` (above) and
+    // `resolve()` (below) — a real edit racing the two calls, not a
+    // fabricated hash.
+    std::fs::write(
+        pack_dir.join("SKILL.md"),
+        "---\nname: race-pack\nversion: \"2.0.0\"\n---\n\nEdited after discover().\n",
+    )
+    .expect("write edited SKILL.md");
+
+    let (fresh_ref, resolved) = catalog.resolve(&lookup).expect("resolves despite the race");
+    assert_eq!(
+        fresh_ref.version.as_deref(),
+        Some("2.0.0"),
+        "the returned identity must carry the pack's current on-disk version, not the version \
+         discover() saw and not None"
+    );
+    assert_eq!(resolved.instructions, "Edited after discover().");
+    assert_eq!(
+        Some(resolved.hash),
+        fresh_ref.hash,
+        "the returned SkillRef's hash must be the same fresh read as ResolvedSkill::hash"
     );
 
     let _ = std::fs::remove_dir_all(&scratch);
@@ -528,7 +587,7 @@ fn hash_is_sha256_over_sorted_relative_paths_and_content() {
             .to_string(),
         EXPECTED
     );
-    let resolved = catalog.resolve(code_reviewer).unwrap();
+    let (_, resolved) = catalog.resolve(code_reviewer).unwrap();
     assert_eq!(resolved.hash.to_string(), EXPECTED);
 }
 

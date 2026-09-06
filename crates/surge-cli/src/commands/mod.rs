@@ -25,6 +25,7 @@ pub mod registry;
 pub mod resolve;
 pub mod run;
 pub mod run_fold;
+pub mod skill;
 pub mod steer;
 pub mod telegram;
 pub mod tracker;

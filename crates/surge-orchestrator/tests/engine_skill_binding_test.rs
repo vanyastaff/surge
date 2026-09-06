@@ -261,7 +261,7 @@ async fn pinned_skill_binds_and_instructions_reach_the_agent_prompt() {
         provider: SkillProvider::ProjectDir,
         path: dir.path().join(".claude/skills"),
     }]);
-    let real = catalog
+    let (_, real) = catalog
         .resolve(&SkillRef {
             name: "code-reviewer".into(),
             provider: SkillProvider::ProjectDir,

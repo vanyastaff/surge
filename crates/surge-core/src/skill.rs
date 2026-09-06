@@ -19,7 +19,7 @@
 //! }];
 //! let catalog = SkillCatalog::discover(&roots);
 //! for skill_ref in catalog.skills() {
-//!     if let Ok(resolved) = catalog.resolve(skill_ref) {
+//!     if let Ok((_, resolved)) = catalog.resolve(skill_ref) {
 //!         println!("{}: {}", skill_ref.name, resolved.instructions);
 //!     }
 //! }
@@ -154,15 +154,25 @@ impl SkillCatalog {
         self.entries.iter().map(|entry| &entry.skill_ref)
     }
 
-    /// Resolve a skill reference into its instructions and file set.
+    /// Resolve a skill reference into its identity and content.
     ///
     /// Matches by `name` and `provider` (and `version`, when
     /// `skill_ref.version` is `Some`) to *locate* candidate packs on disk,
     /// then re-reads and re-hashes the matching one from disk **at this
-    /// call**, not from whatever `discover()` last saw — so the returned
-    /// [`ResolvedSkill::hash`] is always current; comparing it against
-    /// `skill_ref.hash` to detect drift the caller didn't already know about
-    /// is still the caller's job (bind-time approval), not this method's.
+    /// call**, not from whatever `discover()` last saw — so both halves of
+    /// the returned pair are always current. The returned [`SkillRef`] is
+    /// this fresh read's own identity (name, provider, version, and hash —
+    /// all reloaded together from the same directory in the same call),
+    /// **not** `skill_ref` echoed back and **not** looked up by
+    /// cross-referencing [`Self::skills`]'s discover()-time snapshot: a
+    /// caller that needs the resolved pack's identity (e.g. to report its
+    /// version) must use this returned `SkillRef`, never reconstruct it by
+    /// searching the catalog for an entry whose hash happens to match —
+    /// that search races a pack changing on disk between `discover()` and
+    /// `resolve()` and can come up empty even though this call itself
+    /// succeeded. Comparing the returned hash against `skill_ref.hash` to
+    /// detect drift the caller didn't already know about is still the
+    /// caller's job (bind-time approval), not this method's.
     ///
     /// When `skill_ref.hash` is `Some`, it additionally narrows the match to
     /// that exact content — letting a caller resolve straight to a known
@@ -189,7 +199,7 @@ impl SkillCatalog {
     /// - [`SkillError::NotFound`] when no matching pack, broken or otherwise,
     ///   is known.
     #[must_use = "a resolution failure (Err) must be handled, not discarded"]
-    pub fn resolve(&self, skill_ref: &SkillRef) -> Result<ResolvedSkill, SkillError> {
+    pub fn resolve(&self, skill_ref: &SkillRef) -> Result<(SkillRef, ResolvedSkill), SkillError> {
         let matching: Vec<&scan::CatalogEntry> = self
             .entries
             .iter()
@@ -218,12 +228,12 @@ impl SkillCatalog {
                     provider: skill_ref.provider,
                 });
             }
-            let (_fresh_ref, resolved) = scan::load_skill_pack(
+            let (fresh_ref, resolved) = scan::load_skill_pack(
                 &first.dir,
                 first.skill_ref.provider,
                 first.plugin_version.clone(),
             )?;
-            return Ok(resolved);
+            return Ok((fresh_ref, resolved));
         }
 
         if let Some(broken) = self
