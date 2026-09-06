@@ -1496,39 +1496,102 @@ mod with_project_context_seed_memory_claims_tests {
         .expect("Unverified status is always constructible")
     }
 
-    /// Points `MemoryStore::default_path()` (which resolves `$HOME` via
-    /// `dirs::home_dir()`) at a throwaway directory for the duration of
-    /// `f`, then restores the previous value.
+    /// Points `MemoryStore::default_path()` at a throwaway directory for
+    /// the duration of `f`, then restores the previous values.
+    ///
+    /// `MemoryStore::default_path()` resolves `$SURGE_HOME` first (falling
+    /// back to `$HOME` via `dirs::home_dir()` only when `SURGE_HOME` is
+    /// unset/empty — see `crates/surge-persistence/src/memory/store.rs`),
+    /// matching `surge_home_dir()`/`pidfile::daemon_dir()` elsewhere in this
+    /// workspace. Overriding `HOME` alone is not isolation once that lookup
+    /// exists: a developer or CI job with `SURGE_HOME` exported would have
+    /// this test's writes land in that real, shared store instead of the
+    /// throwaway one — measured, not hypothetical (a prior version of this
+    /// helper did exactly that, silently, and stayed green while claims
+    /// accumulated across runs). Clearing `SURGE_HOME` for the duration
+    /// forces the same `$HOME` fallback this helper already isolates.
     ///
     /// Safe under this project's test runner, `cargo nextest`
     /// (`.autopilot/competitive-waves/interfaces.md`), whose defining
-    /// feature is one process per test — mutating a process-global env var
-    /// is only safe when nothing else in the process reads or writes it
+    /// feature is one process per test — mutating process-global env vars
+    /// is only safe when nothing else in the process reads or writes them
     /// concurrently, which per-test process isolation guarantees here. It
     /// would NOT be safe under threaded `cargo test`, which is not this
     /// project's gate.
     fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
-        let previous = std::env::var_os("HOME");
+        let previous_home = std::env::var_os("HOME");
+        let previous_surge_home = std::env::var_os("SURGE_HOME");
         // SAFETY: `set_var`/`remove_var` are unsound only under a
         // concurrent unsynchronized read of the process environment on
         // another thread (a data race). This process has exactly one
-        // thread touching `HOME`: cargo-nextest runs each test in its own
-        // process, this function and `f` are the only code running in it,
-        // and `f` (a call into `with_project_context_seed` /
+        // thread touching `HOME`/`SURGE_HOME`: cargo-nextest runs each test
+        // in its own process, this function and `f` are the only code
+        // running in it, and `f` (a call into `with_project_context_seed` /
         // `MemoryStore::open`) does only synchronous file/SQLite I/O — it
         // spawns no threads and reads no env var itself. The mutate here
         // happens-before `f` runs and the restore happens-after, all on
         // this one thread, so there is no concurrent access to race.
+        // SAFETY: see above.
         unsafe {
             std::env::set_var("HOME", home);
         }
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("SURGE_HOME");
+        }
         let result = f();
-        match previous {
+        match previous_home {
             // SAFETY: see above.
             Some(value) => unsafe { std::env::set_var("HOME", value) },
             None => unsafe { std::env::remove_var("HOME") },
         }
+        match previous_surge_home {
+            // SAFETY: see above.
+            Some(value) => unsafe { std::env::set_var("SURGE_HOME", value) },
+            None => unsafe { std::env::remove_var("SURGE_HOME") },
+        }
         result
+    }
+
+    /// Regression for the exact isolation break a reviewer measured: with
+    /// `SURGE_HOME` already exported in the ambient environment (a
+    /// developer's shell, or a CI job), the previous version of
+    /// [`with_home`] — which only overrode `HOME` — left
+    /// `MemoryStore::default_path()` resolving under that real, shared
+    /// `SURGE_HOME` instead of the throwaway directory this helper exists
+    /// to isolate into. Simulates that ambient state directly (outside
+    /// `with_home`, mirroring a real shell) and asserts the store path
+    /// still lands under the throwaway `home`, not the ambient one.
+    #[test]
+    fn with_home_isolates_even_when_surge_home_is_already_set_in_the_environment() {
+        let ambient_surge_home = tempfile::tempdir().unwrap();
+        let previous_surge_home = std::env::var_os("SURGE_HOME");
+        // SAFETY: see `with_home`'s own SAFETY comment directly above —
+        // the same one-thread-per-nextest-test guarantee holds for this
+        // test too, and no other code in this process reads/writes
+        // `SURGE_HOME` concurrently with it.
+        unsafe {
+            std::env::set_var("SURGE_HOME", ambient_surge_home.path());
+        }
+
+        let throwaway_home = tempfile::tempdir().unwrap();
+        with_home(throwaway_home.path(), || {
+            let store_path = MemoryStore::default_path().expect("home dir resolves");
+            assert!(
+                store_path.starts_with(throwaway_home.path()),
+                "with_home must isolate MemoryStore::default_path() even when SURGE_HOME is \
+                 already set in the ambient environment; got {store_path:?}, expected it under \
+                 {:?}",
+                throwaway_home.path()
+            );
+        });
+
+        match previous_surge_home {
+            // SAFETY: see above.
+            Some(value) => unsafe { std::env::set_var("SURGE_HOME", value) },
+            // SAFETY: see above.
+            None => unsafe { std::env::remove_var("SURGE_HOME") },
+        }
     }
 
     #[test]

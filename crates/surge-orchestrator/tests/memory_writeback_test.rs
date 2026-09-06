@@ -39,8 +39,7 @@ use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_persistence::memory::{MemoryStore, run_audit};
-use surge_persistence::runs::registry::open_registry_pool;
-use surge_persistence::runs::{Storage, SystemClock};
+use surge_persistence::runs::Storage;
 
 use fixtures::mock_bridge::MockBridge;
 
@@ -404,8 +403,10 @@ async fn failing_run_records_a_claim_visible_to_the_audit() {
     );
 
     // The real audit, unmodified — not a reimplementation of its parsing.
-    let registry_pool = open_registry_pool(storage.home(), &SystemClock).unwrap();
-    let report = run_audit(&claims, &registry_pool).unwrap();
+    // The claim's source is a `transcript:` locator (asserted above), so
+    // `project_root` never enters a path resolution here — `dir` (this
+    // run's own worktree root) is passed as the honest value regardless.
+    let report = run_audit(&claims, &storage, dir.path()).await.unwrap();
     let correlated = report
         .run_correlated
         .iter()

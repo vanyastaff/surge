@@ -515,7 +515,7 @@ async fn run_command(command: Commands) -> Result<()> {
         },
 
         Commands::Memory { command } => {
-            commands::memory::run(command)?;
+            commands::memory::run(command).await?;
         },
 
         Commands::Analytics { command } => {

@@ -15,13 +15,19 @@
 //! full scan `aggregate_status` was built for; this module's production path
 //! does not, because here an index exists for the one kind that matters.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use surge_core::RunId;
 use surge_core::keys::NodeKey;
 use surge_core::migrate_payload;
 use surge_core::run_event::{EscalationCause, EventPayload};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader::{ReadEvent, RunReader};
+use crate::runs::registry::RunSummary;
 use crate::runs::seq::EventSeq;
+use crate::runs::storage::Storage;
 
 /// One `EscalationRequested` event, folded from the run's durable event log.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +158,118 @@ pub fn is_loop_guard_cause(cause: EscalationCause) -> bool {
         cause,
         EscalationCause::LoopGuardRepeatedToolCall | EscalationCause::LoopGuardNodeDeadline
     )
+}
+
+/// One run [`list_loop_guard_stopped_runs`] could not scan — its per-run
+/// event log could not be opened or read. The scan continues past it
+/// rather than failing the whole cross-run query: mirrors
+/// `surge-cli::commands::inbox::scan_run_capacity`'s rule, "a run whose
+/// reader has already been pruned must never block the rest of the
+/// listing" — a stale-registry-row-with-no-per-run-directory case that
+/// really occurs (`OpenError::RunNotFound`), not a hypothetical one.
+#[derive(Debug, Clone)]
+pub struct SkippedRun {
+    /// The run whose log could not be read.
+    pub run_id: RunId,
+    /// Human-readable reason, from the underlying `OpenError`/`StorageError`.
+    pub reason: String,
+}
+
+/// Every run in `runs` whose durable event log carries at least one
+/// loop-guard escalation, mapped to the first such [`EscalationCause`]
+/// found — the answer to "which runs did the loop guard stop", asked in
+/// the plural. `surge_persistence::memory::audit::run_audit` is the one
+/// caller today: it needs to correlate memory claims against more than one
+/// run at a time, which [`read_escalations`] (about exactly one run) can't
+/// answer on its own.
+///
+/// Never fails outright: a run whose reader can't be opened or whose log
+/// can't be read is logged (`tracing::debug!`) and returned in the second
+/// element instead of aborting the scan (see [`SkippedRun`]) — the caller
+/// (`run_audit`) surfaces each one as a `caveats` entry rather than losing
+/// the whole report to one unreadable run.
+///
+/// # Cost — read this before calling it from a hot path
+/// [`read_escalations`] answers the singular question — "did THIS run get
+/// stopped by the guard" — with one indexed SQL query (`idx_events_kind`)
+/// against that run's own per-run SQLite file; see this module's doc
+/// comment. The plural question asked here has no equivalent single-query
+/// answer: `crate::runs::registry`'s `runs` table holds only coarse
+/// metadata (id, status, timestamps) and carries no escalation index, so
+/// there is no registry row to filter on. This function instead opens a
+/// [`RunReader`] for **every** run in `runs` and re-runs
+/// [`read_escalations`] against each one — O(len(runs)) SQLite opens and
+/// indexed queries, not one query, and each open additionally builds an
+/// r2d2 connection pool sized `StorageConfig::reader_pool_size` (default
+/// 4) plus its background reaper thread pool — `Storage::open_run_reader`'s
+/// existing construction, shared by every caller (`surge-cli::commands::
+/// inbox` included), not something narrowing `runs` removes. `run_audit`
+/// bounds `len(runs)` to the runs at least one claim actually names
+/// (`run_id_from_source`), not the whole registry — the main lever
+/// available here without changing `open_run_reader` itself.
+///
+/// Closing the multi-query cost for real would mean denormalizing an
+/// escalation flag into the registry `runs` table, written from wherever
+/// `EscalationRequested` is appended
+/// (`surge-orchestrator::engine::stage::agent`) — through `surge-daemon`,
+/// the only process that currently writes registry status (every
+/// `registry::update_status` caller lives in `surge-daemon`/`surge-cli`;
+/// the per-run writer itself never touches the registry pool). That is a
+/// schema change plus a new cross-crate write path, not something this
+/// crate can close on its own for this caller. Recorded here, and in
+/// `.autopilot/competitive-waves/interfaces.md`, as the accepted cost of
+/// answering this question today rather than solved silently.
+///
+/// Deliberately does not filter `runs` by status before scanning: a loop
+/// guard trip that races a dead daemon can leave its `EscalationRequested`
+/// durably in the per-run log before `RunFailed` (and the registry status
+/// update that follows it) ever gets appended, so the run reads `Crashed`
+/// in the registry, not `Failed` — the same class of defect this repo's
+/// `RunStatus`-filtering lesson names (`interfaces.md`, "Факт о
+/// `RunStatus`..."). The caller decides which runs go into `runs`; this
+/// function never narrows that set further.
+pub async fn list_loop_guard_stopped_runs(
+    storage: &Arc<Storage>,
+    runs: &[RunSummary],
+) -> (HashMap<RunId, EscalationCause>, Vec<SkippedRun>) {
+    let mut stopped = HashMap::new();
+    let mut skipped = Vec::new();
+    for run in runs {
+        let reader = match storage.open_run_reader(run.id).await {
+            Ok(reader) => reader,
+            Err(e) => {
+                tracing::debug!(
+                    run_id = %run.id,
+                    error = %e,
+                    "skipping run for loop-guard scan: could not open its per-run event log"
+                );
+                skipped.push(SkippedRun {
+                    run_id: run.id,
+                    reason: e.to_string(),
+                });
+                continue;
+            },
+        };
+        let escalations = match read_escalations(&reader).await {
+            Ok(escalations) => escalations,
+            Err(e) => {
+                tracing::debug!(
+                    run_id = %run.id,
+                    error = %e,
+                    "skipping run for loop-guard scan: could not read its escalations"
+                );
+                skipped.push(SkippedRun {
+                    run_id: run.id,
+                    reason: e.to_string(),
+                });
+                continue;
+            },
+        };
+        if let Some(found) = escalations.iter().find(|e| is_loop_guard_cause(e.cause)) {
+            stopped.insert(run.id, found.cause);
+        }
+    }
+    (stopped, skipped)
 }
 
 #[cfg(test)]
@@ -295,5 +413,151 @@ mod tests {
         assert_eq!(found[0].cause, EscalationCause::LoopGuardNodeDeadline);
         assert_eq!(found[0].node.as_ref(), Some(&node));
         assert!(is_loop_guard_cause(found[0].cause));
+    }
+
+    /// The cross-run entry point: across three real runs (one plain, one
+    /// guard-tripped, one escalated for an unrelated bootstrap reason),
+    /// only the guard-tripped one comes back — proving both that the scan
+    /// finds the run it should and that it does not misclassify the
+    /// bootstrap-cause run the way a text-matching approach would.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_loop_guard_stopped_runs_finds_only_the_guard_tripped_run() {
+        use crate::runs::registry::RunFilter;
+        use crate::runs::storage::Storage;
+        use surge_core::run_event::VersionedEventPayload;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let plain_run = surge_core::RunId::new();
+        let plain_writer = storage
+            .create_run(plain_run, dir.path(), None)
+            .await
+            .unwrap();
+        drop(plain_writer);
+
+        let guard_tripped_run = surge_core::RunId::new();
+        let guard_writer = storage
+            .create_run(guard_tripped_run, dir.path(), None)
+            .await
+            .unwrap();
+        guard_writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: None,
+                    reason: "node loop guard: tool 'shell_exec' called 4 times in a row \
+                              (threshold 3); escalating instead of dispatching it again"
+                        .into(),
+                    cause: EscalationCause::LoopGuardRepeatedToolCall,
+                },
+            ))
+            .await
+            .unwrap();
+        guard_writer.flush().await.unwrap();
+        drop(guard_writer);
+
+        let bootstrap_escalated_run = surge_core::RunId::new();
+        let bootstrap_writer = storage
+            .create_run(bootstrap_escalated_run, dir.path(), None)
+            .await
+            .unwrap();
+        bootstrap_writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: Some(surge_core::run_event::BootstrapStage::Flow),
+                    reason: "edit-loop cap exceeded".into(),
+                    cause: EscalationCause::BootstrapEditLoopExhausted,
+                },
+            ))
+            .await
+            .unwrap();
+        bootstrap_writer.flush().await.unwrap();
+        drop(bootstrap_writer);
+
+        let runs = storage.list_runs(RunFilter::default()).await.unwrap();
+        assert_eq!(runs.len(), 3, "all three seeded runs must be listed");
+
+        let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
+
+        assert!(
+            skipped.is_empty(),
+            "every seeded run has a readable log: {skipped:?}"
+        );
+        assert_eq!(
+            stopped.len(),
+            1,
+            "only the guard-tripped run may be reported: {stopped:?}"
+        );
+        assert_eq!(
+            stopped.get(&guard_tripped_run),
+            Some(&EscalationCause::LoopGuardRepeatedToolCall)
+        );
+        assert!(!stopped.contains_key(&plain_run));
+        assert!(!stopped.contains_key(&bootstrap_escalated_run));
+    }
+
+    /// Blocker regression: a registry row with no per-run directory behind
+    /// it (`OpenError::RunNotFound` — the exact shape a pruned or
+    /// never-fully-created run produces) must not fail the scan for every
+    /// other run. Measured before this fix: the whole function returned
+    /// `Err`, and `run_audit` printed no report at all for zero claims.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_loop_guard_stopped_runs_skips_an_unreadable_run_instead_of_failing_the_scan() {
+        use crate::runs::registry::{self, RunFilter, RunSummary};
+        use surge_core::RunStatus;
+        use surge_core::run_event::VersionedEventPayload;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let good_run = surge_core::RunId::new();
+        let writer = storage
+            .create_run(good_run, dir.path(), None)
+            .await
+            .unwrap();
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: None,
+                    reason: "node loop guard: node has run for 0s, past its 0s wall-clock \
+                              budget; escalating"
+                        .into(),
+                    cause: EscalationCause::LoopGuardNodeDeadline,
+                },
+            ))
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+
+        // A registry row with no per-run directory at all — `insert_run`
+        // directly, bypassing `create_run`'s directory setup.
+        let orphaned_run = surge_core::RunId::new();
+        registry::insert_run(
+            &storage.registry_pool,
+            &RunSummary {
+                id: orphaned_run,
+                project_path: dir.path().to_path_buf(),
+                pipeline_template: None,
+                status: RunStatus::Failed,
+                started_at_ms: 1,
+                ended_at_ms: Some(2),
+                daemon_pid: None,
+            },
+        )
+        .unwrap();
+
+        let runs = storage.list_runs(RunFilter::default()).await.unwrap();
+        assert_eq!(runs.len(), 2);
+
+        let (stopped, skipped) = list_loop_guard_stopped_runs(&storage, &runs).await;
+
+        assert_eq!(
+            stopped.get(&good_run),
+            Some(&EscalationCause::LoopGuardNodeDeadline),
+            "the orphaned run must not block scanning the good one: {stopped:?}"
+        );
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert_eq!(skipped[0].run_id, orphaned_run);
     }
 }

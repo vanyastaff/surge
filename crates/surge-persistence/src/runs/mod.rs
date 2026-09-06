@@ -68,7 +68,10 @@ pub(crate) mod writer_slot;
 pub use clock::{Clock, MockClock, SystemClock};
 pub use config::StorageConfig;
 pub use error::{CloseError, OpenError, StorageError, WriterError};
-pub use escalations::{EscalationRecord, fold_escalations, is_loop_guard_cause, read_escalations};
+pub use escalations::{
+    EscalationRecord, SkippedRun, fold_escalations, is_loop_guard_cause,
+    list_loop_guard_stopped_runs, read_escalations,
+};
 pub use query::{RunStatusSnapshot, aggregate_status, current_status};
 pub use reader::{ReadEvent, RunReader};
 pub use registry::{RunFilter, RunSummary};

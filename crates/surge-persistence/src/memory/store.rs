@@ -9,6 +9,22 @@ use std::str::FromStr;
 use surge_core::memory::{ClaimStatus, Confidence, MemoryClaim, Provenance};
 use surge_core::{ContentHash, MemoryClaimId};
 
+/// Resolve the surge home directory: `$SURGE_HOME` when set and non-empty,
+/// else `~/.surge`. Mirrors the CLI's `surge_home_dir`
+/// (`crates/surge-cli/src/commands/common.rs`) and the daemon's
+/// `surge_runs_dir`/`pidfile::daemon_dir` exactly, so this store lands in
+/// the same sandbox as the rest of a `SURGE_HOME`-isolated process.
+fn surge_home_dir() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("SURGE_HOME")
+        && !custom.is_empty()
+    {
+        return Ok(PathBuf::from(custom));
+    }
+    dirs::home_dir()
+        .map(|h| h.join(".surge"))
+        .ok_or_else(|| PersistenceError::Storage("Cannot determine home directory".into()))
+}
+
 // ── Store ───────────────────────────────────────────────────────────
 
 /// SQLite-based storage for project memory and knowledge base.
@@ -55,11 +71,30 @@ impl MemoryStore {
         Ok(store)
     }
 
-    /// Get the path to the default store location (~/.surge/memory.db).
+    /// Get the path to the default store location (`$SURGE_HOME/memory.db`,
+    /// or `~/.surge/memory.db` when `SURGE_HOME` is unset/empty).
+    ///
+    /// Honoring `SURGE_HOME` matches every other consumer of "the surge
+    /// home" this store must stay sandboxed alongside: the CLI's
+    /// `surge_home_dir` (`crates/surge-cli/src/commands/common.rs`), the
+    /// daemon's `surge_runs_dir`/`pidfile::daemon_dir`
+    /// (`crates/surge-daemon`), and — inside this very crate —
+    /// `crate::runs::registry`'s callers, which all take `home` as a
+    /// parameter already resolved this way rather than re-deriving it.
+    /// Before this fix, a test or operator setting `SURGE_HOME` to isolate
+    /// a sandbox (the daemon's own isolation contract, `v0.2` M4) still had
+    /// every `surge memory` read/write land in the real
+    /// `~/.surge/memory.db` — silently defeating that isolation for the
+    /// one store this crate owns whose path resolution ever diverged from
+    /// it. `ArtifactStore::default_path`
+    /// (`crates/surge-persistence/src/artifacts.rs`) and `Store::default_path`
+    /// (`crates/surge-persistence/src/store.rs`, the usage/analytics store)
+    /// share the exact same gap; fixing them is out of this ticket's zone
+    /// (`08-memory-audit`, `crates/surge-persistence/src/memory/`) and is
+    /// recorded here rather than silently left for the next reader of
+    /// either file to rediscover.
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| PersistenceError::Storage("Cannot determine home directory".into()))?;
-        Ok(home.join(".surge").join("memory.db"))
+        Ok(surge_home_dir()?.join("memory.db"))
     }
 
     /// Initialize or verify the database schema.

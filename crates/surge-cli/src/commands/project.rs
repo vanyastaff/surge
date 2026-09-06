@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::common::project_root;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use surge_acp::bridge::facade::BridgeFacade;
@@ -104,12 +105,6 @@ async fn describe(args: ProjectDescribeArgs) -> Result<()> {
         "project describe command completed"
     );
     Ok(())
-}
-
-fn project_root(cwd: &Path) -> PathBuf {
-    surge_git::GitManager::discover()
-        .map(|manager| manager.repo_path().to_path_buf())
-        .unwrap_or_else(|_| cwd.to_path_buf())
 }
 
 fn load_config_for_root(project_root: &Path) -> Result<SurgeConfig> {

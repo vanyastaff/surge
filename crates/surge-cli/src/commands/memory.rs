@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use surge_core::MemoryClaimId;
+use surge_core::run_event::EscalationCause;
 use surge_persistence::memory::{AuditReport, MemoryStore, StaleReason, models::*, run_audit};
-use surge_persistence::runs::SystemClock;
-use surge_persistence::runs::registry::open_registry_pool;
+use surge_persistence::runs::Storage;
 
 use super::common::surge_home_dir;
 use super::load_spec_by_id;
@@ -105,7 +105,7 @@ pub enum MemoryCommands {
     },
 }
 
-pub fn run(command: MemoryCommands) -> Result<()> {
+pub async fn run(command: MemoryCommands) -> Result<()> {
     match command {
         MemoryCommands::Add {
             category,
@@ -122,7 +122,7 @@ pub fn run(command: MemoryCommands) -> Result<()> {
             tags,
             limit,
         } => search_memory(query, spec, tags, limit),
-        MemoryCommands::Audit { format } => audit_memory(format),
+        MemoryCommands::Audit { format } => audit_memory(format).await,
         MemoryCommands::Forget { ids } => forget_claims(ids),
     }
 }
@@ -446,7 +446,7 @@ fn search_memory(
 /// trace back to a failed run. Read-only — it proposes candidates for
 /// pruning but never deletes anything itself; deletion is a separate,
 /// explicit command an operator issues.
-fn audit_memory(format: AuditFormat) -> Result<()> {
+async fn audit_memory(format: AuditFormat) -> Result<()> {
     let store_path = MemoryStore::default_path()?;
 
     if !store_path.exists() {
@@ -456,10 +456,7 @@ fn audit_memory(format: AuditFormat) -> Result<()> {
                     stale: Vec::new(),
                     unverifiable: Vec::new(),
                     run_correlated: Vec::new(),
-                    caveats: vec![
-                        surge_persistence::memory::audit::LOOPING_CORRELATION_UNAVAILABLE
-                            .to_string(),
-                    ],
+                    caveats: Vec::new(),
                 };
                 println!("{}", serde_json::to_string_pretty(&empty)?);
             },
@@ -475,9 +472,18 @@ fn audit_memory(format: AuditFormat) -> Result<()> {
     let claims = store.list_claims()?;
 
     let home = surge_home_dir()?;
-    let pool = open_registry_pool(&home, &SystemClock)
-        .map_err(|e| anyhow::anyhow!("open run registry: {e}"))?;
-    let report = run_audit(&claims, &pool)?;
+    let storage = Storage::open(&home)
+        .await
+        .map_err(|e| anyhow::anyhow!("open run storage: {e}"))?;
+
+    // A `Provenance::source` file-path locator is relative to the project
+    // root (`interfaces.md`, "Контракт локаторов памяти"), not whatever
+    // directory this command happened to be invoked from.
+    let cwd =
+        std::env::current_dir().map_err(|e| anyhow::anyhow!("resolve current directory: {e}"))?;
+    let project_root = super::common::project_root(&cwd);
+
+    let report = run_audit(&claims, &storage, &project_root).await?;
 
     match format {
         AuditFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
@@ -523,14 +529,23 @@ fn print_audit_report(report: &AuditReport) {
 
         if !report.run_correlated.is_empty() {
             println!(
-                "═══ Correlated with failed runs ({}) ═══",
+                "═══ Correlated with failed or loop-guard-stopped runs ({}) ═══",
                 report.run_correlated.len()
             );
             for finding in &report.run_correlated {
-                println!(
-                    "  {}  ← {} ({})",
-                    finding.claim_id, finding.run_id, finding.run_status
-                );
+                match finding.loop_guard_cause {
+                    Some(cause) => println!(
+                        "  {}  ← {} ({}, stopped by loop guard: {})",
+                        finding.claim_id,
+                        finding.run_id,
+                        finding.run_status,
+                        describe_loop_guard_cause(cause)
+                    ),
+                    None => println!(
+                        "  {}  ← {} ({})",
+                        finding.claim_id, finding.run_id, finding.run_status
+                    ),
+                }
             }
             println!();
         }
@@ -551,6 +566,23 @@ fn print_audit_report(report: &AuditReport) {
         for note in &report.caveats {
             println!("   - {note}");
         }
+    }
+}
+
+/// Human-readable rendering of a loop-guard [`EscalationCause`] for
+/// `surge memory audit`'s text output. `is_loop_guard_cause` (checked
+/// before `run_audit` ever populates `loop_guard_cause`) guarantees only
+/// these two variants reach here in practice; the wildcard exists because
+/// `EscalationCause` is `#[non_exhaustive]`, so a future variant compiles
+/// instead of breaking this match, and is named generically rather than
+/// silently misdescribed as one of today's two.
+fn describe_loop_guard_cause(cause: EscalationCause) -> &'static str {
+    match cause {
+        EscalationCause::LoopGuardRepeatedToolCall => {
+            "the same tool call repeated past its threshold"
+        },
+        EscalationCause::LoopGuardNodeDeadline => "the node ran past its wall-clock budget",
+        _ => "loop guard",
     }
 }
 
