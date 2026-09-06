@@ -1,8 +1,10 @@
 //! Surge configuration.
 
 use crate::approvals::{ApprovalChannelKind, ApprovalPolicy};
+use crate::loop_config::ToolCallLoopGuardConfig;
 use crate::mcp_config::McpServerRef;
 use crate::sandbox::SandboxMode;
+use crate::spill_config::OutputSpillConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -178,6 +180,17 @@ pub struct SurgeConfig {
     /// agent runtime spawns internally.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerRef>,
+    /// Engine-level guard against a node repeating an identical tool call,
+    /// or running past a wall-clock budget, instead of burning the run's
+    /// budget silently. Consumed by `surge_orchestrator::guard` via
+    /// `RoutingToolDispatcher`. Conservative defaults when absent.
+    #[serde(default)]
+    pub tool_call_loop_guard: ToolCallLoopGuardConfig,
+    /// Threshold beyond which a tool's output moves to the artifact store
+    /// instead of flowing to the node in full. Consumed by
+    /// `surge_orchestrator::spill`. Conservative default when absent.
+    #[serde(default)]
+    pub output_spill: OutputSpillConfig,
 }
 
 /// Project initialization defaults used by first-run onboarding.
@@ -981,6 +994,8 @@ impl Default for SurgeConfig {
             inbox: InboxConfig::default(),
             init: InitConfig::default(),
             mcp_servers: Vec::new(),
+            tool_call_loop_guard: ToolCallLoopGuardConfig::default(),
+            output_spill: OutputSpillConfig::default(),
         }
     }
 }

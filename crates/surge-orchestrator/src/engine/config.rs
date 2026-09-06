@@ -101,6 +101,25 @@ pub struct EngineRunConfig {
     /// folded cumulative cost.
     #[serde(default)]
     pub budget: surge_core::budget::BudgetGuard,
+    /// Engine-level guard against a node's agent stage repeating an
+    /// identical tool call, or running past a wall-clock budget, instead of
+    /// burning the run's budget silently
+    /// (`.autopilot/competitive-waves/spec.md` §15). `None` means
+    /// "unset" — deliberately not a concrete `ToolCallLoopGuardConfig`
+    /// defaulted value, so `crate::project_context::with_project_context_seed`
+    /// can tell "the caller never set this" apart from "the caller set it
+    /// to exactly the conservative default" and only fills the former from
+    /// `SurgeConfig::tool_call_loop_guard`. `run_task.rs` resolves the
+    /// final value with `.unwrap_or_default()` right before building
+    /// `AgentStageParams` — nothing downstream of that point ever sees
+    /// `None`.
+    #[serde(default)]
+    pub tool_call_loop_guard: Option<surge_core::loop_config::ToolCallLoopGuardConfig>,
+    /// Threshold beyond which a tool's output moves to the artifact store
+    /// instead of flowing to the node in full (§16). Same `None`-means-unset
+    /// wiring and resolution as `tool_call_loop_guard` above.
+    #[serde(default)]
+    pub output_spill: Option<surge_core::spill_config::OutputSpillConfig>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -203,6 +222,8 @@ impl Default for EngineRunConfig {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
         }
     }
 }
@@ -257,6 +278,8 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -289,6 +312,8 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -335,6 +360,8 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

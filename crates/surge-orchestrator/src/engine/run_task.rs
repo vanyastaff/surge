@@ -645,6 +645,11 @@ async fn execute_agent_node(
         human_input_timeout: params.run_config.human_input_timeout,
         mcp_registry: params.mcp_registry.clone(),
         mcp_servers: params.mcp_servers.clone(),
+        // `EngineRunConfig`'s fields are `Option` (unset vs. explicitly
+        // defaulted — see its doc); this is the one place that resolves to
+        // a concrete value before it reaches the dispatcher.
+        tool_call_loop_guard: params.run_config.tool_call_loop_guard.unwrap_or_default(),
+        output_spill: params.run_config.output_spill.unwrap_or_default(),
         profile_registry: params.profile_registry.clone(),
         hook_executor: &state.hook_executor,
         pending_elevations: state.pending_elevations.clone(),

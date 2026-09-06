@@ -406,7 +406,7 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 
 /// Seed every config-derived field on an [`EngineRunConfig`].
 ///
-/// Currently covers two seeds, both unconditionally needed on every run
+/// Currently covers four seeds, all unconditionally needed on every run
 /// regardless of entry point (CLI in-process, daemon IPC server,
 /// daemon-side ticket launcher):
 ///
@@ -418,6 +418,19 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 ///   structural copy (no I/O), but keeping it next to the file-backed
 ///   project-context seed prevents the two from drifting at individual
 ///   call sites — every entry point now goes through the same helper.
+/// - **`tool_call_loop_guard`** / **`output_spill`** — copied from
+///   `SurgeConfig` when (and only when) the run config leaves them `None`,
+///   so an operator's `surge.toml` thresholds
+///   (`.autopilot/competitive-waves/spec.md` §15, §16) actually reach
+///   `RoutingToolDispatcher` instead of every run silently falling back to
+///   `EngineRunConfig::default()`'s conservative values. `None` is the
+///   explicit "unset" signal — unlike `mcp_servers`'s `is_empty()` check,
+///   comparing against `T::default()` here would conflate "never set" with
+///   "set to exactly the default", and a caller that deliberately chose the
+///   default value would have it silently overwritten the moment
+///   `SurgeConfig` carried a different one. This is the single choke point
+///   all four entry points funnel through — the loop-guard/output-spill
+///   config would otherwise need copying at each of them individually.
 #[must_use]
 pub fn with_project_context_seed(
     mut run_config: EngineRunConfig,
@@ -432,6 +445,12 @@ pub fn with_project_context_seed(
     }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
+    }
+    if run_config.tool_call_loop_guard.is_none() {
+        run_config.tool_call_loop_guard = Some(config.tool_call_loop_guard);
+    }
+    if run_config.output_spill.is_none() {
+        run_config.output_spill = Some(config.output_spill);
     }
     run_config
 }
@@ -1275,5 +1294,129 @@ mod memory_seed_tests {
         let b = load_project_memory_seed(dir.path()).unwrap();
         assert_eq!(a.content, b.content);
         assert_eq!(a.hash, b.hash);
+    }
+}
+
+#[cfg(test)]
+mod with_project_context_seed_threshold_tests {
+    use super::*;
+    use crate::engine::config::EngineRunConfig;
+    use surge_core::loop_config::ToolCallLoopGuardConfig;
+    use surge_core::spill_config::OutputSpillConfig;
+
+    /// This was the exact half of the wiring the first review found dead:
+    /// three harness tests proved `EngineRunConfig` reaches the dispatcher,
+    /// but none proved `SurgeConfig` reaches `EngineRunConfig`. A run
+    /// config that leaves both fields `None` (the default) must pick up
+    /// whatever non-default thresholds `surge.toml` carries.
+    #[test]
+    fn unset_thresholds_are_filled_from_surge_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 7,
+                node_wall_clock_limit_secs: 42,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 123,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+
+        let seeded = with_project_context_seed(EngineRunConfig::default(), dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(config.tool_call_loop_guard),
+            "an unset run config must pick up surge.toml's threshold"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(config.output_spill),
+            "an unset run config must pick up surge.toml's cap"
+        );
+    }
+
+    /// A caller that already set an explicit (non-default) value must keep
+    /// it even when `SurgeConfig` carries a *different* non-default value.
+    #[test]
+    fn explicit_caller_value_is_not_clobbered_by_surge_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 99,
+                node_wall_clock_limit_secs: 999,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 999,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+
+        let caller_guard = ToolCallLoopGuardConfig {
+            max_repeat_tool_calls: 1,
+            node_wall_clock_limit_secs: 1,
+        };
+        let caller_spill = OutputSpillConfig {
+            max_output_bytes: 1,
+        };
+        let run_config = EngineRunConfig {
+            tool_call_loop_guard: Some(caller_guard),
+            output_spill: Some(caller_spill),
+            ..EngineRunConfig::default()
+        };
+
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(caller_guard),
+            "an explicitly set threshold must survive seeding untouched"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(caller_spill),
+            "an explicitly set cap must survive seeding untouched"
+        );
+    }
+
+    /// The precise case review condition 2 named: a caller that explicitly
+    /// chose exactly the *default* value (`Some(T::default())`, not `None`)
+    /// must still not be overwritten. A sentinel comparison
+    /// (`run_config.x == T::default()`) cannot tell this apart from "never
+    /// set" and would silently clobber it the moment `SurgeConfig` carried a
+    /// different value — this is the failure mode `Option`-as-unset exists
+    /// to rule out structurally, not just by convention.
+    #[test]
+    fn explicit_default_valued_setting_is_not_mistaken_for_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 99,
+                node_wall_clock_limit_secs: 999,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 999,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+        let run_config = EngineRunConfig {
+            tool_call_loop_guard: Some(ToolCallLoopGuardConfig::default()),
+            output_spill: Some(OutputSpillConfig::default()),
+            ..EngineRunConfig::default()
+        };
+
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(ToolCallLoopGuardConfig::default()),
+            "a caller-chosen default value must not be mistaken for unset"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(OutputSpillConfig::default()),
+            "a caller-chosen default cap must not be mistaken for unset"
+        );
     }
 }

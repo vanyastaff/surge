@@ -157,6 +157,8 @@ async fn run_stage_steered(
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),

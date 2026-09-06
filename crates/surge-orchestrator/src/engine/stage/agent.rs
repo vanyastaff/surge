@@ -86,6 +86,17 @@ pub struct AgentStageParams<'a> {
     /// Run-level server list. Each entry maps a server name to its timeout
     /// and allowed-tools filter for this session's `RoutingToolDispatcher`.
     pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
+    /// Repeat-tool-call / node-wall-clock guard thresholds
+    /// (`.autopilot/competitive-waves/spec.md` §15), sourced from
+    /// `EngineRunConfig::tool_call_loop_guard` — itself seeded from
+    /// `SurgeConfig::tool_call_loop_guard` via
+    /// `crate::project_context::with_project_context_seed`. Applied to
+    /// every agent stage's `RoutingToolDispatcher`, not only nodes that
+    /// declare an `mcp_add` override.
+    pub tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig,
+    /// Output-spill cap (§16), sourced the same way as
+    /// `tool_call_loop_guard` above.
+    pub output_spill: surge_core::spill_config::OutputSpillConfig,
     /// Optional profile registry. When `Some`, the stage resolves
     /// `agent_config.profile` through it to derive `AgentKind` from the
     /// merged profile's `runtime.agent_id`. When `None`, the legacy M5
@@ -211,6 +222,30 @@ fn append_bound_skills(
         out.push_str(&skill.instructions);
     }
     out
+}
+
+/// Drain `dispatcher`'s pending loop-guard escalations and append each as an
+/// `EscalationRequested` event. Shared by the two call sites that can
+/// observe a trip: right after a tool dispatch, and the timer-driven
+/// wall-clock poll inside the stage's event loop — both need the same
+/// drain-then-append behavior, and a shared helper keeps them from drifting
+/// apart the way a second hand-rolled loop would risk.
+async fn append_loop_escalations(
+    writer: &RunWriter,
+    dispatcher: &Arc<dyn crate::engine::tools::ToolDispatcher>,
+) -> Result<(), StageError> {
+    for esc in dispatcher.drain_loop_escalations() {
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: None,
+                    reason: esc.trip.operator_message(),
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Execute a single agent stage.
@@ -362,100 +397,130 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         })
         .unwrap_or_default();
 
-    // Build the session-scoped tool dispatcher. When an MCP registry is
-    // configured, wrap the engine dispatcher with RoutingToolDispatcher so the
-    // agent sees both engine built-ins and the per-stage MCP allowlist.
-    let session_dispatcher: Arc<dyn crate::engine::tools::ToolDispatcher> = if let Some(ref reg) =
-        p.mcp_registry
-    {
-        // Per-stage MCP server allowlist from ToolOverride::mcp_add.
-        let allowed_servers: std::collections::HashSet<&str> = p
-            .agent_config
-            .tool_overrides
-            .as_ref()
-            .map(|o| o.mcp_add.iter().map(String::as_str).collect())
-            .unwrap_or_default();
+    // Build the session-scoped tool dispatcher. `RoutingToolDispatcher`
+    // always wraps the engine dispatcher — not only when the node declares
+    // `mcp_add` — so the per-node loop guard and output-spill policy apply
+    // to every agent stage: R39/R40 are engine-level policy, not something
+    // that only exists on the MCP branch (first-review finding: a plain
+    // node repeating `read_file` used to get `p.tool_dispatcher` bare, with
+    // no guard and no spill at all).
+    //
+    // Per-stage MCP server allowlist from ToolOverride::mcp_add.
+    let allowed_servers: std::collections::HashSet<&str> = p
+        .agent_config
+        .tool_overrides
+        .as_ref()
+        .map(|o| o.mcp_add.iter().map(String::as_str).collect())
+        .unwrap_or_default();
 
-        // Short-circuit: stage doesn't expose any MCP servers, so skip
-        // the potentially expensive list_all_tools call entirely.
-        if allowed_servers.is_empty() {
-            p.tool_dispatcher.clone()
-        } else {
-            let all_mcp_tools = match reg.list_all_tools().await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        err = %e,
-                        "MCP list_all_tools failed; proceeding with engine tools only"
-                    );
-                    Vec::new()
-                },
-            };
+    // Short-circuit: stage doesn't expose any MCP servers, so skip the
+    // potentially expensive list_all_tools call entirely. Also covers the
+    // no-MCP-registry-configured case (`p.mcp_registry` is `None`) — there
+    // is nothing to list either way.
+    let (filtered_mcp_tools, mcp_timeouts): (
+        Vec<surge_mcp::McpToolEntry>,
+        std::collections::HashMap<String, std::time::Duration>,
+    ) = if allowed_servers.is_empty() {
+        (Vec::new(), std::collections::HashMap::new())
+    } else if let Some(ref reg) = p.mcp_registry {
+        let all_mcp_tools = match reg.list_all_tools().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    err = %e,
+                    "MCP list_all_tools failed; proceeding with engine tools only"
+                );
+                Vec::new()
+            },
+        };
 
-            // Build per-server `allowed_tools` lookup from the run-level
-            // registry. `None` means "expose all tools the server reports".
-            let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
-                .mcp_servers
-                .iter()
-                .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
-                .collect();
+        // Build per-server `allowed_tools` lookup from the run-level
+        // registry. `None` means "expose all tools the server reports".
+        let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
+            .collect();
 
-            // Resolve the canonical MCP spawn policy once per server
-            // (not per tool): a `Denied` server is hidden entirely, and
-            // the unconstrained-intent operator WARN fires at most once
-            // per server rather than once per tool.
-            let mcp_denied_servers: std::collections::HashSet<&str> = p
-                .mcp_servers
-                .iter()
-                .filter(|s| allowed_servers.contains(s.name.as_str()))
-                .filter_map(|s| {
-                    let effective = s.sandbox.unwrap_or(sandbox_cfg.mode);
-                    warn_if_unconstrained_mcp(&s.name, effective);
-                    match mcp_spawn_policy(sandbox_cfg.mode, s.sandbox) {
-                        McpSpawnPolicy::Allowed => None,
-                        McpSpawnPolicy::Denied => Some(s.name.as_str()),
-                    }
-                })
-                .collect();
+        // Resolve the canonical MCP spawn policy once per server
+        // (not per tool): a `Denied` server is hidden entirely, and
+        // the unconstrained-intent operator WARN fires at most once
+        // per server rather than once per tool.
+        let mcp_denied_servers: std::collections::HashSet<&str> = p
+            .mcp_servers
+            .iter()
+            .filter(|s| allowed_servers.contains(s.name.as_str()))
+            .filter_map(|s| {
+                let effective = s.sandbox.unwrap_or(sandbox_cfg.mode);
+                warn_if_unconstrained_mcp(&s.name, effective);
+                match mcp_spawn_policy(sandbox_cfg.mode, s.sandbox) {
+                    McpSpawnPolicy::Allowed => None,
+                    McpSpawnPolicy::Denied => Some(s.name.as_str()),
+                }
+            })
+            .collect();
 
-            let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
-                .into_iter()
-                .filter(|t| {
-                    if !allowed_servers.contains(t.server.as_str()) {
-                        return false;
-                    }
-                    if mcp_denied_servers.contains(t.server.as_str()) {
-                        return false;
-                    }
-                    // Per-server allowed_tools whitelist: outer Some = entry
-                    // exists in the HashMap; inner Some = the field is set.
-                    // If allowed_tools is None, no filtering is applied.
-                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str())
-                        && !whitelist.iter().any(|w| w == &t.tool)
-                    {
-                        return false;
-                    }
-                    true
-                })
-                .collect();
+        let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
+            .into_iter()
+            .filter(|t| {
+                if !allowed_servers.contains(t.server.as_str()) {
+                    return false;
+                }
+                if mcp_denied_servers.contains(t.server.as_str()) {
+                    return false;
+                }
+                // Per-server allowed_tools whitelist: outer Some = entry
+                // exists in the HashMap; inner Some = the field is set.
+                // If allowed_tools is None, no filtering is applied.
+                if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str())
+                    && !whitelist.iter().any(|w| w == &t.tool)
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
 
-            // Per-server timeout map from the run-level McpServerRef list.
-            let timeouts: std::collections::HashMap<String, std::time::Duration> = p
-                .mcp_servers
-                .iter()
-                .map(|s| (s.name.clone(), s.call_timeout))
-                .collect();
+        // Per-server timeout map from the run-level McpServerRef list.
+        let timeouts: std::collections::HashMap<String, std::time::Duration> = p
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.clone(), s.call_timeout))
+            .collect();
 
-            Arc::new(crate::engine::tools::RoutingToolDispatcher::new(
-                p.tool_dispatcher.clone(),
-                reg.clone(),
-                &filtered,
-                &timeouts,
-            )) as Arc<dyn crate::engine::tools::ToolDispatcher>
-        }
+        (filtered, timeouts)
     } else {
-        p.tool_dispatcher.clone()
+        // Node declares `mcp_add` but this run has no MCP registry
+        // configured at all — nothing to route to.
+        (Vec::new(), std::collections::HashMap::new())
     };
+
+    // Fall back to an empty in-process registry when the run has none
+    // configured: cheap (no servers, no spawn — a connection only spawns on
+    // first use) and lets `RoutingToolDispatcher` wrap every agent stage
+    // unconditionally instead of only when MCP is in play.
+    let mcp_registry_for_stage: Arc<surge_mcp::McpRegistry> = p
+        .mcp_registry
+        .clone()
+        .unwrap_or_else(|| Arc::new(surge_mcp::McpRegistry::from_config(&[], None)));
+
+    let session_dispatcher: Arc<dyn crate::engine::tools::ToolDispatcher> = Arc::new(
+        crate::engine::tools::RoutingToolDispatcher::new(
+            p.tool_dispatcher.clone(),
+            mcp_registry_for_stage,
+            &filtered_mcp_tools,
+            &mcp_timeouts,
+        )
+        .with_tool_call_loop_guard_config(p.tool_call_loop_guard)
+        .with_output_spill_config(p.output_spill)
+        // The stage already holds the run's own artifact store — spilled
+        // output must land there, not in a second store built from
+        // `ArtifactStore::from_default_path()` (`~/.surge/runs`), which
+        // would be unreachable to whatever reads the run's artifacts back
+        // (`.autopilot/competitive-waves/spec.md` §16).
+        .with_artifact_store(p.artifact_store.clone()),
+    )
+        as Arc<dyn crate::engine::tools::ToolDispatcher>;
 
     // Assemble the ACP tool list from the session dispatcher's declared catalog.
     // Use ToolCategory::Builtin for all caller-supplied tools (both engine
@@ -546,16 +611,36 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             .map_err(|e| StageError::Storage(e.to_string()))?;
     }
 
+    // Timer-driven poll of the loop guard's wall-clock deadline
+    // (`.autopilot/competitive-waves/spec.md` §15). `check_loop_guard`
+    // (inside `RoutingToolDispatcher::dispatch`) only sees the deadline when
+    // a tool call arrives — a node stuck in one long agent turn (streaming
+    // `AgentMessage`s, no tool calls at all) would otherwise never trip its
+    // budget. A 1s period bounds trip latency cheaply against a default
+    // one-hour budget; `tick()` fires immediately on the first poll, so a
+    // deadline that is already exceeded at session start (e.g. a `0`-second
+    // configured limit) is caught right away rather than a full period late.
+    let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
     let outcome = loop {
-        let event = match events.recv().await {
-            Ok(ev) => ev,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                return Err(StageError::Bridge(
-                    "event stream closed unexpectedly".into(),
-                ));
+        let event = tokio::select! {
+            biased;
+            recv = events.recv() => match recv {
+                Ok(ev) => ev,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(StageError::Bridge(
+                        "event stream closed unexpectedly".into(),
+                    ));
+                },
+            },
+            _ = deadline_poll.tick() => {
+                session_dispatcher.poll_wall_clock_deadline();
+                append_loop_escalations(p.writer, &session_dispatcher).await?;
+                continue;
             },
         };
 
@@ -961,6 +1046,15 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
                 }
+
+                // Loop-guard trips (repeated tool call or wall-clock
+                // deadline) surface as `EscalationRequested` the same way —
+                // mirrors the MCP block above (R39: "raising
+                // EscalationRequested ... rather than burning budget").
+                // Emitted before the fallible `ToolResultReceived` append
+                // for the same reason: a storage failure must not silently
+                // drop the escalation.
+                append_loop_escalations(p.writer, &session_dispatcher).await?;
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {

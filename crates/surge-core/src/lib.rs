@@ -60,6 +60,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod sandbox_matrix;
 pub mod skill;
+pub mod spill_config;
 pub mod subgraph_config;
 pub mod terminal_config;
 pub mod validation;
