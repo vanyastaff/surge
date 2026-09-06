@@ -144,6 +144,7 @@ async fn run_stage_steered(
         steers: steers.clone(),
         node: &node,
         agent_config: cfg,
+        bound_skills: &[],
         declared_outcomes: declared,
         bridge: &bridge,
         writer: &writer,

@@ -81,6 +81,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
+        bound_skills: &[],
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,

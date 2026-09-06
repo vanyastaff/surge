@@ -47,6 +47,13 @@ pub struct AgentStageParams<'a> {
     pub steers: Vec<crate::engine::steer::QueuedSteer>,
     /// Agent node configuration from the spec graph.
     pub agent_config: &'a AgentConfig,
+    /// Skills already resolved and trust-gated for this node
+    /// (`engine::stage::skill_binding::bind_skills`, called by the caller
+    /// before this stage — R10: bound exactly like a context `Binding`,
+    /// never re-resolved here). Each entry's `instructions` is appended to
+    /// the system prompt below, once, before `SessionConfig` is built —
+    /// this is the only place a bound skill's content reaches the agent.
+    pub bound_skills: &'a [crate::engine::stage::skill_binding::BoundSkill],
     /// Declared outcomes from the node — used to populate `SessionConfig::declared_outcomes`.
     /// Must be non-empty; `SessionConfig::validate()` enforces this at session-open time.
     pub declared_outcomes: &'a [OutcomeDecl],
@@ -183,6 +190,29 @@ pub(crate) fn effective_system_prompt(
     }
 }
 
+/// Append each bound skill's instructions onto `prompt`, one `## Skill:
+/// <name>` section per entry, in binding order.
+///
+/// A no-op when `bound_skills` is empty (the common path — most nodes
+/// declare none), so this never adds a stray heading to a prompt that has
+/// nothing to bind.
+fn append_bound_skills(
+    prompt: String,
+    bound_skills: &[crate::engine::stage::skill_binding::BoundSkill],
+) -> String {
+    if bound_skills.is_empty() {
+        return prompt;
+    }
+    let mut out = prompt;
+    for skill in bound_skills {
+        out.push_str("\n\n## Skill: ");
+        out.push_str(&skill.name);
+        out.push_str("\n\n");
+        out.push_str(&skill.instructions);
+    }
+    out
+}
+
 /// Execute a single agent stage.
 ///
 /// Phase 6.2: opens a session, sends an empty placeholder message, then drives
@@ -254,6 +284,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     let prompt_text = renderer
         .render(&prompt_template, &resolved_bindings)
         .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
+
+    // Append every bound skill's instructions *after* template rendering,
+    // not before: a pack's own Markdown body can legitimately contain
+    // `{{...}}`-shaped text (code samples, its own placeholder syntax) that
+    // must reach the agent verbatim, not be mistaken for one of this
+    // stage's template variables. This is the one place a resolved skill's
+    // content reaches the agent — bound "exactly like a context Binding"
+    // means baked into the system prompt at session-open time, the same
+    // rendering pass, never re-fetched mid-turn.
+    let prompt_text = append_bound_skills(prompt_text, p.bound_skills);
 
     // Derive AgentKind. With a resolved profile in hand, take the agent_id
     // from its runtime block; otherwise fall through to the legacy mock

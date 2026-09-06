@@ -9,6 +9,7 @@ use crate::engine::stage::agent::{AgentStageParams, effective_agent_hooks, execu
 use crate::engine::stage::branch::{BranchStageParams, execute_branch_stage};
 use crate::engine::stage::human_gate::{HumanGateStageParams, execute_human_gate_stage};
 use crate::engine::stage::notify::{NotifyStageParams, execute_notify_stage};
+use crate::engine::stage::skill_binding::{SkillBindingParams, bind_skills};
 use crate::engine::stage::terminal::{
     TerminalOutcome, TerminalStageParams, execute_terminal_stage,
 };
@@ -64,16 +65,12 @@ pub(crate) struct RunTaskParams {
     /// Latest accepted graph revision sequence that was durably applied to
     /// the active graph at a stage boundary.
     pub resume_applied_graph_revision_seq: Option<u64>,
-    /// Map of `node_key → oneshot::Sender<HumanGateResolution>`.
-    /// Engine's `resolve_human_input` finds the sender and fires it.
-    pub gate_resolutions: std::sync::Arc<
-        tokio::sync::Mutex<
-            std::collections::HashMap<
-                surge_core::keys::NodeKey,
-                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
-            >,
-        >,
-    >,
+    /// Node-keyed decision registry (`node_key → oneshot::Sender<HumanGateResolution>`).
+    /// Engine's `resolve_human_input` finds the sender and fires it — for a
+    /// `HumanGate` node's own pause, and for the skill-trust prompt
+    /// (`engine::stage::skill_binding::bind_skills`) sharing the same
+    /// registry.
+    pub gate_resolutions: std::sync::Arc<crate::engine::stage::human_gate::GateResolutions>,
     /// Map of `call_id → oneshot::Sender<serde_json::Value>`.
     /// Engine's `resolve_human_input` finds the sender and fires it for
     /// tool-driven `request_human_input` calls from agent stages.
@@ -397,6 +394,15 @@ struct RunExecutionState {
     /// Whether a `BudgetExceeded` has already been recorded this run, so the
     /// `WarnOnly` breach record fires at most once (separate from the warn).
     budget_exceeded_noted: bool,
+    /// Lazily-populated cache of the run's skill catalog
+    /// (`default_skill_roots(&params.worktree_path)`, discovered once).
+    /// The roots are constant for the whole run (derived only from the
+    /// worktree path and the machine's home directory, neither of which
+    /// changes mid-run), so re-discovering — a synchronous walk + hash of
+    /// every pack under up to four roots — on every agent node that
+    /// declares skills would re-pay that cost per node for no reason.
+    /// `None` until the first node that declares skills populates it.
+    skill_catalog: Option<std::sync::Arc<surge_core::skill::SkillCatalog>>,
 }
 
 async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionState, String> {
@@ -439,6 +445,7 @@ async fn initial_execution_state(params: &RunTaskParams) -> Result<RunExecutionS
         pending_elevations: params.pending_elevations.clone(),
         budget_warned,
         budget_exceeded_noted,
+        skill_catalog: None,
     })
 }
 
@@ -590,10 +597,19 @@ async fn dispatch_node_stage(
 
 async fn execute_agent_node(
     params: &RunTaskParams,
-    state: &RunExecutionState,
+    state: &mut RunExecutionState,
     node: &surge_core::node::Node,
     cfg: &surge_core::agent_config::AgentConfig,
 ) -> Result<StageOutcome, StageError> {
+    // Skills bind at stage entry, exactly like a context `Binding`
+    // (`project.md`) — never lazily mid-stage. A denied or unanswered trust
+    // prompt returns before any session opens, so the node does not start.
+    // The bound skills' instructions are threaded into `AgentStageParams`
+    // below so `execute_agent_stage` can inject them into the prompt — a
+    // skill that only reaches `SkillBound` in the log and never the agent
+    // is a record, not a binding.
+    let bound_skills = bind_declared_skills(params, state, cfg).await?;
+
     // Drain any operator steer messages queued for this run and hand them to
     // the stage, which prepends them to the prompt and records delivery. This
     // is the safe stage-boundary steering point (ACP v1 has no mid-turn inject).
@@ -616,6 +632,7 @@ async fn execute_agent_node(
         node: &state.cursor.node,
         steers,
         agent_config: cfg,
+        bound_skills: &bound_skills,
         declared_outcomes: &node.declared_outcomes,
         bridge: &params.bridge,
         writer: &params.writer,
@@ -657,6 +674,154 @@ async fn execute_agent_node(
     }
 
     stage_result.map(StageOutcome::Routed)
+}
+
+/// Resolve `cfg`'s declared skills, gate any untrusted one behind operator
+/// approval, and return the bound skills so the caller can inject their
+/// instructions into the agent's prompt (R10) — before the agent stage
+/// proper runs.
+///
+/// Reuses the exact node-keyed decision registry (`gate_resolutions`)
+/// `HumanGate` stages already register into and `Engine::resolve_human_input`
+/// already drains — a skill-trust prompt is delivered and resolved through
+/// the same live, rendered path (`HumanInputRequested`), not a second one.
+async fn bind_declared_skills(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> Result<Vec<crate::engine::stage::skill_binding::BoundSkill>, StageError> {
+    let declared =
+        cfg.declared_skills()
+            .map_err(|source| StageError::InvalidSkillsDeclaration {
+                node: state.cursor.node.clone(),
+                source,
+            })?;
+    if declared.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let catalog = cached_skill_catalog(params, state).await?;
+    let gate_enabled = skill_approval_enabled(params, cfg);
+
+    bind_skills(SkillBindingParams {
+        node: &state.cursor.node,
+        declared: &declared,
+        catalog: catalog.as_ref(),
+        writer: &params.writer,
+        gate_enabled,
+        gate_resolutions: Some(params.gate_resolutions.as_ref()),
+        approval_timeout: params.run_config.human_input_timeout,
+    })
+    .await
+}
+
+/// The run's skill catalog, discovering it at most once.
+///
+/// `SkillCatalog::discover` synchronously walks and hashes every pack under
+/// up to four roots — real installs measure in the hundreds — so it runs on
+/// the blocking-task pool, never inline on the async worker thread, and its
+/// result is cached on `state` after the first agent node that declares
+/// skills, reused by every later one instead of re-walking the filesystem
+/// per node.
+///
+/// What's actually frozen by the cache is the **candidate list** —
+/// `discover()`'s directory walk — not pack content: a pack added or
+/// removed under a root partway through the run will not be seen by any
+/// node after the first (the walk isn't repeated), but an existing pack
+/// *edited in place* is still caught, because `SkillCatalog::resolve`
+/// always re-reads and re-hashes that specific pack's files from disk at
+/// resolve time (see its own doc comment) — only discovery is memoized,
+/// never resolution. The roots themselves (derived from the worktree path
+/// and the machine's home directory) are constant for the run regardless.
+async fn cached_skill_catalog(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+) -> Result<std::sync::Arc<surge_core::skill::SkillCatalog>, StageError> {
+    if let Some(cached) = state.skill_catalog.as_ref() {
+        return Ok(cached.clone());
+    }
+
+    let roots = default_skill_roots(&params.worktree_path);
+    let catalog =
+        tokio::task::spawn_blocking(move || surge_core::skill::SkillCatalog::discover(&roots))
+            .await
+            .map_err(|e| StageError::Internal(format!("skill catalog discovery panicked: {e}")))?;
+
+    let catalog = std::sync::Arc::new(catalog);
+    state.skill_catalog = Some(catalog.clone());
+    Ok(catalog)
+}
+
+/// Whether the operator-approval trust gate is active for `cfg`'s node
+/// (`ApprovalConfig::skill_approval`).
+///
+/// Node-level `approvals_override` wins when present. Otherwise falls back
+/// to the resolved profile's own `approvals.skill_approval` — the same
+/// node-then-profile precedence `engine::stage::agent::effective_approvals`
+/// already establishes for every other approval flag — so a profile that
+/// turns the gate off is honored even for a node that carries no override
+/// of its own at all. An unresolvable profile reference or a missing
+/// registry falls back to the default (gate enabled): failing to resolve a
+/// profile here is not this function's failure to report — the agent stage
+/// itself will hit and report the identical resolution failure moments
+/// later, before any session opens.
+fn skill_approval_enabled(
+    params: &RunTaskParams,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> bool {
+    if let Some(node_override) = cfg.approvals_override.as_ref() {
+        return node_override.skill_approval;
+    }
+    let Some(registry) = params.profile_registry.as_deref() else {
+        return surge_core::approvals::ApprovalConfig::default().skill_approval;
+    };
+    let Ok(key_ref) = surge_core::profile::keyref::parse_key_ref(cfg.profile.as_ref()) else {
+        return surge_core::approvals::ApprovalConfig::default().skill_approval;
+    };
+    match registry.resolve(&key_ref) {
+        Ok(resolved) => resolved.profile.approvals.skill_approval,
+        Err(_) => surge_core::approvals::ApprovalConfig::default().skill_approval,
+    }
+}
+
+/// Skill roots scanned for a node's declared skills: the worktree's and the
+/// user's `.claude/skills` (Agent Skills packs) **and** `.claude/plugins`
+/// (Agent Plugins packages — `marketplace/plugins/name`-style nesting,
+/// recognized by `SkillCatalog` at any depth under the root). Measured
+/// against a real machine's installs, **all 352 `SKILL.md` files and all 47
+/// `.claude-plugin/plugin.json` manifests live under `~/.claude/plugins`** —
+/// `~/.claude/skills` is empty (see `.autopilot/competitive-waves/interfaces.md`,
+/// corrected there after an earlier pass misread a formulation that named
+/// both directories for one combined count). Scanning only `.claude/skills`
+/// would silently bind nothing at all from that corpus. A missing root
+/// directory is not an error — `SkillCatalog::discover` skips it (see
+/// `skill/scan.rs`). A configured `SkillProvider::Registry` root is not
+/// wired here (Решение §22 defers its network/registry-config surface out
+/// of this delivery); a node referencing it resolves to
+/// `SkillError::NotFound` rather than silently matching a different
+/// provider.
+fn default_skill_roots(worktree_path: &std::path::Path) -> Vec<surge_core::skill::SkillRoot> {
+    let mut roots = vec![
+        surge_core::skill::SkillRoot {
+            provider: surge_core::skill::SkillProvider::ProjectDir,
+            path: worktree_path.join(".claude/skills"),
+        },
+        surge_core::skill::SkillRoot {
+            provider: surge_core::skill::SkillProvider::ProjectDir,
+            path: worktree_path.join(".claude/plugins"),
+        },
+    ];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(surge_core::skill::SkillRoot {
+            provider: surge_core::skill::SkillProvider::UserDir,
+            path: home.join(".claude/skills"),
+        });
+        roots.push(surge_core::skill::SkillRoot {
+            provider: surge_core::skill::SkillProvider::UserDir,
+            path: home.join(".claude/plugins"),
+        });
+    }
+    roots
 }
 
 async fn handle_flow_generator_result(
@@ -1573,6 +1738,85 @@ mod tests {
         assert!(!checkpoint_exit_matches(Some("impl_1"), "review_1"));
         assert!(!checkpoint_exit_matches(None, "impl_1"));
         assert!(!checkpoint_exit_matches(Some(""), "impl_1"));
+    }
+
+    #[test]
+    fn default_skill_roots_declares_two_project_roots_and_two_user_roots() {
+        // Structural shape only — count and provider kind, not the literal
+        // path strings `default_skill_roots` builds internally (that would
+        // just restate the function's own expression back at it). Whether
+        // those roots actually contribute packs when scanned is a separate,
+        // behavioral question — see
+        // `default_skill_roots_resolves_a_real_agent_plugins_package_under_dot_claude_plugins`
+        // below.
+        use surge_core::skill::SkillProvider;
+
+        let worktree = std::path::Path::new("/tmp/some-worktree");
+        let roots = default_skill_roots(worktree);
+
+        let project_count = roots
+            .iter()
+            .filter(|r| r.provider == SkillProvider::ProjectDir)
+            .count();
+        assert_eq!(
+            project_count, 2,
+            "expected one worktree root per layout (Agent Skills + Agent \
+             Plugins), got {roots:?}"
+        );
+
+        let user_count = roots
+            .iter()
+            .filter(|r| r.provider == SkillProvider::UserDir)
+            .count();
+        let expected_user_count = if dirs::home_dir().is_some() { 2 } else { 0 };
+        assert_eq!(
+            user_count, expected_user_count,
+            "expected one user root per layout only when a home directory \
+             resolves, got {roots:?}"
+        );
+    }
+
+    #[test]
+    fn default_skill_roots_resolves_a_real_agent_plugins_package_under_dot_claude_plugins() {
+        // Proves the `.claude/plugins` root by exercising real discovery +
+        // resolution against a physically distinct on-disk layout — the
+        // Agent Plugins package shape (`.claude-plugin/plugin.json` +
+        // `skills/<name>/SKILL.md`), not the flatter `.claude/skills/<name>`
+        // shape the engine-harness tests in `engine_skill_binding_test.rs`
+        // use. If `default_skill_roots` ever stopped including this root,
+        // this is the test that would actually fail — a path-equality
+        // assertion against the function's own `.join(...)` expression
+        // would not have.
+        use surge_core::skill::{SkillCatalog, SkillProvider, SkillRef};
+
+        let worktree = tempfile::tempdir().unwrap();
+        let package_dir = worktree.path().join(".claude/plugins/my-plugin");
+        std::fs::create_dir_all(package_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            package_dir.join(".claude-plugin/plugin.json"),
+            r#"{"version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let skill_dir = package_dir.join("skills/code-reviewer");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: code-reviewer\n---\n\nReview carefully.\n",
+        )
+        .unwrap();
+
+        let catalog = SkillCatalog::discover(&default_skill_roots(worktree.path()));
+        let resolved = catalog.resolve(&SkillRef {
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            version: None,
+            hash: None,
+        });
+        assert!(
+            resolved.is_ok(),
+            "a skill packaged under .claude/plugins (Agent Plugins layout) \
+             must resolve via default_skill_roots: {resolved:?}"
+        );
     }
 
     fn agent_node(hooks: Vec<Hook>, declared: Vec<&str>) -> Node {

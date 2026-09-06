@@ -36,7 +36,7 @@ policy = "on-request"
 sandbox_approval = false
 mcp_elicitations = false
 request_permissions = false
-skill_approval = false
+skill_approval = true
 elevation = true
 elevation_channels = []
 

@@ -14,6 +14,7 @@ use crate::roadmap_patch::{
     RoadmapPatchTarget,
 };
 use crate::sandbox::SandboxMode;
+use crate::skill::SkillProvider;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -483,6 +484,33 @@ pub enum EventPayload {
         /// and the failure mode).
         reason: String,
     },
+
+    /// A skill pack was bound onto `node` at stage entry (skills bind once,
+    /// never mid-stage). `hash` is the content hash resolved *at bind time*,
+    /// not whatever the node's declaration pinned — replaying the log
+    /// therefore reconstructs the exact triple "node → skill → hash" from
+    /// this event alone, with no positional inference from a preceding
+    /// `StageEntered`. `gate_enabled` records whether the trust gate
+    /// (`ApprovalConfig::skill_approval`) was active for this bind: `false`
+    /// means the node's approval config explicitly disabled it and this
+    /// skill bound without a trust prompt regardless of hash state — kept
+    /// on the event so a disabled protection is visible in the log, not
+    /// silent. Schema v6.
+    SkillBound {
+        /// Node the skill was bound onto.
+        node: NodeKey,
+        /// The skill's declared name.
+        name: String,
+        /// Which root the bound pack was found under.
+        provider: SkillProvider,
+        /// Content hash of the pack as resolved at bind time.
+        hash: ContentHash,
+        /// Whether the operator-approval trust gate was active for this
+        /// bind. `false` means it was explicitly disabled by
+        /// `ApprovalConfig::skill_approval` and this skill bound without a
+        /// pin/hash check.
+        gate_enabled: bool,
+    },
 }
 
 impl EventPayload {
@@ -563,6 +591,7 @@ impl EventPayload {
             Self::SubgraphExited { .. } => "SubgraphExited",
             Self::NotifyDelivered { .. } => "NotifyDelivered",
             Self::EscalationRequested { .. } => "EscalationRequested",
+            Self::SkillBound { .. } => "SkillBound",
         }
     }
 }
@@ -1095,6 +1124,21 @@ mod tests {
             let parsed = EventPayload::from_bincode(&bytes).unwrap();
             assert_eq!(p, parsed);
         }
+    }
+
+    #[test]
+    fn skill_bound_roundtrip() {
+        let payload = EventPayload::SkillBound {
+            node: NodeKey::try_from("implement").unwrap(),
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            hash: ContentHash::compute(b"skill-pack-content"),
+            gate_enabled: true,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "SkillBound");
     }
 
     #[test]

@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Skill binding, trust gate, and the `SkillBound` event
+
+- **`AgentConfig::declared_skills()`** — a node's `skills = [...]` declaration
+  (read from `custom_fields["skills"]`, an array of `surge_core::skill::SkillRef`)
+  resolves and binds at stage entry, exactly like a context `Binding`
+  (`project.md`) — never lazily mid-stage. Declared on `custom_fields` rather
+  than a dedicated field so the capability doesn't force every `AgentConfig`
+  struct literal across the workspace to grow it. A malformed declaration is
+  its own typed `StageError::InvalidSkillsDeclaration { node, source }`, not
+  flattened into `StageError::Internal(String)`.
+- **`engine::stage::skill_binding::bind_skills`** — resolves each declared
+  skill against the node's discovered `SkillCatalog` and, once bound, hands
+  the caller each skill's resolved instructions
+  (`skill_binding::BoundSkill::instructions`) so `engine::stage::agent`
+  appends them to the agent's system prompt at session-open time — the
+  content actually reaches the agent, not just the event log.
+- **Trust gate delivered through the rendered path.** An unpinned, unhashed,
+  or content-changed skill gates behind an operator decision emitted as
+  `EventPayload::HumanInputRequested` / `HumanInputResolved` /
+  `HumanInputTimedOut` — the same events `cockpit::dispatch::decide_action`
+  and `surge inbox` already render — resolved through the engine's existing
+  node-keyed `gate_resolutions` registry and `Engine::resolve_human_input`.
+  The sender is registered into that registry only at the moment a prompt is
+  actually requested, never eagerly at stage entry, so a node whose skills
+  all bind without approval never touches the registry, and a prompt can
+  never be resolved against a stale, already-abandoned entry. A denial or an
+  unanswered prompt is `StageError::SkillApprovalRejected` — the node does
+  not start, and nothing is bound for it.
+- **`ApprovalConfig::skill_approval`** now gates real behavior (previously
+  read nowhere): default enabled, so a profile that never mentions it keeps
+  the trust check active; set to `false` to bind every declared skill on
+  that node without a prompt. Every `SkillBound` event records
+  `gate_enabled: bool` so a disabled gate is visible in the log, not silent.
+- **`EventPayload::SkillBound`** carries `node: NodeKey` explicitly (not
+  positional "nearest preceding `StageEntered`" inference), so a single
+  event reconstructs the full "node → skill → hash" triple by itself — the
+  event log alone is enough to know which skill, at which content, entered
+  which node (R17).
+- **`default_skill_roots`** scans `.claude/plugins` alongside `.claude/skills`
+  under both the worktree and the user's home directory. The Agent Plugins
+  corpus measured on a real machine (352 `SKILL.md`, 47
+  `.claude-plugin/plugin.json` manifests) lives under `~/.claude/plugins`,
+  not `~/.claude/skills` — scanning only the latter would never bind a
+  single one of those 47 packages.
+  See [ADR 0015](docs/adr/0015-skill-binding-trust-via-content-hash.md).
+- **Event schema v6** (`surge_core::migrations::MAX_SUPPORTED_VERSION`) adds
+  the `SkillBound` variant, carrying `node`, `name`, `provider`, `hash`, and
+  `gate_enabled`. **Not "purely additive"**: an unknown enum variant has no
+  representation for an old reader to fall back on at all (unlike an
+  optional field, which can default) — the version is bumped precisely so a
+  v5-max reader fails closed with a clean `SurgeError::SchemaTooNew` instead
+  of an opaque unknown-variant decode error, the same reasoning as the
+  v2/v4/v5 bumps before it. See
+  [docs/schema-versioning.md](docs/schema-versioning.md#event-payloads-run-log).
+- **Ambiguous unpinned names reach the operator, not a hard failure.**
+  Measured on a real `~/.claude/plugins` corpus: 49 of 99 skill names have
+  more than one physically distinct pack (up to five per name). An unpinned
+  declaration of one of those names used to fail
+  `StageError::SkillResolutionFailed` before the node ever asked anyone —
+  roughly half the corpus, silently un-bindable. `bind_skills` now resolves
+  a `hash: Some(pin)` declaration directly against that pin (narrowing to
+  exact content — never ambiguous, per Решение §4) and only falls back to a
+  name/provider(/version) lookup — where `SkillError::Ambiguous` is expected
+  corpus shape, not a failure — when the pin doesn't match anything current.
+  The resulting approval prompt names every candidate's hash; the
+  lexicographically smallest is the one that binds if approved (a stable,
+  deterministic tie-break, not a guess).
+- **Skill catalog discovery moved off the async worker thread and is cached
+  per run.** `SkillCatalog::discover` synchronously walks and hashes every
+  pack under (now four) roots — hundreds of packs on a real corpus — and was
+  being called inline from an async fn on every single agent node that
+  declares skills. It now runs via `tokio::task::spawn_blocking` and is
+  discovered at most once per run (cached on the run's execution state),
+  reused by every later node instead of re-walking the filesystem each time.
+- **`ApprovalConfig::skill_approval` also honors the resolved profile**, not
+  only a node's own `approvals_override` — the same node-then-profile
+  precedence `engine::stage::agent::effective_approvals` already establishes
+  for every other approval flag.
+- **Declared skills validated at graph load**, not lazily the first time a
+  node's stage runs: `surge_core::validation::validate` now calls
+  `AgentConfig::declared_skills()` on every agent node (top-level and inside
+  subgraphs) and reports a malformed one as
+  `ValidationErrorKind::InvalidSkillsDeclaration { node, reason }` — the run
+  fails before `PipelineMaterialized`, before a worktree exists, matching
+  the "a broken declaration does not fail the run silently" standard History
+  15 already set for a broken `SKILL.md` (R09.1).
+- **`AgentConfig::declared_skills()` is `#[must_use]`.**
+
 ### Added — Memory as claims: per-entry provenance and confidence
 
 - **`surge_core::memory`** — a memory entry is now a claim, not free text:

@@ -139,6 +139,7 @@ pub async fn run_feature_planner(
         steers: Vec::new(),
         node: &node,
         agent_config: &agent_config,
+        bound_skills: &[],
         declared_outcomes: &declared_outcomes,
         bridge: params.bridge,
         writer: params.writer,

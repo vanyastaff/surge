@@ -45,7 +45,22 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// v1..v4 payloads decode cleanly (they never contain the new variants). The
 /// version is bumped so a v4-max reader rejects a ledger event with a clean
 /// [`SurgeError::SchemaTooNew`] rather than an unknown-variant decode error.
-pub const MAX_SUPPORTED_VERSION: u32 = 5;
+///
+/// **v6 (introduced 2026-09):** adds [`EventPayload::SkillBound`] (skill
+/// binding + trust gate), carrying `node`, `name`, `provider`, `hash`, and
+/// `gate_enabled`. A v5-max reader has no representation for this variant at
+/// all — decoding one is not a matter of a missing optional field defaulting
+/// cleanly, it is an unknown enum tag the v5 decoder cannot construct — so
+/// the version is bumped precisely so that reader fails closed with
+/// [`SurgeError::SchemaTooNew`] instead of an opaque unknown-variant decode
+/// error (the same reasoning as the v2/v4/v5 bumps above: a new variant is
+/// never "purely additive" from an old reader's point of view, even though
+/// every *existing* v1..v5 payload keeps decoding unchanged because none of
+/// them ever contained it). `SkillBound`'s own field set was still being
+/// shaped under this same v6 the week it was introduced — no v6 payload has
+/// ever left this development branch — so its five-field shape here is the
+/// v6 shape, not a v7 change; see `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
+pub const MAX_SUPPORTED_VERSION: u32 = 6;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -159,6 +174,27 @@ impl Migration for IdentityV5 {
     }
 }
 
+/// Identity migration for v6 — the schema bump that introduced the
+/// `SkillBound` variant (skill binding + trust gate). The wire shape is
+/// unchanged (same JSON-encoded [`VersionedEventPayload`] wrapper); old
+/// payloads decode cleanly because they never carry the new variant. The
+/// `schema_version` field is the only signal that distinguishes v1..v5 from
+/// v6 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV6;
+
+impl Migration for IdentityV6 {
+    fn version(&self) -> u32 {
+        6
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v6 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -166,7 +202,7 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// [`IdentityV3`], [`IdentityV4`], and [`IdentityV5`].
+    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], and [`IdentityV6`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -176,6 +212,7 @@ impl MigrationChain {
                 Box::new(IdentityV3),
                 Box::new(IdentityV4),
                 Box::new(IdentityV5),
+                Box::new(IdentityV6),
             ],
         }
     }
@@ -284,7 +321,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 5);
+        assert_eq!(wrapper.schema_version, 6);
     }
 
     #[test]
@@ -292,8 +329,25 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 5 }
+            SurgeError::SchemaTooNew { found: 99, max: 6 }
         ));
+    }
+
+    #[test]
+    fn v6_skill_bound_event_round_trips() {
+        use crate::content_hash::ContentHash;
+        use crate::skill::SkillProvider;
+
+        let payload = EventPayload::SkillBound {
+            node: NodeKey::try_from("implement").unwrap(),
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            hash: ContentHash::compute(b"skill-pack-content"),
+            gate_enabled: true,
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 
     #[test]

@@ -45,6 +45,19 @@ pub struct HumanGateResolution {
     pub response: serde_json::Value,
 }
 
+/// Node-keyed decision registry `Engine::resolve_human_input` drains.
+///
+/// Shared (behind an `Arc`) by `RunTaskParams::gate_resolutions` and any
+/// stage that pauses on an operator decision routed through the generic
+/// `HumanInputRequested`/`HumanInputResolved` pair — today `HumanGate`
+/// nodes and the skill-trust prompt
+/// (`engine::stage::skill_binding::bind_skills`). A caller registers a
+/// sender for its node immediately before requesting the decision (never
+/// earlier) so a stale, unread entry can never sit in the map — see
+/// `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
+pub type GateResolutions =
+    tokio::sync::Mutex<std::collections::HashMap<NodeKey, oneshot::Sender<HumanGateResolution>>>;
+
 /// Execute a single `NodeKind::HumanGate` stage.
 ///
 /// Emits `HumanInputRequested`, then waits for either an external

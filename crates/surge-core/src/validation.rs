@@ -143,6 +143,16 @@ pub enum ValidationErrorKind {
     UnverifiedSuccessPath {
         terminal: NodeKey,
     },
+    /// An `Agent` node's `custom_fields["skills"]` does not deserialize as a
+    /// list of `surge_core::skill::SkillRef` — a graph-authoring mistake,
+    /// caught here so it fails the run at load time, before a worktree is
+    /// even created, rather than lazily the first time that node's stage
+    /// runs (History 15 / R09.1's "a broken declaration does not fail the
+    /// run silently" standard, applied to skill declarations).
+    InvalidSkillsDeclaration {
+        node: NodeKey,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,7 +210,8 @@ impl ValidationErrorKind {
             | Self::SandboxCustomEmpty { .. }
             | Self::SandboxWritableRootEscape { .. }
             | Self::SandboxNetworkPatternInvalid { .. }
-            | Self::SandboxShellMetacharacters { .. } => Severity::Error,
+            | Self::SandboxShellMetacharacters { .. }
+            | Self::InvalidSkillsDeclaration { .. } => Severity::Error,
         }
     }
 }
@@ -262,6 +273,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w4_unverified_success(graph, &mut findings);
     validate_loop_static_cap(graph, &mut findings);
     validate_sandbox_custom_on_agents(graph, &mut findings);
+    validate_declared_skills(graph, &mut findings);
 
     let has_error = findings
         .iter()
@@ -1224,6 +1236,45 @@ fn validate_sandbox_custom_on_agents(graph: &Graph, out: &mut Vec<ValidationErro
         let errs = validate_custom(sandbox);
         if !errs.is_empty() {
             push(node, errs, out);
+        }
+    };
+
+    for node in graph.nodes.values() {
+        walk_node(node, out);
+    }
+    for sg in graph.subgraphs.values() {
+        for node in sg.nodes.values() {
+            walk_node(node, out);
+        }
+    }
+}
+
+/// Every `Agent` node's `custom_fields["skills"]` must deserialize as a list
+/// of `surge_core::skill::SkillRef` (via `AgentConfig::declared_skills`).
+/// Runs at graph-load time — before `PipelineMaterialized`, before a
+/// worktree is created — so a malformed declaration is a validation
+/// finding naming the node and the parse reason, not a run that starts,
+/// spends setup work, and only then fails the first time that node's
+/// stage is entered.
+fn validate_declared_skills(graph: &Graph, out: &mut Vec<ValidationError>) {
+    let walk_node = |node: &crate::node::Node, out: &mut Vec<ValidationError>| {
+        let NodeConfig::Agent(cfg) = &node.config else {
+            return;
+        };
+        if let Err(err) = cfg.declared_skills() {
+            out.push(ValidationError {
+                kind: ValidationErrorKind::InvalidSkillsDeclaration {
+                    node: node.id.clone(),
+                    reason: err.to_string(),
+                },
+                location: ErrorLocation::Node {
+                    id: node.id.clone(),
+                },
+                message: format!(
+                    "agent node `{}` declares an invalid `skills` list: {err}",
+                    node.id.as_str(),
+                ),
+            });
         }
     };
 
@@ -2366,6 +2417,94 @@ mod tests {
             )),
             "happy path should not surface any MCP-specific errors; got: {errors:?}"
         );
+    }
+
+    #[test]
+    fn invalid_skills_declaration_is_rejected_by_graph_validation() {
+        use crate::agent_config::{AgentConfig, NodeLimits};
+        use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+        use crate::keys::{NodeKey, ProfileKey};
+        use crate::node::{Node, NodeConfig, Position};
+        use crate::terminal_config::{TerminalConfig, TerminalKind};
+        use std::collections::BTreeMap;
+
+        let stage_key = NodeKey::try_from("implement").unwrap();
+        let terminal_key = NodeKey::try_from("end").unwrap();
+
+        // `skills` present but shaped wrong (missing the required `name`
+        // key) — a graph-authoring mistake, not a missing key.
+        let mut custom_fields = BTreeMap::new();
+        custom_fields.insert(
+            "skills".to_string(),
+            toml::Value::Array(vec![toml::Value::Table({
+                let mut t = toml::map::Map::new();
+                t.insert(
+                    "provider".to_string(),
+                    toml::Value::String("project_dir".into()),
+                );
+                t
+            })]),
+        );
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            stage_key.clone(),
+            Node {
+                id: stage_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Agent(AgentConfig {
+                    profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: vec![],
+                    rules_overrides: None,
+                    limits: NodeLimits::default(),
+                    hooks: vec![],
+                    custom_fields,
+                }),
+            },
+        );
+        nodes.insert(
+            terminal_key.clone(),
+            Node {
+                id: terminal_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+
+        let graph = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata::new("skills-load-validation", chrono::Utc::now()),
+            start: stage_key.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let errors = crate::validation::validate(&graph)
+            .expect_err("a malformed skills declaration must be a validation error");
+        let finding = errors
+            .iter()
+            .find(|e| matches!(e.kind, ValidationErrorKind::InvalidSkillsDeclaration { .. }))
+            .expect("expected an InvalidSkillsDeclaration finding");
+        match &finding.kind {
+            ValidationErrorKind::InvalidSkillsDeclaration { node, reason } => {
+                assert_eq!(*node, stage_key);
+                assert!(
+                    !reason.is_empty(),
+                    "the finding must name why the declaration is invalid"
+                );
+            },
+            other => panic!("expected InvalidSkillsDeclaration, got {other:?}"),
+        }
     }
 }
 

@@ -8,7 +8,7 @@ memory database versions independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **1** |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **6** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
 
 ## `surge.toml` (config)
@@ -42,6 +42,24 @@ older than the current version are run **through the migration chain in
 `surge_core::migrations` before the fold**, so an old run remains
 replayable after a surge upgrade. This is the one format that must *never*
 hard-break across versions — historical runs are immutable.
+
+**Every one of the v2..v6 bumps so far has been a *new enum variant*, not a
+field change on an existing one — and that distinction is the actual
+reason each bump was required.** A field a reader doesn't recognize can
+default (`#[serde(default)]`) and the payload still decodes; a variant the
+reader's `EventPayload` enum has never heard of has **no representation to
+decode into at all** — a v5-max binary reading a v6 `SkillBound` event
+would hit an unknown-tag deserialize error, not a missing-field default.
+Bumping the version so that reader instead returns a clean, typed
+`SurgeError::SchemaTooNew` — rather than an opaque decode failure — is the
+whole reason the migration chain exists (`surge_core::migrations`, each
+`IdentityVN` documents this per-version). Describing such a bump as
+"purely additive" is only true in the narrow sense that *every prior
+version's own payloads* keep decoding unchanged (they never contained the
+new variant); it is not additive from an *old reader's* point of view, and
+a CHANGELOG entry should say the latter, not just the former — see the
+Memory DB v1→v2 entry below for the same caution applied to a different
+kind of change (a backfill, not a new variant).
 
 ## Memory DB (`surge-persistence`)
 

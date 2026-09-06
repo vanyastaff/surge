@@ -6,6 +6,7 @@ pub mod branch;
 pub mod human_gate;
 pub mod loop_stage;
 pub mod notify;
+pub mod skill_binding;
 pub mod subgraph_stage;
 pub mod terminal;
 
@@ -83,6 +84,35 @@ pub enum StageError {
         stage: surge_core::run_event::BootstrapStage,
         /// The configured cap value.
         cap: u32,
+    },
+
+    /// A node's declared skill failed to resolve against the discovered
+    /// catalog — not found, malformed manifest, or ambiguous content across
+    /// ProjectDir/UserDir/Registry candidates.
+    #[error("skill resolution failed: {0}")]
+    SkillResolutionFailed(#[from] surge_core::skill::SkillError),
+
+    /// An unpinned, unhashed, or content-changed skill's trust prompt was
+    /// denied or went unanswered within the timeout. The node does not
+    /// start.
+    #[error("skill approval rejected (timeout or explicit denial)")]
+    SkillApprovalRejected,
+
+    /// A node's `custom_fields["skills"]` declaration does not deserialize
+    /// as a list of `surge_core::skill::SkillRef` — a graph-authoring
+    /// mistake, not an internal engine condition. Kept as its own variant
+    /// (rather than flattened into `Internal(String)`) so the typed
+    /// `DeclaredSkillsError` — which names the malformed TOML and why —
+    /// survives to whatever reports the failure, matching the file+reason
+    /// standard `SkillError::MalformedFrontmatter` already holds for a
+    /// broken `SKILL.md` (History 15 / R09.1).
+    #[error("node {node} declares invalid skills: {source}")]
+    InvalidSkillsDeclaration {
+        /// The node whose declaration failed to parse.
+        node: surge_core::keys::NodeKey,
+        /// The typed parse failure.
+        #[source]
+        source: surge_core::agent_config::DeclaredSkillsError,
     },
 }
 
