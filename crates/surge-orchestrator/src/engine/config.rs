@@ -120,6 +120,20 @@ pub struct EngineRunConfig {
     /// wiring and resolution as `tool_call_loop_guard` above.
     #[serde(default)]
     pub output_spill: Option<surge_core::spill_config::OutputSpillConfig>,
+    /// Test-only override of `MemoryStore::default_path()`
+    /// (`~/.surge/memory.db`), consumed by
+    /// `engine::hooks::memory_writeback::record_node_failure`. `None` — the
+    /// only value any production caller sets — keeps the real default path;
+    /// integration tests set `Some(tempdir_path)` so a node's terminal
+    /// failure is recorded into a throwaway store instead of mutating the
+    /// process-wide `$HOME` environment variable
+    /// (`tests/memory_writeback_test.rs`). Deliberately never copied into
+    /// `surge_core::run_event::RunConfig` (`Engine::startup_run_events`'s
+    /// `core_run_config`), so it is not part of the persisted run schema and
+    /// does not survive a daemon restart + resume — see
+    /// `docs/schema-versioning.md`.
+    #[serde(default)]
+    pub memory_store_path: Option<std::path::PathBuf>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -224,6 +238,7 @@ impl Default for EngineRunConfig {
             budget: surge_core::budget::BudgetGuard::default(),
             tool_call_loop_guard: None,
             output_spill: None,
+            memory_store_path: None,
         }
     }
 }
@@ -260,6 +275,21 @@ mod tests {
     }
 
     #[test]
+    fn engine_run_config_default_has_no_memory_store_path_override() {
+        let cfg = EngineRunConfig::default();
+        assert!(cfg.memory_store_path.is_none());
+    }
+
+    #[test]
+    fn engine_run_config_missing_memory_store_path_deserializes_to_none() {
+        // Persisted/legacy configs from before this field existed must still
+        // decode, defaulting to the real `MemoryStore::default_path()`.
+        let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
+        let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.memory_store_path.is_none());
+    }
+
+    #[test]
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
             human_input_timeout: Duration::from_secs(120),
@@ -280,6 +310,7 @@ mod tests {
             budget: surge_core::budget::BudgetGuard::default(),
             tool_call_loop_guard: None,
             output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -314,6 +345,7 @@ mod tests {
             budget: surge_core::budget::BudgetGuard::default(),
             tool_call_loop_guard: None,
             output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -362,6 +394,7 @@ mod tests {
             budget: surge_core::budget::BudgetGuard::default(),
             tool_call_loop_guard: None,
             output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

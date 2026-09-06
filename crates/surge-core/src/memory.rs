@@ -275,6 +275,21 @@ impl MemoryClaim {
         self
     }
 
+    /// Whether this claim may be superseded in place by a fresher
+    /// write-back about the same subject, rather than left standing next to
+    /// a new claim.
+    ///
+    /// Only ever true for [`ClaimStatus::Unverified`]. A [`ClaimStatus::Verified`]
+    /// claim carries a verification command and timestamp
+    /// (`Provenance::is_verified`) — that is proof, and background write-back
+    /// never silently retires proof just because a fresh, unverified
+    /// assertion showed up about the same thing (`.autopilot/competitive-waves/spec.md`
+    /// §24, History 20 / R22: "a verified claim is never aged").
+    #[must_use]
+    pub fn is_aging_eligible(&self) -> bool {
+        self.status == ClaimStatus::Unverified
+    }
+
     /// Build a claim that is always `ClaimStatus::Unverified` — infallible
     /// by construction, since the `Verified`-requires-provenance invariant
     /// only constrains `ClaimStatus::Verified`. Not `pub`: external callers
@@ -516,5 +531,34 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn unverified_claim_is_aging_eligible() {
+        let claim = MemoryClaim::from_transcript(
+            "the retry budget is 3 attempts",
+            "transcript:run-01ARZ3NDEKTSV4RRFFQ69G5FAV#turn-1",
+            ContentHash::compute(b"turn 1"),
+        );
+
+        assert!(claim.is_aging_eligible());
+    }
+
+    #[test]
+    fn verified_claim_is_never_aging_eligible() {
+        let hash = ContentHash::compute(b"src/lib.rs");
+        let claim = MemoryClaim::new(
+            MemoryClaimId::new(),
+            "the retry budget is 3 attempts",
+            Provenance::verified("src/lib.rs", hash, "cargo test", 1_700_000_000_000),
+            Confidence::Verified,
+            ClaimStatus::Verified,
+        )
+        .unwrap();
+
+        assert!(
+            !claim.is_aging_eligible(),
+            "a verified claim must never be reported eligible for aging/replacement"
+        );
     }
 }

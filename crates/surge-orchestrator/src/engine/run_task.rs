@@ -1144,7 +1144,7 @@ async fn resolve_stage_error(
         return record_suppressed_error(params, state, suppressed, &raw_reason).await;
     }
 
-    let _ = params
+    let stage_failed_seq = params
         .writer
         .append_event(VersionedEventPayload::new(EventPayload::StageFailed {
             node: state.cursor.node.clone(),
@@ -1152,6 +1152,23 @@ async fn resolve_stage_error(
             retry_available: false,
         }))
         .await;
+    // Write-back is a node *outcome*, not a side effect: only once the
+    // failure is genuinely terminal (not suppressed above) and its
+    // `StageFailed` is durably recorded do we record it in memory — and
+    // only then, using the seq `StageFailed` was actually assigned, so a
+    // failed append (storage already in trouble) skips write-back too
+    // rather than compounding it.
+    if let Ok(seq) = stage_failed_seq {
+        crate::engine::hooks::memory_writeback::record_node_failure(
+            params.run_id,
+            &state.cursor.node,
+            &raw_reason,
+            &params.writer,
+            seq,
+            params.run_config.memory_store_path.as_deref(),
+        )
+        .await;
+    }
     Err(failed(params, raw_reason).await)
 }
 
