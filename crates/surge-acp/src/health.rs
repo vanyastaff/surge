@@ -216,7 +216,7 @@ impl AgentHealth {
 pub struct HealthTracker {
     agents: HashMap<String, AgentHealth>,
     fallback_map: HashMap<String, String>,
-    /// Learned capacity per agent account (R34–R36), populated from real
+    /// Learned capacity per agent runtime (R34–R36), populated from real
     /// observed 429s in [`Self::record_failure`]. Absent entry means "not
     /// yet observed" — see [`Self::capacity_status`].
     capacity: HashMap<String, CapacityWindow>,
@@ -380,7 +380,7 @@ impl HealthTracker {
     }
 
     /// Capacity status Surge has for `agent` (R34–R36). Distinguishes a
-    /// fresh account nobody has ever failed against
+    /// fresh runtime nobody has ever failed against
     /// ([`CapacityStatus::NeverObserved`], the common case, R35.1) from one
     /// that has failed without ever matching a recognized rate-limit shape
     /// ([`CapacityStatus::Unclassified`]) — the two must not read the same
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_capacity_status_never_observed_before_any_failure() {
-        // The primary case (R35.1): a fresh account has never been
+        // The primary case (R35.1): a fresh runtime has never been
         // observed, so there is nothing to report — not a fabricated
         // default.
         let mut monitor = HealthTracker::new();
@@ -715,7 +715,7 @@ mod tests {
             .window()
             .cloned()
             .expect("429 with Retry-After must populate a capacity window");
-        assert_eq!(window.account(), "claude");
+        assert_eq!(window.runtime(), "claude");
         assert_eq!(
             window.source(),
             surge_core::capacity::CapacitySource::Observed429
@@ -806,7 +806,7 @@ mod tests {
         // An agent whose every heartbeat fails (spawn/handshake broken)
         // never calls `record_failure` — `total_failures` never moves —
         // but it has very much failed, and must not report the same
-        // `NeverObserved` a truly untouched account would.
+        // `NeverObserved` a truly untouched runtime would.
         let mut monitor = HealthTracker::new();
         monitor.register("claude");
         monitor.record_heartbeat_failure("claude");

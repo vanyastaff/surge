@@ -8,11 +8,13 @@ date = "2026-09-06"
 
 ## Status
 
-Accepted, **M0 slice only**. Task 12 ("capacity scheduling") is six milestones
+Accepted, **M0 and M1**. Task 12 ("capacity scheduling") is six milestones
 (M0–M5); this ADR is opened at M0 and is expected to gain sections for
-`CapacityPolicy`/`Decision` (M1), persistence (M2), the run-task wiring
-(M3), the wake scheduler (M4), and the inbox/doc surface (M5) as each lands —
-not to be rewritten wholesale once they do.
+persistence (M2), the run-task wiring (M3), the wake scheduler (M4), and the
+inbox/doc surface (M5) as each lands — not to be rewritten wholesale once
+they do. The M0 sections above use the field name current at the time they
+were written (`account`); M1 renamed it — see the M1 section below, which
+uses the post-rename name throughout.
 
 ## Context
 
@@ -188,14 +190,149 @@ its elimination.
   time" as the exceptional case it measures as, not the common case the
   ticket's original framing assumed.
 
+## M1: Model and Policy (`surge-core`)
+
+**A1 — the key is renamed `account` → `runtime` throughout, ratified after
+three rounds finding the same bug.** Task 11 already moved this field once
+(`ProfileKey` → `agent_id`) because the name misdescribed the content;
+leaving `account` on data that is, by every constructor this crate has,
+purely a runtime identity would guarantee a fourth round. Surge never
+stores provider credentials, and `builtin_registry.json` carries exactly
+one launch configuration per registered runtime — there is no second axis
+a distinct login could be keyed on today, so runtime and login coincide for
+every installation this crate can express. `CapacityWindow.account` (field,
+`account()` accessor, `observed_429`/`from_observed_error` parameters),
+`StageError::RateLimited.account`, and the module doc's "per-agent-account"
+framing are all renamed to `runtime`; `SendMessageError::RateLimited` is
+untouched (the bridge layer never carried an identity to rename). Where a
+future installation *can* express two logins on one runtime, this key errs
+toward the safe side (over-parking both together) rather than the unsafe
+one (under-parking either) — see A2 below for the follow-up that would
+actually distinguish them. `SendMessageError`/`StageError`/`Decision`
+marker questions from the API-gate pass are settled in-line on each type
+(see `surge_core::capacity`'s doc comments); not re-litigated here.
+
+**A2 (deferred, not this task):** introduce `Profile.runtime.login: Option<String>`
+naming a specific `SurgeConfig.agents` entry, once the engine path actually
+resolves through `agents` rather than solely through `Registry` — a real
+cost concentrated in the launch-resolution path, not the scheduler, and
+worth its own review rather than folding into a parking-policy change.
+
+**Normalization decision: fix the write site, not every reader.**
+`StageError::RateLimited.runtime` was already normalized at construction
+(M0), but `EventPayload::SessionOpened.agent_id` — the field `surge-cli`'s
+inbox capacity scan actually keys off today — was written raw, un-normalized,
+in `engine/stage/agent.rs`. One fact (which runtime a session belongs to)
+had two different values depending on which event you read, silently
+reopening the exact `claude`/`claude-code`/`claude-acp` fragmentation this
+ADR's M0 section already claimed was closed. Fixed at the write site
+(`SessionOpened`'s construction, `agent.rs`), not by asking every reader to
+normalize on its own: this is the only place the fact is ever produced,
+while it already has one real reader and will gain another (M2's ledger);
+"remember to normalize" is a contract this codebase's own standards single
+out as the wrong shape for exactly this reason. Cost accepted knowingly:
+the run event log is append-only, so any `SessionOpened` written *before*
+this fix keeps its raw `agent_id` forever — this closes the gap for every
+session opened from here on, not retroactively. A future reader spanning
+both eras (a `surge-cli` inbox scan against a run started before this
+change) still sees the un-normalized string for that older run; that reader
+owns its own historical-data decision, this write-site fix cannot undo it.
+
+**Rule order (`CapacityPolicy::decide`, pure, no I/O):**
+1. exhausted, usable reset time known → `Park{ObservedReset, wake_at =
+   resets_at}`. "Usable" is `seconds_until_reset(now).is_some()`, never
+   `resets_at.is_some()` alone — a stale past `resets_at` is not evidence of
+   anything.
+2. exhausted, no usable reset time, `blind_backoff` configured →
+   `Park{PolicyBackoff, wake_at = now + blind_backoff}`.
+3. exhausted, no usable reset time, `blind_backoff` removed by the operator
+   → `Dispatch{degraded: ExhaustedNoResetTime | ExhaustedResetElapsed}` —
+   the two `Degraded` reasons distinguish "never had a reset time" from "had
+   one, it went stale," which the fold and the log can both tell apart.
+4. no `WorkEstimate` → `Dispatch{degraded: None}`, unconditionally — the one
+   claim this milestone can actually measure (R35.1): absence of an
+   estimate is never itself a reason to refuse. Pinned by a test that fails
+   red under the exact defect this rule forbids (verified during review by
+   deliberately reintroducing it).
+5. otherwise (estimate present, not exhausted) — attempt a real comparison
+   against the runtime's remaining capacity. **Structurally unreachable
+   with any `CapacityWindow` this crate's own constructors can produce
+   today**: `remaining` is only ever `None` or exactly `EXHAUSTED` (the sole
+   live constructor is `observed_429`), so a genuine fraction never occurs
+   in production, and `window` (a learned duration) is populated only by
+   the rare `with_learned_window` path. Implemented as real code anyway (not
+   a stub) so the arm is pluggable the day a producer exists; exercised in
+   tests via direct construction bypassing the public API, which no
+   production caller can do.
+
+`Decision` carries **no** `#[non_exhaustive]` (each variant demands
+categorically different caller behavior — a silently-absorbed future
+variant would run the wrong one under the new variant's name) and **is**
+`#[must_use]`. `WakeBasis` carries no `#[non_exhaustive]` either (a
+consecutive-blind-park counter must match it exhaustively). `Degraded`
+does carry it (its only consumer is a log line; over-inclusion costs
+nothing).
+
+**Rotation (R41) — shape only, not live.** `RotationPolicy` and
+`Decision::Rotate` exist so the seam is ready, but `decide` never emits
+`Rotate` in this delivery regardless of `RotationPolicy`'s value: verifying
+a candidate targets a genuinely different `RuntimeKind` needs
+`surge_acp::Registry`, which `surge-core` does not and should not depend
+on. Shipping a live `Rotate` today — "next profile of the same runtime" —
+would silently repeat rule 2/3's already-exhausted dispatch with extra
+steps, worse than refusing outright. R41 remains deferred, against a
+verified target, not yet scheduled as a numbered task.
+
+**`RemainingShare` validation moved onto the type.** The derived
+`Deserialize` bypassed `RemainingShare::new`'s `[0.0, 1.0]` range check
+entirely — a `NaN` or out-of-range `f64` off the wire produced a
+`RemainingShare` nothing had validated, and `NaN <= 0.0` is `false`, so
+`is_exhausted()` would have read it as "capacity available." Fixed via
+`#[serde(try_from = "f64")]`, routing every deserialization through `new`.
+A future SQLite `remaining REAL` reader (M2) must do the same: a value that
+fails `new` there is a corrupt/unreadable row, which is
+`CapacityStatus::Unclassified`, never `NeverObserved` — those answer
+different questions.
+
+**Schema bump 6→7, unconditional.** `RunParked`/`RunWokeFromPark` are two
+new `EventPayload` variants under one bump — `docs/schema-versioning.md`'s
+field-composition exception (which covered a *field* added to the
+already-v6 `SkillBound`) does not extend to a new variant, and "no tagged
+release has shipped v6 yet" is a risk-radius observation about today's
+blast radius, not a version-policy exemption. A v6-max reader has no
+representation to decode either new variant into at all and must fail
+closed with `SurgeError::SchemaTooNew`, exactly like every prior variant
+bump (v2/v4/v5/v6).
+
+**Parser widening (`parse_reset_hint`, additive next to
+`parse_retry_after_secs`).** Three new, narrowly-anchored rules — OpenAI's
+`"try again in Ns"` prose, Google's `retryDelay` protobuf-`Duration` field,
+and Anthropic's `"usage limit reached|<epoch>"` suffix (accepted only when
+the epoch is strictly future and within a 30-day horizon) — move 3 of the
+4 real-provider-shaped bodies from M0's measurement table out of "no reset
+time recognized." `parse_retry_after_secs` stays `pub`, signature and
+contract untouched: M0 gave it a second cross-crate caller
+(`surge_acp::bridge::worker`), so privatizing it would have broken the
+build in the same commit that added that caller. Deliberately does **not**
+copy `surge_acp::pool::parse_retry_after`'s unanchored numeric fallback or
+its invented 60-second default — that fallback is exactly the fabricated
+signal this module exists to refuse. All three parsers (`parse_retry_after_secs`,
+`parse_reset_hint`, `pool::parse_retry_after`) carry a doc comment stating
+they are intentionally separate (observation vs. policy) and must not be
+unified — a regression test cannot catch its own premise disappearing, so
+the comment is the guard a test can't be.
+
 ## Revisit Triggers
 
 - Real agent-runtime error text is captured (from Claude Code / Codex /
   Gemini CLI actually rate-limited) — replace the reconstructed table with
   captured samples and update the achievability reading.
-- M2 designs the capacity ledger's key and resolves whether two credentialed
-  accounts can share one runtime identity — `account`'s doc and shape may
-  need to change at that point, not before.
+- ~~M2 designs the capacity ledger's key and resolves whether two
+  credentialed accounts can share one runtime identity~~ — resolved in M1
+  (A1): the key is the canonical runtime id (`runtime`, renamed from
+  `account`); M2's ledger key follows directly. A2 (a real
+  `Profile.runtime.login` distinguishing two logins on one runtime) remains
+  open and not yet scheduled as a numbered task — see the M1 section above.
 - A provider's `Retry-After` **HTTP header** turns out to be observable
   through some agent runtime's ACP adapter (as opposed to only its JSON
   error body) — worth a dedicated classifier note if so.

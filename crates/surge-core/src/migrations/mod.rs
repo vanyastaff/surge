@@ -60,7 +60,20 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// shaped under this same v6 the week it was introduced — no v6 payload has
 /// ever left this development branch — so its five-field shape here is the
 /// v6 shape, not a v7 change; see `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
-pub const MAX_SUPPORTED_VERSION: u32 = 6;
+///
+/// **v7 (introduced 2026-09):** adds [`EventPayload::RunParked`] and
+/// [`EventPayload::RunWokeFromPark`] (Task 12 M1 — provider rate-limit
+/// parking, R37/R37.1). Two new self-contained variants, unconditionally
+/// bumped for the identical reason as v6: `docs/schema-versioning.md`'s
+/// field-composition exception (which let a v6 *field* change on
+/// `SkillBound` ride under the version already bumped for its variant) does
+/// not extend to a *new variant* — that exception was never about variants,
+/// and "no tagged release has shipped v6 yet" is a risk-radius observation,
+/// not a version-policy exemption; a v6-max reader still cannot construct
+/// either new variant at all (not merely default a missing field), so it
+/// must fail closed with [`SurgeError::SchemaTooNew`] rather than an opaque
+/// unknown-variant decode error, exactly like v2/v4/v5/v6 before it.
+pub const MAX_SUPPORTED_VERSION: u32 = 7;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -195,6 +208,27 @@ impl Migration for IdentityV6 {
     }
 }
 
+/// Identity migration for v7 — the schema bump that introduced the
+/// `RunParked` / `RunWokeFromPark` variants (Task 12 M1, provider
+/// rate-limit parking). The wire shape is unchanged (same JSON-encoded
+/// [`VersionedEventPayload`] wrapper); old payloads decode cleanly because
+/// they never carry either new variant. The `schema_version` field is the
+/// only signal that distinguishes v1..v6 from v7 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV7;
+
+impl Migration for IdentityV7 {
+    fn version(&self) -> u32 {
+        7
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v7 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -202,7 +236,8 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], and [`IdentityV6`].
+    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`], and
+    /// [`IdentityV7`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -213,6 +248,7 @@ impl MigrationChain {
                 Box::new(IdentityV4),
                 Box::new(IdentityV5),
                 Box::new(IdentityV6),
+                Box::new(IdentityV7),
             ],
         }
     }
@@ -321,7 +357,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 6);
+        assert_eq!(wrapper.schema_version, 7);
     }
 
     #[test]
@@ -329,7 +365,7 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 6 }
+            SurgeError::SchemaTooNew { found: 99, max: 7 }
         ));
     }
 
@@ -345,6 +381,30 @@ mod tests {
             hash: ContentHash::compute(b"skill-pack-content"),
             gate_enabled: true,
         };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v7_run_parked_event_round_trips() {
+        use crate::capacity::WakeBasis;
+
+        let payload = EventPayload::RunParked {
+            wake_at: chrono::Utc::now(),
+            runtime: Some("claude-acp".into()),
+            worktree: std::path::PathBuf::from("/tmp/run-worktree"),
+            basis: WakeBasis::PolicyBackoff,
+            reason: "no observed reset time; blind backoff".into(),
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v7_run_woke_from_park_event_round_trips() {
+        let payload = EventPayload::RunWokeFromPark {};
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);

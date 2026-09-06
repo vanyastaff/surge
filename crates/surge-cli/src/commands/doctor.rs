@@ -775,8 +775,8 @@ fn format_capacity(window: &surge_core::capacity::CapacityWindow) -> String {
         .resets_at()
         .map_or_else(|| "unknown".to_string(), |t| t.to_rfc3339());
     format!(
-        "account={} window={window_len} remaining={remaining} resets_at={resets_at} source={:?}",
-        window.account(),
+        "runtime={} window={window_len} remaining={remaining} resets_at={resets_at} source={:?}",
+        window.runtime(),
         window.source(),
     )
 }
@@ -794,7 +794,7 @@ mod tests {
         let window =
             surge_core::capacity::CapacityWindow::observed_429("claude", None, chrono::Utc::now());
         let rendered = format_capacity(&window);
-        assert!(rendered.contains("account=claude"), "{rendered}");
+        assert!(rendered.contains("runtime=claude"), "{rendered}");
         assert!(rendered.contains("window=unknown"), "{rendered}");
         assert!(rendered.contains("resets_at=unknown"), "{rendered}");
         assert!(rendered.contains("remaining=0%"), "{rendered}");

@@ -173,13 +173,15 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
             RunStatus::Failed | RunStatus::Aborted | RunStatus::Crashed => {
                 scan_run_capacity(storage, summary.id).await
             },
-            // `Bootstrapping`/`Running` cannot reach here (`is_terminal()`
-            // gates this branch); kept explicit rather than a wildcard so a
-            // future `RunStatus` variant forces a decision here instead of
+            // `Bootstrapping`/`Running`/`Parked` cannot reach here
+            // (`is_terminal()` gates this branch, and `Parked.is_terminal()`
+            // is `false` — Task 12); kept explicit rather than a wildcard so
+            // a future `RunStatus` variant forces a decision here instead of
             // silently defaulting.
-            RunStatus::Completed | RunStatus::Bootstrapping | RunStatus::Running => {
-                CapacityStatus::NeverObserved
-            },
+            RunStatus::Completed
+            | RunStatus::Bootstrapping
+            | RunStatus::Running
+            | RunStatus::Parked => CapacityStatus::NeverObserved,
         };
         return Ok(base(
             "done",
@@ -212,6 +214,11 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
             capacity,
         ),
         Attention::Working => base("working", None, active_node, None, capacity),
+        // Minimal, compiling treatment only — Task 12 M1 adds the
+        // `Attention::Waiting` variant so `RunState`/`Attention` compile
+        // and fold correctly; a dedicated inbox group surfacing `until` is
+        // M5's job (`.autopilot/competitive-waves/tickets/12-capacity-scheduling.md`).
+        Attention::Waiting { .. } => base("waiting", None, active_node, None, capacity),
         Attention::Done(reason) => base("done", Some(reason_label(reason)), None, None, capacity),
     })
 }
@@ -237,21 +244,21 @@ async fn scan_run_capacity(storage: &std::sync::Arc<Storage>, run_id: RunId) -> 
 }
 
 /// Best-effort capacity signal for `run_id` (R34–R36): the classification of
-/// each node's most recent `StageFailed` reason, attributed to the account
+/// each node's most recent `StageFailed` reason, attributed to the runtime
 /// from the last `SessionOpened.agent_id` seen before it — **not** `.agent`,
 /// which carries the node's flow-authored *profile* (e.g.
-/// `"implementer@1.0"`), a role identity, not an account. Keying
-/// `CapacityWindow.account` by profile would read one real account
-/// configured under two profiles as two different accounts. `agent_id` is
+/// `"implementer@1.0"`), a role identity, not a runtime. Keying
+/// `CapacityWindow.runtime` by profile would read one real runtime
+/// configured under two profiles as two different runtimes. `agent_id` is
 /// `None` for a run recorded before this field existed, or opened via the
-/// no-profile-registry legacy path; a `StageFailed` with no known account
+/// no-profile-registry legacy path; a `StageFailed` with no known runtime
 /// still means "saw something, cannot classify it", not silence — see the
 /// `None` arm below.
 ///
 /// Tracked **per node**, not as one run-wide slot: a flow node's profile
-/// (and so its account) is fixed for the node's lifetime, so `node` alone
-/// identifies "which account this status belongs to" without also tracking
-/// per-node account history. Per-node tracking matters because a run is not
+/// (and so its runtime) is fixed for the node's lifetime, so `node` alone
+/// identifies "which runtime this status belongs to" without also tracking
+/// per-node runtime history. Per-node tracking matters because a run is not
 /// one long attempt at one node — `plan` failing with a 429 and `review`
 /// separately failing with an unrelated error must not merge into a single
 /// downgraded status, and `review` later completing must not erase `plan`'s
@@ -266,19 +273,19 @@ async fn scan_capacity_signal(reader: &RunReader, run_id: RunId) -> Result<Capac
         .read_events(EventSeq(0)..EventSeq(u64::MAX))
         .await
         .with_context(|| format!("read events for {run_id}"))?;
-    let mut current_account: Option<String> = None;
+    let mut current_runtime: Option<String> = None;
     let mut by_node: std::collections::HashMap<surge_core::keys::NodeKey, CapacityStatus> =
         std::collections::HashMap::new();
     for read in events {
         let observed_at =
             chrono::DateTime::from_timestamp_millis(read.timestamp_ms).unwrap_or_default();
         match read.payload.payload {
-            EventPayload::SessionOpened { agent_id, .. } => current_account = agent_id,
+            EventPayload::SessionOpened { agent_id, .. } => current_runtime = agent_id,
             EventPayload::StageFailed { node, reason, .. } => {
-                let status = match &current_account {
-                    Some(account) => {
+                let status = match &current_runtime {
+                    Some(runtime) => {
                         match surge_core::capacity::CapacityWindow::from_observed_error(
-                            account.clone(),
+                            runtime.clone(),
                             &reason,
                             observed_at,
                         ) {
@@ -286,7 +293,7 @@ async fn scan_capacity_signal(reader: &RunReader, run_id: RunId) -> Result<Capac
                             None => CapacityStatus::Unclassified,
                         }
                     },
-                    // A failure with no known account still means "saw
+                    // A failure with no known runtime still means "saw
                     // something, cannot classify it" — never silence.
                     None => CapacityStatus::Unclassified,
                 };
@@ -331,7 +338,11 @@ fn terminal_label(status: surge_core::RunStatus) -> &'static str {
         RunStatus::Failed => "failed",
         RunStatus::Aborted => "aborted",
         RunStatus::Crashed => "crashed",
-        RunStatus::Bootstrapping | RunStatus::Running => "running",
+        // Only ever called with `is_terminal()` statuses (see the call
+        // site above); `Bootstrapping`/`Running`/`Parked` are unreachable
+        // here in practice — kept explicit, not a wildcard, per the same
+        // reasoning as `scan_capacity_for_summary`'s match above.
+        RunStatus::Bootstrapping | RunStatus::Running | RunStatus::Parked => "running",
     }
 }
 
@@ -352,6 +363,18 @@ fn print_inbox(entries: &[InboxEntry], show_done: bool) {
         .iter()
         .filter(|e| e.attention == "working")
         .collect();
+    // Task 12 M1: `Attention::Waiting` (parked on a provider rate limit)
+    // gets its own group rather than falling through unfiltered by any of
+    // the three buckets above/below — a run whose label matches none of
+    // them would otherwise silently vanish from this listing entirely
+    // (visible only via `--json`), the same "filter upstream drops a real
+    // class of input" failure this project has hit before. A richer,
+    // wake-time-aware surface is M5's job; this only keeps a parked run
+    // visible.
+    let waiting: Vec<&InboxEntry> = entries
+        .iter()
+        .filter(|e| e.attention == "waiting")
+        .collect();
     let done: Vec<&InboxEntry> = entries.iter().filter(|e| e.attention == "done").collect();
 
     // Blocked-first: the "needs me right now" group leads.
@@ -365,6 +388,15 @@ fn print_inbox(entries: &[InboxEntry], show_done: bool) {
             if let Some(prompt) = &e.prompt {
                 println!("      ↳ {}", first_line(prompt));
             }
+            print_capacity_line(e);
+        }
+    }
+
+    if !waiting.is_empty() {
+        println!("\n⏸ WAITING (parked on capacity) ({})", waiting.len());
+        for e in &waiting {
+            let node = e.active_node.as_deref().unwrap_or("-");
+            println!("  {}  @{}", short_run(&e.run_id), node);
             print_capacity_line(e);
         }
     }
@@ -401,8 +433,8 @@ fn print_capacity_line(entry: &InboxEntry) {
         CapacityStatus::NeverObserved => {},
         CapacityStatus::Known(window) => {
             println!(
-                "      ⚠ rate-limited: account={} resets_in={}",
-                window.account(),
+                "      ⚠ rate-limited: runtime={} resets_in={}",
+                window.runtime(),
                 format_resets_in(window, chrono::Utc::now())
             );
         },
@@ -590,18 +622,61 @@ mod tests {
         assert_eq!(d.done_reason, Some("completed"));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inbox_surfaces_waiting_group_for_a_parked_run() {
+        // Task 12 M1 (non-blocking review item): a parked run must land in
+        // its own "waiting" group, not silently vanish from every printed
+        // bucket (`needs_input`/`working`/`done` all filter by exact string
+        // match — a fourth label that matches none of them would otherwise
+        // only be visible via `--json`).
+        use surge_core::capacity::WakeBasis;
+
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let parked = RunId::new();
+        let w = storage.create_run(parked, &project, None).await.unwrap();
+        let wake_at = chrono::Utc::now() + chrono::Duration::minutes(5);
+        append(
+            &w,
+            vec![
+                run_started(),
+                pipeline_materialized(),
+                EventPayload::RunParked {
+                    wake_at,
+                    runtime: Some("claude-acp".into()),
+                    worktree: dir.path().to_path_buf(),
+                    basis: WakeBasis::ObservedReset,
+                    reason: "provider rate limit exhausted".into(),
+                },
+            ],
+        )
+        .await;
+        w.flush().await.unwrap();
+
+        let entries = collect_entries(&storage, Some(project.clone()), 100)
+            .await
+            .unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.run_id == parked.to_string())
+            .expect("parked run present");
+        assert_eq!(entry.attention, "waiting");
+    }
+
     /// A real `SessionOpened` as `agent.rs` actually emits it: `agent` holds
     /// the flow-authored *profile* (`"implementer@1.0"`-shaped — a role, not
-    /// an account), `agent_id` holds the real runtime/account identity. Two
+    /// a runtime), `agent_id` holds the real runtime identity. Two
     /// fixtures below deliberately give these *different* values so a test
     /// reading the wrong field is caught rather than passing by
     /// coincidence.
-    fn session_opened(node: &str, account: &str) -> EventPayload {
+    fn session_opened(node: &str, runtime: &str) -> EventPayload {
         EventPayload::SessionOpened {
             node: NodeKey::try_from(node).unwrap(),
             session: SessionId::new(),
             agent: "implementer@1.0".into(),
-            agent_id: Some(account.into()),
+            agent_id: Some(runtime.into()),
         }
     }
 
@@ -647,10 +722,10 @@ mod tests {
             .capacity
             .window()
             .expect("429 in StageFailed.reason must surface as a capacity signal");
-        // The account is `agent_id` ("claude-work"), never the profile
+        // The runtime is `agent_id` ("claude-work"), never the profile
         // string `agent` carries ("implementer@1.0") — the exact mix-up
-        // that would read one real account under two profiles as two.
-        assert_eq!(window.account(), "claude-work");
+        // that would read one real runtime under two profiles as two.
+        assert_eq!(window.runtime(), "claude-work");
         assert!(window.is_exhausted());
         assert!(window.resets_at().is_some());
     }
@@ -659,9 +734,9 @@ mod tests {
     async fn inbox_capacity_is_unclassified_when_agent_id_is_absent() {
         // A run recorded before `agent_id` existed (or opened via the
         // no-profile-registry legacy path) decodes `agent_id` as `None` —
-        // there is no account to attribute the failure to, so this must
-        // read as "saw something, cannot classify it", not fabricate an
-        // account from the profile string, and not silently disappear into
+        // there is no runtime to attribute the failure to, so this must
+        // read as "saw something, cannot classify it", not fabricate a
+        // runtime from the profile string, and not silently disappear into
         // `NeverObserved` either.
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("proj");
@@ -703,7 +778,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn inbox_capacity_persists_when_a_different_node_completes() {
         // The reviewer's exact example: `plan` fails with a 429 on one
-        // account, then a *different* node finishes — that must not erase
+        // runtime, then a *different* node finishes — that must not erase
         // the still-open signal on `plan`. Reset is node-scoped, not
         // "any StageCompleted anywhere in the run".
         let dir = tempfile::tempdir().unwrap();
@@ -744,7 +819,7 @@ mod tests {
             .capacity
             .window()
             .expect("an unrelated node completing must not clear plan's signal");
-        assert_eq!(window.account(), "claude-work");
+        assert_eq!(window.runtime(), "claude-work");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -799,7 +874,7 @@ mod tests {
         let window = entry.capacity.window().expect(
             "plan's Known signal must survive review separately failing and then completing",
         );
-        assert_eq!(window.account(), "claude-work");
+        assert_eq!(window.runtime(), "claude-work");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -851,7 +926,7 @@ mod tests {
             .capacity
             .window()
             .expect("a terminal Failed run's own StageFailed must still surface");
-        assert_eq!(window.account(), "claude-work");
+        assert_eq!(window.runtime(), "claude-work");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1000,7 +1075,7 @@ mod tests {
             .capacity
             .window()
             .expect("an Aborted run's own StageFailed must still surface");
-        assert_eq!(window.account(), "claude-work");
+        assert_eq!(window.runtime(), "claude-work");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1051,7 +1126,7 @@ mod tests {
             .capacity
             .window()
             .expect("a Crashed run's own StageFailed must still surface");
-        assert_eq!(window.account(), "claude-work");
+        assert_eq!(window.runtime(), "claude-work");
     }
 
     #[test]

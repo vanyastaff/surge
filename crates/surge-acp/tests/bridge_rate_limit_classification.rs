@@ -14,9 +14,12 @@
 //! `.to_string()` mangles it along the way.
 //!
 //! `#[ignore]`d per the task's own test-strategy item 7: `just ci`'s `test`
-//! recipe does not pass `--ignored`, so this is explicitly OUT of the
-//! project gate (it needs the `mock_acp_agent` binary built, ~tens of ms of
-//! subprocess spawn/handshake overhead per run). Run explicitly with
+//! recipe does not pass `--ignored`, so this is explicitly OUT of `just ci`
+//! (it needs the `mock_acp_agent` binary built, ~tens of ms of subprocess
+//! spawn/handshake overhead per run). **Not** out of the project's full
+//! gate, though: `-p surge-acp` was added to `just test-ignored`
+//! (`justfile`), which `just ci-full` does run — so this test is exercised
+//! there, just not on every `just ci` invocation. Run explicitly with
 //! `cargo test -p surge-acp --test bridge_rate_limit_classification -- --ignored`.
 
 use std::collections::BTreeMap;
@@ -30,7 +33,7 @@ use surge_core::OutcomeKey;
 use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "Task 12 M0 measurement: real mock_acp_agent subprocess round trip, not part of the project gate (just ci's `test` recipe excludes --ignored)"]
+#[ignore = "Task 12 M0 measurement: real mock_acp_agent subprocess round trip, not part of `just ci` (its `test` recipe excludes --ignored); run under `just ci-full`/`just test-ignored`"]
 async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
     let wt = TempDir::new().unwrap();
     let bridge = AcpBridge::with_defaults().unwrap();

@@ -43,13 +43,16 @@ older than the current version are run **through the migration chain in
 replayable after a surge upgrade. This is the one format that must *never*
 hard-break across versions — historical runs are immutable.
 
-**Every one of the v2..v6 bumps so far has been a *new enum variant*, not a
+**Every one of the v2..v7 bumps so far has been a *new enum variant*, not a
 field change on an existing one — and that distinction is the actual
 reason each bump was required.** A field a reader doesn't recognize can
 default (`#[serde(default)]`) and the payload still decodes; a variant the
 reader's `EventPayload` enum has never heard of has **no representation to
 decode into at all** — a v5-max binary reading a v6 `SkillBound` event
-would hit an unknown-tag deserialize error, not a missing-field default.
+would hit an unknown-tag deserialize error, not a missing-field default;
+likewise a v6-max binary reading a v7 `RunParked`/`RunWokeFromPark` event
+(Task 12 M1, provider rate-limit parking — two new variants under one bump,
+not a field change on an existing one either).
 Bumping the version so that reader instead returns a clean, typed
 `SurgeError::SchemaTooNew` — rather than an opaque decode failure — is the
 whole reason the migration chain exists (`surge_core::migrations`, each

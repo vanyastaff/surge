@@ -587,13 +587,55 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             node: p.node.clone(),
             session: session_id,
             agent: p.agent_config.profile.to_string(),
-            // The actual account identity, not the role/profile above —
-            // `None` only via the no-profile-registry legacy path (see
-            // `resolved_profile` above), which has no runtime block to
-            // read one from.
-            agent_id: resolved_profile
-                .as_ref()
-                .map(|rp| rp.profile.runtime.agent_id.clone()),
+            // The actual runtime identity, not the role/profile above —
+            // `None` **only** via the no-profile-registry legacy path (see
+            // `resolved_profile` above, which has no runtime block to read
+            // one from). When a profile *is* resolved, this is always
+            // `Some`: normalized through the registry when that succeeds,
+            // falling back to the **raw** `agent_id` when it does not
+            // (review finding #4) — the bundled `mock` profile
+            // (`bundled/profiles/mock-1.0.toml`, `agent_id = "mock"`) is a
+            // real, shipped case of the latter (`normalize_agent_id("mock")`
+            // is `None`: "mock" is neither a registry id nor an alias), and
+            // silently dropping to `None` there would have every run on it
+            // report `CapacityStatus::Unclassified` where the raw string
+            // would have read as `Known` — a real identity discarded for
+            // want of a registry entry, not the "nothing was ever known"
+            // `None` is reserved for elsewhere in this same field.
+            //
+            // **Normalized here, at the point of writing this fact — not
+            // left for each reader to normalize on its own (Task 12 M1,
+            // resolving the gap the M0 review found).** Before this, this
+            // field carried the raw, un-normalized `agent_id` unconditionally,
+            // while `StageError::RateLimited.runtime` two call sites below
+            // already went through `normalize_agent_id`: one fact (which
+            // runtime a session belongs to) had two different values
+            // depending on which event you read, and
+            // `claude`/`claude-code`/`claude-acp` could fragment across
+            // three keys on the one path (`surge-cli`'s inbox scan) that
+            // actually keys off this field instead of the registry-id path
+            // M2's persisted ledger will use. Normalizing at write, not at
+            // read, because: (a) this is the *only* place this fact is ever
+            // produced, while it already has at least one real reader
+            // (`surge-cli`'s inbox scan) and will gain another (M2's
+            // ledger, reading historical `SessionOpened` for keys already
+            // collapsed rather than raw); asking every future reader to
+            // remember to normalize is the "remember-to-call-me" shape this
+            // crate's own standards single out as the wrong contract. (b) A
+            // run's persisted event log is append-only — events written
+            // **before** this change keep their raw, un-normalized
+            // `agent_id` forever; this fix closes the gap for every session
+            // opened from here on, not retroactively. A reader spanning
+            // both eras still needs its own normalization pass over
+            // historical data if it must collapse aliases there too — a
+            // fact for that reader to state, not something this write-site
+            // can undo.
+            agent_id: resolved_profile.as_ref().map(|rp| {
+                let raw_agent_id = &rp.profile.runtime.agent_id;
+                surge_acp::Registry::builtin()
+                    .normalize_agent_id(raw_agent_id)
+                    .unwrap_or_else(|| raw_agent_id.clone())
+            }),
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
@@ -630,23 +672,35 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // "claude-code", and "claude-acp" (aliases for one entry,
                 // see `Registry::normalize_agent_id`) collapse to the same
                 // string instead of quietly fragmenting one runtime's
-                // observations across three keys. `None` only via the
+                // observations across three keys. `None` **only** via the
                 // no-profile-registry legacy path (no runtime block to read
-                // an id from) or the unreachable-in-practice case where
-                // normalization fails after `agent_kind` derivation already
-                // proved this exact id resolves.
+                // an id from). When `agent_id` does not resolve through the
+                // registry at all despite `agent_kind` deriving successfully
+                // above — a **real**, shipped case, not an unreachable one:
+                // the bundled `mock` profile (`bundled/profiles/
+                // mock-1.0.toml`, `agent_id = "mock"`) is special-cased for
+                // `AgentKind` derivation (`derive_agent_kind_from_id`'s
+                // `agent_id == "mock"` arm) without ever touching the
+                // registry, so `normalize_agent_id` legitimately returns
+                // `None` for it — this falls back to the **raw** `agent_id`
+                // (mirroring `SessionOpened.agent_id`'s construction above)
+                // rather than discarding the identity: a mock-profile run's
+                // capacity signal must still key consistently, not vanish
+                // into `None` for want of a registry entry.
                 //
-                // This is NOT a distinct-credentialed-account identifier —
-                // `RuntimeCfg::agent_id`'s own doc calls it "the agent
-                // runtime this profile targets", and every profile pointed
-                // at the same runtime (the common case: one CLI, one
-                // logged-in session) normalizes to the same string
-                // regardless of how many profiles reference it. Whether
-                // Surge can ever observe two distinct credentialed accounts
-                // sharing one runtime is an open question for the capacity
-                // ledger's design (M2), not settled here.
-                account: resolved_profile.as_ref().and_then(|rp| {
-                    surge_acp::Registry::builtin().normalize_agent_id(&rp.profile.runtime.agent_id)
+                // This is NOT a distinct-login identifier — `RuntimeCfg::
+                // agent_id`'s own doc calls it "the agent runtime this
+                // profile targets", and every profile pointed at the same
+                // runtime (the common case: one CLI, one logged-in session)
+                // normalizes to the same string regardless of how many
+                // profiles reference it. Whether Surge can ever observe two
+                // distinct logins sharing one runtime is an open question
+                // for the capacity ledger's design (M2), not settled here.
+                runtime: resolved_profile.as_ref().map(|rp| {
+                    let raw_agent_id = &rp.profile.runtime.agent_id;
+                    surge_acp::Registry::builtin()
+                        .normalize_agent_id(raw_agent_id)
+                        .unwrap_or_else(|| raw_agent_id.clone())
                 }),
                 retry_after,
                 details,

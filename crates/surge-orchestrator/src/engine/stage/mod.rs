@@ -75,23 +75,33 @@ pub enum StageError {
     /// capacity-aware caller can park the run on a known (or unknown) reset
     /// time instead of burning its retry budget against a wall that will
     /// not move (R37).
-    #[error("agent rate limited (account = {account:?}, retry_after = {retry_after:?}): {details}")]
+    #[error("agent rate limited (runtime = {runtime:?}, retry_after = {retry_after:?}): {details}")]
     RateLimited {
         /// The resolved profile's runtime registry id (e.g. `"claude-acp"`),
         /// normalized through `surge_acp::Registry::normalize_agent_id` so
-        /// aliases of one entry collapse to the same string. `None` on the
-        /// legacy no-profile-registry path, where no id is known at all — a
+        /// aliases of one entry collapse to the same string — or, when
+        /// normalization fails despite a profile being resolved (e.g. the
+        /// bundled `mock` profile, not itself a registry id or alias), the
+        /// raw `agent_id`, so an unrecognized-but-real identity is never
+        /// silently discarded. `None` **only** on the legacy
+        /// no-profile-registry path, where no id is known at all — a
         /// placeholder string here would be fabricating an identity nothing
         /// observed.
         ///
-        /// This is a **runtime** identity, not a distinct-credentialed-
-        /// account one: every profile pointed at the same agent runtime
-        /// normalizes to the same string regardless of how many profiles
-        /// reference it, and `RuntimeCfg::agent_id`'s own doc describes it
-        /// as "the agent runtime this profile targets". Whether Surge can
-        /// ever observe two distinct credentialed accounts sharing one
-        /// runtime is an open question, not settled by this field.
-        account: Option<String>,
+        /// **Resolved (Task 12 revision 6, A1):** this key names the agent
+        /// runtime, not a separately-tracked login — and today those two
+        /// coincide for every installation Surge can express (see
+        /// `surge_core::capacity`'s module doc, "Why the key is the
+        /// runtime"). `builtin_registry.json` carries exactly one launch
+        /// configuration per runtime, so there is no second axis a second
+        /// login could be keyed on yet. Where a future installation *can*
+        /// distinguish two logins sharing one runtime, this field's
+        /// granularity errs toward the safe side: it collapses both into
+        /// one capacity window, which over-parks (a false-positive refusal)
+        /// rather than under-parks (dispatching into a wall) — see A2 in
+        /// `docs/adr/0016-capacity-parking-and-wake.md` for the follow-up
+        /// that would actually distinguish them.
+        runtime: Option<String>,
         /// Provider-supplied retry delay, when the raw ACP error text
         /// carried one. Mirrors
         /// `surge_acp::bridge::error::SendMessageError::RateLimited::retry_after`.
@@ -190,7 +200,7 @@ mod tests {
     /// `CapacityWindow::from_observed_error` against that exact string —
     /// never against `StageError` itself. Today this only works because
     /// `RateLimited`'s `#[error(...)]` format splices `details` in verbatim,
-    /// and its own `retry_after`/`account` debug formatting uses `retry_after`
+    /// and its own `retry_after`/`runtime` debug formatting uses `retry_after`
     /// (underscore) rather than `retry-after`/`retry after`, so it never
     /// shadows the real marker inside `details`. Renaming `details`, dropping
     /// it from the format string, or introducing a literal "retry after"
@@ -202,7 +212,7 @@ mod tests {
     fn rate_limited_display_still_classifies_through_the_full_stage_failed_reason() {
         let node = surge_core::keys::NodeKey::try_from("plan_1").unwrap();
         let error = StageError::RateLimited {
-            account: Some("claude-acp".to_string()),
+            runtime: Some("claude-acp".to_string()),
             retry_after: Some(Duration::from_secs(30)),
             details: "429 Too Many Requests: Retry-After: 30".to_string(),
         };

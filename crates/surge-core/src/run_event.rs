@@ -2,6 +2,7 @@
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
 use crate::archetype::ArchetypeMetadata;
+use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
 use crate::graph::Graph;
@@ -85,6 +86,42 @@ pub enum EventPayload {
     RunAborted {
         reason: String,
     },
+    /// Pipeline execution paused because a provider rate-limit window is
+    /// exhausted (`CapacityPolicy::decide` returned `Decision::Park` —
+    /// Task 12, R37/R37.1). Schema v7.
+    RunParked {
+        /// When the run is expected to resume on its own.
+        wake_at: DateTime<Utc>,
+        /// Canonical agent-runtime registry id the parked capacity window
+        /// belongs to (see `surge_core::capacity`'s module doc, "Why the
+        /// key is the runtime"). `None` on the legacy no-profile-registry
+        /// path, where no such id is ever known.
+        runtime: Option<String>,
+        /// The run's worktree path, recorded directly rather than
+        /// reconstructed from `<worktrees_root>/<run_id>` the way
+        /// `surge-daemon`'s crash recovery does — that reconstruction
+        /// documents its own limitation ("runs launched via `--worktree
+        /// <custom>` do not record their path and are not resumable
+        /// here"); parking has the real path in hand at the moment it
+        /// happens, at zero extra cost, so it does not need to guess.
+        worktree: PathBuf,
+        /// Why `wake_at` is what it is — an actually-observed provider
+        /// reset, or a configured blind-backoff guess. A field of its own,
+        /// not folded into `reason`'s free text: a consecutive-blind-park
+        /// escalation counter (rule 4 of `CapacityPolicy::decide`'s order)
+        /// has to branch on this exactly, and re-deriving a typed fact by
+        /// parsing a display string is the same defect `StageError::Bridge`
+        /// used to have before it grew a typed `RateLimited` variant.
+        basis: WakeBasis,
+        /// Free-form, human-readable explanation for display (`surge
+        /// inbox`, logs) — not meant to be parsed back into a fact; see
+        /// `basis` for that.
+        reason: String,
+    },
+    /// The parked run in `RunParked` resumed: either its `wake_at` passed
+    /// and the daemon's wake scheduler resumed it, or an operator resumed
+    /// it manually. Schema v7.
+    RunWokeFromPark {},
 
     // Bootstrap
     BootstrapStageStarted {
@@ -188,13 +225,16 @@ pub enum EventPayload {
         node: NodeKey,
         session: SessionId,
         /// The node's flow-authored profile (e.g. `"implementer@1.0"`) —
-        /// a role/behavior identity, **not** an account identifier. Kept
-        /// for its existing readers; do not key capacity/account tracking
+        /// a role/behavior identity, **not** a runtime identifier. Kept
+        /// for its existing readers; do not key capacity/runtime tracking
         /// off this field (see `agent_id`).
         agent: String,
-        /// The actual runtime/account identity the session was opened
-        /// against (`ResolvedProfile.profile.runtime.agent_id`) — this is
-        /// what `surge_core::capacity::CapacityWindow.account` and
+        /// The actual runtime identity the session was opened against
+        /// (`ResolvedProfile.profile.runtime.agent_id`, normalized through
+        /// the registry when that resolves, falling back to the raw id
+        /// otherwise — see this field's construction in
+        /// `engine::stage::agent::execute_agent_stage`) — this is what
+        /// `surge_core::capacity::CapacityWindow.runtime` and
         /// `AgentPool`/`SurgeConfig.agents` key by. Additive,
         /// `#[serde(default)]`: a run recorded before this field existed,
         /// or one opened via the no-profile-registry legacy path, decodes
@@ -571,6 +611,8 @@ impl EventPayload {
             Self::RunCompleted { .. } => "RunCompleted",
             Self::RunFailed { .. } => "RunFailed",
             Self::RunAborted { .. } => "RunAborted",
+            Self::RunParked { .. } => "RunParked",
+            Self::RunWokeFromPark { .. } => "RunWokeFromPark",
             Self::BootstrapStageStarted { .. } => "BootstrapStageStarted",
             Self::BootstrapArtifactProduced { .. } => "BootstrapArtifactProduced",
             Self::BootstrapApprovalRequested { .. } => "BootstrapApprovalRequested",

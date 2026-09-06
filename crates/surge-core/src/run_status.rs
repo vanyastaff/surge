@@ -25,6 +25,13 @@ pub enum RunStatus {
     Aborted,
     /// Daemon process recorded as running but no longer alive (stale-pid detection).
     Crashed,
+    /// Pipeline execution is paused waiting for a provider rate-limit
+    /// window to reset (Task 12, R37/R37.1) — recorded by `RunParked`,
+    /// cleared by `RunWokeFromPark`. Deliberately **not** terminal: the run
+    /// resumes on its own once `wake_at` passes, with no further operator
+    /// action required, unlike [`Self::Failed`]/[`Self::Aborted`]/
+    /// [`Self::Crashed`].
+    Parked,
 }
 
 impl RunStatus {
@@ -38,10 +45,17 @@ impl RunStatus {
             Self::Failed => "failed",
             Self::Aborted => "aborted",
             Self::Crashed => "crashed",
+            Self::Parked => "parked",
         }
     }
 
     /// True if the run is in a terminal state (no further events expected).
+    ///
+    /// [`Self::Parked`] deliberately is **not** enumerated here — the
+    /// `matches!` above simply does not name it, so it falls through to
+    /// `false` without any edit to this method (Task 12, §1(16)): a parked
+    /// run is paused, not finished, and further events (`RunWokeFromPark`,
+    /// then resumed pipeline execution) are expected once `wake_at` passes.
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(
@@ -73,6 +87,7 @@ impl FromStr for RunStatus {
             "failed" => Self::Failed,
             "aborted" => Self::Aborted,
             "crashed" => Self::Crashed,
+            "parked" => Self::Parked,
             other => return Err(ParseRunStatusError(other.to_string())),
         })
     }
@@ -91,6 +106,7 @@ mod tests {
             RunStatus::Failed,
             RunStatus::Aborted,
             RunStatus::Crashed,
+            RunStatus::Parked,
         ] {
             assert_eq!(s.as_str().parse::<RunStatus>().unwrap(), s);
         }
@@ -109,6 +125,16 @@ mod tests {
         assert!(RunStatus::Failed.is_terminal());
         assert!(RunStatus::Aborted.is_terminal());
         assert!(RunStatus::Crashed.is_terminal());
+    }
+
+    #[test]
+    fn parked_is_not_terminal() {
+        // Task 12 (§1(16)): pinned as intent, not accident — `Parked` simply
+        // is not named in `is_terminal`'s `matches!`, so this already holds
+        // without any change to that method; this test exists so a future
+        // edit to `is_terminal` cannot silently start treating a parked run
+        // as finished without failing a test.
+        assert!(!RunStatus::Parked.is_terminal());
     }
 
     #[test]

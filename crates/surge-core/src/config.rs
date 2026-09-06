@@ -1,6 +1,7 @@
 //! Surge configuration.
 
 use crate::approvals::{ApprovalChannelKind, ApprovalPolicy};
+use crate::capacity_config::CapacityConfig;
 use crate::context_pack::ContextPackConfig;
 use crate::loop_config::ToolCallLoopGuardConfig;
 use crate::mcp_config::McpServerRef;
@@ -200,6 +201,12 @@ pub struct SurgeConfig {
     /// default when absent.
     #[serde(default)]
     pub context_pack: ContextPackConfig,
+    /// Blind-backoff duration and consecutive-blind-park escalation cap for
+    /// `surge_core::capacity::CapacityPolicy` (Task 12, R37/R37.1/R38/R38.1).
+    /// Conservative, visible defaults when absent — see
+    /// `crate::capacity_config`.
+    #[serde(default)]
+    pub capacity: CapacityConfig,
 }
 
 /// Project initialization defaults used by first-run onboarding.
@@ -1006,6 +1013,7 @@ impl Default for SurgeConfig {
             tool_call_loop_guard: ToolCallLoopGuardConfig::default(),
             output_spill: OutputSpillConfig::default(),
             context_pack: ContextPackConfig::default(),
+            capacity: CapacityConfig::default(),
         }
     }
 }
@@ -1056,6 +1064,7 @@ impl SurgeConfig {
         // Validate pipeline configuration
         self.pipeline.validate()?;
         self.init.validate()?;
+        self.capacity.validate()?;
 
         // Validate routing agent_preferences reference existing agents
         if !self.agents.is_empty() {

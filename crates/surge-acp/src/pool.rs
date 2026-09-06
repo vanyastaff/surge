@@ -297,8 +297,8 @@ impl AgentPool {
     }
 
     /// Capacity status Surge has for `name` (an already configured agent
-    /// account), learned from real request failures — never a fabricated
-    /// default. Distinguishes "no signal yet" (a fresh account, the common
+    /// runtime), learned from real request failures — never a fabricated
+    /// default. Distinguishes "no signal yet" (a fresh runtime, the common
     /// case, R35.1) from "failed, but not a recognized rate-limit shape"
     /// (see [`CapacityStatus`]).
     #[must_use]
@@ -1269,6 +1269,20 @@ fn is_rate_limit(error_msg: &str) -> bool {
 /// - "wait 30s"
 ///
 /// Returns the number of seconds to wait, or a default of 60 seconds if not found.
+///
+/// **Intentionally separate from `surge_core::capacity::{parse_retry_after_secs,
+/// parse_reset_hint}`: observation vs. policy. Do not unify these — see
+/// `docs/adr/0016-capacity-parking-and-wake.md`.** This function backs this
+/// pool's own retry-loop backoff, which has to sleep on *some* number even
+/// when the provider said nothing — hence the unanchored numeric fallback
+/// below and the 60-second default a caller of this function applies. The
+/// `surge-core` pair answers a different question ("what reset time did the
+/// provider actually say", an observation Surge either records verbatim or
+/// not at all) and must never inherit this function's invented default or
+/// its fallback — pinned by `parse_retry_after_behavior_is_unchanged_by_task_12`
+/// below: a future "these look similar, let's merge them" refactor must not
+/// silently change this pool's backoff behavior (a prior round of review
+/// already found exactly that happening once).
 fn parse_retry_after(error_msg: &str) -> u64 {
     use std::str::FromStr;
 
@@ -1554,7 +1568,7 @@ mod tests {
             .window()
             .cloned()
             .expect("observed 429 must be reflected through the pool's public API");
-        assert_eq!(window.account(), "test-agent");
+        assert_eq!(window.runtime(), "test-agent");
         assert!(window.is_exhausted());
     }
 
@@ -1903,6 +1917,33 @@ mod tests {
             parse_retry_after("HTTP/1.1 429 Too Many Requests\nRetry-After: 15\n"),
             15
         );
+    }
+
+    /// Regression (Task 12 M1): pins this pool's own `parse_retry_after` as
+    /// unchanged by the addition of `surge_core::capacity::parse_reset_hint`
+    /// — the two are deliberately separate functions (observation vs.
+    /// policy; see this function's own doc and ADR-0016), and a future
+    /// "let's unify the two retry-after parsers" refactor is exactly the
+    /// change this test exists to catch, since it would otherwise pass
+    /// every other test in this file (they only assert this pool's own
+    /// behavior, not that it stayed independent of `surge-core`'s). The
+    /// unanchored numeric fallback and the 60-second default in particular
+    /// must survive: `surge_core::capacity::parse_reset_hint` deliberately
+    /// does **not** implement either.
+    #[test]
+    fn parse_retry_after_behavior_is_unchanged_by_task_12() {
+        // Unanchored fallback: `surge_core::capacity::parse_reset_hint`
+        // returns `None` for exactly this shape (no anchor connects the
+        // number to a recognized reset-time phrase) — this pool must still
+        // resolve *some* concrete number, because its retry loop has to
+        // sleep on one.
+        assert_eq!(
+            parse_retry_after("rate limited, wait ~45 seconds and retry"),
+            45
+        );
+        // Invented default when nothing at all is recognized — a behavior
+        // `surge_core::capacity`'s functions refuse to have by design.
+        assert_eq!(parse_retry_after("no timing information whatsoever"), 60);
     }
 
     // ── Token validation tests ────────────────────────────────────
