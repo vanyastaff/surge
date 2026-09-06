@@ -1146,6 +1146,7 @@ mod tests {
                 started_at_ms: 1,
                 ended_at_ms: None,
                 daemon_pid: Some(i32::MAX),
+                wake_at_ms: None,
             },
         )
         .unwrap();

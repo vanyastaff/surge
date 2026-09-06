@@ -69,6 +69,7 @@
 //! different questions (how long to wait vs. what Surge actually knows)
 //! answered honestly.
 
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -92,6 +93,41 @@ pub enum CapacitySource {
     AcpUsage,
     /// Inferred from an observed HTTP 429 (rate-limit) response.
     Observed429,
+}
+
+impl CapacitySource {
+    /// Stable string form for durable storage (`surge-persistence`'s
+    /// `runtime_capacity.source` column, Task 12 M2) — the same role
+    /// [`crate::run_status::RunStatus::as_str`] plays for the registry's
+    /// `runs.status` column. Deliberately independent of
+    /// `#[derive(Serialize)]`'s own tag spelling: a persisted column format
+    /// is a decision this type owns explicitly, not an accident of derive
+    /// internals a future refactor of the derive attributes could silently
+    /// change out from under an already-written database.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AcpUsage => "acp_usage",
+            Self::Observed429 => "observed_429",
+        }
+    }
+}
+
+/// [`CapacitySource::from_str`] was given an unrecognized label.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown CapacitySource: {0:?}")]
+pub struct ParseCapacitySourceError(pub String);
+
+impl FromStr for CapacitySource {
+    type Err = ParseCapacitySourceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "acp_usage" => Self::AcpUsage,
+            "observed_429" => Self::Observed429,
+            other => return Err(ParseCapacitySourceError(other.to_string())),
+        })
+    }
 }
 
 /// A remaining-capacity share, validated to `[0.0, 1.0]` so a caller never
@@ -582,6 +618,40 @@ impl CapacityWindow {
                 ..self
             },
             None => self,
+        }
+    }
+
+    /// Reassemble a window from parts a caller already has individually —
+    /// used by a persistence reader (`surge-persistence`, Task 12 M2)
+    /// rebuilding a [`CapacityWindow`] from a durable `runtime_capacity` row
+    /// (one column per field here).
+    ///
+    /// Unlike [`Self::observed_429`] and [`Self::from_observed_error`],
+    /// which each *derive* some fields from a single observation, this
+    /// constructor takes every field already computed — it is for the one
+    /// caller that has all of them separately (a SQLite row) and only needs
+    /// them assembled, not reduced from raw text.
+    ///
+    /// Does not itself validate `remaining`: [`RemainingShare`] is
+    /// constructible only through [`RemainingShare::new`], so any value
+    /// passed here already went through that range check at the caller —
+    /// see that type's doc for why a persistence reader must run a raw
+    /// `remaining REAL` column value through it before it can even be
+    /// passed here.
+    #[must_use]
+    pub fn from_parts(
+        runtime: impl Into<String>,
+        window: Option<Duration>,
+        remaining: Option<RemainingShare>,
+        resets_at: Option<DateTime<Utc>>,
+        source: CapacitySource,
+    ) -> Self {
+        Self {
+            runtime: runtime.into(),
+            window,
+            remaining,
+            resets_at,
+            source,
         }
     }
 
@@ -1100,6 +1170,47 @@ mod tests {
         let window = CapacityWindow::observed_429("claude", None, Utc::now())
             .with_learned_window(Utc::now());
         assert_eq!(window.window(), None);
+    }
+
+    #[test]
+    fn capacity_source_string_form_round_trips() {
+        for source in [CapacitySource::AcpUsage, CapacitySource::Observed429] {
+            assert_eq!(source.as_str().parse::<CapacitySource>().unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn capacity_source_unknown_string_is_error() {
+        assert!("nonsense".parse::<CapacitySource>().is_err());
+    }
+
+    #[test]
+    fn from_parts_assembles_every_field() {
+        let resets_at = t("2026-01-01T00:00:00Z");
+        let remaining = RemainingShare::new(0.25).unwrap();
+        let window = CapacityWindow::from_parts(
+            "claude-acp",
+            Some(Duration::from_secs(3600)),
+            Some(remaining),
+            Some(resets_at),
+            CapacitySource::Observed429,
+        );
+        assert_eq!(window.runtime(), "claude-acp");
+        assert_eq!(window.window(), Some(Duration::from_secs(3600)));
+        assert_eq!(window.remaining(), Some(remaining));
+        assert_eq!(window.resets_at(), Some(resets_at));
+        assert_eq!(window.source(), CapacitySource::Observed429);
+    }
+
+    #[test]
+    fn from_parts_accepts_every_field_absent() {
+        // A fresh runtime nobody has failed against yet: every learned
+        // field stays `None`, same as any other constructor on this type.
+        let window =
+            CapacityWindow::from_parts("claude-acp", None, None, None, CapacitySource::AcpUsage);
+        assert_eq!(window.window(), None);
+        assert_eq!(window.remaining(), None);
+        assert_eq!(window.resets_at(), None);
     }
 
     #[test]

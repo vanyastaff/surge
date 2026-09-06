@@ -238,6 +238,7 @@ impl Storage {
             started_at_ms: self.clock.now_ms(),
             ended_at_ms: None,
             daemon_pid: Some(std::process::id() as i32),
+            wake_at_ms: None,
         };
         registry::insert_run(&self.registry_pool, &summary)
             .map_err(|e| OpenError::MigrationFailed(format!("registry insert failed: {e}")))?;
@@ -310,6 +311,24 @@ impl Storage {
     }
 
     /// List runs matching the filter, with stale-pid detection.
+    ///
+    /// **`Parked` is deliberately never rewritten here** (Task 12 M2): the
+    /// stale-pid probe below is an allowlist (`Running | Bootstrapping`),
+    /// not a `!= Parked` blocklist, so a future status added to that
+    /// `matches!` is the only way to sweep `Parked` in — it does not
+    /// happen by construction. This matters because a parked run has *no*
+    /// owning daemon process by design (see
+    /// `surge_core::run_event::EventPayload::RunParked`'s doc: parking
+    /// happens precisely so the run stops needing one until `wake_at`
+    /// passes), so its `daemon_pid` is routinely stale. Rewriting `Parked`
+    /// to `Crashed` on a stale pid would misreport a run that is waiting on
+    /// purpose as one that failed, and — because [`RunStatus::Crashed`] is
+    /// excluded from `registry::due_parked`'s scan by design (that query's
+    /// own doc) — it would make the parked run's own wake-up scan stop
+    /// finding it, so it would never resume on its own again. Pinned by
+    /// `parked_run_with_dead_pid_stays_parked` below; see that test's doc
+    /// for why this is a "does not happen by construction" guarantee, not
+    /// a red→green fix.
     // No `.await` in this body — see `open_with` for why it stays `async fn`.
     #[expect(
         clippy::unused_async_trait_impl,
@@ -385,6 +404,9 @@ impl Storage {
     }
 
     /// Get a single run summary, with stale-pid detection.
+    ///
+    /// Same allowlisted stale-pid probe as [`Self::list_runs`] — `Parked`
+    /// is never rewritten here either; see that method's doc.
     // No `.await` in this body — see `open_with` for why it stays `async fn`.
     #[expect(
         clippy::unused_async_trait_impl,
@@ -530,5 +552,57 @@ mod snapshot_active_runs_tests {
             snap.iter()
                 .all(|r| matches!(r.status.as_str(), "Running" | "Bootstrapping"))
         );
+    }
+}
+
+#[cfg(test)]
+mod parked_survives_stale_pid_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Task 12 M2: pinned as intent, not a red→green fix — the stale-pid
+    /// probe in `list_runs`/`get_run` is already an allowlist
+    /// (`Running | Bootstrapping`), so `Parked` already falls through
+    /// untouched today, the same way `RunStatus::is_terminal()` already
+    /// excluded `Parked` before Task 12 M1 added a test for it. This test
+    /// exists so a future edit that widens that allowlist (or flips it to a
+    /// `!= Parked` blocklist, which a new status added later would slip
+    /// past) fails loudly instead of silently starting to reap runs that
+    /// are waiting on purpose.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parked_run_with_dead_pid_stays_parked() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run_id = RunId::new();
+        let writer = storage
+            .create_run(run_id.clone(), "/proj", None)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        // A parked run has no owning daemon by design; fake one with a pid
+        // that cannot possibly be alive (i32::MAX, same fixture as
+        // `stale_pid.rs`'s existing Running/Bootstrapping regression test).
+        registry::set_run_parked(&storage.registry_pool, &run_id, 1_700_000_100_000).unwrap();
+        {
+            let conn = storage.registry_pool.get().unwrap();
+            conn.execute(
+                "UPDATE runs SET daemon_pid = ? WHERE id = ?",
+                rusqlite::params![i32::MAX, run_id.to_string()],
+            )
+            .unwrap();
+        }
+
+        let listed = storage.list_runs(RunFilter::default()).await.unwrap();
+        let row = listed.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(
+            row.status,
+            RunStatus::Parked,
+            "a dead pid must not rewrite a parked run to Crashed"
+        );
+
+        let single = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(single.status, RunStatus::Parked);
     }
 }

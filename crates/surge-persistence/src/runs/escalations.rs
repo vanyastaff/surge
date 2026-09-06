@@ -543,6 +543,7 @@ mod tests {
                 started_at_ms: 1,
                 ended_at_ms: Some(2),
                 daemon_pid: None,
+                wake_at_ms: None,
             },
         )
         .unwrap();

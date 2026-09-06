@@ -42,6 +42,7 @@
     clippy::match_same_arms,
 )]
 
+pub mod capacity;
 pub mod clock;
 pub mod config;
 pub mod error;

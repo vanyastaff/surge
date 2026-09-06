@@ -34,14 +34,17 @@ pub fn maintain(
     use EventPayload::{
         ApprovalDecided, ApprovalRequested, ArtifactProduced, BootstrapApprovalDecided,
         BootstrapApprovalRequested, BootstrapArtifactProduced, BootstrapEditRequested,
-        BootstrapStageStarted, EdgeTraversed, ForkCreated, GraphRevisionAccepted, HookExecuted,
-        LoopCompleted, LoopIterationCompleted, LoopIterationStarted, OutcomeRejectedByHook,
+        BootstrapStageStarted, BootstrapTelemetry, BudgetExceeded, BudgetWarningRaised,
+        EdgeTraversed, EscalationRequested, ForkCreated, GraphRevisionAccepted, HookExecuted,
+        HumanInputRequested, HumanInputResolved, HumanInputTimedOut, LoopCompleted,
+        LoopIterationCompleted, LoopIterationStarted, NotifyDelivered, OutcomeRejectedByHook,
         OutcomeReported, PipelineMaterialized, RoadmapPatchApplied, RoadmapPatchApprovalDecided,
         RoadmapPatchApprovalRequested, RoadmapPatchDrafted, RoadmapUpdated, RunAborted,
-        RunCompleted, RunFailed, RunStarted, SandboxElevationDecided, SandboxElevationRequested,
-        SessionClosed, SessionOpened, StageCompleted, StageEntered, StageFailed,
-        StageInputsResolved, TaskDiscovered, TaskStatusChanged, TaskVerified, TokensConsumed,
-        ToolCalled, ToolResultReceived,
+        RunCompleted, RunFailed, RunParked, RunStarted, RunWokeFromPark, RuntimeVersionWarning,
+        SandboxElevationDecided, SandboxElevationRequested, SandboxElevationTimedOut,
+        SessionClosed, SessionOpened, SkillBound, StageCompleted, StageEntered, StageFailed,
+        StageInputsResolved, SteerDelivered, SubgraphEntered, SubgraphExited, TaskDiscovered,
+        TaskStatusChanged, TaskVerified, TokensConsumed, ToolCalled, ToolResultReceived,
     };
     match payload {
         StageEntered { node, attempt } => {
@@ -412,10 +415,30 @@ pub fn maintain(
                 rusqlite::params![task_id, node.as_str(), seq.0 as i64],
             )?;
         },
-        // All other variants currently produce no view changes.
-        // Listed explicitly here so a future variant addition forces a
-        // conscious decision rather than silently falling through.
-        RunStarted { .. }
+        // All other variants currently produce no view changes. Every
+        // variant `EventPayload` has *today* is named explicitly below —
+        // this is a real, checked claim: M1 added `RunParked`/
+        // `RunWokeFromPark` and both fell silently into a bare `_ => {}`
+        // here, compiling clean, until M2 found and named them by hand.
+        // The 14 variants below them were the same silent gap, found the
+        // same way (Task 12 M2 review).
+        //
+        // RunParked/RunWokeFromPark (Task 12 M2, deliberate — not an
+        // oversight): a run's parked/awake fact already lives durably in
+        // the *registry* (`runs.status`/`runs.wake_at`, written directly by
+        // `registry::set_run_parked` — see that function's doc), which is
+        // a cross-run table this per-run event-log view maintainer never
+        // touches. None of the existing per-run view tables
+        // (`stage_executions`, `artifacts`, `cost_summary`,
+        // `pending_approvals`, `task_ledger`) have a natural column for
+        // "is this run currently parked", and no reader queries a per-run
+        // view for that fact today — the registry row already is that
+        // materialized view. Adding a second, driftable copy of the same
+        // fact here for no reader that needs it would be exactly the
+        // "one fact, one place" violation this crate's other views avoid.
+        RunParked { .. }
+        | RunWokeFromPark { .. }
+        | RunStarted { .. }
         | RunCompleted { .. }
         | RunFailed { .. }
         | RunAborted { .. }
@@ -440,9 +463,69 @@ pub fn maintain(
         | SandboxElevationDecided { .. }
         | HookExecuted { .. }
         | OutcomeRejectedByHook { .. }
-        | ForkCreated { .. } => {},
-        // M5 HumanInput variants — not aggregated into materialized views.
-        _ => {},
+        | ForkCreated { .. }
+        | BootstrapTelemetry { .. }
+        | BudgetExceeded { .. }
+        | BudgetWarningRaised { .. }
+        | EscalationRequested { .. }
+        | HumanInputRequested { .. }
+        | HumanInputResolved { .. }
+        | HumanInputTimedOut { .. }
+        | NotifyDelivered { .. }
+        | RuntimeVersionWarning { .. }
+        | SandboxElevationTimedOut { .. }
+        | SkillBound { .. }
+        | SteerDelivered { .. }
+        | SubgraphEntered { .. }
+        | SubgraphExited { .. } => {},
+        // `EventPayload` is `#[non_exhaustive]` (defined in `surge-core`), so
+        // a cross-crate `match` here is *compiler-required* to carry a
+        // wildcard no matter how many variants are already listed above —
+        // verified directly: deleting this arm does not compile (`E0004`,
+        // "`&_` not covered"). Every variant this binary knows about is
+        // named explicitly above; this arm exists only for one `surge-core`
+        // adds later that this function has not been taught about yet.
+        //
+        // `debug_assert!` is a *runtime* stretch, not a compiler guarantee
+        // — it fires only at the moment some variant actually **reaches**
+        // `maintain` in a debug build (`cargo test`/`cargo nextest`, the
+        // profile this crate's whole suite runs under), not the moment
+        // `surge-core` adds one. Accepted with a named, known gap, not
+        // "closed": this exact assert would **not** have caught M1's own
+        // regression retroactively — nobody fed a `RunParked` payload
+        // through `maintain` until M2 wrote a test that did, so a variant
+        // sitting unconstructed and untested is invisible to it for as
+        // long as it stays unconstructed. Confirmed live in this workspace
+        // right now: `BootstrapArtifactProduced`, `BootstrapStageStarted`,
+        // and `StageInputsResolved` are not constructed anywhere in this
+        // workspace today — "the variant exists" does not imply "the
+        // variant reaches this function", so this arm's coverage is
+        // contingent on something exercising the new variant, not
+        // guaranteed by adding it.
+        //
+        // A `surge-core`-side exhaustive classifier (matching `EventPayload`
+        // from *inside* its own defining crate, where `#[non_exhaustive]`
+        // does not force a wildcard, and handing back something this match
+        // switches on) would upgrade this from a runtime stretch to a
+        // compiler-checked one — considered and rejected: it would require
+        // `surge-core` to know that `stage_executions`/`artifacts`/
+        // `cost_summary`/`pending_approvals`/`task_ledger` (this crate's
+        // materialized views) exist at all, a downward leak of
+        // persistence-layer structure into the model crate for the sake of
+        // exhaustiveness on one match here. `rusqlite::types::Value` inside
+        // `status()` (this same file) gets the compiler-checked version for
+        // free instead, because that type is not `#[non_exhaustive]` — the
+        // two are not the same guarantee, and this comment used to conflate
+        // them.
+        _ => {
+            debug_assert!(
+                false,
+                "EventPayload variant reached views::maintain's \
+                 non_exhaustive catch-all -- every variant this function \
+                 knows about is matched explicitly above; teach this match \
+                 about the new one instead of relying on this arm"
+            );
+        },
     }
     Ok(())
 }
@@ -1249,6 +1332,62 @@ mod tests {
             &EventPayload::RunCompleted {
                 terminal_node: n("end"),
             },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        for table in [
+            "stage_executions",
+            "artifacts",
+            "pending_approvals",
+            "cost_summary",
+            "roadmap_patches",
+            "task_ledger",
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "table {table} should be empty");
+        }
+    }
+
+    /// Task 12 M2: `RunParked`/`RunWokeFromPark` are a deliberate, named
+    /// no-op here (see the match arm's doc) — the parked/awake fact lives
+    /// in the registry `runs` table instead, not any per-run view. Kept as
+    /// its own test rather than folded into `no_op_variant_does_not_touch_views`
+    /// above so a future decision to reverse this one shows up as an edit to
+    /// a test named for it, not an unrelated-looking change to a
+    /// `RunCompleted`-only test.
+    #[test]
+    fn run_parked_and_woke_are_a_deliberate_no_op_for_views() {
+        use surge_core::capacity::WakeBasis;
+
+        let mut conn = fresh_db();
+        let tx = conn.transaction().unwrap();
+        maintain(
+            &tx,
+            EventSeq(1),
+            1_700_000_000_001,
+            &EventPayload::RunParked {
+                wake_at: chrono::Utc::now(),
+                runtime: Some("claude-acp".into()),
+                // Never read by `maintain` (this is the deliberate no-op
+                // arm) -- an obviously-fake path under `/mnt/data`, not
+                // `/tmp` (this project's discipline never writes there;
+                // this test doesn't touch the filesystem via this field at
+                // all, but the literal itself should not be a magnet for a
+                // future edit that makes it a real path).
+                worktree: "/mnt/data/dev/surge-test-fixture/not-a-real-worktree".into(),
+                basis: WakeBasis::PolicyBackoff,
+                reason: "blind backoff".into(),
+            },
+        )
+        .unwrap();
+        maintain(
+            &tx,
+            EventSeq(2),
+            1_700_000_000_002,
+            &EventPayload::RunWokeFromPark {},
         )
         .unwrap();
         tx.commit().unwrap();
