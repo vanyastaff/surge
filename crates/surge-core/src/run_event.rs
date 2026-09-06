@@ -187,7 +187,22 @@ pub enum EventPayload {
     SessionOpened {
         node: NodeKey,
         session: SessionId,
+        /// The node's flow-authored profile (e.g. `"implementer@1.0"`) —
+        /// a role/behavior identity, **not** an account identifier. Kept
+        /// for its existing readers; do not key capacity/account tracking
+        /// off this field (see `agent_id`).
         agent: String,
+        /// The actual runtime/account identity the session was opened
+        /// against (`ResolvedProfile.profile.runtime.agent_id`) — this is
+        /// what `surge_core::capacity::CapacityWindow.account` and
+        /// `AgentPool`/`SurgeConfig.agents` key by. Additive,
+        /// `#[serde(default)]`: a run recorded before this field existed,
+        /// or one opened via the no-profile-registry legacy path, decodes
+        /// as `None` rather than failing to parse (no schema bump per
+        /// `docs/schema-versioning.md` — an optional field with a serde
+        /// default).
+        #[serde(default)]
+        agent_id: Option<String>,
     },
     ToolCalled {
         session: SessionId,
@@ -1035,6 +1050,7 @@ mod tests {
             node: NodeKey::try_from("agent_1").unwrap(),
             session,
             agent: "claude-opus-4-7".into(),
+            agent_id: Some("claude-code".into()),
         };
         let closed = EventPayload::SessionClosed {
             session,

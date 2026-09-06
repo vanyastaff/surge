@@ -38,6 +38,7 @@ pub mod artifact_contract;
 pub mod branch_config;
 pub mod budget;
 pub mod bundled_flows;
+pub mod capacity;
 pub mod content_hash;
 pub mod context_pack;
 pub mod doctor;

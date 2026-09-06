@@ -485,6 +485,9 @@ async fn run_agent_smoke(name: String, handshake_only: bool) -> Result<()> {
                 } else {
                     println!("real smoke session: PASS (spawn + handshake + prompt dispatched)");
                 }
+                // R34–R36: no failure to observe a rate limit from — the
+                // common case (R35.1), never a fabricated window.
+                println!("capacity: no rate-limit signal observed this run");
             },
             Err((stage, detail)) => {
                 warn!(
@@ -498,6 +501,16 @@ async fn run_agent_smoke(name: String, handshake_only: bool) -> Result<()> {
                 println!("  detail: {detail}");
                 if stage == SmokeStage::Auth {
                     println!("  hint: log the runtime in (run its own login, or set its API key).");
+                }
+                match surge_core::capacity::CapacityWindow::from_observed_error(
+                    &name,
+                    &detail,
+                    chrono::Utc::now(),
+                ) {
+                    Some(window) => println!("capacity: {}", format_capacity(&window)),
+                    None => println!(
+                        "capacity: no rate-limit signal observed (failure was `{stage}`, not a 429)"
+                    ),
                 }
                 return Err(anyhow::anyhow!(
                     "doctor smoke for `{name}` failed at stage `{stage}`"
@@ -747,9 +760,45 @@ fn format_status(status: MatrixCellStatus) -> &'static str {
     }
 }
 
+/// Render a [`surge_core::capacity::CapacityWindow`] (R34–R36) for the
+/// operator: window length, remaining share, and reset time — each
+/// `"unknown"` when Surge has not observed it, never a fabricated value.
+fn format_capacity(window: &surge_core::capacity::CapacityWindow) -> String {
+    let window_len = window
+        .window()
+        .map_or_else(|| "unknown".to_string(), |d| format!("{}s", d.as_secs()));
+    let remaining = window.remaining().map_or_else(
+        || "unknown".to_string(),
+        |r| format!("{:.0}%", r.get() * 100.0),
+    );
+    let resets_at = window
+        .resets_at()
+        .map_or_else(|| "unknown".to_string(), |t| t.to_rfc3339());
+    format!(
+        "account={} window={window_len} remaining={remaining} resets_at={resets_at} source={:?}",
+        window.account(),
+        window.source(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_capacity_shows_unknown_for_fields_never_observed() {
+        // `run_agent_smoke`'s real-smoke `Err` branch feeds a
+        // `CapacityWindow` straight from `from_observed_error` into this
+        // formatter — a 429 with no Retry-After leaves `window`/`resets_at`
+        // unknown, and this must render as "unknown", never a guess.
+        let window =
+            surge_core::capacity::CapacityWindow::observed_429("claude", None, chrono::Utc::now());
+        let rendered = format_capacity(&window);
+        assert!(rendered.contains("account=claude"), "{rendered}");
+        assert!(rendered.contains("window=unknown"), "{rendered}");
+        assert!(rendered.contains("resets_at=unknown"), "{rendered}");
+        assert!(rendered.contains("remaining=0%"), "{rendered}");
+    }
 
     #[test]
     fn classify_open_error_maps_spawn_vs_handshake() {

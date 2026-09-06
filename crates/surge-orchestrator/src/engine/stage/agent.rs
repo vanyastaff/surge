@@ -587,6 +587,13 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             node: p.node.clone(),
             session: session_id,
             agent: p.agent_config.profile.to_string(),
+            // The actual account identity, not the role/profile above —
+            // `None` only via the no-profile-registry legacy path (see
+            // `resolved_profile` above), which has no runtime block to
+            // read one from.
+            agent_id: resolved_profile
+                .as_ref()
+                .map(|rp| rp.profile.runtime.agent_id.clone()),
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;

@@ -193,6 +193,7 @@ mod tests {
                     node: node.clone(),
                     session: SessionId::new(),
                     agent: "claude-opus-4-7".into(),
+                    agent_id: None,
                 },
             ),
             event(
