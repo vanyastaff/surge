@@ -199,6 +199,14 @@ pub fn looks_like_rate_limit(text: &str) -> bool {
 /// [`crate::error::SurgeError::RateLimit`] renders (`"retry after 30s"`).
 /// Returns `None` when absent — callers must not invent a default; see
 /// [`CapacityWindow::observed_429`].
+///
+/// Slices the **lowercased** copy, never the original `text`: `text` and
+/// `text.to_lowercase()` can disagree in UTF-8 byte length (e.g. `İ` U+0130
+/// lowercases to a 3-byte `i̇` from a 2-byte original), so a byte offset
+/// found in one is not guaranteed to land on a char boundary — or even mean
+/// the same position — in the other. `text` reaches this function from an
+/// agent runtime the operator does not control, so it must never panic on
+/// arbitrary Unicode in it.
 #[must_use]
 pub fn parse_retry_after_secs(text: &str) -> Option<u64> {
     let lower = text.to_lowercase();
@@ -208,7 +216,7 @@ pub fn parse_retry_after_secs(text: &str) -> Option<u64> {
         let pos = lower.find("retry after")?;
         (pos, "retry after".len())
     };
-    let after = &text[marker_pos + marker_len..];
+    let after = &lower[marker_pos + marker_len..];
     let after = after.trim_start();
     let after = after.strip_prefix(':').unwrap_or(after).trim_start();
     let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
@@ -536,6 +544,39 @@ mod tests {
             ),
             Some(30)
         );
+    }
+
+    /// Regression: this function is reached from `surge-acp`'s bridge worker
+    /// on **every** rejected prompt whose text matches `looks_like_rate_limit`
+    /// — text that originates at an agent runtime the operator does not
+    /// control, so it must never panic on it, no matter what Unicode shows
+    /// up. It used to: the marker position/length are computed against
+    /// `text.to_lowercase()`, but the slice was taken out of the *original*
+    /// `text` — for any character whose lowercasing changes UTF-8 byte
+    /// length (e.g. `İ` U+0130 → `i̇`, 2 bytes → 3), the two strings'
+    /// coordinate frames diverge and the borrowed index can land inside a
+    /// multi-byte character of `text`, which panics `str` indexing instead
+    /// of returning `None`. Fixed by slicing `lower` (self-consistent by
+    /// construction) instead of `text`.
+    #[test]
+    fn parse_retry_after_secs_does_not_panic_on_multi_byte_case_folding() {
+        // A length-changing character sits between the standalone-429
+        // marker and "Retry-After", so byte offsets computed against the
+        // lowercased copy no longer line up with the original string; the
+        // emoji right after the marker is 4 bytes wide, so an off-by-one
+        // index has nowhere valid to land except inside it.
+        let text = "429 Too Many Requests İRetry-After😀30";
+        // Must not panic. The emoji sits between the marker and the digits,
+        // so no digits are recoverable here — the point is survival, not a
+        // specific value.
+        assert_eq!(parse_retry_after_secs(text), None);
+
+        // A length-changing character earlier in the string, with an
+        // otherwise ordinary header afterward, must still extract correctly
+        // — proving the fix does not merely avoid panicking but keeps
+        // parsing the common case right.
+        let text_with_valid_digits = "429 Too Many Requests İ: Retry-After: 30";
+        assert_eq!(parse_retry_after_secs(text_with_valid_digits), Some(30));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol::{
     Agent, ClientCapabilities, ClientSideConnection, Implementation, InitializeRequest,
@@ -1087,13 +1088,19 @@ pub(crate) async fn send_message_impl(
             })?;
 
     connection.prompt(req).await.map_err(|e| {
-        let details = e.to_string();
-        if crate::pool::is_auth_failure(&details) {
-            warn!(session = %session, error = %details, "ACP prompt dispatch failed: agent authentication error");
-        } else {
-            warn!(session = %session, error = %details, "ACP prompt dispatch failed");
+        let classified = classify_prompt_dispatch_error(e.to_string());
+        match &classified {
+            super::error::SendMessageError::AgentAuthenticationFailed { .. } => {
+                warn!(session = %session, error = %classified, "ACP prompt dispatch failed: agent authentication error");
+            },
+            super::error::SendMessageError::RateLimited { retry_after, .. } => {
+                warn!(session = %session, error = %classified, retry_after = ?retry_after, "ACP prompt dispatch failed: rate limit / quota exhaustion");
+            },
+            _ => {
+                warn!(session = %session, error = %classified, "ACP prompt dispatch failed");
+            },
         }
-        classify_prompt_dispatch_error(details)
+        classified
     })?;
 
     Ok(())
@@ -1102,14 +1109,34 @@ pub(crate) async fn send_message_impl(
 /// Map a failed `connection.prompt(...)` error into the most accurate
 /// `SendMessageError`.
 ///
-/// An authentication failure (HTTP 401 / `authentication_error`) becomes the
-/// dedicated [`super::error::SendMessageError::AgentAuthenticationFailed`]
-/// variant, which carries operator-facing guidance — the agent runtime is
-/// almost certainly not logged in. Every other failure stays a generic bridge
-/// transport error, preserving the previous behaviour.
+/// Arm order is load-bearing and must stay auth → rate-limit → generic: an
+/// authentication failure (HTTP 401 / `authentication_error`) is checked
+/// first so a 401 whose text also happens to contain rate-limit vocabulary
+/// (e.g. "too many requests") still classifies as
+/// [`super::error::SendMessageError::AgentAuthenticationFailed`] rather than
+/// [`super::error::SendMessageError::RateLimited`] — checking the arms in
+/// the other order would tell an operator to wait out a rate limit when the
+/// real problem is that the agent runtime isn't logged in.
+///
+/// A rate limit / quota-exhaustion signal
+/// ([`surge_core::capacity::looks_like_rate_limit`]) becomes
+/// [`super::error::SendMessageError::RateLimited`], carrying whatever
+/// `retry_after` the same text yields via
+/// [`surge_core::capacity::parse_retry_after_secs`] (`None` when the text
+/// carries no recoverable delay — this classifier never invents one).
+///
+/// Every other failure stays a generic bridge transport error, preserving
+/// the previous behaviour.
 pub(crate) fn classify_prompt_dispatch_error(details: String) -> super::error::SendMessageError {
     if crate::pool::is_auth_failure(&details) {
         super::error::SendMessageError::AgentAuthenticationFailed { details }
+    } else if surge_core::capacity::looks_like_rate_limit(&details) {
+        let retry_after =
+            surge_core::capacity::parse_retry_after_secs(&details).map(Duration::from_secs);
+        super::error::SendMessageError::RateLimited {
+            retry_after,
+            details,
+        }
     } else {
         super::error::SendMessageError::Bridge(super::error::BridgeError::CommandSendFailed(
             details,
@@ -1286,6 +1313,151 @@ mod tests {
                 )
             ),
             "non-auth prompt error should stay a bridge transport error, got: {err:?}"
+        );
+    }
+
+    /// Arm order is mandated: auth before rate-limit before generic. A 401
+    /// message that *also* happens to contain rate-limit vocabulary must
+    /// still classify as [`super::super::error::SendMessageError::AgentAuthenticationFailed`] —
+    /// the reverse order would tell an operator to wait out a rate limit
+    /// when the real problem is that the agent runtime isn't logged in.
+    #[test]
+    fn classify_prompt_error_401_wins_over_rate_limit_vocabulary() {
+        let details =
+            "401 Unauthorized: too many requests from an unauthenticated client".to_string();
+        let err = classify_prompt_dispatch_error(details);
+        assert!(
+            matches!(
+                err,
+                super::super::error::SendMessageError::AgentAuthenticationFailed { .. }
+            ),
+            "a 401 message must classify as auth failure even when it also \
+             contains rate-limit vocabulary, got: {err:?}"
+        );
+    }
+
+    /// M0 measurement (this task's mandated deliverable): for each realistic
+    /// shape a provider's rate-limit / quota-exhaustion error might take
+    /// once it reaches `classify_prompt_dispatch_error` as raw ACP error
+    /// text, record whether the classifier recovers a `retry_after`. Every
+    /// case here MUST still classify as `RateLimited` (R37's "exhausted, no
+    /// reset time known" rung); `retry_after` is allowed to be `None`
+    /// case-by-case — the whole point of this table is finding out how
+    /// often it actually is — but not in *every* case, which the trailing
+    /// assertion guards.
+    ///
+    /// **Every `details` string below is reconstructed for this test, not
+    /// captured from a live provider or a real agent runtime.** None of them
+    /// is a response this task actually observed — this task had no live
+    /// Claude Code / Codex / Gemini CLI instance to rate-limit and capture
+    /// from, and the classifier in production sees `e.to_string()` of an
+    /// ACP JSON-RPC error produced by *that runtime's own adapter*, not a
+    /// provider's raw HTTP/JSON body directly. Treat the "reachable" /
+    /// "not reachable" readings here as a plausibility argument against
+    /// today's parser, not a measured fact about any specific provider or
+    /// runtime — see `docs/adr/0016-capacity-parking-and-wake.md`'s
+    /// Measurement section for the same caveat and the full table.
+    #[test]
+    fn classify_prompt_error_rate_limit_shape_measurement() {
+        struct Case {
+            name: &'static str,
+            details: &'static str,
+            expect_retry_after_secs: Option<u64>,
+        }
+        let cases = [
+            Case {
+                name: "429 with a literal 'Retry-After: N' line",
+                details: "429 Too Many Requests: Retry-After: 30",
+                expect_retry_after_secs: Some(30),
+            },
+            Case {
+                name: "429 with no retry hint at all",
+                details: "429 Too Many Requests",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "shape of Anthropic's documented rate_limit_error type (reconstructed, not captured)",
+                details: "API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\
+                          \"message\":\"Number of request tokens has exceeded your per-minute rate limit\"}}",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "OpenAI rate_limit_exceeded (prose uses \"try again in Ns\", which the parser does not recognize)",
+                details: "Rate limit reached for requests. Please try again in 20s. \
+                          {\"error\":{\"type\":\"rate_limit_exceeded\"}}",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "OpenAI insufficient_quota",
+                details: "You exceeded your current quota, please check your plan and billing details. \
+                          {\"error\":{\"type\":\"insufficient_quota\"}}",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "Google RESOURCE_EXHAUSTED",
+                details: "429 Resource has been exhausted (e.g. check quota). \
+                          {\"error\":{\"code\":429,\"status\":\"RESOURCE_EXHAUSTED\"}}",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "Anthropic overloaded_error",
+                details: "Overloaded {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\
+                          \"message\":\"Overloaded\"}}",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "usage limit reached (subscription-style, epoch suffix)",
+                details: "Claude AI usage limit reached|1735500000",
+                expect_retry_after_secs: None,
+            },
+            Case {
+                name: "Surge's own SurgeError::RateLimit Display shape (capacity.rs's own doctest text)",
+                details: "Rate limit exceeded for agent 'implementer': retry after 30s (attempt 2)",
+                expect_retry_after_secs: Some(30),
+            },
+        ];
+
+        let mut any_retry_after_recovered = false;
+        for case in cases {
+            let err = classify_prompt_dispatch_error(case.details.to_string());
+            let super::super::error::SendMessageError::RateLimited { retry_after, .. } = err else {
+                panic!("case {:?}: expected RateLimited, got {err:?}", case.name);
+            };
+            let expected = case.expect_retry_after_secs.map(Duration::from_secs);
+            assert_eq!(
+                retry_after, expected,
+                "case {:?}: retry_after mismatch",
+                case.name
+            );
+            any_retry_after_recovered |= retry_after.is_some();
+        }
+        assert!(
+            any_retry_after_recovered,
+            "measurement found NOT ONE provider-error shape yielding a recoverable \
+             retry_after — R37's park-with-known-wake-time rule would be unreachable \
+             in production; this must escalate, not ship silently"
+        );
+    }
+
+    /// M0 measurement, documenting a real gap: bare "retry after Ns" prose
+    /// with no accompanying rate-limit vocabulary never reaches the
+    /// rate-limit arm at all — `looks_like_rate_limit` requires "429" or one
+    /// of its known keywords first. An agent runtime that only ever emits
+    /// bare retry-delay prose (never naming "429"/"rate limit"/etc.) is
+    /// invisible to this classifier and stays a generic `Bridge` error.
+    #[test]
+    fn classify_prompt_error_bare_retry_after_prose_without_rate_limit_keyword_is_not_recognized() {
+        let err =
+            classify_prompt_dispatch_error("please retry after 30s and try again".to_string());
+        assert!(
+            matches!(
+                err,
+                super::super::error::SendMessageError::Bridge(
+                    super::super::error::BridgeError::CommandSendFailed(_)
+                )
+            ),
+            "bare retry-after prose with no rate-limit keyword should NOT be \
+             recognized as a rate limit (measured gap), got: {err:?}"
         );
     }
 

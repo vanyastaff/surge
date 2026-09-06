@@ -79,7 +79,7 @@ jobs:
       # from blocking the rest of the gate.
       - name: Run engine integration tests (--ignored)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run -p surge-orchestrator --run-ignored only
+        run: cargo nextest run -p surge-acp -p surge-orchestrator --run-ignored only
         timeout-minutes: 10
         continue-on-error: true
 

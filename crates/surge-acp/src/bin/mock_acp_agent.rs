@@ -59,6 +59,14 @@ enum Scenario {
     /// subprocess waiter never resolves. Used by Task 10.4
     /// `bridge_close_timeout` to exercise the 5s grace path.
     Frozen,
+    /// Reject every `prompt` call with a scripted JSON-RPC error instead of
+    /// processing normally. `key` selects a canned provider rate-limit /
+    /// quota-exhaustion error shape (see [`provider_error_for_key`]). Used
+    /// by Task 12 M0's real-ACP-wire measurement of whether
+    /// `surge-acp::bridge::worker::classify_prompt_dispatch_error` can
+    /// recover a `retry_after` from what actually crosses the JSON-RPC
+    /// boundary (not just from a hand-built `String` in a unit test).
+    PromptError(String),
 }
 
 impl Scenario {
@@ -83,6 +91,9 @@ impl Scenario {
         if let Some(k) = value.strip_prefix("report_outcome=") {
             return Self::ReportOutcome(k.to_string());
         }
+        if let Some(k) = value.strip_prefix("prompt_error=") {
+            return Self::PromptError(k.to_string());
+        }
         if let Some(n) = value.strip_prefix("crash_after=") {
             let parsed = n.parse().unwrap_or_else(|e| {
                 eprintln!("[mock_acp_agent] bad crash_after value {n:?}: {e}; defaulting to 1");
@@ -101,6 +112,22 @@ impl Scenario {
                 Self::Echo
             },
         }
+    }
+}
+
+/// Canned JSON-RPC error bodies for [`Scenario::PromptError`], keyed by
+/// name. Each mirrors a realistic ACP-error-text shape a rate-limited or
+/// quota-exhausted provider could produce; `"429_retry_after"` is the one
+/// shape `surge-acp::bridge::worker::classify_prompt_dispatch_error` can
+/// recover a `retry_after` from (see the M0 measurement table in
+/// `surge-acp/src/bridge/worker.rs`'s test module) and is what the
+/// `#[ignore]`d `bridge_rate_limit_classification` integration test spawns
+/// this mock with — proving the real wire preserves that text, not just
+/// that the pure classifier function does.
+fn provider_error_for_key(key: &str) -> acp::Error {
+    match key {
+        "429_retry_after" => acp::Error::new(-32000, "429 Too Many Requests: Retry-After: 30"),
+        other => acp::Error::internal_error().data(json!({ "unknown_prompt_error_key": other })),
     }
 }
 
@@ -195,6 +222,14 @@ impl acp::Agent for MockAgent {
         let sid = req.session_id.clone();
 
         match &self.scenario {
+            // ── prompt_error=KEY ─────────────────────────────────────────────
+            Scenario::PromptError(key) => {
+                self.log(&format!(
+                    "prompt_error: returning scripted error for key {key:?}"
+                ));
+                return Err(provider_error_for_key(key));
+            },
+
             // ── echo ────────────────────────────────────────────────────────
             Scenario::Echo => {
                 // Gather user text from the prompt blocks.

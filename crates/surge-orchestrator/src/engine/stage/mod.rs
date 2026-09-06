@@ -10,6 +10,8 @@ pub mod skill_binding;
 pub mod subgraph_stage;
 pub mod terminal;
 
+use std::time::Duration;
+
 use crate::engine::error::EngineError;
 use surge_core::keys::OutcomeKey;
 use thiserror::Error;
@@ -19,7 +21,16 @@ use thiserror::Error;
 pub type StageResult = Result<OutcomeKey, StageError>;
 
 /// Errors that can occur during a single stage's execution.
+///
+/// `#[non_exhaustive]`: this crate alone decides this taxonomy and is
+/// expected to keep growing it, so no external crate may match it
+/// exhaustively — every addition here would otherwise be a breaking change
+/// for such a caller. The trade-off is explicit: an external `match` is
+/// forced to carry a wildcard arm from day one, so a genuinely new failure
+/// mode lands quietly in that wildcard until the caller deliberately gives
+/// it its own handling.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StageError {
     /// A `LoopGuard` trip ended this stage (`.autopilot/competitive-waves/spec.md`
     /// §15). Distinct from `AgentCrashed`: nothing crashed — the engine
@@ -55,6 +66,40 @@ pub enum StageError {
     /// An ACP bridge call failed.
     #[error("bridge error: {0}")]
     Bridge(String),
+
+    /// The agent hit a provider-side rate limit or usage quota while this
+    /// stage was mid-turn — matched directly off
+    /// `surge_acp::bridge::error::SendMessageError::RateLimited`, never by
+    /// re-parsing its rendered `Display` text. Kept as its own variant —
+    /// rather than folded into [`Self::Bridge`] and stringified — so a
+    /// capacity-aware caller can park the run on a known (or unknown) reset
+    /// time instead of burning its retry budget against a wall that will
+    /// not move (R37).
+    #[error("agent rate limited (account = {account:?}, retry_after = {retry_after:?}): {details}")]
+    RateLimited {
+        /// The resolved profile's runtime registry id (e.g. `"claude-acp"`),
+        /// normalized through `surge_acp::Registry::normalize_agent_id` so
+        /// aliases of one entry collapse to the same string. `None` on the
+        /// legacy no-profile-registry path, where no id is known at all — a
+        /// placeholder string here would be fabricating an identity nothing
+        /// observed.
+        ///
+        /// This is a **runtime** identity, not a distinct-credentialed-
+        /// account one: every profile pointed at the same agent runtime
+        /// normalizes to the same string regardless of how many profiles
+        /// reference it, and `RuntimeCfg::agent_id`'s own doc describes it
+        /// as "the agent runtime this profile targets". Whether Surge can
+        /// ever observe two distinct credentialed accounts sharing one
+        /// runtime is an open question, not settled by this field.
+        account: Option<String>,
+        /// Provider-supplied retry delay, when the raw ACP error text
+        /// carried one. Mirrors
+        /// `surge_acp::bridge::error::SendMessageError::RateLimited::retry_after`.
+        retry_after: Option<Duration>,
+        /// Raw error text carried over from the bridge-level error, kept
+        /// for debugging.
+        details: String,
+    },
 
     /// The run was cancelled while the stage was executing.
     #[error("cancelled")]
@@ -130,5 +175,50 @@ pub enum StageError {
 impl From<StageError> for EngineError {
     fn from(e: StageError) -> Self {
         EngineError::Internal(format!("stage error: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use surge_core::capacity::{CapacityWindow, RemainingShare};
+
+    /// Pins the exact invariant `surge-cli`'s inbox capacity scan depends on.
+    /// `resolve_stage_error` (`engine/run_task.rs`) persists
+    /// `format!("stage error at {node}: {error}")` as `StageFailed.reason`,
+    /// and `surge-cli`'s `scan_capacity_signal` (`commands/inbox.rs`) re-runs
+    /// `CapacityWindow::from_observed_error` against that exact string —
+    /// never against `StageError` itself. Today this only works because
+    /// `RateLimited`'s `#[error(...)]` format splices `details` in verbatim,
+    /// and its own `retry_after`/`account` debug formatting uses `retry_after`
+    /// (underscore) rather than `retry-after`/`retry after`, so it never
+    /// shadows the real marker inside `details`. Renaming `details`, dropping
+    /// it from the format string, or introducing a literal "retry after"
+    /// ahead of it would silently break the inbox's capacity signal without
+    /// failing any test that looks at `StageError` in isolation — this one
+    /// goes through the full persisted string on purpose. If it goes red,
+    /// the fix belongs in the `#[error(...)]` format, not in this test.
+    #[test]
+    fn rate_limited_display_still_classifies_through_the_full_stage_failed_reason() {
+        let node = surge_core::keys::NodeKey::try_from("plan_1").unwrap();
+        let error = StageError::RateLimited {
+            account: Some("claude-acp".to_string()),
+            retry_after: Some(Duration::from_secs(30)),
+            details: "429 Too Many Requests: Retry-After: 30".to_string(),
+        };
+        // Exact construction `resolve_stage_error` uses for `StageFailed.reason`.
+        let raw_reason = format!("stage error at {node}: {error}");
+
+        let observed_at = chrono::Utc::now();
+        let window = CapacityWindow::from_observed_error("claude-acp", &raw_reason, observed_at)
+            .expect(
+                "the inbox's scan_capacity_signal must still classify a persisted \
+                 RateLimited StageFailed.reason as a rate-limit signal",
+            );
+        assert_eq!(window.remaining(), Some(RemainingShare::EXHAUSTED));
+        assert_eq!(
+            window.resets_at(),
+            Some(observed_at + chrono::Duration::seconds(30))
+        );
     }
 }

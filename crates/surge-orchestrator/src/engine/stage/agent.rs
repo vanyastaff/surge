@@ -619,7 +619,40 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     p.bridge
         .send_message(session_id, prompt_msg)
         .await
-        .map_err(|e| StageError::Bridge(format!("send_message: {e}")))?;
+        .map_err(|e| match e {
+            surge_acp::bridge::error::SendMessageError::RateLimited {
+                retry_after,
+                details,
+            } => StageError::RateLimited {
+                // The resolved profile's runtime registry id, normalized
+                // through the same `surge_acp::Registry` the engine already
+                // used to derive `agent_kind` above — so "claude",
+                // "claude-code", and "claude-acp" (aliases for one entry,
+                // see `Registry::normalize_agent_id`) collapse to the same
+                // string instead of quietly fragmenting one runtime's
+                // observations across three keys. `None` only via the
+                // no-profile-registry legacy path (no runtime block to read
+                // an id from) or the unreachable-in-practice case where
+                // normalization fails after `agent_kind` derivation already
+                // proved this exact id resolves.
+                //
+                // This is NOT a distinct-credentialed-account identifier —
+                // `RuntimeCfg::agent_id`'s own doc calls it "the agent
+                // runtime this profile targets", and every profile pointed
+                // at the same runtime (the common case: one CLI, one
+                // logged-in session) normalizes to the same string
+                // regardless of how many profiles reference it. Whether
+                // Surge can ever observe two distinct credentialed accounts
+                // sharing one runtime is an open question for the capacity
+                // ledger's design (M2), not settled here.
+                account: resolved_profile.as_ref().and_then(|rp| {
+                    surge_acp::Registry::builtin().normalize_agent_id(&rp.profile.runtime.agent_id)
+                }),
+                retry_after,
+                details,
+            },
+            other => StageError::Bridge(format!("send_message: {other}")),
+        })?;
 
     // Record each steer delivery only after the prompt was actually sent, so a
     // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
