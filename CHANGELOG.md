@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Run Report: `surge run report <id> --format json|md|html`
+
+- **`RunReport::compile(run_id, events) -> RunReport`** (`surge_core::run_report`)
+  compiles nine named sections — `nodes`, `outcomes`, `verdicts`, `evidence`,
+  `cost`, `skills`, `memory_receipts`, `steers`, `approvals` — as a **pure
+  projection of the event log**: no database connection, no live engine
+  handle, no `surge.toml`. A run whose log never reaches a terminal event
+  compiles with `completion: RunCompletion::Incomplete` instead of erroring
+  or guessing — a crashed or still-running run is exactly as reportable as a
+  finished one. See [ADR 0017](docs/adr/0017-run-report-is-a-log-projection.md)
+  for why this deliberately does not reuse `run_state::fold` (whose
+  `RunMemory` bookkeeping is discarded at the terminal transition — wrong
+  lifetime for a report) or the `surge-persistence` materialized SQL views
+  (wrong dependency direction for a `surge-core` type testable from a bare
+  event-fixture slice).
+- **`skills` reconstructs every skill a run bound entirely from `SkillBound`
+  events** (R14) — name, provider, content hash, and whether the trust gate
+  was active — with no dependency on a node's declaration or `surge.toml`.
+- **`verdicts` cross-checks verification authority**, not just presence: a
+  `TaskVerified` event is folded as `Verified` only when the graph active at
+  that point actually granted the reporting node verification authority
+  (`run_state::node_has_verification_authority`, the same predicate
+  `LedgerState::record_verified` trusts); otherwise it is surfaced as
+  `VerdictResult::Unauthorized` rather than silently accepted or dropped —
+  R33 asks a reviewer to accept/reject a run from the report alone, and a
+  log entry that claims verification without the authority to grant it is
+  exactly the kind of fact that judgment needs to see.
+- **`RunReport::header`** carries `RunStarted.initial_prompt` and the first/
+  last event timestamps — the identifying "what was this run even asked to
+  do, and when" facts a reviewer needs before any of the nine sections make
+  sense. **`RunReport::escalations`** lists every `EscalationRequested`
+  (typed `EscalationCause`, since Task 17) the run raised, so a run a loop
+  guard stopped reports *why* instead of a bare, reasonless `Incomplete`.
+- **`RunCompletion::Parked`** is its own completion state, read straight
+  from `RunParked`/`RunWokeFromPark` — a run paused on a provider rate limit
+  proves *why* it paused and *when* it resumes, which collapsing it into the
+  same `Incomplete` bucket as a genuinely unexplained stall would throw away.
+- **`OutcomeStatus::RejectedByHook`** — an `OutcomeRejectedByHook` event
+  flips the matching `outcomes` entry's status in place (or, for a torn log
+  missing the original report, still records the rejection) rather than
+  reporting a hook-rejected outcome exactly like an accepted one. The same
+  half-the-trust-story gap `VerdictResult::Unauthorized` already closed for
+  verifier verdicts, applied to outcomes.
+- **`CostTotals.uncosted_token_events`** counts `TokensConsumed` events with
+  no recorded price; every renderer says "at least $X (+N events without a
+  recorded price)" rather than silently treating unpriced spend as free.
+- **`surge run report <run_id> --format json|md|html`** (default `md` via
+  `#[arg(default_value = "md")]`, `crates/surge-cli/src/commands/run.rs`).
+  Output is written with a discarded-error `writeln!`, not `println!`,
+  which would otherwise panic on `BrokenPipe` (e.g. piping a large HTML
+  report to `| head`) the same way `inbox.rs::print_inbox_to` already
+  avoids. The HTML form is one self-contained file — inline `<style>`,
+  **every** interpolated value HTML-escaped uniformly (not only the fields
+  judged risky — a validated `NodeKey`, a hex `ContentHash`, and a
+  `{:?}`-formatted enum are escaped too, so the guarantee holds even if a
+  future field's validation loosens), no `<link>`/`<script src>`/CDN/
+  external `http(s)://` reference of any kind — so it opens and reads
+  identically in a PR viewer, an offline archive, or years later with no
+  network reachable at all.
+- **`crates/surge-cli/src/commands/run_fold.rs`** gained
+  `read_run_events(reader, run_id)`, factored out of the pre-existing
+  `fold_run_state` so `surge run report` and `surge inbox`/`surge resolve`
+  share the one `ReadEvent → RunEvent` conversion instead of a second reader
+  deriving it independently.
+
+Named rather than silently absent: **`memory_receipts` is always empty
+today.** `surge_core::context_pack::PackReceipt` exists and is computed at
+run start, but no `EventPayload` variant carries it into the event log yet
+(a follow-up already named in that module's own doc). The field, and its
+rendering in all three formats, exist and are wired to the log exactly like
+every other section — they simply have nothing to read until a future
+change emits the event. `RunReport::caveats` names this gap as a real field
+on the type, populated by `compile` itself, so the **JSON** form carries the
+same warning the Markdown/HTML prose does — a bare `"memory_receipts": []`
+with nothing alongside it would read to a machine consumer as "memory was
+not used," which is exactly the false reading this field prevents.
+
 ### Added — Provider rate-limit parking: park, wake, and see it in the inbox
 
 - **A run no longer dispatches into a provider it already knows is

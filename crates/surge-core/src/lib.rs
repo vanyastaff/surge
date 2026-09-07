@@ -57,6 +57,7 @@ pub mod notify_config;
 pub mod predicate;
 pub mod profile;
 pub mod run_event;
+pub mod run_report;
 pub mod run_state;
 pub mod run_status;
 pub mod runtime;
@@ -136,6 +137,7 @@ pub use run_event::{
     BootstrapDecision, BootstrapStage, ElevationDecision, EscalationCause, EventPayload, RunConfig,
     RunEvent, SessionDisposition, VersionedEventPayload,
 };
+pub use run_report::RunReport;
 pub use run_state::{
     Attention, Cursor, FoldError, LedgerState, LedgerTask, RunMemory, RunState, TerminalReason,
     node_has_verification_authority,
