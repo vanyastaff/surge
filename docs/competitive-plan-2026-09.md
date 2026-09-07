@@ -171,7 +171,7 @@ reach us, or harden a claim we already make. Nothing here contradicts
 
 ### Wave 0 — DSH as a runtime (highest leverage per line of code)
 
-DSH's `packages/acp` is an ACP server exposing **fresh** harness agents to
+DSH's `packages/acp` is an Agent Client Protocol (ACP) server exposing **fresh** harness agents to
 programmatic clients with no human in the loop. That is precisely our execution
 model, so this is a registry entry, not an integration project.
 

@@ -45,7 +45,7 @@ enough to record once here rather than re-deriving them per unit.
    carried to the orchestrator via a `ToolDispatcher` trait-method seam.
 
 3. **Surge-injected tools win on name collision.** `report_stage_outcome` and
-   `request_human_input` are added by the ACP bridge and dispatched upstream
+   `request_human_input` are added by the Agent Client Protocol (ACP) bridge and dispatched upstream
    of the router. An MCP server advertising one of those names is dropped from
    the routing table and the declared catalog at a single canonical
    arbitration site (`RESERVED_INJECTED_TOOLS` in `routing.rs`), warning once

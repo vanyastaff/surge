@@ -110,7 +110,7 @@ production, which is exactly the failure mode this task exists to replace
 ## Measurement (M0's mandated deliverable)
 
 The plan required measuring, before any policy is built on top: does the raw
-ACP error text an agent runtime actually produces carry enough for
+Agent Client Protocol (ACP) error text an agent runtime actually produces carry enough for
 `parse_retry_after_secs` to recover a `retry_after`? **This table is
 reconstructed, not captured** — every string below was authored for this
 task; none is a captured response from a live provider or a real agent

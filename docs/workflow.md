@@ -8,7 +8,7 @@ This page describes the AFK ("away-from-keyboard") workflow as it appears to a u
 
 ## Target AFK Workflow
 
-Surge is project-first. A user creates or opens a project folder, runs `surge init`, lets Surge detect available ACP clients, chooses default or interactive setup, then runs whole-project or task-level work. The daemon owns execution; Telegram and the desktop UI are monitoring and approval surfaces.
+Surge is project-first. A user creates or opens a project folder, runs `surge init`, lets Surge detect available Agent Client Protocol (ACP) clients, chooses default or interactive setup, then runs whole-project or task-level work. The daemon owns execution; Telegram and the desktop UI are monitoring and approval surfaces.
 
 ```mermaid
 flowchart TD

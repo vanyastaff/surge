@@ -1,6 +1,6 @@
 # Agent runtimes
 
-Surge is agent-agnostic: it talks to any coding agent over ACP (see
+Surge is agent-agnostic: it talks to any coding agent over Agent Client Protocol (ACP) (see
 [ADR-0006](adr/0006-acp-only-transport.md)). This page is the per-runtime
 support matrix — how each runtime is launched, its current validation status,
 and known quirks.

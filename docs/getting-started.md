@@ -61,7 +61,7 @@ cargo run -p surge-cli --bin surge -- init --default
 cargo run -p surge-cli --bin surge -- project describe
 ```
 
-`surge init --default` writes a validated `surge.toml` with safe onboarding defaults and the best detected ACP agent, falling back to an installable `claude-acp` entry when no agent is found. Run `surge init` without `--default` for the interactive wizard.
+`surge init --default` writes a validated `surge.toml` with safe onboarding defaults and the best detected Agent Client Protocol (ACP) agent, falling back to an installable `claude-acp` entry when no agent is found. Run `surge init` without `--default` for the interactive wizard.
 
 `surge project describe` scans high-signal files such as `AGENTS.md`, `README.md`, `Cargo.toml`, `justfile`, formatter/lint config, and git state, then writes `project.md`. In `--author-mode auto` (the default), it uses the Project Context Author ACP profile when the configured runtime is installed and otherwise falls back to deterministic local rendering. This file is separate from `.ai-factory/` agent context: it is the stable project summary captured into new runs at start time. Use `--dry-run` to preview whether it would change, and `--refresh` to rewrite after meaningful project changes.
 

@@ -139,7 +139,7 @@ surge steer <run> --cancel <id>     # drop a queued steer
 
 Steering is **non-destructive**: the message is prepended to the next stage's
 prompt and recorded as a `SteerDelivered` event — the current agent is not
-interrupted. This is deliberate: ACP v1 has no mid-turn injection channel (a
+interrupted. This is deliberate: Agent Client Protocol (ACP) v1 has no mid-turn injection channel (a
 second `session/prompt` mid-turn is unspecified and agents reject it), so Surge
 delivers at the next stage boundary. The queue is held in the daemon's memory;
 a daemon restart before delivery drops undelivered steers (re-issue them).

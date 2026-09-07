@@ -20,7 +20,7 @@ The four hook triggers cover every observable transition inside an
 
 | Trigger          | Fires                                                                     | Engine action on rejection                                                                                                  |
 |------------------|---------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| `pre_tool_use`   | Before the engine dispatches a non-injected ACP tool call.                | Engine sends a synthetic `ToolResultPayload::Error` reply to the agent and **skips** the dispatcher entirely.                |
+| `pre_tool_use`   | Before the engine dispatches a non-injected Agent Client Protocol (ACP) tool call.                | Engine sends a synthetic `ToolResultPayload::Error` reply to the agent and **skips** the dispatcher entirely.                |
 | `post_tool_use`  | After the dispatcher replies — i.e. after the agent receives the result.  | Cannot un-run the call. Engine logs a warning and emits `HookExecuted` for audit.                                            |
 | `on_outcome`     | Before `OutcomeReported` is appended to the event log.                    | Engine appends `OutcomeRejectedByHook`, increments the per-session attempt counter, and lets the agent pick another outcome. |
 | `on_error`       | When a stage fails (tool spawn failure, ACP transport error, etc.).       | Engine may **suppress** the failure into a declared outcome via a JSON stdout directive (see "Suppression" below).           |

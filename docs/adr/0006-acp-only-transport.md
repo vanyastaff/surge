@@ -26,7 +26,7 @@ These invariants are not negotiable for v0.1. The transport mechanism must serve
 
 ## Decision
 
-ACP is the **sole** agent-transport mechanism in surge. The `surge-acp` crate is the only agent-side adapter; no second backend is introduced for non-ACP agents.
+Agent Client Protocol (ACP) is the **sole** agent-transport mechanism in surge. The `surge-acp` crate is the only agent-side adapter; no second backend is introduced for non-ACP agents.
 
 ## Rationale
 

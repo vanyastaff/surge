@@ -17,7 +17,7 @@ initialize project → describe work → approve roadmap/flow → walk away → 
 Surge is **pre-release software**. Treat it as an active development workspace, not a stable end-user product. Current implementation by crate:
 
 - `surge-core` — graph, profile, event, sandbox, approval, and validation types.
-- `surge-acp` — ACP client / pool / bridge, agent registry, discovery, health, mock ACP agent.
+- `surge-acp` — Agent Client Protocol (ACP) client / pool / bridge, agent registry, discovery, health, mock ACP agent.
 - `surge-orchestrator` — graph engine (`engine/`), bootstrap chain, project-context helper, roadmap-amendment surfaces.
 - `surge-persistence` — SQLite-backed run storage, event logs, views, memory, analytics.
 - `surge-daemon` — long-running local engine host over Unix sockets / Windows named pipes.

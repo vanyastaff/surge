@@ -38,7 +38,7 @@ The strict clippy profile is in [`clippy.toml`](../clippy.toml). Test code relax
 
 ## Long-Running / External-Agent Tests
 
-Some `surge-orchestrator` tests need the bundled mock ACP agent. Build it and run the ignored tests separately:
+Some `surge-orchestrator` tests need the bundled mock Agent Client Protocol (ACP) agent. Build it and run the ignored tests separately:
 
 ```bash
 cargo build -p surge-acp --bin mock_acp_agent
