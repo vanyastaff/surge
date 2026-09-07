@@ -74,6 +74,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Where the numbers in a [`CapacityWindow`] came from.
 ///
@@ -1005,6 +1006,12 @@ pub struct CapacityPolicy {
     /// R41 seam. See [`RotationPolicy`]'s doc: `decide` never emits
     /// [`Decision::Rotate`] from this field in this delivery.
     pub rotation: RotationPolicy,
+    /// Upper bound on the deterministic, per-run "herd" offset
+    /// [`Self::apply_park_jitter`] adds to a [`Decision::Park`]'s `wake_at`
+    /// (Task 12 M4, ADR-0016 §14). `Duration::ZERO` disables jitter
+    /// entirely — every run parked on the same window then shares the
+    /// exact `wake_at` `decide` computed, the pre-M4 behavior.
+    pub jitter_max: Duration,
 }
 
 impl CapacityPolicy {
@@ -1099,6 +1106,68 @@ impl CapacityPolicy {
             },
         }
     }
+
+    /// Add this policy's deterministic "herd" jitter to a [`Decision::Park`]
+    /// `wake_at` (Task 12 M4, ADR-0016 §14): call at the moment of parking,
+    /// on whatever `wake_at` [`Self::decide`] returned, and persist the
+    /// *result* — never re-derive it later. Every run gated on the same
+    /// exhausted runtime otherwise computes the exact same `wake_at` from
+    /// the exact same [`CapacityWindow`], wakes in the same tick, and hits
+    /// the still-exhausted (or freshly-observed) window together; this
+    /// spreads them over `[0, jitter_max)` instead.
+    ///
+    /// The offset is a pure function of `run_id` alone: the same run always
+    /// gets the same offset, which is what "replay-safe" and "testable"
+    /// both require here — recomputing it from a random source each time
+    /// would let two processes (the one that parked, and a later replay)
+    /// disagree about the same run's `wake_at`. Hashed with SHA-256 (an
+    /// already-audited, already-used dependency — see
+    /// [`crate::content_hash::ContentHash`]), not `std::hash::
+    /// DefaultHasher`: that hasher's `RandomState` seed is randomized once
+    /// per process, which is exactly the non-determinism this method exists
+    /// to avoid.
+    ///
+    /// Never panics: an addition that would overflow `DateTime<Utc>`'s
+    /// representable range (an operator-configured `jitter_max` near
+    /// `u64::MAX` seconds, say) clamps to `wake_at` itself — zero jitter —
+    /// rather than crash a park. This is a runtime clamp, not a
+    /// compile-time or config-load-time guarantee; unlike `blind_backoff`,
+    /// `CapacityConfig::validate` does not reject an absurd `jitter_max`,
+    /// because an absurd value degrades to "no jitter" here, not to a
+    /// silently wrong wake time.
+    #[must_use]
+    pub fn apply_park_jitter(
+        &self,
+        wake_at: DateTime<Utc>,
+        run_id: crate::id::RunId,
+    ) -> DateTime<Utc> {
+        let offset = park_jitter_offset(run_id, self.jitter_max);
+        let Ok(offset_secs) = i64::try_from(offset.as_secs()) else {
+            return wake_at;
+        };
+        chrono::Duration::try_seconds(offset_secs)
+            .and_then(|delta| wake_at.checked_add_signed(delta))
+            .unwrap_or(wake_at)
+    }
+}
+
+/// `[0, jitter_max)` offset derived from `run_id` — see
+/// [`CapacityPolicy::apply_park_jitter`], the only caller.
+fn park_jitter_offset(run_id: crate::id::RunId, jitter_max: Duration) -> Duration {
+    let Ok(max_ms) = u64::try_from(jitter_max.as_millis()) else {
+        return Duration::ZERO;
+    };
+    if max_ms == 0 {
+        return Duration::ZERO;
+    }
+    let ulid_bytes: [u8; 16] = run_id.as_ulid().into();
+    let mut hasher = Sha256::new();
+    hasher.update(ulid_bytes);
+    let digest = hasher.finalize();
+    let mut first8 = [0u8; 8];
+    first8.copy_from_slice(&digest[..8]);
+    let hashed = u64::from_be_bytes(first8);
+    Duration::from_millis(hashed % max_ms)
 }
 
 /// Whether `estimate` can be judged against `window`'s remaining capacity,
@@ -1400,6 +1469,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(9_000_000_000_000)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             policy.decide(None, &status, now),
@@ -1663,6 +1733,7 @@ mod tests {
         CapacityPolicy {
             blind_backoff: None,
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         }
     }
 
@@ -1705,6 +1776,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             policy.decide(None, &status, now),
@@ -1763,6 +1835,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             policy.decide(None, &status, now),
@@ -1795,6 +1868,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             policy.decide(None, &status, a_year_later),
@@ -1824,6 +1898,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             policy.decide(None, &status, now),
@@ -1846,6 +1921,7 @@ mod tests {
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
         };
         let now = t("2026-06-01T00:00:00Z");
 
@@ -1972,6 +2048,7 @@ mod tests {
         let parking_policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(60)),
             rotation: rotation.clone(),
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             parking_policy.decide(None, &CapacityStatus::Known(window.clone()), now),
@@ -1984,12 +2061,124 @@ mod tests {
         let dispatching_policy = CapacityPolicy {
             blind_backoff: None,
             rotation,
+            jitter_max: Duration::ZERO,
         };
         assert_eq!(
             dispatching_policy.decide(None, &CapacityStatus::Known(window), now),
             Decision::Dispatch {
                 degraded: Some(Degraded::ExhaustedNoResetTime)
             }
+        );
+    }
+
+    // ── `CapacityPolicy::apply_park_jitter` (Task 12 M4, ADR-0016 §14) ──
+
+    #[test]
+    fn park_jitter_is_deterministic_for_the_same_run_id() {
+        let run_id = crate::id::RunId::new();
+        let policy = CapacityPolicy {
+            blind_backoff: None,
+            rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::from_secs(60),
+        };
+        let wake_at = t("2026-01-01T00:00:00Z");
+        let first = policy.apply_park_jitter(wake_at, run_id);
+        let second = policy.apply_park_jitter(wake_at, run_id);
+        assert_eq!(
+            first, second,
+            "the same run_id must yield the same jittered wake_at every time — this is what \
+             makes parking replay-safe and this test reproducible, not a source of flakiness"
+        );
+    }
+
+    #[test]
+    fn park_jitter_never_moves_wake_at_backward_and_stays_within_jitter_max() {
+        let jitter_max = Duration::from_secs(30);
+        let policy = CapacityPolicy {
+            blind_backoff: None,
+            rotation: RotationPolicy::Disabled,
+            jitter_max,
+        };
+        let wake_at = t("2026-01-01T00:00:00Z");
+        // Several distinct run_ids: the offset must always land in
+        // [0, jitter_max), never negative and never at-or-past the ceiling.
+        for _ in 0..20 {
+            let run_id = crate::id::RunId::new();
+            let jittered = policy.apply_park_jitter(wake_at, run_id);
+            assert!(
+                jittered >= wake_at,
+                "jitter must never move wake_at earlier, got {jittered} for base {wake_at}"
+            );
+            let offset = jittered - wake_at;
+            assert!(
+                offset < chrono::Duration::from_std(jitter_max).unwrap(),
+                "offset {offset} must be strictly less than jitter_max {jitter_max:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_jitter_max_disables_jitter_entirely() {
+        let policy = CapacityPolicy {
+            blind_backoff: None,
+            rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::ZERO,
+        };
+        let wake_at = t("2026-01-01T00:00:00Z");
+        let run_id = crate::id::RunId::new();
+        assert_eq!(
+            policy.apply_park_jitter(wake_at, run_id),
+            wake_at,
+            "jitter_max: Duration::ZERO must be a genuine opt-out, not a 0-length-but-still-\
+             hashed no-op — every run must see the exact wake_at decide() computed"
+        );
+    }
+
+    #[test]
+    fn different_run_ids_can_get_different_jitter() {
+        // Not a strict requirement of any single call, but the whole point
+        // of this mechanism is to spread runs apart — if every run_id
+        // collapsed to the same offset, the herd this method exists to
+        // break up would just re-form at the jittered instant instead of
+        // the original one. A handful of runs should not all land on the
+        // exact same offset.
+        let policy = CapacityPolicy {
+            blind_backoff: None,
+            rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::from_secs(3600),
+        };
+        let wake_at = t("2026-01-01T00:00:00Z");
+        let offsets: std::collections::BTreeSet<i64> = (0..10)
+            .map(|_| {
+                let run_id = crate::id::RunId::new();
+                (policy.apply_park_jitter(wake_at, run_id) - wake_at).num_milliseconds()
+            })
+            .collect();
+        assert!(
+            offsets.len() > 1,
+            "10 distinct run_ids against a 1h jitter_max collapsed to a single offset; \
+             park_jitter_offset is not spreading runs apart"
+        );
+    }
+
+    #[test]
+    fn park_jitter_never_panics_on_an_absurdly_large_jitter_max() {
+        // Mirrors `decide_does_not_panic_on_an_absurdly_large_blind_backoff`
+        // above: an operator-configured jitter_max this module's own
+        // `CapacityConfig::validate` does not reject (see
+        // `apply_park_jitter`'s doc on why not) must degrade to no jitter,
+        // never panic on the `DateTime<Utc>` overflow.
+        let policy = CapacityPolicy {
+            blind_backoff: None,
+            rotation: RotationPolicy::Disabled,
+            jitter_max: Duration::from_secs(u64::MAX),
+        };
+        let wake_at = DateTime::<Utc>::MAX_UTC;
+        let run_id = crate::id::RunId::new();
+        let jittered = policy.apply_park_jitter(wake_at, run_id);
+        assert!(
+            jittered == wake_at || jittered == DateTime::<Utc>::MAX_UTC,
+            "an unrepresentable jitter offset must clamp, not panic; got {jittered}"
         );
     }
 }

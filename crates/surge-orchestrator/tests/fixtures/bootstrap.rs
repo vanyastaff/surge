@@ -28,11 +28,22 @@ pub struct BootstrapHarness {
     pub engine: Arc<Engine>,
     pub run_id: RunId,
     pub sessions: Vec<SessionId>,
+    /// Backing directory for `memory_dir`/`memory_store_path` below. Held
+    /// only to keep the tempdir alive for the harness's lifetime; never
+    /// read directly.
+    _memory_dir: tempfile::TempDir,
+    /// Test-only `EngineRunConfig::memory_store_path` override so a
+    /// bootstrap run driven to a terminal failure (e.g. the edit-loop cap)
+    /// writes its failure claim here instead of the developer's real
+    /// `~/.surge/memory.db` (`engine::hooks::memory_writeback::record_node_failure`).
+    memory_store_path: std::path::PathBuf,
 }
 
 impl BootstrapHarness {
     pub async fn new(session_count: usize) -> Self {
         let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        let memory_store_path = memory_dir.path().join("memory.db");
         let storage = Storage::open(dir.path()).await.unwrap();
         let mock = Arc::new(MockBridge::new());
         let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -56,6 +67,8 @@ impl BootstrapHarness {
             engine,
             run_id: RunId::new(),
             sessions,
+            _memory_dir: memory_dir,
+            memory_store_path,
         }
     }
 
@@ -64,8 +77,17 @@ impl BootstrapHarness {
         let prompt = prompt.to_owned();
         let run_id = self.run_id;
         let worktree = self.dir.path().to_path_buf();
+        let memory_store_path = self.memory_store_path.clone();
         tokio::spawn(async move {
-            run_bootstrap_in_worktree(engine.as_ref(), prompt, run_id, worktree, None).await
+            run_bootstrap_in_worktree(
+                engine.as_ref(),
+                prompt,
+                run_id,
+                worktree,
+                None,
+                Some(memory_store_path),
+            )
+            .await
         })
     }
 

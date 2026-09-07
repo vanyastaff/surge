@@ -1,13 +1,17 @@
-//! Read-API for the cockpit's `/status` and `/runs` commands.
+//! Read-API for a run's current status — originally the cockpit's
+//! `/status` and `/runs` commands, now also `surge-daemon`'s wake scheduler
+//! (Task 12 M4), which reads the same fold to find a parked run's recorded
+//! worktree and its consecutive-blind-park count without a second pass over
+//! the log.
 //!
-//! Folds a run's persisted event log down to a small snapshot the bot can
-//! render in a single Telegram card. Reuses the existing [`RunReader`] /
-//! `RunFilter` machinery — no new fold rules.
+//! Folds a run's persisted event log down to a small snapshot. Reuses the
+//! existing [`RunReader`] / `RunFilter` machinery — no new fold rules.
 
 use std::ops::Range;
+use std::path::PathBuf;
 
 use surge_core::id::RunId;
-use surge_core::run_event::EventPayload;
+use surge_core::run_event::{EscalationCause, EventPayload};
 
 use crate::runs::error::StorageError;
 use crate::runs::reader::{ReadEvent, RunReader};
@@ -41,6 +45,35 @@ pub struct RunStatusSnapshot {
     pub elapsed_ms: Option<i64>,
     /// Total number of events in the log (== highest seq observed).
     pub event_count: u64,
+    /// The worktree path recorded by the most recent `RunParked` event,
+    /// cleared by `RunWokeFromPark` (Task 12 M4). `None` for a run that
+    /// has never parked, or whose most recent park was already woken.
+    ///
+    /// This is the run's *actual* worktree, recorded at the moment it
+    /// parked (`RunTaskParams::worktree_path`, threaded through
+    /// `EventPayload::RunParked.worktree`) — not the
+    /// `<worktrees_root>/<run_id>` path `surge-daemon`'s crash-recovery
+    /// scan reconstructs (`recovery.rs`'s own doc names the limitation:
+    /// a run launched with a custom `--worktree` is not resumable through
+    /// that reconstruction). `surge-daemon::wake_scheduler` (Task 12 M4)
+    /// reads this field so a parked run's wake probes the worktree it was
+    /// actually parked from.
+    pub parked_worktree: Option<PathBuf>,
+    /// Count of consecutive `RunParked { basis: WakeBasis::PolicyBackoff }`
+    /// events with no successful dispatch (`StageCompleted`) between them
+    /// (Task 12 M4, `CapacityConfig::blind_park_limit`). Increments on each
+    /// such park, resets to `0` on `StageCompleted`. A `RunParked { basis:
+    /// WakeBasis::ObservedReset }` does **not** reset it — the streak this
+    /// counter tracks is "blind" (no learned reset time, no real dispatch
+    /// success), and a still-exhausted-but-now-observed window is neither.
+    pub consecutive_blind_parks: u32,
+    /// `true` once `surge-daemon::wake_scheduler` has already raised
+    /// `EscalationRequested { cause: CapacityBlindParkLimitExceeded }` for
+    /// the *current* blind-park streak — cleared, alongside
+    /// [`Self::consecutive_blind_parks`], by the next `StageCompleted`. Lets
+    /// the wake scheduler escalate once per streak instead of once per
+    /// poll tick for as long as the run stays stuck.
+    pub blind_park_limit_escalated: bool,
 }
 
 impl RunStatusSnapshot {
@@ -58,6 +91,9 @@ impl RunStatusSnapshot {
             last_event_at_ms: None,
             elapsed_ms: None,
             event_count: 0,
+            parked_worktree: None,
+            consecutive_blind_parks: 0,
+            blind_park_limit_escalated: false,
         }
     }
 }
@@ -91,6 +127,27 @@ pub fn aggregate_status(run_id: RunId, events: &[ReadEvent]) -> RunStatusSnapsho
             EventPayload::RunFailed { .. } => {
                 snap.terminal = true;
                 snap.failed = true;
+            },
+            EventPayload::RunParked {
+                worktree, basis, ..
+            } => {
+                snap.parked_worktree = Some(worktree.clone());
+                if matches!(basis, surge_core::capacity::WakeBasis::PolicyBackoff) {
+                    snap.consecutive_blind_parks = snap.consecutive_blind_parks.saturating_add(1);
+                }
+            },
+            EventPayload::RunWokeFromPark { .. } => {
+                snap.parked_worktree = None;
+            },
+            EventPayload::StageCompleted { .. } => {
+                snap.consecutive_blind_parks = 0;
+                snap.blind_park_limit_escalated = false;
+            },
+            EventPayload::EscalationRequested {
+                cause: EscalationCause::CapacityBlindParkLimitExceeded,
+                ..
+            } => {
+                snap.blind_park_limit_escalated = true;
             },
             _ => {},
         }
@@ -137,6 +194,7 @@ mod tests {
     use std::path::PathBuf;
     use surge_core::approvals::ApprovalPolicy;
     use surge_core::budget::BudgetGuard;
+    use surge_core::capacity::WakeBasis;
     use surge_core::keys::{NodeKey, OutcomeKey};
     use surge_core::migrations::MAX_SUPPORTED_VERSION;
     use surge_core::run_event::{EventPayload, RunConfig, VersionedEventPayload};
@@ -310,5 +368,211 @@ mod tests {
         assert!(snap.terminal);
         assert!(snap.failed);
         assert_eq!(snap.elapsed_ms, Some(800));
+    }
+
+    /// Task 12 M4: `parked_worktree` is `surge-daemon::wake_scheduler`'s
+    /// only door onto the worktree a parked run actually recorded — must
+    /// be set from `RunParked.worktree`, not left `None`.
+    #[test]
+    fn run_parked_records_the_worktree() {
+        let run_id = RunId::new();
+        let worktree = PathBuf::from("/wt/actual");
+        let events = [event(
+            1,
+            1_000,
+            EventPayload::RunParked {
+                wake_at: chrono::Utc::now(),
+                runtime: Some("claude-acp".into()),
+                worktree: worktree.clone(),
+                basis: WakeBasis::PolicyBackoff,
+                reason: "exhausted".into(),
+            },
+        )];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.parked_worktree, Some(worktree));
+    }
+
+    /// The other half: `RunWokeFromPark` must clear `parked_worktree`, or
+    /// a wake scheduler that re-reads the snapshot after resuming would
+    /// keep seeing a worktree for a run that is no longer parked.
+    #[test]
+    fn run_woke_from_park_clears_the_recorded_worktree() {
+        let run_id = RunId::new();
+        let events = [
+            event(
+                1,
+                1_000,
+                EventPayload::RunParked {
+                    wake_at: chrono::Utc::now(),
+                    runtime: Some("claude-acp".into()),
+                    worktree: PathBuf::from("/wt/actual"),
+                    basis: WakeBasis::PolicyBackoff,
+                    reason: "exhausted".into(),
+                },
+            ),
+            event(2, 2_000, EventPayload::RunWokeFromPark {}),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(
+            snap.parked_worktree, None,
+            "RunWokeFromPark must clear parked_worktree"
+        );
+    }
+
+    /// A second park after a wake must record the (possibly different)
+    /// worktree from that second `RunParked`, not stay cleared or stick to
+    /// the first one — `parked_worktree` tracks the *most recent* park.
+    #[test]
+    fn a_second_park_after_a_wake_records_its_own_worktree() {
+        let run_id = RunId::new();
+        let second_worktree = PathBuf::from("/wt/second");
+        let events = [
+            event(
+                1,
+                1_000,
+                EventPayload::RunParked {
+                    wake_at: chrono::Utc::now(),
+                    runtime: Some("claude-acp".into()),
+                    worktree: PathBuf::from("/wt/first"),
+                    basis: WakeBasis::PolicyBackoff,
+                    reason: "exhausted".into(),
+                },
+            ),
+            event(2, 2_000, EventPayload::RunWokeFromPark {}),
+            event(
+                3,
+                3_000,
+                EventPayload::RunParked {
+                    wake_at: chrono::Utc::now(),
+                    runtime: Some("claude-acp".into()),
+                    worktree: second_worktree.clone(),
+                    basis: WakeBasis::PolicyBackoff,
+                    reason: "exhausted again".into(),
+                },
+            ),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.parked_worktree, Some(second_worktree));
+    }
+
+    // ── `consecutive_blind_parks` / `blind_park_limit_escalated` (Task 12 M4) ──
+
+    fn blind_park(seq: u64, ts: i64) -> ReadEvent {
+        event(
+            seq,
+            ts,
+            EventPayload::RunParked {
+                wake_at: chrono::Utc::now(),
+                runtime: Some("claude-acp".into()),
+                worktree: PathBuf::from("/wt"),
+                basis: WakeBasis::PolicyBackoff,
+                reason: "blind backoff".into(),
+            },
+        )
+    }
+
+    fn observed_reset_park(seq: u64, ts: i64) -> ReadEvent {
+        event(
+            seq,
+            ts,
+            EventPayload::RunParked {
+                wake_at: chrono::Utc::now(),
+                runtime: Some("claude-acp".into()),
+                worktree: PathBuf::from("/wt"),
+                basis: WakeBasis::ObservedReset,
+                reason: "observed reset".into(),
+            },
+        )
+    }
+
+    fn stage_completed(seq: u64, ts: i64) -> ReadEvent {
+        event(
+            seq,
+            ts,
+            EventPayload::StageCompleted {
+                node: NodeKey::try_from("agent_1").unwrap(),
+                outcome: OutcomeKey::try_from("done").unwrap(),
+            },
+        )
+    }
+
+    fn blind_park_escalation(seq: u64, ts: i64) -> ReadEvent {
+        event(
+            seq,
+            ts,
+            EventPayload::EscalationRequested {
+                stage: None,
+                reason: "5 consecutive blind parks".into(),
+                cause: EscalationCause::CapacityBlindParkLimitExceeded,
+            },
+        )
+    }
+
+    #[test]
+    fn consecutive_blind_parks_counts_policy_backoff_parks() {
+        let run_id = RunId::new();
+        let events = [
+            blind_park(1, 1_000),
+            blind_park(2, 2_000),
+            blind_park(3, 3_000),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.consecutive_blind_parks, 3);
+    }
+
+    #[test]
+    fn observed_reset_park_does_not_increment_the_blind_streak() {
+        let run_id = RunId::new();
+        let events = [blind_park(1, 1_000), observed_reset_park(2, 2_000)];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(
+            snap.consecutive_blind_parks, 1,
+            "an ObservedReset-basis park is not a blind park — it must not add to the count"
+        );
+    }
+
+    #[test]
+    fn stage_completed_resets_the_blind_streak_and_the_escalation_flag() {
+        let run_id = RunId::new();
+        let events = [
+            blind_park(1, 1_000),
+            blind_park(2, 2_000),
+            blind_park_escalation(3, 2_500),
+            stage_completed(4, 3_000),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.consecutive_blind_parks, 0);
+        assert!(!snap.blind_park_limit_escalated);
+    }
+
+    #[test]
+    fn a_fresh_streak_after_reset_counts_from_zero_and_can_escalate_again() {
+        let run_id = RunId::new();
+        let events = [
+            blind_park(1, 1_000),
+            blind_park(2, 2_000),
+            blind_park_escalation(3, 2_500),
+            stage_completed(4, 3_000),
+            blind_park(5, 4_000),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.consecutive_blind_parks, 1);
+        assert!(
+            !snap.blind_park_limit_escalated,
+            "a new streak after a reset must be eligible to escalate again"
+        );
+    }
+
+    #[test]
+    fn blind_park_limit_escalated_flag_is_set_by_the_escalation_event() {
+        let run_id = RunId::new();
+        let events = [
+            blind_park(1, 1_000),
+            blind_park(2, 2_000),
+            blind_park_escalation(3, 2_500),
+        ];
+        let snap = aggregate_status(run_id, &events);
+        assert_eq!(snap.consecutive_blind_parks, 2);
+        assert!(snap.blind_park_limit_escalated);
     }
 }

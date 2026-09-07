@@ -256,6 +256,12 @@ async fn configured_repeat_threshold_is_honored_not_the_default() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn node_wall_clock_deadline_trips_without_any_tool_call() {
     let dir = tempfile::tempdir().unwrap();
+    // This test drives the run to a genuine `RunOutcome::Failed`
+    // (`StageError::LoopGuardTripped`), which trips
+    // `engine::hooks::memory_writeback::record_node_failure` — route it at
+    // a throwaway store instead of the developer's real `~/.surge/memory.db`.
+    let memory_dir = tempfile::tempdir().unwrap();
+    let store_path = memory_dir.path().join("memory.db");
 
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(MockBridge::new());
@@ -287,6 +293,7 @@ async fn node_wall_clock_deadline_trips_without_any_tool_call() {
             max_repeat_tool_calls: 100,
             node_wall_clock_limit_secs: 0,
         }),
+        memory_store_path: Some(store_path),
         ..EngineRunConfig::default()
     };
     let handle = engine

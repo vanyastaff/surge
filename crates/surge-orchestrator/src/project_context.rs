@@ -449,7 +449,11 @@ pub fn with_project_context_seed(
         run_config.project_context = load_project_context_seed(project_root, config);
     }
     if run_config.project_memory.is_none() {
-        run_config.project_memory = merged_project_memory_seed(project_root, config);
+        run_config.project_memory = merged_project_memory_seed(
+            project_root,
+            config,
+            run_config.memory_store_path.as_deref(),
+        );
     }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
@@ -575,12 +579,17 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
 /// seed instead of a project accumulating unbounded raw notes as the only
 /// form of cross-run memory). Either half may be absent; the result is
 /// `None` only when both are.
+///
+/// `store_path_override` is `EngineRunConfig::memory_store_path` forwarded
+/// unchanged from [`with_project_context_seed`]; see
+/// [`load_memory_claims_seed`] for how it is resolved.
 fn merged_project_memory_seed(
     project_root: &Path,
     config: &surge_core::SurgeConfig,
+    store_path_override: Option<&Path>,
 ) -> Option<ProjectContextSeed> {
     let notes = load_project_memory_seed(project_root);
-    let claims_pack = load_memory_claims_seed(config);
+    let claims_pack = load_memory_claims_seed(config, store_path_override);
 
     let mut body = String::new();
     if let Some(notes) = &notes {
@@ -633,19 +642,31 @@ fn render_memory_claims_pack(
     (Some(body), receipt)
 }
 
-/// Load memory claims from the default claim store and select them into a
-/// pack under `config.context_pack`'s budget. Tolerant of every failure —
-/// a missing/unreadable store yields no claims, exactly like
+/// Load memory claims from the claim store and select them into a pack
+/// under `config.context_pack`'s budget. Tolerant of every failure — a
+/// missing/unreadable store yields no claims, exactly like
 /// [`load_project_memory_seed`] tolerates a missing `.surge/memory/`
 /// directory; memory-claim recall must never be the reason a run fails to
 /// start.
+///
+/// `store_path_override` mirrors
+/// `engine::hooks::memory_writeback::record_node_failure`'s parameter of
+/// the same name and the same `EngineRunConfig::memory_store_path` field:
+/// `Some(path)` reads from there instead (test-only), `None` (every
+/// production run) resolves `MemoryStore::default_path()`.
 ///
 /// The receipt this produces is not yet persisted to the run event log
 /// (`surge_core::run_event` is out of scope for the task that added this —
 /// see `.autopilot/competitive-waves/tickets/06-context-pack.md`); it is
 /// logged here so it is at least operator-visible in the interim.
-fn load_memory_claims_seed(config: &surge_core::SurgeConfig) -> Option<String> {
-    let store_path = MemoryStore::default_path().ok()?;
+fn load_memory_claims_seed(
+    config: &surge_core::SurgeConfig,
+    store_path_override: Option<&Path>,
+) -> Option<String> {
+    let store_path = match store_path_override {
+        Some(path) => path.to_path_buf(),
+        None => MemoryStore::default_path().ok()?,
+    };
     if !store_path.exists() {
         return None;
     }
@@ -1496,107 +1517,27 @@ mod with_project_context_seed_memory_claims_tests {
         .expect("Unverified status is always constructible")
     }
 
-    /// Points `MemoryStore::default_path()` at a throwaway directory for
-    /// the duration of `f`, then restores the previous values.
-    ///
-    /// `MemoryStore::default_path()` resolves `$SURGE_HOME` first (falling
-    /// back to `$HOME` via `dirs::home_dir()` only when `SURGE_HOME` is
-    /// unset/empty — see `crates/surge-persistence/src/memory/store.rs`),
-    /// matching `surge_home_dir()`/`pidfile::daemon_dir()` elsewhere in this
-    /// workspace. Overriding `HOME` alone is not isolation once that lookup
-    /// exists: a developer or CI job with `SURGE_HOME` exported would have
-    /// this test's writes land in that real, shared store instead of the
-    /// throwaway one — measured, not hypothetical (a prior version of this
-    /// helper did exactly that, silently, and stayed green while claims
-    /// accumulated across runs). Clearing `SURGE_HOME` for the duration
-    /// forces the same `$HOME` fallback this helper already isolates.
-    ///
-    /// Safe under this project's test runner, `cargo nextest`
-    /// (`.autopilot/competitive-waves/interfaces.md`), whose defining
-    /// feature is one process per test — mutating process-global env vars
-    /// is only safe when nothing else in the process reads or writes them
-    /// concurrently, which per-test process isolation guarantees here. It
-    /// would NOT be safe under threaded `cargo test`, which is not this
-    /// project's gate.
-    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
-        let previous_home = std::env::var_os("HOME");
-        let previous_surge_home = std::env::var_os("SURGE_HOME");
-        // SAFETY: `set_var`/`remove_var` are unsound only under a
-        // concurrent unsynchronized read of the process environment on
-        // another thread (a data race). This process has exactly one
-        // thread touching `HOME`/`SURGE_HOME`: cargo-nextest runs each test
-        // in its own process, this function and `f` are the only code
-        // running in it, and `f` (a call into `with_project_context_seed` /
-        // `MemoryStore::open`) does only synchronous file/SQLite I/O — it
-        // spawns no threads and reads no env var itself. The mutate here
-        // happens-before `f` runs and the restore happens-after, all on
-        // this one thread, so there is no concurrent access to race.
-        // SAFETY: see above.
-        unsafe {
-            std::env::set_var("HOME", home);
-        }
-        // SAFETY: see above.
-        unsafe {
-            std::env::remove_var("SURGE_HOME");
-        }
-        let result = f();
-        match previous_home {
-            // SAFETY: see above.
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match previous_surge_home {
-            // SAFETY: see above.
-            Some(value) => unsafe { std::env::set_var("SURGE_HOME", value) },
-            None => unsafe { std::env::remove_var("SURGE_HOME") },
-        }
-        result
-    }
-
-    /// Regression for the exact isolation break a reviewer measured: with
-    /// `SURGE_HOME` already exported in the ambient environment (a
-    /// developer's shell, or a CI job), the previous version of
-    /// [`with_home`] — which only overrode `HOME` — left
-    /// `MemoryStore::default_path()` resolving under that real, shared
-    /// `SURGE_HOME` instead of the throwaway directory this helper exists
-    /// to isolate into. Simulates that ambient state directly (outside
-    /// `with_home`, mirroring a real shell) and asserts the store path
-    /// still lands under the throwaway `home`, not the ambient one.
-    #[test]
-    fn with_home_isolates_even_when_surge_home_is_already_set_in_the_environment() {
-        let ambient_surge_home = tempfile::tempdir().unwrap();
-        let previous_surge_home = std::env::var_os("SURGE_HOME");
-        // SAFETY: see `with_home`'s own SAFETY comment directly above —
-        // the same one-thread-per-nextest-test guarantee holds for this
-        // test too, and no other code in this process reads/writes
-        // `SURGE_HOME` concurrently with it.
-        unsafe {
-            std::env::set_var("SURGE_HOME", ambient_surge_home.path());
-        }
-
-        let throwaway_home = tempfile::tempdir().unwrap();
-        with_home(throwaway_home.path(), || {
-            let store_path = MemoryStore::default_path().expect("home dir resolves");
-            assert!(
-                store_path.starts_with(throwaway_home.path()),
-                "with_home must isolate MemoryStore::default_path() even when SURGE_HOME is \
-                 already set in the ambient environment; got {store_path:?}, expected it under \
-                 {:?}",
-                throwaway_home.path()
-            );
-        });
-
-        match previous_surge_home {
-            // SAFETY: see above.
-            Some(value) => unsafe { std::env::set_var("SURGE_HOME", value) },
-            // SAFETY: see above.
-            None => unsafe { std::env::remove_var("SURGE_HOME") },
+    /// `EngineRunConfig` with `memory_store_path` pointed at `store_path`,
+    /// mirroring `tests/memory_writeback_test.rs`'s
+    /// `run_config_with_memory_store` helper. Every test in this module
+    /// must route through this (or its own explicit `Some(path)`) rather
+    /// than `EngineRunConfig::default()` directly, or
+    /// `load_memory_claims_seed` would resolve the developer's real
+    /// `~/.surge/memory.db` instead of a throwaway store — no `$HOME` /
+    /// `SURGE_HOME` env mutation needed, since the path travels explicitly
+    /// through `EngineRunConfig` the same way the engine's own write-back
+    /// path (`engine::hooks::memory_writeback`) already does.
+    fn run_config_with_memory_store(store_path: PathBuf) -> EngineRunConfig {
+        EngineRunConfig {
+            memory_store_path: Some(store_path),
+            ..EngineRunConfig::default()
         }
     }
 
     #[test]
     fn with_project_context_seed_folds_a_confidence_ordered_claims_pack_into_project_memory() {
-        let home = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        let store_path = memory_dir.path().join("memory.db");
         let project_root = tempfile::tempdir().unwrap();
 
         // Verified costs exactly 25 estimated tokens (100 chars / 4); the
@@ -1609,21 +1550,22 @@ mod with_project_context_seed_memory_claims_tests {
         let verified_text = verified.text().to_string();
         let asserted_text = asserted.text().to_string();
 
-        with_home(home.path(), || {
-            let store_path = MemoryStore::default_path().expect("home dir resolves");
+        {
             let store = MemoryStore::open(&store_path).expect("open memory store");
             store.add_claim(&verified).expect("add verified claim");
             store.add_claim(&asserted).expect("add asserted claim");
-        });
+        }
 
         let config = surge_core::SurgeConfig {
             context_pack: ContextPackConfig { budget_tokens: 25 },
             ..surge_core::SurgeConfig::default()
         };
 
-        let seeded = with_home(home.path(), || {
-            with_project_context_seed(EngineRunConfig::default(), project_root.path(), &config)
-        });
+        let seeded = with_project_context_seed(
+            run_config_with_memory_store(store_path),
+            project_root.path(),
+            &config,
+        );
 
         let seed = seeded
             .project_memory
@@ -1642,16 +1584,22 @@ mod with_project_context_seed_memory_claims_tests {
 
     #[test]
     fn with_project_context_seed_falls_back_to_notes_only_when_the_claim_store_is_empty() {
-        let home = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        // Deliberately never opened: `load_memory_claims_seed` must treat a
+        // non-existent store exactly like an absent one, same as
+        // `load_project_memory_seed` tolerates a missing `.surge/memory/`.
+        let store_path = memory_dir.path().join("memory.db");
         let project_root = tempfile::tempdir().unwrap();
         let mem_dir = project_root.path().join(PROJECT_MEMORY_DIR);
         std::fs::create_dir_all(&mem_dir).unwrap();
         std::fs::write(mem_dir.join("note.md"), "a curated note\n").unwrap();
 
         let config = surge_core::SurgeConfig::default();
-        let seeded = with_home(home.path(), || {
-            with_project_context_seed(EngineRunConfig::default(), project_root.path(), &config)
-        });
+        let seeded = with_project_context_seed(
+            run_config_with_memory_store(store_path),
+            project_root.path(),
+            &config,
+        );
 
         let seed = seeded
             .project_memory
@@ -1673,9 +1621,16 @@ mod with_project_context_seed_threshold_tests {
     /// but none proved `SurgeConfig` reaches `EngineRunConfig`. A run
     /// config that leaves both fields `None` (the default) must pick up
     /// whatever non-default thresholds `surge.toml` carries.
+    ///
+    /// `memory_store_path` is pointed at a throwaway (never-created) path
+    /// so this test's `with_project_context_seed` call cannot open the
+    /// developer's real `~/.surge/memory.db` — the pre-existing
+    /// hermeticity gap `.autopilot/competitive-waves/tickets/06-context-pack.md`
+    /// recorded for these three threshold tests.
     #[test]
     fn unset_thresholds_are_filled_from_surge_config() {
         let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
         let config = surge_core::SurgeConfig {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 7,
@@ -1686,8 +1641,12 @@ mod with_project_context_seed_threshold_tests {
             },
             ..surge_core::SurgeConfig::default()
         };
+        let run_config = EngineRunConfig {
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
+            ..EngineRunConfig::default()
+        };
 
-        let seeded = with_project_context_seed(EngineRunConfig::default(), dir.path(), &config);
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
 
         assert_eq!(
             seeded.tool_call_loop_guard,
@@ -1703,9 +1662,14 @@ mod with_project_context_seed_threshold_tests {
 
     /// A caller that already set an explicit (non-default) value must keep
     /// it even when `SurgeConfig` carries a *different* non-default value.
+    ///
+    /// `memory_store_path` is pointed at a throwaway path for the same
+    /// hermeticity reason as `unset_thresholds_are_filled_from_surge_config`
+    /// above.
     #[test]
     fn explicit_caller_value_is_not_clobbered_by_surge_config() {
         let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
         let config = surge_core::SurgeConfig {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 99,
@@ -1727,6 +1691,7 @@ mod with_project_context_seed_threshold_tests {
         let run_config = EngineRunConfig {
             tool_call_loop_guard: Some(caller_guard),
             output_spill: Some(caller_spill),
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
             ..EngineRunConfig::default()
         };
 
@@ -1751,9 +1716,13 @@ mod with_project_context_seed_threshold_tests {
     /// set" and would silently clobber it the moment `SurgeConfig` carried a
     /// different value — this is the failure mode `Option`-as-unset exists
     /// to rule out structurally, not just by convention.
+    /// `memory_store_path` is pointed at a throwaway path for the same
+    /// hermeticity reason as `unset_thresholds_are_filled_from_surge_config`
+    /// above.
     #[test]
     fn explicit_default_valued_setting_is_not_mistaken_for_unset() {
         let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
         let config = surge_core::SurgeConfig {
             tool_call_loop_guard: ToolCallLoopGuardConfig {
                 max_repeat_tool_calls: 99,
@@ -1767,6 +1736,7 @@ mod with_project_context_seed_threshold_tests {
         let run_config = EngineRunConfig {
             tool_call_loop_guard: Some(ToolCallLoopGuardConfig::default()),
             output_spill: Some(OutputSpillConfig::default()),
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
             ..EngineRunConfig::default()
         };
 

@@ -169,6 +169,12 @@ fn graph_with_declared_skill_and_approval(declared: Vec<SkillRef>, gate_enabled:
 async fn unpinned_skill_unanswered_rejects_before_any_session_opens() {
     let dir = tempfile::tempdir().unwrap();
     write_project_skill(dir.path(), "reviewer", "code-reviewer", "Review carefully.");
+    // This test drives the run to a genuine `RunOutcome::Failed` (skill
+    // approval rejected), which trips
+    // `engine::hooks::memory_writeback::record_node_failure` — route it at
+    // a throwaway store instead of the developer's real `~/.surge/memory.db`.
+    let memory_dir = tempfile::tempdir().unwrap();
+    let store_path = memory_dir.path().join("memory.db");
 
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
@@ -188,6 +194,7 @@ async fn unpinned_skill_unanswered_rejects_before_any_session_opens() {
     let run_id = RunId::new();
     let run_config = EngineRunConfig {
         human_input_timeout: Duration::from_millis(50),
+        memory_store_path: Some(store_path),
         ..EngineRunConfig::default()
     };
     let handle = engine

@@ -24,6 +24,7 @@ use surge_acp::bridge::error::SendMessageError;
 use surge_acp::bridge::event::BridgeEvent;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::{AgentConfig, NodeLimits};
+use surge_core::budget::{BudgetDimension, BudgetGuard, BudgetLimits, BudgetPolicy};
 use surge_core::capacity::{CapacityPolicy, RotationPolicy};
 use surge_core::capacity_config::CapacityConfig;
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
@@ -38,6 +39,7 @@ use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
 use surge_orchestrator::profile_loader::{DiskProfileSet, ProfileRegistry};
+use surge_persistence::memory::MemoryStore;
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::seq::EventSeq;
 
@@ -308,6 +310,12 @@ async fn configured_blind_backoff_reaches_the_park_decision_not_the_hardcoded_de
     let capacity_config = CapacityConfig {
         blind_backoff: Some(configured_backoff),
         blind_park_limit: 5,
+        // Task 12 M4: this test's assertion window below is exact-ish
+        // (30..=55s) and is about `blind_backoff` plumbing specifically —
+        // holding jitter at zero keeps that assertion decoupled from the
+        // unrelated jitter default (see the M4 jitter tests in
+        // `capacity.rs`/`capacity_config.rs` for jitter's own coverage).
+        jitter_max: Duration::ZERO,
     };
     let capacity_policy: CapacityPolicy = (&capacity_config).into();
     assert_eq!(capacity_policy.rotation, RotationPolicy::Disabled);
@@ -392,6 +400,14 @@ async fn rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_sa
     let registry = Arc::new(ProfileRegistry::new(disk));
 
     let dir = tempfile::tempdir().unwrap();
+    // `agent_2`'s scripted `SessionNotFound` is only reachable if the
+    // capacity gate this test guards is broken — but if it ever is, that
+    // dispatch is a genuine `StageError` reaching a terminal
+    // `RunOutcome::Failed`, which trips
+    // `engine::hooks::memory_writeback::record_node_failure`. Route it at a
+    // throwaway store instead of the developer's real `~/.surge/memory.db`.
+    let memory_dir = tempfile::tempdir().unwrap();
+    let store_path = memory_dir.path().join("memory.db");
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -450,7 +466,10 @@ async fn rate_limited_agent_parks_instead_of_dispatching_a_second_node_on_the_sa
             run_id,
             g,
             dir.path().to_path_buf(),
-            EngineRunConfig::default(),
+            EngineRunConfig {
+                memory_store_path: Some(store_path),
+                ..EngineRunConfig::default()
+            },
         )
         .await
         .expect("start_run");
@@ -653,7 +672,10 @@ async fn surge_toml_blind_backoff_reaches_the_park_decision_through_surge_config
     // module's own default (300s) or the sibling test's (42s).
     std::fs::write(
         dir.path().join("surge.toml"),
-        "[capacity]\nblind_backoff = \"77s\"\n",
+        // jitter_max pinned to 0s for the same reason as the sibling
+        // hardcoded-backoff test above: this test's assertion window is
+        // about `blind_backoff` plumbing, not jitter.
+        "[capacity]\nblind_backoff = \"77s\"\njitter_max = \"0s\"\n",
     )
     .unwrap();
     let app_config = surge_core::config::SurgeConfig::discover_from(dir.path())
@@ -881,5 +903,322 @@ async fn resuming_a_parked_run_makes_one_real_attempt_and_clears_the_stale_row()
     assert_eq!(
         after_resume.wake_at_ms, None,
         "wake_at must be cleared in the same write as the status transition, not left stale"
+    );
+
+    // Task 12 M4: `RunWokeFromPark` was declared and folded (clears
+    // `RunState::Pipeline.parked`) since M1, but nothing wrote it — this is
+    // the write, and this is its first behavioral test. Must land AFTER
+    // the original `RunParked` and appear exactly once.
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let last = reader.current_seq().await.unwrap();
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        .await
+        .unwrap();
+    let parked_seq = events
+        .iter()
+        .find(|ev| matches!(ev.payload.payload, EventPayload::RunParked { .. }))
+        .map(|ev| ev.seq)
+        .expect("RunParked must still be in the log");
+    let woke_events: Vec<_> = events
+        .iter()
+        .filter(|ev| matches!(ev.payload.payload, EventPayload::RunWokeFromPark { .. }))
+        .collect();
+    assert_eq!(
+        woke_events.len(),
+        1,
+        "expected exactly one RunWokeFromPark event, got {}: {events:?}",
+        woke_events.len()
+    );
+    assert!(
+        woke_events[0].seq > parked_seq,
+        "RunWokeFromPark must follow RunParked in the log"
+    );
+}
+
+/// Task 12 M4 acceptance criterion: "the frozen budget survives a wake" —
+/// the mechanism commit `1ed5caa` added (persist `RunConfig.budget`,
+/// restore it into `resume_run_config.budget` in `Engine::resume_run`)
+/// applies to every resume, but nothing proved it specifically for a
+/// parked-then-woken run before this test. A behavioral proof, not a
+/// field-equality check: if the resumed run's budget had silently reverted
+/// to `BudgetGuard::default()` (unlimited) instead of the 1_000-token
+/// budget it started with, `enforce_budget` would short-circuit
+/// (`is_unlimited()`) and this run would complete instead of aborting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resuming_a_parked_run_re_arms_its_frozen_token_budget() {
+    let profiles_dir = tempfile::tempdir().unwrap();
+    drop_profile(profiles_dir.path(), "budget-role", "claude-code", &["done"]);
+    let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
+    let registry = Arc::new(ProfileRegistry::new(disk));
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+
+    // First attempt: rate-limited, no reset time learned — same shape as
+    // the sibling resume test, so the run parks before spending anything.
+    mock.fail_next_send_message(SendMessageError::RateLimited {
+        retry_after: None,
+        details: "usage limit reached".into(),
+    })
+    .await;
+
+    let engine = Engine::new_full(
+        bridge,
+        storage.clone(),
+        dispatcher,
+        Arc::new(surge_notify::MultiplexingNotifier::new()),
+        None,
+        Some(registry),
+        EngineConfig::default(),
+    );
+
+    let run_id = RunId::new();
+    let g = graph(
+        "capacity-resume-budget",
+        "agent_1",
+        vec![
+            agent_node("agent_1", "budget-role@1.0", vec![], &["done"]),
+            terminal_node("end"),
+        ],
+        vec![edge("agent_to_end", "agent_1", "done", "end")],
+    );
+    // A real, tight token budget — not the default (unlimited). If resume
+    // ever reverts to `EngineRunConfig::default()`'s budget, this is the
+    // dimension that would silently stop being enforced.
+    let run_config = EngineRunConfig {
+        budget: BudgetGuard {
+            limits: BudgetLimits {
+                usd: None,
+                tokens: Some(1_000),
+                warn_threshold_pct: 80,
+            },
+            policy: BudgetPolicy::Abort,
+        },
+        ..EngineRunConfig::default()
+    };
+    let handle = engine
+        .start_run(run_id, g, dir.path().to_path_buf(), run_config)
+        .await
+        .expect("start_run");
+
+    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+        .await
+        .expect("run must not hang")
+        .expect("run handle join");
+    assert!(
+        matches!(outcome, RunOutcome::Parked { .. }),
+        "expected Parked before any token spend, got {outcome:?}"
+    );
+
+    // Wake: resume the same run, scripted to report 15_000 tokens (well
+    // over the 1_000-token budget) before its outcome.
+    let second_session = SessionId::new();
+    mock.pin_next_session_id(second_session).await;
+    mock.enqueue_event(BridgeEvent::TokenUsage {
+        session: second_session,
+        prompt_tokens: 10_000,
+        output_tokens: 5_000,
+        cache_hits: 0,
+        model: "mock-model".into(),
+    })
+    .await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: second_session,
+        outcome: OutcomeKey::try_from("done").unwrap(),
+        summary: "ok on resume".into(),
+        artifacts_produced: vec![],
+    })
+    .await;
+
+    let resumed_handle = engine
+        .resume_run(run_id, dir.path().to_path_buf())
+        .await
+        .expect("resume_run");
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        mock_for_pump.wait_for_subscribe_count(2).await;
+        mock_for_pump.pump_scripted_events().await;
+    });
+
+    let resumed_outcome =
+        tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+            .await
+            .expect("resumed run must not hang")
+            .expect("run handle join");
+    pump.await.unwrap();
+
+    match &resumed_outcome {
+        RunOutcome::Aborted { reason } => {
+            assert!(
+                reason.contains("budget"),
+                "abort reason should cite the budget, got: {reason}"
+            );
+        },
+        other => panic!(
+            "expected Aborted on budget breach after resume (proves the frozen 1_000-token \
+             budget survived the wake, per commit 1ed5caa's mechanism) — a resumed run that \
+             silently reverted to the unlimited default would instead show Completed; got \
+             {other:?}"
+        ),
+    }
+
+    let reader = storage.open_run_reader(run_id).await.unwrap();
+    let last = reader.current_seq().await.unwrap();
+    let events = reader
+        .read_events(EventSeq(0)..EventSeq(last.0 + 1))
+        .await
+        .unwrap();
+    let saw_exceeded = events.iter().any(|ev| {
+        matches!(
+            &ev.payload.payload,
+            EventPayload::BudgetExceeded {
+                dimension: BudgetDimension::Tokens,
+                ..
+            }
+        )
+    });
+    assert!(
+        saw_exceeded,
+        "expected a BudgetExceeded(Tokens) event in the post-resume log"
+    );
+}
+
+/// Task 12 M4 review: `EngineRunConfig::memory_store_path` is deliberately
+/// never persisted (it is a test-only override), so `Engine::resume_run`
+/// rebuilding `EngineRunConfig::default()` from scratch has no way to
+/// recover a per-run store override — before this fix, a resumed run's
+/// stage failure would silently write to the real `~/.surge/memory.db`
+/// regardless of what the original `start_run` was given.
+///
+/// The fix moves the override to `EngineConfig::memory_store_path` (engine
+/// construction time, not per-run), which both `start_run` and
+/// `resume_run` consult. This is the "obvious next test" the review named:
+/// park, resume, drive the resumed dispatch to a genuine (non-rate-limit)
+/// stage failure, and prove the write-back landed in the *configured*
+/// store — the store this test controls — not silently in the developer's
+/// real one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_run_driven_to_stage_failure_writes_to_the_configured_memory_store() {
+    let profiles_dir = tempfile::tempdir().unwrap();
+    drop_profile(
+        profiles_dir.path(),
+        "memstore-role",
+        "claude-code",
+        &["done"],
+    );
+    let disk = DiskProfileSet::scan(profiles_dir.path()).unwrap();
+    let registry = Arc::new(ProfileRegistry::new(disk));
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(UnusedDispatcher);
+
+    // First attempt: rate-limited, no reset time learned — parks before
+    // ever reaching the memory-store question.
+    mock.fail_next_send_message(SendMessageError::RateLimited {
+        retry_after: None,
+        details: "usage limit reached".into(),
+    })
+    .await;
+
+    let memory_dir = tempfile::tempdir().unwrap();
+    let configured_store = memory_dir.path().join("memory.db");
+
+    // The fix under test: the override lives on `EngineConfig`, set once
+    // at construction — `start_run` below is deliberately given a plain
+    // `EngineRunConfig::default()` (no per-run override at all), so any
+    // write that lands in `configured_store` can only have come from the
+    // engine-level fallback, never from a per-run field this test forgot
+    // to set.
+    let engine = Engine::new_full(
+        bridge,
+        storage.clone(),
+        dispatcher,
+        Arc::new(surge_notify::MultiplexingNotifier::new()),
+        None,
+        Some(registry),
+        EngineConfig {
+            memory_store_path: Some(configured_store.clone()),
+            ..EngineConfig::default()
+        },
+    );
+
+    let run_id = RunId::new();
+    let g = graph(
+        "capacity-resume-memory-store",
+        "agent_1",
+        vec![
+            agent_node("agent_1", "memstore-role@1.0", vec![], &["done"]),
+            terminal_node("end"),
+        ],
+        vec![edge("agent_to_end", "agent_1", "done", "end")],
+    );
+    let handle = engine
+        .start_run(
+            run_id,
+            g,
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
+        .await
+        .expect("start_run");
+
+    let outcome = tokio::time::timeout(Duration::from_secs(2), handle.await_completion())
+        .await
+        .expect("run must not hang")
+        .expect("run handle join");
+    assert!(
+        matches!(outcome, RunOutcome::Parked { .. }),
+        "expected Parked before any memory write-back question arises, got {outcome:?}"
+    );
+
+    // Wake: resume, scripted to fail hard on the bypass-granted attempt —
+    // NOT rate-limited, so the capacity gate lets it fall through to a
+    // genuine `StageFailed` instead of re-parking.
+    mock.fail_next_send_message(SendMessageError::AgentAuthenticationFailed {
+        details: "not a rate limit — must reach StageFailed, not re-park".into(),
+    })
+    .await;
+
+    let resumed_handle = engine
+        .resume_run(run_id, dir.path().to_path_buf())
+        .await
+        .expect("resume_run");
+    let resumed_outcome =
+        tokio::time::timeout(Duration::from_secs(2), resumed_handle.await_completion())
+            .await
+            .expect("resumed run must not hang")
+            .expect("run handle join");
+    assert!(
+        matches!(resumed_outcome, RunOutcome::Failed { .. }),
+        "expected the resumed dispatch to fail the stage (not re-park, not succeed), got \
+         {resumed_outcome:?}"
+    );
+
+    assert!(
+        configured_store.exists(),
+        "the resumed run's stage failure must write to the store this test configured at the \
+         engine level; before the fix, `resume_run` rebuilds EngineRunConfig::default() with \
+         no way to recover a per-run override, and this file would never be created"
+    );
+    let claims = MemoryStore::open(&configured_store)
+        .expect("open configured memory store")
+        .list_claims()
+        .expect("list claims");
+    assert_eq!(
+        claims.len(),
+        1,
+        "expected exactly one memory claim from the resumed run's stage failure, got {claims:?}"
+    );
+    assert!(
+        claims[0].text().contains("agent_1"),
+        "claim text should name the failing node: {}",
+        claims[0].text()
     );
 }

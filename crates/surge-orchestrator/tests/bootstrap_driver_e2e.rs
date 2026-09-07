@@ -68,6 +68,8 @@ async fn report_agent_outcome(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn run_bootstrap_materializes_followup_graph() {
     let dir = tempfile::tempdir().unwrap();
+    let memory_dir = tempfile::tempdir().unwrap();
+    let store_path = memory_dir.path().join("memory.db");
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -96,6 +98,7 @@ async fn run_bootstrap_materializes_followup_graph() {
             run_id,
             worktree,
             None,
+            Some(store_path),
         )
         .await
     });

@@ -319,7 +319,7 @@ impl Engine {
         run_id: RunId,
         graph: Graph,
         worktree_path: PathBuf,
-        run_config: EngineRunConfig,
+        mut run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
@@ -335,6 +335,9 @@ impl Engine {
         );
 
         validate_for_m6(&graph)?;
+
+        run_config.memory_store_path =
+            self.resolve_memory_store_path(run_config.memory_store_path.take());
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
@@ -444,6 +447,18 @@ impl Engine {
                 Some(worktree_path),
             )))
         }
+    }
+
+    /// Resolve the effective memory-store override for a run: the per-run
+    /// `EngineRunConfig::memory_store_path` if the caller set one, else
+    /// this engine's own `EngineConfig::memory_store_path` fallback (Task
+    /// 12 M4 review). One fact, one place — both `start_run` and
+    /// `resume_run` call this rather than each re-deriving the same
+    /// "prefer per-run, fall back to engine-level" rule, which is exactly
+    /// the kind of two-call-site invariant that drifts apart if it is
+    /// spelled out twice.
+    fn resolve_memory_store_path(&self, per_run: Option<PathBuf>) -> Option<PathBuf> {
+        per_run.or_else(|| self.config.memory_store_path.clone())
     }
 
     async fn build_startup_events(
@@ -703,6 +718,32 @@ impl Engine {
             .map_err(|e| EngineError::Storage(e.to_string()))?;
         self.spawn_event_forwarder(run_id, &writer);
 
+        // Task 12 M4: `RunWokeFromPark` is declared (`run_event.rs`) and
+        // folded (`run_state.rs` clears `RunState::Pipeline.parked`, which
+        // is what turns off `Attention::Waiting`), but nothing wrote it —
+        // this is that write. `Engine::resume_run` is the single choke
+        // point every real wake goes through (the daemon's wake scheduler
+        // and crash recovery's due-parked fallthrough both resume only via
+        // `server::resume_run_tracked` → this method), so writing it here,
+        // gated on the *same* `was_parked` fact that already clears the
+        // registry row above, covers both triggers without a second write
+        // site. Best-effort like `RunParked`'s own append in
+        // `run_task.rs::parked` — a failed append here must not abort an
+        // otherwise-successful resume.
+        if was_parked
+            && let Err(error) = writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunWokeFromPark {}))
+                .await
+        {
+            tracing::warn!(
+                target: "engine::capacity",
+                %run_id,
+                %error,
+                "failed to append RunWokeFromPark; the run resumed but its log will not show \
+                 when it woke, and RunState::Pipeline.parked will not fold clear"
+            );
+        }
+
         let reader = self
             .storage
             .open_run_reader(run_id)
@@ -745,6 +786,12 @@ impl Engine {
             // Re-arm spend enforcement with the run's frozen budget.
             resume_run_config.budget = persisted.budget;
         }
+        // Task 12 M4 review: `memory_store_path` is deliberately never
+        // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
+        // so there is nothing to recover from `replayed.run_config` above —
+        // this resumed run's only source for it is the engine-level
+        // fallback, the same one `start_run` consults.
+        resume_run_config.memory_store_path = self.resolve_memory_store_path(None);
 
         // Build a per-run McpRegistry exactly like start_run does.
         let per_run_mcp_registry = if resume_run_config.mcp_servers.is_empty() {

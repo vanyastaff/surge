@@ -295,6 +295,28 @@ fn main() -> std::process::ExitCode {
             "crash recovery pass complete"
         );
 
+        // Periodic wake for runs parked mid-session (Task 12 M4) — the
+        // recurring counterpart to the one-shot startup scan above. Spawned
+        // strictly AFTER recovery finishes (same ordering reason as the
+        // TaskRouter/inbox subsystems below): recovery's own due-parked
+        // resume and this scheduler's tick both funnel through
+        // `server::resume_run_tracked`, whose `Engine::resume_run` guards
+        // re-entry with `EngineError::RunAlreadyActive` — but recovery
+        // completing first, before this scheduler starts polling, means
+        // there is no window for the two to race the same run at all.
+        let wake_scheduler = surge_daemon::wake_scheduler::WakeScheduler {
+            storage: Arc::clone(&storage),
+            facade: Arc::clone(&facade),
+            admission: Arc::clone(&admission),
+            broadcast: Arc::clone(&broadcast_registry),
+            clock: Arc::new(surge_persistence::runs::SystemClock),
+            notifier: Arc::clone(&notifier),
+            blind_park_limit: config.capacity.blind_park_limit,
+            poll_interval: surge_daemon::wake_scheduler::DEFAULT_POLL_INTERVAL,
+        };
+        let shutdown_for_wake = shutdown.clone();
+        tokio::spawn(wake_scheduler.run(shutdown_for_wake));
+
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
                 sources,

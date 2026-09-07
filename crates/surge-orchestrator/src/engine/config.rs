@@ -39,6 +39,21 @@ pub struct EngineConfig {
     /// `Engine` directly (most tests) gets this default instead, which is
     /// intentional — those callers do not read a `surge.toml` at all.
     pub capacity: surge_core::capacity::CapacityPolicy,
+    /// Engine-level fallback for [`EngineRunConfig::memory_store_path`]
+    /// (Task 12 M4 review): consulted by [`crate::engine::engine::Engine::start_run`]
+    /// and [`crate::engine::engine::Engine::resume_run`] whenever the
+    /// per-run field is `None`. Exists specifically because
+    /// `EngineRunConfig::memory_store_path` is deliberately never copied
+    /// into the persisted `RunConfig` (see that field's own doc for why) —
+    /// which means a *resumed* run has no way to recover a per-run
+    /// override the original `start_run` call was given; it rebuilds
+    /// `EngineRunConfig::default()` from scratch. A caller that needs a
+    /// resumed run to keep writing to a non-default memory store (every
+    /// integration test that exercises resume + a stage failure) sets it
+    /// **here**, once, at `Engine` construction — not per-run — so both
+    /// `start_run` and `resume_run` resolve the same value without needing
+    /// anything to survive a trip through the event log.
+    pub memory_store_path: Option<std::path::PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -49,6 +64,7 @@ impl Default for EngineConfig {
             capacity: surge_core::capacity::CapacityPolicy::from(
                 &surge_core::capacity_config::CapacityConfig::default(),
             ),
+            memory_store_path: None,
         }
     }
 }
@@ -141,17 +157,31 @@ pub struct EngineRunConfig {
     #[serde(default)]
     pub output_spill: Option<surge_core::spill_config::OutputSpillConfig>,
     /// Test-only override of `MemoryStore::default_path()`
-    /// (`~/.surge/memory.db`), consumed by
-    /// `engine::hooks::memory_writeback::record_node_failure`. `None` — the
+    /// (`~/.surge/memory.db`), consumed by both
+    /// `engine::hooks::memory_writeback::record_node_failure` (writes a
+    /// failure claim) and `project_context::load_memory_claims_seed` (reads
+    /// the claims pack a run seeds `project_memory` from). `None` — the
     /// only value any production caller sets — keeps the real default path;
-    /// integration tests set `Some(tempdir_path)` so a node's terminal
-    /// failure is recorded into a throwaway store instead of mutating the
-    /// process-wide `$HOME` environment variable
-    /// (`tests/memory_writeback_test.rs`). Deliberately never copied into
-    /// `surge_core::run_event::RunConfig` (`Engine::startup_run_events`'s
-    /// `core_run_config`), so it is not part of the persisted run schema and
-    /// does not survive a daemon restart + resume — see
-    /// `docs/schema-versioning.md`.
+    /// integration tests set `Some(tempdir_path)` so a run's memory reads
+    /// and writes land in a throwaway store instead of mutating the
+    /// process-wide `$HOME`/`SURGE_HOME` environment variables
+    /// (`tests/memory_writeback_test.rs`,
+    /// `project_context::with_project_context_seed_memory_claims_tests`).
+    /// Deliberately never copied into `surge_core::run_event::RunConfig`
+    /// (`Engine::startup_run_events`'s `core_run_config`), so it is not part
+    /// of the persisted run schema and does not, by itself, survive a
+    /// daemon restart + resume: `Engine::resume_run` rebuilds
+    /// `EngineRunConfig::default()` from scratch (`memory_store_path:
+    /// None`), with nothing in the event log to recover a per-run override
+    /// from.
+    ///
+    /// **A resumed run is not left writing to the real default path on
+    /// that account** (Task 12 M4 review, closed the same milestone that
+    /// made resume routine instead of restart-only): [`EngineConfig::
+    /// memory_store_path`] is the engine-level fallback both `start_run`
+    /// and `resume_run` consult when this field is `None` — set it once at
+    /// `Engine` construction (not per-run) and every run on that engine,
+    /// including a resumed one, resolves the same store.
     #[serde(default)]
     pub memory_store_path: Option<std::path::PathBuf>,
 }

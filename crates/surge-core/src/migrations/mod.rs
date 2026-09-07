@@ -73,7 +73,20 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// either new variant at all (not merely default a missing field), so it
 /// must fail closed with [`SurgeError::SchemaTooNew`] rather than an opaque
 /// unknown-variant decode error, exactly like v2/v4/v5/v6 before it.
-pub const MAX_SUPPORTED_VERSION: u32 = 7;
+///
+/// **v8 (introduced 2026-09):** adds [`crate::run_event::EscalationCause::CapacityBlindParkLimitExceeded`]
+/// (Task 12 M4, blind-park-limit escalation). Bumped for the reason
+/// [`crate::run_event::EscalationCause`]'s own doc names: that enum has
+/// `#[serde(rename_all = "snake_case")]` with no `#[serde(other)]`
+/// fallback, so a v7-max reader does not merely miss an optional field on a
+/// new tag — it cannot decode the tag at all, the same "unknown enum
+/// variant" failure mode a new `EventPayload` variant has (v2/v4/v5/v6/v7).
+/// Every `EscalationRequested` payload written before this version keeps
+/// decoding unchanged (`cause` defaults to `Unspecified` when absent;
+/// existing named causes are untouched) — only a payload that actually
+/// carries the new tag needs the bump, exactly like v6/v7's own "old
+/// payloads decode cleanly, they simply never contain the new thing."
+pub const MAX_SUPPORTED_VERSION: u32 = 8;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -229,6 +242,26 @@ impl Migration for IdentityV7 {
     }
 }
 
+/// Identity migration for v8 — the schema bump that introduced
+/// `EscalationCause::CapacityBlindParkLimitExceeded` (Task 12 M4). The wire
+/// shape is unchanged (same JSON-encoded [`VersionedEventPayload`]
+/// wrapper); old `EscalationRequested` payloads decode cleanly because they
+/// never carry this cause tag.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV8;
+
+impl Migration for IdentityV8 {
+    fn version(&self) -> u32 {
+        8
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v8 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -236,8 +269,8 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`], and
-    /// [`IdentityV7`].
+    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
+    /// [`IdentityV7`], and [`IdentityV8`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -249,6 +282,7 @@ impl MigrationChain {
                 Box::new(IdentityV5),
                 Box::new(IdentityV6),
                 Box::new(IdentityV7),
+                Box::new(IdentityV8),
             ],
         }
     }
@@ -357,7 +391,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 7);
+        assert_eq!(wrapper.schema_version, 8);
     }
 
     #[test]
@@ -365,7 +399,7 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 7 }
+            SurgeError::SchemaTooNew { found: 99, max: 8 }
         ));
     }
 
@@ -405,6 +439,20 @@ mod tests {
     #[test]
     fn v7_run_woke_from_park_event_round_trips() {
         let payload = EventPayload::RunWokeFromPark {};
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v8_capacity_blind_park_limit_escalation_round_trips() {
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "runtime exhausted 5 consecutive times with no successful dispatch".into(),
+            cause: EscalationCause::CapacityBlindParkLimitExceeded,
+        };
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);

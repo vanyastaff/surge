@@ -718,6 +718,18 @@ pub enum EscalationCause {
     /// so collapsing the two would reintroduce the exact "conflates
     /// unrelated escalation causes" problem this field exists to remove.
     RoadmapAmendmentEditLoopExhausted,
+    /// A run's `CapacityConfig::blind_park_limit` (Task 12, R37/R37.1) was
+    /// reached: the run parked on a guessed (`WakeBasis::PolicyBackoff`)
+    /// backoff this many consecutive times, with no successful dispatch
+    /// (`StageCompleted`) between any of them. Not a correctness bug — each
+    /// wake still makes exactly one real attempt (the resume-time capacity
+    /// precheck bypass) and self-corrects the moment the runtime recovers
+    /// or a real reset time is learned — but a long streak is evidence the
+    /// runtime may be genuinely down or misconfigured, which nothing but a
+    /// human can resolve. Raised by `surge-daemon::wake_scheduler`, at most
+    /// once per streak (cleared by the next `StageCompleted`), not on every
+    /// tick past the limit.
+    CapacityBlindParkLimitExceeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

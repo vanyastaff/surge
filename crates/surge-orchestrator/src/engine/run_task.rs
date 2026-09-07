@@ -2067,6 +2067,14 @@ async fn parked(
     runtime: Option<String>,
     details: Option<String>,
 ) -> RunOutcome {
+    // Task 12 M4, ADR-0016 §14: fold in this run's deterministic "herd"
+    // offset right here, at the moment of parking, so the *persisted*
+    // wake_at (this event, the registry row, and the outcome below) is the
+    // jittered value — not re-derived later. `jitter_max: Duration::ZERO`
+    // (the pre-M4 behavior) makes this a no-op.
+    let wake_at = params
+        .capacity_policy
+        .apply_park_jitter(wake_at, params.run_id);
     let runtime_display = runtime.as_deref().unwrap_or("<unknown>");
     let mut reason = match basis {
         surge_core::capacity::WakeBasis::ObservedReset => format!(

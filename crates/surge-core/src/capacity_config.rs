@@ -36,6 +36,21 @@ fn default_blind_park_limit() -> u32 {
     DEFAULT_BLIND_PARK_LIMIT
 }
 
+/// Default upper bound on the deterministic per-run "herd" jitter
+/// [`crate::capacity::CapacityPolicy::apply_park_jitter`] adds to a park's
+/// `wake_at` (Task 12 M4, ADR-0016 §14). 30 seconds: small relative to
+/// [`DEFAULT_BLIND_BACKOFF`]'s 5 minutes (10%) — enough to break up many
+/// runs waking in the same tick against one exhausted runtime, not so much
+/// that any single run waits meaningfully longer than the policy already
+/// decided. Visible and editable in `surge.toml` for the same reason
+/// `DEFAULT_BLIND_BACKOFF` is (see that constant's doc): a real, generated
+/// value an operator can find and tune, not an invisible in-code constant.
+pub const DEFAULT_JITTER_MAX: Duration = Duration::from_secs(30);
+
+fn default_jitter_max() -> Duration {
+    DEFAULT_JITTER_MAX
+}
+
 /// `surge.toml` key: `capacity`.
 ///
 /// **`blind_backoff`'s parse-default and `Default`-value deliberately
@@ -72,13 +87,27 @@ pub struct CapacityConfig {
     /// `Some(`[`DEFAULT_BLIND_BACKOFF`]`)`.
     #[serde(default, with = "humantime_serde::option")]
     pub blind_backoff: Option<Duration>,
-    /// Cap on consecutive blind parks (no successful dispatch between
-    /// them) before escalating to the operator instead of parking forever
-    /// on guesses. Consumed by the caller that counts parks across the
-    /// event log (`surge-daemon`, M4) — `CapacityPolicy::decide` itself is
-    /// a single, stateless call and does not enforce this cap.
+    /// Cap on consecutive blind parks (`WakeBasis::PolicyBackoff`, no
+    /// successful dispatch between them) before escalating to the operator
+    /// instead of parking forever on guesses. Consumed by
+    /// `surge-daemon::wake_scheduler::WakeScheduler`, which counts the
+    /// streak from the run's own event log
+    /// (`surge_persistence::runs::RunStatusSnapshot::consecutive_blind_parks`)
+    /// and raises `EventPayload::EscalationRequested` once the count
+    /// reaches this value — `CapacityPolicy::decide` itself is a single,
+    /// stateless call and does not enforce this cap.
     #[serde(default = "default_blind_park_limit")]
     pub blind_park_limit: u32,
+    /// Upper bound on the deterministic per-run jitter added to a park's
+    /// `wake_at` (Task 12 M4). Unlike `blind_backoff`, there is no
+    /// operator-facing "opt out" ambiguity to preserve: `0s` **is** the
+    /// natural spelling of "no jitter", so — unlike `blind_backoff` —
+    /// this field's parse-default and its `Default`-impl value are the
+    /// same [`DEFAULT_JITTER_MAX`], both via [`default_jitter_max`]; a
+    /// `surge.toml` missing this key behaves exactly like a freshly
+    /// generated one.
+    #[serde(default = "default_jitter_max", with = "humantime_serde")]
+    pub jitter_max: Duration,
 }
 
 impl Default for CapacityConfig {
@@ -86,6 +115,7 @@ impl Default for CapacityConfig {
         Self {
             blind_backoff: Some(DEFAULT_BLIND_BACKOFF),
             blind_park_limit: default_blind_park_limit(),
+            jitter_max: default_jitter_max(),
         }
     }
 }
@@ -177,6 +207,7 @@ impl From<&CapacityConfig> for crate::capacity::CapacityPolicy {
         Self {
             blind_backoff: cfg.blind_backoff,
             rotation: crate::capacity::RotationPolicy::Disabled,
+            jitter_max: cfg.jitter_max,
         }
     }
 }
@@ -238,6 +269,7 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: None,
             blind_park_limit: 0,
+            jitter_max: default_jitter_max(),
         };
         assert!(cfg.validate().is_err());
     }
@@ -250,6 +282,7 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: Some(Duration::from_secs(u64::MAX)),
             blind_park_limit: 1,
+            jitter_max: default_jitter_max(),
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -287,6 +320,7 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: Some(Duration::from_secs(absurd_secs)),
             blind_park_limit: 1,
+            jitter_max: default_jitter_max(),
         };
         let err = cfg
             .validate()
@@ -303,6 +337,7 @@ mod tests {
             let cfg = CapacityConfig {
                 blind_backoff: Some(Duration::from_secs(secs)),
                 blind_park_limit: 1,
+                jitter_max: default_jitter_max(),
             };
             assert!(cfg.validate().is_ok(), "{secs}s should be a valid backoff");
         }
@@ -313,6 +348,7 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: Some(Duration::from_secs(120)),
             blind_park_limit: 3,
+            jitter_max: default_jitter_max(),
         };
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
@@ -331,6 +367,7 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: Some(Duration::from_secs(777)),
             blind_park_limit: 9,
+            jitter_max: default_jitter_max(),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, Some(Duration::from_secs(777)));
@@ -346,8 +383,67 @@ mod tests {
         let cfg = CapacityConfig {
             blind_backoff: None,
             blind_park_limit: 1,
+            jitter_max: default_jitter_max(),
         };
         let policy = crate::capacity::CapacityPolicy::from(&cfg);
         assert_eq!(policy.blind_backoff, None);
+    }
+
+    // ── `jitter_max` (Task 12 M4) ──
+
+    #[test]
+    fn default_jitter_max_is_visible_and_matches_the_documented_constant() {
+        let cfg = CapacityConfig::default();
+        assert_eq!(cfg.jitter_max, DEFAULT_JITTER_MAX);
+        assert_eq!(DEFAULT_JITTER_MAX, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn absent_jitter_max_parses_to_the_default_not_zero() {
+        // Unlike `blind_backoff`, `jitter_max` has no `None`/opt-out
+        // ambiguity to preserve — a `surge.toml` missing the key gets the
+        // same default a fresh `CapacityConfig::default()` does, not a
+        // silently-disabling zero.
+        let parsed: CapacityConfig = toml::from_str("").unwrap();
+        assert_eq!(parsed.jitter_max, DEFAULT_JITTER_MAX);
+    }
+
+    #[test]
+    fn jitter_max_serializes_as_a_human_readable_duration() {
+        let toml_s = toml::to_string(&CapacityConfig::default()).unwrap();
+        assert!(
+            toml_s.contains("30s"),
+            "expected a human-readable jitter_max duration in generated TOML, got: {toml_s}"
+        );
+    }
+
+    #[test]
+    fn operator_can_disable_jitter_by_setting_it_to_zero() {
+        let parsed: CapacityConfig = toml::from_str("jitter_max = \"0s\"\n").unwrap();
+        assert_eq!(parsed.jitter_max, Duration::ZERO);
+        assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn round_trip_jitter_max_through_toml() {
+        let cfg = CapacityConfig {
+            blind_backoff: Some(Duration::from_secs(120)),
+            blind_park_limit: 3,
+            jitter_max: Duration::from_secs(45),
+        };
+        let toml_s = toml::to_string(&cfg).unwrap();
+        let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
+        assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn from_capacity_config_carries_jitter_max() {
+        let cfg = CapacityConfig {
+            blind_backoff: None,
+            blind_park_limit: 1,
+            jitter_max: Duration::from_secs(17),
+        };
+        let policy = crate::capacity::CapacityPolicy::from(&cfg);
+        assert_eq!(policy.jitter_max, Duration::from_secs(17));
     }
 }

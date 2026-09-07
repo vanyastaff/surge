@@ -64,6 +64,22 @@ a CHANGELOG entry should say the latter, not just the former — see the
 Memory DB v1→v2 entry below for the same caution applied to a different
 kind of change (a backfill, not a new variant).
 
+**v8 is the same failure mode one level deeper: a new variant on a *nested*
+enum, not on `EventPayload` itself.** `EventPayload::EscalationRequested`
+already existed (unchanged) at v7; what's new is
+`EscalationCause::CapacityBlindParkLimitExceeded` (Task 12 M4, blind-park
+escalation), a variant of the `cause` field's own enum type. That field is
+`#[serde(default)]` (a v6-max reader tolerates the *key being absent*), but
+`#[serde(rename_all = "snake_case")]` on `EscalationCause` has no
+`#[serde(other)]` catch-all — so once the key is *present* with an
+unrecognized tag, decoding fails exactly like an unknown `EventPayload`
+variant tag does, not like a missing optional field. Same underlying rule
+("a value with no representation to decode into forces a version bump, a
+merely-absent one does not"), applied to an enum living inside a variant
+rather than to a top-level variant of `EventPayload` — the "Principles"
+section below is about `EventPayload`'s own variants, but the same logic
+governs any nested closed enum reachable from a persisted payload.
+
 **The additive-field exception itself is not a general rule — it is tied to
 one property of the durable encoding, and stops holding the moment that
 property does.** An additive `#[serde(default)]` field on an *existing*

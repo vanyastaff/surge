@@ -79,6 +79,7 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
             bootstrap_run_id,
             driver_worktree,
             project_context,
+            None, // production run: real ~/.surge/memory.db is correct here
         )
         .await
     });

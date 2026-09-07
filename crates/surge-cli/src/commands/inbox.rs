@@ -665,6 +665,53 @@ mod tests {
         assert_eq!(entry.attention, "waiting");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inbox_attention_leaves_waiting_once_the_run_wakes() {
+        // Task 12 M4: the other half of the sibling test above —
+        // `RunWokeFromPark` must clear `RunState::Pipeline.parked` in the
+        // fold, or a resumed run keeps showing "waiting" in `surge inbox`
+        // while it is actually executing again.
+        use surge_core::capacity::WakeBasis;
+
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run = RunId::new();
+        let w = storage.create_run(run, &project, None).await.unwrap();
+        let wake_at = chrono::Utc::now() + chrono::Duration::minutes(5);
+        append(
+            &w,
+            vec![
+                run_started(),
+                pipeline_materialized(),
+                EventPayload::RunParked {
+                    wake_at,
+                    runtime: Some("claude-acp".into()),
+                    worktree: dir.path().to_path_buf(),
+                    basis: WakeBasis::ObservedReset,
+                    reason: "provider rate limit exhausted".into(),
+                },
+                EventPayload::RunWokeFromPark {},
+            ],
+        )
+        .await;
+        w.flush().await.unwrap();
+
+        let entries = collect_entries(&storage, Some(project.clone()), 100)
+            .await
+            .unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.run_id == run.to_string())
+            .expect("run present");
+        assert_eq!(
+            entry.attention, "working",
+            "RunWokeFromPark must clear the parked state — a resumed run must not still show \
+             as \"waiting\" in the inbox"
+        );
+    }
+
     /// A real `SessionOpened` as `agent.rs` actually emits it: `agent` holds
     /// the flow-authored *profile* (`"implementer@1.0"`-shaped — a role, not
     /// a runtime), `agent_id` holds the real runtime identity. Two
