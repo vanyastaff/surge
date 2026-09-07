@@ -1,6 +1,16 @@
 //! Pre-execution graph validation for M6: allows Loop and Subgraph nodes,
 //! rejects `gate_after_each: true` (M7) and multi-edge fanout from the same
-//! `(node, outcome)` port (M8+), and validates subgraph references.
+//! `(node, outcome)` port (M8+), validates subgraph references, and — as of
+//! Ticket 18 — delegates into [`surge_core::validate`] for the 21 structural
+//! and content rules that module owns (reachability, terminal-reachable,
+//! one-edge-per-outcome, node-key uniqueness, `InvalidSkillsDeclaration`,
+//! etc.). Before Ticket 18, [`validate_for_m6`] was called on every
+//! `Engine::start_run` but never ran those 21 rules — they were reachable
+//! only through [`validate_for_m6_with_resolver`], which had zero
+//! non-test callers. A measurement pass against all 13 bundled flows, all 9
+//! example flows, and all repository/fixture graphs found exactly one
+//! violation (a test-only fixture referencing a nonexistent artifact-producer
+//! node, fixed alongside this wiring) — every shipped flow was already clean.
 
 use crate::engine::error::EngineError;
 use surge_core::edge::{Edge, EdgeKind};
@@ -9,7 +19,16 @@ use surge_core::keys::NodeKey;
 
 /// Validate the graph for M6 execution. Allows Loop and Subgraph nodes
 /// (M5 rejected them). Rejects multi-edge fanout (M8+) and
-/// `gate_after_each: true` (M7).
+/// `gate_after_each: true` (M7). Also runs the full
+/// [`surge_core::validate`] rule set (see module docs) — a graph that
+/// passes the M6-specific checks below but fails a `surge_core` structural
+/// rule (e.g. an unreachable node, or a malformed `skills` declaration) is
+/// still rejected here, before the caller creates any run state or worktree.
+///
+/// # Errors
+/// Returns [`EngineError::GraphInvalid`] for the first M6-specific
+/// violation found, or for every `Severity::Error` finding from
+/// [`surge_core::validate`] once the M6-specific checks pass.
 pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
     if !graph.nodes.contains_key(&graph.start) {
         return Err(EngineError::GraphInvalid(format!(
@@ -132,7 +151,37 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
         }
     }
 
+    apply_surge_core_validation(graph)?;
+
     Ok(())
+}
+
+/// Run [`surge_core::validate`] and surface every `Severity::Error` finding
+/// as a single [`EngineError::GraphInvalid`]. `Severity::Warning` findings
+/// (e.g. `UnverifiedSuccessPath`) do not block the run — they are the
+/// operator-facing "unverified success" signal rendered elsewhere, not a
+/// validation failure.
+///
+/// Factored out of [`validate_for_m6`] so [`validate_for_m6_with_resolver`]
+/// does not need to duplicate the finding-to-message conversion; the latter
+/// still makes its own (second, cheap) call into `surge_core::validate_with_resolver`
+/// for the reference-specific findings `validate_for_m6` cannot see.
+fn apply_surge_core_validation(graph: &Graph) -> Result<(), EngineError> {
+    let Err(findings) = surge_core::validate(graph) else {
+        return Ok(());
+    };
+    let messages: Vec<String> = findings
+        .into_iter()
+        .filter(|f| f.kind.severity() == surge_core::Severity::Error)
+        .map(|f| format!("[structural] {}", f.message))
+        .collect();
+    if messages.is_empty() {
+        return Ok(());
+    }
+    Err(EngineError::GraphInvalid(format!(
+        "surge_core::validate failed: {}",
+        messages.join("; ")
+    )))
 }
 
 // Back-compat alias for any internal caller still using the M5 name.
@@ -294,33 +343,54 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 }
 
 /// `validate_for_m6` plus the `surge_core::ReferenceResolver` lookups for
-/// profiles, templates, and named agents. Engine wiring picks this entry
-/// point when a real registry is available; the terminal-only smoke path
-/// can still use the no-resolver `validate_for_m6`.
+/// profiles, templates, and named agents.
+///
+/// As of Ticket 18, `validate_for_m6` itself already runs the full
+/// `surge_core::validate` structural rule set (see that function's docs),
+/// so the *additional* value this wrapper adds is narrower than its name
+/// suggests: only the three resolver-backed reference checks below.
+///
+/// # ⚠️ These three rules are inert in production today
+/// `ProfileNotFound`, `TemplateNotFound`, and `NamedAgentNotFound` only ever
+/// fire when called with a `ReferenceResolver` that actually knows the
+/// registry contents. Every `impl ReferenceResolver` in this workspace is
+/// test-only (`surge-core`'s own test module, `surge-cli/tests/`,
+/// `surge-orchestrator/tests/`) — there is no `ProfileRegistry`-backed
+/// production implementation, and nothing in the engine's production start
+/// path (`Engine::start_run`, `commands/engine.rs::run_command`) calls this
+/// function at all; they call the resolver-free `validate_for_m6`. Building
+/// that adapter (wrapping `crate::profile_loader::ProfileRegistry` — plus
+/// whatever registries would answer `template_exists`/`named_agent_exists`,
+/// neither of which exists yet either) and wiring it into `Engine::start_run`
+/// is a separate, larger task: it is out of Ticket 18's declared zone
+/// (`engine/validate.rs`, `engine/bootstrap.rs`, `commands/engine.rs` — a
+/// resolver adapter is a new production type, not a call-site wiring) and
+/// deserves its own measurement pass the same way this ticket demanded one,
+/// since flipping it on can start rejecting graphs whose profile references
+/// have never been checked before.
 ///
 /// # Errors
-/// - All `validate_for_m6` errors (engine-level structural rules).
+/// - All `validate_for_m6` errors (M6-specific checks plus the full
+///   `surge_core::validate` structural rule set).
 /// - [`EngineError::GraphInvalid`] for every `Severity::Error` finding
-///   reported by `surge_core::validate_with_resolver` — covering both the
-///   resolver-specific diagnostics (`ProfileNotFound`, `TemplateNotFound`,
-///   `NamedAgentNotFound`) AND the broader structural rules from
-///   `surge_core::validate` that `validate_for_m6` does NOT replicate
-///   (one-edge-per-outcome, reachability, terminal-reachable,
-///   loop-iterable, backtrack-target-reachable, subgraph-cycle,
-///   node-key uniqueness, terminal-outcome-no-edge, etc.).
-///   Resolver failures are tagged with a `[ref]` prefix in the message
-///   so callers can distinguish them from structural errors at a glance.
+///   reported by `surge_core::validate_with_resolver` — in practice, since
+///   `validate_for_m6` above already ran the structural rules and returned
+///   early on any failure, only the resolver-specific diagnostics
+///   (`ProfileNotFound`, `TemplateNotFound`, `NamedAgentNotFound`) can still
+///   surface here. Tagged with a `[ref]` prefix (`[structural]` for the
+///   defensive fallback arm, which today cannot be reached for the reason
+///   above) so callers can distinguish them at a glance.
 pub fn validate_for_m6_with_resolver(
     graph: &Graph,
     resolver: &dyn surge_core::ReferenceResolver,
 ) -> Result<(), EngineError> {
     validate_for_m6(graph)?;
 
-    // Surge-core covers a different set of rules from `validate_for_m6`
-    // (notably reachability, single-edge-per-outcome, terminal
-    // reachability, etc.) — propagate every Severity::Error finding so
-    // graphs that pass the engine-level checks but fail core-level
-    // structural rules are surfaced rather than silently accepted.
+    // `validate_for_m6` above already ran `surge_core::validate`'s
+    // structural rules via `apply_surge_core_validation` and returned early
+    // on any Severity::Error finding, so `validate_with_resolver`'s own
+    // (redundant, cheap) structural pass below cannot contribute a new
+    // error — only the resolver-specific reference checks can.
     if let Err(findings) = surge_core::validate_with_resolver(graph, resolver) {
         let mut messages: Vec<String> = Vec::new();
         for finding in findings {
@@ -405,15 +475,19 @@ mod tests {
 
     #[test]
     fn loop_node_no_longer_rejected() {
+        use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
         use surge_core::graph::Subgraph;
-        use surge_core::keys::SubgraphKey;
+        use surge_core::keys::{EdgeKey, SubgraphKey};
         use surge_core::loop_config::{
             ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
         };
+        use surge_core::node::OutcomeDecl;
 
         let loop_key = NodeKey::try_from("loop_1").unwrap();
+        let end_key = NodeKey::try_from("end").unwrap();
         let body_key = SubgraphKey::try_from("body").unwrap();
         let body_start = NodeKey::try_from("body_start").unwrap();
+        let completed_outcome = OutcomeKey::try_from("completed").unwrap();
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -421,7 +495,19 @@ mod tests {
             Node {
                 id: loop_key.clone(),
                 position: Position::default(),
-                declared_outcomes: vec![],
+                // A declared "completed" outcome, wired below to the outer
+                // Terminal node — a bare Loop node with zero declared
+                // outcomes and no Terminal node anywhere in the outer graph
+                // is what `surge_core::validate`'s `NoTerminalReachable` rule
+                // (correctly) rejects; this test is about Loop nodes being
+                // *structurally* permitted in M6, not about that rule.
+                declared_outcomes: vec![OutcomeDecl {
+                    id: completed_outcome.clone(),
+                    description: "all items processed".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: surge_core::LedgerEffect::default(),
+                }],
                 config: NodeConfig::Loop(LoopConfig {
                     iterates_over: IterableSource::Static(vec![]),
                     body: body_key.clone(),
@@ -430,6 +516,18 @@ mod tests {
                     on_iteration_failure: FailurePolicy::Abort,
                     parallelism: ParallelismMode::Sequential,
                     gate_after_each: false,
+                }),
+            },
+        );
+        nodes.insert(
+            end_key.clone(),
+            Node {
+                id: end_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
                 }),
             },
         );
@@ -468,9 +566,18 @@ mod tests {
                 author: None,
                 archetype: None,
             },
-            start: loop_key,
+            start: loop_key.clone(),
             nodes,
-            edges: vec![],
+            edges: vec![Edge {
+                id: EdgeKey::try_from("e_loop_done").unwrap(),
+                from: PortRef {
+                    node: loop_key,
+                    outcome: completed_outcome,
+                },
+                to: end_key,
+                kind: EdgeKind::Forward,
+                policy: EdgePolicy::default(),
+            }],
             subgraphs,
         };
 
@@ -637,11 +744,31 @@ mod tests {
     }
 
     fn terminal_node(name: &str) -> Node {
+        terminal_node_with_outcomes(name, &[])
+    }
+
+    /// Like [`terminal_node`], but declares the given outcome ids —
+    /// `surge_core::validate`'s `EdgeFromUndeclaredOutcome`/`OutcomeWithNoEdge`
+    /// rules require every edge's source outcome to be declared on that node
+    /// (used by [`graph_with_nodes_and_edges`], which derives the right set
+    /// from the edges it's given).
+    fn terminal_node_with_outcomes(name: &str, outcomes: &[&str]) -> Node {
         let key = NodeKey::try_from(name).unwrap();
         Node {
             id: key,
             position: Position::default(),
-            declared_outcomes: vec![],
+            declared_outcomes: outcomes
+                .iter()
+                .map(|o| surge_core::node::OutcomeDecl {
+                    id: OutcomeKey::try_from(*o).unwrap(),
+                    description: format!(
+                        "synthetic outcome `{o}` for a validate.rs cycle-detection test"
+                    ),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: surge_core::LedgerEffect::default(),
+                })
+                .collect(),
             config: NodeConfig::Terminal(TerminalConfig {
                 kind: TerminalKind::Success,
                 message: None,
@@ -676,7 +803,19 @@ mod tests {
     ) -> Graph {
         let mut node_map = BTreeMap::new();
         for n in nodes {
-            node_map.insert(NodeKey::try_from(*n).unwrap(), terminal_node(n));
+            let node_key = NodeKey::try_from(*n).unwrap();
+            // Declare exactly the outcomes this node actually has outgoing
+            // edges from — these are cycle-detection fixtures, so the node
+            // kind (always Terminal here) is a stand-in and the specific
+            // outcome id only matters insofar as an edge names it.
+            let mut declared: Vec<&str> = edges
+                .iter()
+                .filter(|e| e.from.node == node_key)
+                .map(|e| e.from.outcome.as_str())
+                .collect();
+            declared.sort_unstable();
+            declared.dedup();
+            node_map.insert(node_key, terminal_node_with_outcomes(n, &declared));
         }
         Graph {
             schema_version: SCHEMA_VERSION,

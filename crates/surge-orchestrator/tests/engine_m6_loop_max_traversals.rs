@@ -24,7 +24,7 @@ use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey};
 use surge_core::loop_config::{
     ExitCondition, FailurePolicy, IterableSource, LoopConfig, ParallelismMode,
 };
-use surge_core::node::{Node, NodeConfig, Position};
+use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
 use surge_core::run_event::EventPayload;
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
@@ -52,7 +52,15 @@ fn build_5_item_loop_graph() -> Graph {
     let loop_node = Node {
         id: loop_key.clone(),
         position: Position::default(),
-        declared_outcomes: vec![],
+        // Declared to match `edge_loop_to_end` below — `surge_core::validate`
+        // rejects an edge whose source outcome the node never declared.
+        declared_outcomes: vec![OutcomeDecl {
+            id: done_outcome.clone(),
+            description: "iterations completed".into(),
+            edge_kind_hint: EdgeKind::Forward,
+            is_terminal: false,
+            ledger_effect: Default::default(),
+        }],
         config: NodeConfig::Loop(LoopConfig {
             iterates_over: IterableSource::Static(vec![
                 toml::Value::Integer(1),

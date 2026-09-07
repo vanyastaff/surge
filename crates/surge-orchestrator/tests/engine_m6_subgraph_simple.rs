@@ -20,7 +20,7 @@ use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, SubgraphKey};
-use surge_core::node::{Node, NodeConfig, Position};
+use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
 use surge_core::run_event::EventPayload;
 use surge_core::subgraph_config::{SubgraphConfig, SubgraphOutput};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
@@ -55,7 +55,15 @@ fn build_subgraph_graph() -> Graph {
     let sg_node = Node {
         id: sg_node_key.clone(),
         position: Position::default(),
-        declared_outcomes: vec![],
+        // Declared to match `edge_sg_to_end` below — `surge_core::validate`
+        // rejects an edge whose source outcome the node never declared.
+        declared_outcomes: vec![OutcomeDecl {
+            id: completed_outcome.clone(),
+            description: "inner subgraph completed".into(),
+            edge_kind_hint: EdgeKind::Forward,
+            is_terminal: false,
+            ledger_effect: Default::default(),
+        }],
         config: NodeConfig::Subgraph(sg_config),
     };
 

@@ -2,12 +2,19 @@
 #
 # Shape required by Task 18:
 # - graph metadata declares the multi-milestone archetype
-# - outer Loop iterates over artifact name `roadmap.milestones`
+# - outer Loop iterates over artifact name `roadmap.milestones`, produced by
+#   a real upstream `roadmap_planner` agent node (the loop's
+#   `iterates_over.value.node` reference must resolve — Ticket 18's
+#   measurement pass found this fixture referencing a `roadmap_planner` node
+#   that did not exist, tripping `surge_core::validation`'s
+#   `LoopIterableInvalid` rule; fixed here by adding the producer node the
+#   reference already named, matching the shape of the bundled
+#   `bootstrap-1.0.toml`'s own `roadmap_planner` node)
 # - outer body contains an inner task Loop
 # - inner task body contains concrete Agent work
 
 schema_version = 1
-start = "milestone_loop"
+start = "roadmap_planner"
 
 [metadata]
 name = "golden_multi_milestone"
@@ -16,6 +23,23 @@ created_at = "2026-05-07T00:00:00Z"
 [metadata.archetype]
 name = "multi-milestone"
 milestones = 3
+
+[nodes.roadmap_planner]
+id = "roadmap_planner"
+
+[nodes.roadmap_planner.position]
+x = -240.0
+y = 0.0
+
+[[nodes.roadmap_planner.declared_outcomes]]
+id = "drafted"
+description = "roadmap.milestones drafted and ready for iteration"
+edge_kind_hint = "forward"
+is_terminal = false
+
+[nodes.roadmap_planner.config]
+node_kind = "agent"
+profile = "roadmap-planner@1.0"
 
 [nodes.milestone_loop]
 id = "milestone_loop"
@@ -81,6 +105,15 @@ node_kind = "terminal"
 
 [nodes.end.config.kind]
 type = "success"
+
+[[edges]]
+id = "e_roadmap_to_milestones"
+to = "milestone_loop"
+kind = "forward"
+
+[edges.from]
+node = "roadmap_planner"
+outcome = "drafted"
 
 [[edges]]
 id = "e_milestones_done"
