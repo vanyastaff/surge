@@ -411,6 +411,407 @@ fn failed_verification_status_change_is_a_rejected_verdict() {
     assert_eq!(report.verdicts[0].result, VerdictResult::Rejected);
 }
 
+/// Spec §10/R30's headline case: a run that completes successfully but
+/// never had a verifier node run at all must not read the same as a proven
+/// one. `surge inbox` (`commands::inbox::tests::
+/// evidence_backed_distinguishes_a_verified_completion_from_an_unverified_one`)
+/// and `surge ledger` (`task_ledger::tests::
+/// is_evidence_backed_matches_completed_and_verified_only`) in `surge-cli`/
+/// `surge-persistence` each pin this identical *scenario* against their own
+/// layer's data shape — a registry `TaskLedgerIndexRecord`, not this event
+/// log — so it is three independent fixtures proving the same fact, not one
+/// shared fixture three tests import. Reading this test alongside those two
+/// is how you audit that the three layers agree; nothing here binds them
+/// together in code.
+#[test]
+fn completed_run_with_no_verdicts_at_all_is_not_evidence_backed() {
+    let run_id = RunId::new();
+    let events = vec![
+        run_started(1),
+        event(
+            2,
+            EventPayload::RunCompleted {
+                terminal_node: node_key("end"),
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.evidence_backed, Some(false));
+}
+
+#[test]
+fn completed_run_with_an_authorized_verdict_is_evidence_backed() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier,
+                evidence: ContentHash::compute(b"verification-report"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::RunCompleted {
+                terminal_node: node_key("verify_1"),
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.evidence_backed, Some(true));
+}
+
+/// Same shape as the authorized case above, but the `TaskVerified` names a
+/// node the active graph never granted authority to — `report.verdicts`
+/// still gets an entry (`Unauthorized`), but it must not count toward
+/// evidence-backing. Mutating `VerdictResult::node_outcome`'s `Unauthorized`
+/// arm back to `Completed`/`verified: true` turns this assertion red.
+#[test]
+fn completed_run_with_only_an_unauthorized_verdict_is_not_evidence_backed() {
+    let run_id = RunId::new();
+    let impostor = node_key("impl_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(non_verifier_graph("impl_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: impostor,
+                evidence: ContentHash::compute(b"forged"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::RunCompleted {
+                terminal_node: node_key("impl_1"),
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.evidence_backed, Some(false));
+}
+
+/// "Was this proven" is only meaningful for a claimed success —
+/// `evidence_backed` must be `None`, not `Some(false)`, for a failed run.
+/// Collapsing the two would make an honest failure look like exactly the
+/// "success without proof" case this field exists to flag.
+#[test]
+fn a_failed_run_carries_no_evidence_backed_question() {
+    let run_id = RunId::new();
+    let report = RunReport::compile(
+        run_id,
+        &[event(
+            1,
+            EventPayload::RunFailed {
+                error: "boom".into(),
+            },
+        )],
+    );
+    assert_eq!(report.evidence_backed, None);
+}
+
+/// Spec §10's "same fact on every surface": `run_state.rs`'s
+/// `LedgerState::record_status_change` clears `verified` on *any*
+/// non-`Completed` transition, and production really does emit
+/// `TaskVerified` → `TaskStatusChanged{to: ReadyForVerification}` for a task
+/// sent back for re-verification (`stage::agent::emit_ledger_event`,
+/// mirrored by `run_state.rs`'s own
+/// `status_change_after_verified_clears_verified_flag` test). Before this
+/// fixture, `compile` only ever pushed onto `verdicts` and never revisited
+/// an earlier entry, so this exact sequence left a stale `Verified` verdict
+/// standing and `evidence_backed` read `Some(true)` while `surge inbox` /
+/// `surge ledger` (which fold through `LedgerState`) already read `false`
+/// for the same run.
+///
+/// The earlier verdict is *marked* `Superseded`, not removed from
+/// `verdicts` — `LedgerState::record_status_change` clears `verified` on the
+/// task's existing ledger row, it does not delete the row. Removing here
+/// instead would shrink `evidence_backed`'s denominator (see
+/// `one_verified_and_one_superseded_after_verification_is_not_evidence_backed`
+/// below for the case that distinguishes the two).
+#[test]
+fn status_change_after_verified_revokes_the_stale_verdict() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"evidence"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "t1".into(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::ReadyForVerification,
+                authority_node: node_key("impl_1"),
+            },
+        ),
+        event(
+            4,
+            EventPayload::RunCompleted {
+                terminal_node: verifier,
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.verdicts.len(), 1);
+    assert_eq!(
+        report.verdicts[0].result,
+        VerdictResult::Superseded,
+        "the earlier Verified verdict must be marked Superseded, not left standing: {:?}",
+        report.verdicts
+    );
+    assert_eq!(report.evidence_backed, Some(false));
+}
+
+/// The scenario `retain`-based revocation (an earlier, rejected approach)
+/// would get backwards: a task verified then later failed outright must
+/// still drag the run's `evidence_backed` down — removing it from
+/// `verdicts` instead of marking it `Superseded` would shrink `all()`'s
+/// denominator to just the other, genuinely-verified task and read
+/// `Some(true)`.
+#[test]
+fn one_verified_and_one_superseded_after_verification_is_not_evidence_backed() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"t1-evidence"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::TaskVerified {
+                task_id: "t2".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"t2-evidence"),
+            },
+        ),
+        event(
+            4,
+            EventPayload::TaskStatusChanged {
+                task_id: "t2".into(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::Failed,
+                authority_node: node_key("impl_1"),
+            },
+        ),
+        event(
+            5,
+            EventPayload::RunCompleted {
+                terminal_node: verifier,
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(
+        report.verdicts.len(),
+        2,
+        "t2 must still be tracked (Superseded), not dropped: {:?}",
+        report.verdicts
+    );
+    assert_eq!(report.evidence_backed, Some(false));
+}
+
+/// The aggregation the review round asked to pin: one verified task among
+/// several rejected ones must not read as a proven run.
+/// `!verdicts.is_empty() && verdicts.iter().all(..)` requires every recorded
+/// verdict to be evidence-backed — mutating that back to `.any(..)` turns
+/// this assertion (built with a mixed-outcome fixture no single-verdict test
+/// above can catch) green on a run that should read `Some(false)`.
+#[test]
+fn one_verified_among_several_rejected_verdicts_is_not_evidence_backed() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let mut events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"evidence"),
+            },
+        ),
+    ];
+    for (i, task_id) in ["t2", "t3", "t4", "t5"].into_iter().enumerate() {
+        events.push(event(
+            3 + i as u64,
+            EventPayload::TaskStatusChanged {
+                task_id: task_id.into(),
+                from: RoadmapStatus::ReadyForVerification,
+                to: RoadmapStatus::FailedVerification,
+                authority_node: verifier.clone(),
+            },
+        ));
+    }
+    events.push(event(
+        7,
+        EventPayload::RunCompleted {
+            terminal_node: verifier,
+        },
+    ));
+
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(report.verdicts.len(), 5);
+    assert_eq!(report.evidence_backed, Some(false));
+}
+
+/// The denominator-convergence case the review round asked to pin: a task
+/// that was only ever `TaskDiscovered` — never verified, never rejected —
+/// is a row in `surge_persistence::task_ledger`'s registry mirror (what
+/// `surge inbox`/`surge ledger` read), so it must count against this run's
+/// `evidence_backed` the same way it counts there, even though it never
+/// appears in `report.verdicts` at all (no verdict event ever named it).
+/// Computing `evidence_backed` over `report.verdicts` alone (the mutation
+/// this pins) would ignore t2 entirely and read `Some(true)` off t1's
+/// verdict alone — `report.verdicts.len()` staying at 1 here, rather than
+/// growing to 2, is exactly the tell that this task never got a verdict but
+/// still must count.
+#[test]
+fn task_discovered_with_no_verdict_at_all_still_counts_against_evidence_backed() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"evidence"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::TaskDiscovered {
+                task_id: "t2".into(),
+                discovered_from: "t1".into(),
+                title: "follow-up work".into(),
+            },
+        ),
+        event(
+            4,
+            EventPayload::RunCompleted {
+                terminal_node: verifier,
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(
+        report.verdicts.len(),
+        1,
+        "t2 never received a verdict event, so it must not appear in verdicts: {:?}",
+        report.verdicts
+    );
+    assert_eq!(
+        report.evidence_backed,
+        Some(false),
+        "t2 was discovered but never verified — the run is not a proven success"
+    );
+}
+
+/// `cargo mutants` found this uncovered: `record_task_status_change` clears
+/// `verified` unless `to == Completed` — a redundant/duplicate
+/// `TaskStatusChanged{to: Completed}` for an already-verified task must
+/// leave its `verified` bit alone, not clear it. No prior fixture exercised
+/// a second, `Completed`-targeted status change after `TaskVerified` for
+/// the same task_id.
+#[test]
+fn redundant_completed_status_change_does_not_clear_verified() {
+    let run_id = RunId::new();
+    let verifier = node_key("verify_1");
+    let events = vec![
+        event(
+            1,
+            EventPayload::PipelineMaterialized {
+                graph: Box::new(verifier_graph("verify_1")),
+                graph_hash: ContentHash::compute(b"graph"),
+            },
+        ),
+        event(
+            2,
+            EventPayload::TaskVerified {
+                task_id: "t1".into(),
+                node: verifier.clone(),
+                evidence: ContentHash::compute(b"evidence"),
+            },
+        ),
+        event(
+            3,
+            EventPayload::TaskStatusChanged {
+                task_id: "t1".into(),
+                from: RoadmapStatus::Completed,
+                to: RoadmapStatus::Completed,
+                authority_node: verifier.clone(),
+            },
+        ),
+        event(
+            4,
+            EventPayload::RunCompleted {
+                terminal_node: verifier,
+            },
+        ),
+    ];
+    let report = RunReport::compile(run_id, &events);
+    assert_eq!(
+        report.evidence_backed,
+        Some(true),
+        "a redundant TaskStatusChanged{{to: Completed}} must not clear an \
+         already-verified task's evidence-backed bit"
+    );
+}
+
 #[test]
 fn artifact_produced_and_bootstrap_artifact_are_both_evidence() {
     let run_id = RunId::new();

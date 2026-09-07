@@ -19,11 +19,35 @@
 //! Nothing here ever emits a `<link>`, `<script src>`, or any other
 //! externally-resolved reference (R29) — the file opens and renders
 //! identically with no network reachable at all.
+//!
+//! [`render_markdown`] escapes with the same *discipline* — every
+//! interpolation site, no exceptions — but deliberately **not** the same
+//! [`escape_html`] function: its own doc says the Markdown form targets a
+//! terminal or an archived `.md` file first, and `escape_html`'s `' " &`
+//! attribute-context escaping would visibly corrupt ordinary punctuation
+//! there (`don't` → `don&#39;t`) for a threat that document never faces.
+//! [`render_markdown`] is *also* the form the L3 merge gate embeds into a
+//! tracker comment that leaves the machine (spec §10/R31), and a tracker
+//! that renders inline HTML (GitHub) treats an unescaped
+//! `<script>`/`</details>` in that comment exactly the way a browser treats
+//! one in an HTML page — so it still needs *some* escaping, just not this
+//! one. [`escape_markdown`] is the narrower function built for that: it
+//! neutralizes the one character that can open an HTML tag (`<`) and the
+//! one shape (an embedded newline followed by Markdown structure) that can
+//! forge a fake section or table row, and touches nothing else. See
+//! [`escape_markdown`]'s own doc for the full reasoning — including why a
+//! single shared discipline still means two different functions.
 
 use super::{
     ApprovalEntry, CostTotals, EscalationEntry, EvidenceOrigin, NodeStatus, OutcomeStatus,
     RunCompletion, RunHeader, RunReport, VerdictResult,
 };
+
+/// The one banner text for a `Completed` run with no evidence-backed verdict
+/// (spec §10/R30) — shared by [`render_markdown`] and [`render_html`] so the
+/// two forms say the same thing, not two independently-worded warnings.
+const UNVERIFIED_SUCCESS_BANNER: &str = "⚠ UNVERIFIED SUCCESS — this run completed without an authorized verifier confirming it. \
+     See Verifier verdicts below.";
 
 /// Render `report` as pretty-printed JSON.
 ///
@@ -40,15 +64,20 @@ pub fn render_json(report: &RunReport) -> Result<String, serde_json::Error> {
 #[must_use]
 pub fn render_markdown(report: &RunReport) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Run Report — {}\n\n", report.run_id));
+    out.push_str(&format!(
+        "# Run Report — {}\n\n",
+        escape_markdown_display(&report.run_id)
+    ));
 
     if let Some(prompt) = &report.header.initial_prompt {
-        out.push_str(&format!("**Task:** {prompt}\n\n"));
+        out.push_str(&format!("**Task:** {}\n\n", escape_markdown(prompt)));
     }
     match (report.header.first_event_at, report.header.last_event_at) {
         (Some(first), Some(last)) => {
             out.push_str(&format!(
-                "**Started:** {first}  \n**Last activity:** {last}  \n**Duration:** {}\n\n",
+                "**Started:** {}  \n**Last activity:** {}  \n**Duration:** {}\n\n",
+                escape_markdown_display(&first),
+                escape_markdown_display(&last),
                 format_duration(first, last)
             ));
         },
@@ -69,11 +98,18 @@ pub fn render_markdown(report: &RunReport) -> String {
              event was found in the log read for this report.\n\n",
         );
     }
+    // Spec §10/R30: a `Completed` run with no evidence-backed verdict must
+    // not read the same as a verified one. `report.evidence_backed` is only
+    // `Some(false)` here — `None` (non-`Completed` completions) renders
+    // nothing extra.
+    if report.evidence_backed == Some(false) {
+        out.push_str(&format!("> {UNVERIFIED_SUCCESS_BANNER}\n\n"));
+    }
 
     if !report.caveats.is_empty() {
         out.push_str("## Caveats\n\n");
         for caveat in &report.caveats {
-            out.push_str(&format!("- ⚠ {caveat}\n"));
+            out.push_str(&format!("- ⚠ {}\n", escape_markdown(caveat)));
         }
         out.push('\n');
     }
@@ -83,7 +119,10 @@ pub fn render_markdown(report: &RunReport) -> String {
         out.push_str("_No escalations were raised._\n\n");
     } else {
         for escalation in &report.escalations {
-            out.push_str(&format!("- {}\n", escalation_label(escalation)));
+            out.push_str(&format!(
+                "- {}\n",
+                escape_markdown(&escalation_label(escalation))
+            ));
         }
         out.push('\n');
     }
@@ -100,7 +139,7 @@ pub fn render_markdown(report: &RunReport) -> String {
         for node in &report.nodes {
             out.push_str(&format!(
                 "| {} | {} | {} |\n",
-                node.node,
+                escape_markdown_display(&node.node),
                 node.attempts,
                 node_status_label(&node.status)
             ));
@@ -116,12 +155,14 @@ pub fn render_markdown(report: &RunReport) -> String {
             let status = match &entry.status {
                 OutcomeStatus::Accepted => String::new(),
                 OutcomeStatus::RejectedByHook { hook_id } => {
-                    format!(" — ⚠ REJECTED BY HOOK `{hook_id}`")
+                    format!(" — ⚠ REJECTED BY HOOK `{}`", escape_markdown(hook_id))
                 },
             };
             out.push_str(&format!(
                 "- **{}** → `{}`: {}{status}\n",
-                entry.node, entry.outcome, entry.summary
+                escape_markdown_display(&entry.node),
+                escape_markdown_display(&entry.outcome),
+                escape_markdown(&entry.summary)
             ));
         }
         out.push('\n');
@@ -134,8 +175,8 @@ pub fn render_markdown(report: &RunReport) -> String {
         for verdict in &report.verdicts {
             out.push_str(&format!(
                 "- task `{}` ({}): {}\n",
-                verdict.task_id,
-                verdict.node,
+                escape_markdown(&verdict.task_id),
+                escape_markdown_display(&verdict.node),
                 verdict_label(&verdict.result)
             ));
         }
@@ -148,16 +189,18 @@ pub fn render_markdown(report: &RunReport) -> String {
     } else {
         for artifact in &report.evidence {
             let origin = match &artifact.origin {
-                EvidenceOrigin::Node { node } => format!("node {node}"),
-                EvidenceOrigin::Bootstrap { stage } => format!("bootstrap {stage:?}"),
+                EvidenceOrigin::Node { node } => format!("node {}", escape_markdown_display(node)),
+                EvidenceOrigin::Bootstrap { stage } => {
+                    format!("bootstrap {}", escape_markdown(&format!("{stage:?}")))
+                },
             };
-            let path = artifact
-                .path
-                .as_ref()
-                .map_or_else(String::new, |p| format!(" ({})", p.display()));
+            let path = artifact.path.as_ref().map_or_else(String::new, |p| {
+                format!(" ({})", escape_markdown(&p.display().to_string()))
+            });
             out.push_str(&format!(
                 "- **{}**{path} — {origin} — `{}`\n",
-                artifact.name, artifact.hash
+                escape_markdown(&artifact.name),
+                escape_markdown_display(&artifact.hash)
             ));
         }
         out.push('\n');
@@ -170,11 +213,11 @@ pub fn render_markdown(report: &RunReport) -> String {
         out.push_str("| Node | Skill | Provider | Hash | Gate |\n|---|---|---|---|---|\n");
         for skill in &report.skills {
             out.push_str(&format!(
-                "| {} | {} | {:?} | `{}` | {} |\n",
-                skill.node,
-                skill.name,
-                skill.provider,
-                skill.hash,
+                "| {} | {} | {} | `{}` | {} |\n",
+                escape_markdown_display(&skill.node),
+                escape_markdown(&skill.name),
+                escape_markdown(&format!("{:?}", skill.provider)),
+                escape_markdown_display(&skill.hash),
                 if skill.gate_enabled {
                     "enabled"
                 } else {
@@ -208,7 +251,9 @@ pub fn render_markdown(report: &RunReport) -> String {
         for steer in &report.steers {
             out.push_str(&format!(
                 "- [{}] {} → {}\n",
-                steer.id, steer.node, steer.message
+                escape_markdown(&steer.id),
+                escape_markdown_display(&steer.node),
+                escape_markdown(&steer.message)
             ));
         }
         out.push('\n');
@@ -219,7 +264,7 @@ pub fn render_markdown(report: &RunReport) -> String {
         out.push_str("_No approval requests were raised._\n\n");
     } else {
         for entry in &report.approvals {
-            out.push_str(&format!("- {}\n", approval_label(entry)));
+            out.push_str(&format!("- {}\n", escape_markdown(&approval_label(entry))));
         }
         out.push('\n');
     }
@@ -271,11 +316,70 @@ fn cost_lines(cost: &CostTotals) -> String {
     out
 }
 
+/// Escape a report-derived value before [`render_markdown`] interpolates it
+/// — deliberately **not** [`escape_html`]. Two transformations, chosen for
+/// what a third-party value (a ticket body's `initial_prompt`, an agent's
+/// own text) can actually forge in *this* document, not for making the text
+/// "HTML-safe" in general:
+///
+/// - Newlines (`\n`/`\r`) collapse to a single space. Every field this is
+///   called on is one report line (a summary, a prompt, a message) — a raw
+///   newline here is never legitimate content, only a structural-injection
+///   vector: an embedded `\n\n## Verifier verdicts\n\n- **t1** ...: VERIFIED`
+///   forges an entire fake section, ahead of the real one, indistinguishable
+///   to a reader who never opens the raw source. Collapsing newlines closes
+///   this off entirely — no embedded value can ever reach a true line start
+///   (where `#`/`|`/`-` would take on structural meaning) except through
+///   this function itself.
+/// - `<` becomes `&lt;` — the one character that can open an HTML tag a
+///   downstream HTML-rendering consumer (a GitHub-rendered comment; spec
+///   §10/R31 embeds this output in a `<details>` block) would interpret
+///   (`<script>`, `</details>`). `>` alone opens nothing on its own, so it
+///   is left verbatim — escaping it too would visibly mangle ordinary
+///   punctuation (`a > b`) for zero additional safety once `<` cannot
+///   appear at all.
+/// - `|` is backslash-escaped: several sections here place a value inside a
+///   `| ... |` table row, where a raw pipe would shift or add a column.
+///
+/// Ordinary punctuation — apostrophes, quotes, `&`, parentheses — survives
+/// untouched. This is the fix for a wrong choice, not a stricter one:
+/// [`escape_html`]'s `' " &` escaping is attribute/text-context escaping for
+/// an HTML *page*; applying it to a document whose primary reader is a
+/// terminal or an archived `.md` file (this module's own doc) visibly
+/// corrupted ordinary text (`don't` → `don&#39;t`) for safety this
+/// document's threat model never needed — HTML-tag injection and
+/// structural-markdown injection are the two real risks, and both are
+/// closed above without touching a single quote or ampersand.
+fn escape_markdown(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\n' | '\r' => out.push(' '),
+            '<' => out.push_str("&lt;"),
+            '|' => out.push_str("\\|"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Escape the `Display` form of a report-derived value for Markdown — see
+/// [`escape_markdown`].
+fn escape_markdown_display(value: &impl std::fmt::Display) -> String {
+    escape_markdown(&value.to_string())
+}
+
+/// Markdown-only (unlike [`escalation_label`]/[`approval_label`] below,
+/// which [`render_html`] also calls and escapes itself at the call site):
+/// every free-text field this interpolates is escaped right here, since
+/// nothing else escapes it before [`render_markdown`] embeds it.
 fn completion_label(completion: &RunCompletion) -> String {
     match completion {
-        RunCompletion::Completed { terminal_node } => format!("Completed at `{terminal_node}`"),
-        RunCompletion::Failed { error } => format!("Failed — {error}"),
-        RunCompletion::Aborted { reason } => format!("Aborted — {reason}"),
+        RunCompletion::Completed { terminal_node } => {
+            format!("Completed at `{}`", escape_markdown_display(terminal_node))
+        },
+        RunCompletion::Failed { error } => format!("Failed — {}", escape_markdown(error)),
+        RunCompletion::Aborted { reason } => format!("Aborted — {}", escape_markdown(reason)),
         RunCompletion::Parked {
             wake_at,
             runtime,
@@ -283,12 +387,23 @@ fn completion_label(completion: &RunCompletion) -> String {
             reason,
         } => {
             let runtime = runtime.as_deref().unwrap_or("unknown runtime");
-            format!("PARKED until {wake_at} ({basis:?}, {runtime}) — {reason}")
+            format!(
+                "PARKED until {} ({}, {}) — {}",
+                escape_markdown_display(wake_at),
+                escape_markdown(&format!("{basis:?}")),
+                escape_markdown(runtime),
+                escape_markdown(reason)
+            )
         },
         RunCompletion::Incomplete => "NOT FINISHED".to_string(),
     }
 }
 
+/// Shared by [`render_markdown`] (raw; escaped with [`escape_markdown`] at
+/// the call site below) and [`render_html`] (escaped with [`escape_html`] in
+/// `render_escalations_section`) — kept unescaped here so neither caller
+/// double-escapes, and so each can apply the escaping appropriate to its own
+/// document type.
 fn escalation_label(escalation: &EscalationEntry) -> String {
     let stage = escalation
         .stage
@@ -296,14 +411,18 @@ fn escalation_label(escalation: &EscalationEntry) -> String {
     format!("{:?}{stage}: {}", escalation.cause, escalation.reason)
 }
 
+/// Markdown-only — see [`completion_label`]'s doc comment.
 fn node_status_label(status: &NodeStatus) -> String {
     match status {
-        NodeStatus::Completed { outcome } => format!("completed ({outcome})"),
+        NodeStatus::Completed { outcome } => {
+            format!("completed ({})", escape_markdown_display(outcome))
+        },
         NodeStatus::Failed {
             reason,
             retry_available,
         } => format!(
-            "failed ({reason}){}",
+            "failed ({}){}",
+            escape_markdown(reason),
             if *retry_available {
                 ", retry available"
             } else {
@@ -314,12 +433,21 @@ fn node_status_label(status: &NodeStatus) -> String {
     }
 }
 
+/// Markdown-only — see [`completion_label`]'s doc comment.
 fn verdict_label(result: &VerdictResult) -> String {
     match result {
-        VerdictResult::Verified { evidence } => format!("VERIFIED (evidence `{evidence}`)"),
+        VerdictResult::Verified { evidence } => {
+            format!(
+                "VERIFIED (evidence `{}`)",
+                escape_markdown_display(evidence)
+            )
+        },
         VerdictResult::Rejected => "REJECTED".to_string(),
         VerdictResult::Unauthorized => {
             "⚠ UNAUTHORIZED — node lacked verification authority".to_string()
+        },
+        VerdictResult::Superseded => {
+            "SUPERSEDED — task moved on after this verdict; must be re-earned".to_string()
         },
     }
 }
@@ -368,9 +496,10 @@ fn approval_label(entry: &ApprovalEntry) -> String {
 /// contexts. No external crate: this report is one self-contained file by
 /// contract (R29), and the escaping surface needed here is small and fixed.
 ///
-/// Every call site in [`render_html`] and its section helpers routes every
-/// piece of report-derived text through this — see this module's own doc
-/// comment for why that is uniform rather than "only where it's needed."
+/// Every call site in [`render_html`] and its section helpers, and now
+/// [`render_markdown`] too, routes every piece of report-derived text
+/// through this — see this module's own doc comment for why that is uniform
+/// rather than "only where it's needed."
 fn escape_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -410,6 +539,15 @@ pub fn render_html(report: &RunReport) -> String {
     body.push_str(&render_header_section(&report.header));
 
     let (status_class, status_text) = match &report.completion {
+        // Spec §10/R30: a `Completed` run with no evidence-backed verdict
+        // renders with the `warn` class and an explicit label, not the same
+        // green `ok` a verified completion gets — `report.evidence_backed`
+        // is `Some(bool)` exactly when `completion` is `Completed`, so this
+        // arm is the only place that reads it.
+        RunCompletion::Completed { terminal_node } if report.evidence_backed == Some(false) => (
+            "warn",
+            format!("Completed at {terminal_node} — UNVERIFIED SUCCESS"),
+        ),
         RunCompletion::Completed { terminal_node } => {
             ("ok", format!("Completed at {terminal_node}"))
         },
@@ -442,6 +580,12 @@ pub fn render_html(report: &RunReport) -> String {
              <code>RunFailed</code>/<code>RunAborted</code> event was found in the log read \
              for this report.</p>\n",
         );
+    }
+    if report.evidence_backed == Some(false) {
+        body.push_str(&format!(
+            "<p class=\"warn\">{}</p>\n",
+            escape_html(UNVERIFIED_SUCCESS_BANNER)
+        ));
     }
 
     body.push_str(&render_caveats_section(report));
@@ -631,6 +775,10 @@ fn render_verdicts_section(report: &RunReport) -> String {
             VerdictResult::Unauthorized => (
                 "bad",
                 "UNAUTHORIZED — node lacked verification authority".to_string(),
+            ),
+            VerdictResult::Superseded => (
+                "warn",
+                "SUPERSEDED — task moved on after this verdict; must be re-earned".to_string(),
             ),
         };
         items.push_str(&format!(
@@ -1092,6 +1240,189 @@ mod tests {
         );
     }
 
+    /// The Markdown counterpart of the test above: `render_markdown` is used
+    /// for more than a terminal — the merge gate (spec §10/R31) embeds its
+    /// output straight into a `<details>` block on a tracker comment that
+    /// leaves the machine, and a tracker that renders inline HTML (GitHub)
+    /// will interpret an unescaped `<script>`/`</details>` the same way a
+    /// browser would. Before this test, `render_markdown` escaped nothing;
+    /// it now must match `render_html`'s coverage, section for section,
+    /// against the identical fixture.
+    #[test]
+    fn every_string_carrying_section_escapes_its_xss_fixture_in_markdown_too() {
+        let md = render_markdown(&full_coverage_report());
+
+        assert!(
+            !md.contains("<script>xss</script>"),
+            "raw script tag survived somewhere in the Markdown:\n{md}"
+        );
+        // `escape_markdown` neutralizes `<` only — `>` opens no HTML tag on
+        // its own, and the rest of `XSS_PAYLOAD` (` & "quo'te"`) is ordinary
+        // punctuation that must survive verbatim (spec §10/R31 review: a
+        // wrong choice of escaper corrupted exactly this before).
+        const ESCAPED_PAYLOAD: &str = "&lt;script>xss&lt;/script> & \"quo'te\"";
+
+        let sections: Vec<&str> = md.split("## ").collect();
+        let section = |name: &str| {
+            sections
+                .iter()
+                .find(|s| s.starts_with(name))
+                .unwrap_or_else(|| panic!("section {name:?} not found in rendered Markdown"))
+        };
+
+        // Header (task/prompt) — rendered before the first `## ` header.
+        let header = sections[0];
+        assert!(
+            header.contains(ESCAPED_PAYLOAD),
+            "header (initial_prompt) must escape only `<`, leaving ordinary \
+             punctuation verbatim:\n{header}"
+        );
+
+        assert!(section("Nodes").contains(ESCAPED_PAYLOAD));
+        assert!(section("Outcomes").contains(ESCAPED_PAYLOAD));
+        assert!(
+            section("Outcomes").contains("REJECTED BY HOOK"),
+            "a hook-rejected outcome must render as rejected, not accepted"
+        );
+        assert!(section("Verifier verdicts").contains(ESCAPED_PAYLOAD));
+        assert!(section("Evidence").contains(ESCAPED_PAYLOAD));
+        assert!(section("Skills bound").contains(ESCAPED_PAYLOAD));
+        assert!(section("Steers").contains(ESCAPED_PAYLOAD));
+        assert!(section("Approvals").contains(ESCAPED_PAYLOAD));
+        assert!(
+            md.contains("Failed") && md.contains(ESCAPED_PAYLOAD),
+            "RunFailed's error must be escaped in the status line"
+        );
+    }
+
+    /// Spec §10/R31 review, finding 1: `escape_html`'s attribute-context
+    /// escaping (`' " &`) was applied to a document whose primary reader is
+    /// a terminal, corrupting ordinary punctuation
+    /// (`don't` → `don&#39;t`). `escape_markdown` must leave every one of
+    /// these characters exactly as written — the only prior XSS-fixture
+    /// test asserted the presence of the escaped `<script>` tag and never
+    /// checked whether the payload's own `"quo'te"` survived, which is
+    /// exactly how that regression went unnoticed.
+    #[test]
+    fn markdown_leaves_ordinary_punctuation_verbatim() {
+        let run_id = RunId::new();
+        let text = "don't merge until Bob's \"final\" review & CI pass (a > b)";
+        let events = vec![RunEvent {
+            run_id,
+            seq: 1,
+            timestamp: chrono::Utc::now(),
+            payload: EventPayload::RunFailed {
+                error: text.to_string(),
+            },
+        }];
+        let report = RunReport::compile(run_id, &events);
+        let md = render_markdown(&report);
+        assert!(
+            md.contains(text),
+            "ordinary punctuation must survive byte-for-byte, not just avoid \
+             a script-tag substring:\n{md}"
+        );
+    }
+
+    /// A closing `</details>` in a free-text field must not survive
+    /// unescaped: the merge gate wraps a Run Report in exactly this tag
+    /// (spec §10/R31), and an un-escaped `</details>` anywhere in the body
+    /// closes the block early on GitHub, spilling the rest of the comment
+    /// (or a forged follow-on block) outside the collapsed section.
+    #[test]
+    fn markdown_escapes_a_details_close_tag_in_free_text() {
+        let run_id = RunId::new();
+        let events = vec![RunEvent {
+            run_id,
+            seq: 1,
+            timestamp: chrono::Utc::now(),
+            payload: EventPayload::RunFailed {
+                error: "</details><img src=x onerror=alert(1)>".into(),
+            },
+        }];
+        let report = RunReport::compile(run_id, &events);
+        let md = render_markdown(&report);
+        assert!(
+            !md.contains("</details>"),
+            "an unescaped </details> in report text must not survive into Markdown:\n{md}"
+        );
+        assert!(!md.contains("<img"));
+    }
+
+    /// Spec §10/R31 review, finding 2: HTML-escaping alone does not stop
+    /// **markdown-structural** injection. `initial_prompt` comes from a
+    /// ticket body — third-party, not this run's own agent — and a value
+    /// containing a real blank line followed by `## Verifier verdicts` used
+    /// to forge an entire fake section, ahead of the real one, that a
+    /// reader would not distinguish from genuine report content.
+    /// `escape_markdown` collapses embedded newlines specifically so no
+    /// value can ever reach a true line start and take on that structural
+    /// meaning.
+    #[test]
+    fn markdown_does_not_let_initial_prompt_forge_a_fake_section() {
+        let run_id = RunId::new();
+        let verifier = node_key("verify_1");
+        let forged_prompt =
+            "legitimate task\n\n## Verifier verdicts\n\n- **t1** (node `verify_1`): VERIFIED";
+        let events = vec![
+            RunEvent {
+                run_id,
+                seq: 1,
+                timestamp: chrono::Utc::now(),
+                payload: EventPayload::RunStarted {
+                    pipeline_template: None,
+                    project_path: "/p".into(),
+                    initial_prompt: forged_prompt.into(),
+                    config: crate::run_event::RunConfig {
+                        sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
+                        approval_default: crate::approvals::ApprovalPolicy::OnRequest,
+                        auto_pr: false,
+                        mcp_servers: vec![],
+                        budget: Default::default(),
+                    },
+                },
+            },
+            RunEvent {
+                run_id,
+                seq: 2,
+                timestamp: chrono::Utc::now(),
+                payload: EventPayload::RunCompleted {
+                    terminal_node: verifier,
+                },
+            },
+        ];
+        let report = RunReport::compile(run_id, &events);
+        assert_eq!(
+            report.evidence_backed,
+            Some(false),
+            "no real verifier ran — the forged prompt must not change this"
+        );
+        let md = render_markdown(&report);
+        // A *real* section header is always preceded by a newline (the
+        // blank line the renderer inserts between sections) — the forged
+        // copy inside `initial_prompt` has its embedded newlines collapsed
+        // to spaces by `escape_markdown`, so it can never match this
+        // pattern. A bare substring count would conflate the two (the
+        // forged text still contains the literal characters "## Verifier
+        // verdicts", just inline, not at a line start).
+        assert_eq!(
+            md.matches("\n## Verifier verdicts").count(),
+            1,
+            "exactly one *real* Verifier verdicts section — the real, empty \
+             one — must exist; the forged text must not create a second:\n{md}"
+        );
+        let real_section = md
+            .split("\n## Verifier verdicts")
+            .nth(1)
+            .expect("the real section must exist");
+        let real_section = real_section.split("\n## ").next().unwrap();
+        assert!(
+            !real_section.contains("VERIFIED"),
+            "the real Verifier verdicts section must stay empty — the forged \
+             \"VERIFIED\" line must not land inside it:\n{real_section}"
+        );
+    }
+
     #[test]
     fn html_renders_a_parked_run_distinctly_from_not_finished() {
         let run_id = RunId::new();
@@ -1134,5 +1465,119 @@ mod tests {
             escape_html("<a href=\"x\">'&'</a>"),
             "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;"
         );
+    }
+
+    /// Spec §10/R30: `sample_report()` completes with zero verifier verdicts
+    /// — both render forms must say so, distinctly from a verified
+    /// completion (the next test). Checked in both forms with one fixture so
+    /// a regression in either renderer's wiring, not just one, fails here.
+    #[test]
+    fn unverified_success_is_flagged_in_both_render_forms() {
+        let report = sample_report();
+        assert_eq!(report.evidence_backed, Some(false));
+
+        let html = render_html(&report);
+        assert!(
+            html.contains("UNVERIFIED SUCCESS"),
+            "html must flag an unverified completion:\n{html}"
+        );
+        assert!(
+            !html.contains("<p class=\"status ok\">"),
+            "an unverified completion must not render the plain green 'ok' status:\n{html}"
+        );
+
+        let md = render_markdown(&report);
+        assert!(
+            md.contains("UNVERIFIED SUCCESS"),
+            "markdown must flag an unverified completion:\n{md}"
+        );
+    }
+
+    /// The other half of the pair above: a `Completed` run backed by an
+    /// authorized verifier verdict must render as a plain, unflagged
+    /// success — no warning banner, `ok`-class status. Pinned alongside the
+    /// unverified case so a mutation that always shows (or always hides)
+    /// the banner fails one test or the other.
+    #[test]
+    fn verified_success_shows_no_unverified_banner() {
+        let run_id = RunId::new();
+        let verifier = node_key("verify_1");
+        let declared_outcomes = vec![crate::node::OutcomeDecl {
+            id: OutcomeKey::try_from("verified").unwrap(),
+            description: String::new(),
+            edge_kind_hint: crate::edge::EdgeKind::Forward,
+            is_terminal: true,
+            ledger_effect: crate::node::LedgerEffect::Verified,
+        }];
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            verifier.clone(),
+            crate::node::Node {
+                id: verifier.clone(),
+                position: crate::node::Position::default(),
+                declared_outcomes,
+                config: crate::node::NodeConfig::Terminal(crate::terminal_config::TerminalConfig {
+                    kind: crate::terminal_config::TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let graph = crate::graph::Graph {
+            schema_version: crate::graph::SCHEMA_VERSION,
+            metadata: crate::graph::GraphMetadata {
+                name: "verified-graph".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: verifier.clone(),
+            nodes,
+            edges: vec![],
+            subgraphs: std::collections::BTreeMap::new(),
+        };
+
+        let events = vec![
+            RunEvent {
+                run_id,
+                seq: 1,
+                timestamp: chrono::Utc::now(),
+                payload: EventPayload::PipelineMaterialized {
+                    graph: Box::new(graph),
+                    graph_hash: ContentHash::compute(b"graph"),
+                },
+            },
+            RunEvent {
+                run_id,
+                seq: 2,
+                timestamp: chrono::Utc::now(),
+                payload: EventPayload::TaskVerified {
+                    task_id: "t1".into(),
+                    node: verifier.clone(),
+                    evidence: ContentHash::compute(b"evidence"),
+                },
+            },
+            RunEvent {
+                run_id,
+                seq: 3,
+                timestamp: chrono::Utc::now(),
+                payload: EventPayload::RunCompleted {
+                    terminal_node: verifier,
+                },
+            },
+        ];
+        let report = RunReport::compile(run_id, &events);
+        assert_eq!(report.evidence_backed, Some(true));
+
+        let html = render_html(&report);
+        assert!(
+            !html.contains("UNVERIFIED SUCCESS"),
+            "a verified completion must not show the unverified banner:\n{html}"
+        );
+        assert!(html.contains("<p class=\"status ok\">"));
+
+        let md = render_markdown(&report);
+        assert!(!md.contains("UNVERIFIED SUCCESS"));
     }
 }

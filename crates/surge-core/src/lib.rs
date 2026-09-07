@@ -44,6 +44,7 @@ pub mod content_hash;
 pub mod context_pack;
 pub mod doctor;
 pub mod edge;
+pub mod evidence;
 pub mod graph;
 pub mod hooks;
 pub mod human_gate_config;

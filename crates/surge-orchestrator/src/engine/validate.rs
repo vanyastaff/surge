@@ -158,9 +158,19 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 
 /// Run [`surge_core::validate`] and surface every `Severity::Error` finding
 /// as a single [`EngineError::GraphInvalid`]. `Severity::Warning` findings
-/// (e.g. `UnverifiedSuccessPath`) do not block the run — they are the
-/// operator-facing "unverified success" signal rendered elsewhere, not a
-/// validation failure.
+/// (e.g. `UnverifiedSuccessPath`) do not block the run.
+///
+/// `UnverifiedSuccessPath` specifically is a *design-time* lint — could this
+/// graph's shape let some run declare success without a verifier, considered
+/// once at validation time, independent of any actual run — not itself
+/// rendered by the operator-facing surfaces. The *run-time* counterpart this
+/// comment used to point to unqualified ("rendered elsewhere") now has a
+/// real home: `surge_core::evidence::is_evidence_backed` answers, from a
+/// specific run's own event log, whether *that run's* completion was
+/// actually verified, and Run Report / `surge inbox` / `surge ledger` all
+/// render it (spec §10/R30). See `surge_core::evidence`'s module doc for
+/// exactly how the two relate — they are complementary questions, not the
+/// same check surfaced twice.
 ///
 /// Factored out of [`validate_for_m6`] so [`validate_for_m6_with_resolver`]
 /// does not need to duplicate the finding-to-message conversion; the latter

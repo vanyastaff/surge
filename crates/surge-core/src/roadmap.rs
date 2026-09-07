@@ -790,6 +790,24 @@ pub enum RoadmapStatus {
 }
 
 impl RoadmapStatus {
+    /// Every variant, exhaustive by construction: `all_variants_are_named`
+    /// below matches every arm with no wildcard, so a ninth `RoadmapStatus`
+    /// variant fails to compile there until this array is updated too — a
+    /// reader fixing that match failure sees this array right next to it.
+    /// `surge_core::evidence`'s tests build their "every non-`Completed`
+    /// status" fixtures from this instead of keeping their own hand-written
+    /// list, so a new variant reaches those tests without a second edit.
+    pub const ALL: [Self; 8] = [
+        Self::Pending,
+        Self::Running,
+        Self::Paused,
+        Self::ReadyForVerification,
+        Self::FailedVerification,
+        Self::Completed,
+        Self::Failed,
+        Self::Skipped,
+    ];
+
     /// Returns `true` when the item has not started.
     #[must_use]
     pub fn is_pending(&self) -> bool {
@@ -922,6 +940,30 @@ impl Timeline {
 mod tests {
     use super::*;
     use crate::id::SpecId;
+
+    /// Guards [`RoadmapStatus::ALL`]: this match has no wildcard arm, so a
+    /// ninth `RoadmapStatus` variant fails to compile here (and only here)
+    /// until it is added both to this match and to `ALL` alongside it — see
+    /// `ALL`'s own doc comment for why that pairing is deliberate.
+    #[test]
+    fn all_variants_are_named() {
+        fn name(status: RoadmapStatus) -> &'static str {
+            match status {
+                RoadmapStatus::Pending => "pending",
+                RoadmapStatus::Running => "running",
+                RoadmapStatus::Paused => "paused",
+                RoadmapStatus::ReadyForVerification => "ready_for_verification",
+                RoadmapStatus::FailedVerification => "failed_verification",
+                RoadmapStatus::Completed => "completed",
+                RoadmapStatus::Failed => "failed",
+                RoadmapStatus::Skipped => "skipped",
+            }
+        }
+        assert_eq!(RoadmapStatus::ALL.len(), 8);
+        for status in RoadmapStatus::ALL {
+            assert!(!name(status).is_empty());
+        }
+    }
 
     #[test]
     fn verification_report_defaults_to_v1_not_roadmap_v2() {

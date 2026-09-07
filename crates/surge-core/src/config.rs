@@ -207,6 +207,28 @@ pub struct SurgeConfig {
     /// `crate::capacity_config`.
     #[serde(default)]
     pub capacity: CapacityConfig,
+    /// L3 (`surge:auto`) auto-merge gate configuration (spec §10/R31).
+    #[serde(default)]
+    pub merge_gate: MergeGateConfig,
+}
+
+/// L3 auto-merge gate configuration (spec §10/R31).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MergeGateConfig {
+    /// Attach the completed run's own Run Report to the merge gate's
+    /// success comment on the tracker (a collapsible `<details>` block on
+    /// providers that render inline HTML; a plain leading line otherwise).
+    ///
+    /// **Off by default.** Spec §10/R31 says the attachment is *optional*;
+    /// consent to L3 auto-merge (the `surge:auto` label) is consent to
+    /// *merge* the PR, not to publish the run's transcript-derived report to
+    /// the tracker — that is a separate disclosure decision the operator has
+    /// not made just by opting into auto-merge. Turning this on does not
+    /// bypass redaction: the attachment still goes through
+    /// `surge_acp::secrets::redact_secrets` and absolute-path shortening
+    /// before it is ever posted.
+    #[serde(default)]
+    pub publish_run_report: bool,
 }
 
 /// Project initialization defaults used by first-run onboarding.
@@ -1014,6 +1036,7 @@ impl Default for SurgeConfig {
             output_spill: OutputSpillConfig::default(),
             context_pack: ContextPackConfig::default(),
             capacity: CapacityConfig::default(),
+            merge_gate: MergeGateConfig::default(),
         }
     }
 }

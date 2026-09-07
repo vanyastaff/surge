@@ -150,9 +150,21 @@ struct Setup {
     conn: Arc<TokioMutex<Connection>>,
     notifier: Arc<RecordingNotifier>,
     tx: broadcast::Sender<GlobalDaemonEvent>,
+    // Run event-log store for the optional Run Report attachment (spec
+    // §10/R31). Most fixtures in this file never create a real run in it,
+    // so `run_report_attachment` degrades to `None` (`RunNotFound`) for
+    // them — this test file is mostly about the merge decision, not the
+    // report itself (see `run_report`'s own tests for that coverage).
+    // `l3_merged_comment_attaches_the_run_report_and_flags_it_unverified`
+    // and its `publish_run_report=false` counterpart below are the
+    // exceptions: they write a real, minimal run so the attachment path
+    // itself — and the config flag gating it — gets one end-to-end check.
+    // Kept alive by `_home` for the lifetime of the `Storage` handle.
+    runs: Arc<surge_persistence::runs::Storage>,
+    _home: tempfile::TempDir,
 }
 
-fn make_setup() -> Setup {
+async fn make_setup() -> Setup {
     let src = Arc::new(MockTaskSource::new("mock:test", "mock"));
     let mut map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
     map.insert("mock:test".into(), Arc::clone(&src) as Arc<dyn TaskSource>);
@@ -160,12 +172,18 @@ fn make_setup() -> Setup {
     let conn = Arc::new(TokioMutex::new(db_with_schema()));
     let notifier = Arc::new(RecordingNotifier::new());
     let (tx, _rx0) = broadcast::channel(8);
+    let home = tempfile::tempdir().unwrap();
+    let runs = surge_persistence::runs::Storage::open(home.path())
+        .await
+        .unwrap();
     Setup {
         src,
         map,
         conn,
         notifier,
         tx,
+        runs,
+        _home: home,
     }
 }
 
@@ -173,12 +191,15 @@ fn make_setup() -> Setup {
 fn spawn_gate(
     setup: &Setup,
     rx: broadcast::Receiver<GlobalDaemonEvent>,
+    publish_run_report: bool,
 ) -> tokio::task::JoinHandle<()> {
     automation_merge_gate::spawn(
         rx,
         Arc::clone(&setup.map),
         Arc::clone(&setup.conn),
         Arc::clone(&setup.notifier) as Arc<dyn NotifyDeliverer>,
+        Arc::clone(&setup.runs),
+        publish_run_report,
     )
 }
 
@@ -263,9 +284,9 @@ async fn wait_for_fetch_task(src: &Arc<MockTaskSource>, expected: u32) {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_ready_merges_and_posts_merged_comment_and_label() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#42";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -281,7 +302,7 @@ async fn l3_ready_merges_and_posts_merged_comment_and_label() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let comments = wait_for_comments(&setup.src, 1).await;
@@ -317,12 +338,113 @@ async fn l3_ready_merges_and_posts_merged_comment_and_label() {
     );
 }
 
-#[tokio::test]
+/// Spec §10/R31: the merge gate's success comment optionally carries the
+/// run's own Run Report, through the *existing* `post_comment` call —
+/// no new tracker integration. This run never ran a verifier, so the
+/// attachment must lead with the same "UNVERIFIED SUCCESS" signal Run
+/// Report, `surge inbox`, and `surge ledger` all show for the identical
+/// scenario (spec §10/R30) — one predicate, one answer, now visible on the
+/// PR too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l3_merged_comment_attaches_the_run_report_and_flags_it_unverified() {
+    let setup = make_setup().await;
+    let task_id_str = "mock:test#report";
+    seed_l3_task(&setup.src, task_id_str).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+
+    let run_id = RunId::new();
+    let project = std::env::temp_dir().join(format!("surge-merge-gate-report-{run_id}"));
+    let writer = setup.runs.create_run(run_id, &project, None).await.unwrap();
+    writer
+        .append_event(surge_core::run_event::VersionedEventPayload::new(
+            surge_core::run_event::EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_new("end").unwrap(),
+            },
+        ))
+        .await
+        .unwrap();
+    writer.flush().await.unwrap();
+
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task_id_str, &run_id.to_string());
+    }
+
+    let rx = setup.tx.subscribe();
+    let _handle = spawn_gate(&setup, rx, true);
+    setup.tx.send(completed_event(run_id)).unwrap();
+
+    let comments = wait_for_comments(&setup.src, 1).await;
+    assert_eq!(comments.len(), 1);
+    let body = &comments[0].1;
+    assert!(
+        body.contains("<details>") && body.contains("Surge Run Report"),
+        "merged comment must carry the Run Report attachment, got: {body}"
+    );
+    assert!(
+        body.contains("UNVERIFIED SUCCESS"),
+        "a run with no verifier verdict must be flagged, got: {body}"
+    );
+}
+
+/// Spec §10/R31 says the attachment is *optional* — off by default
+/// (`MergeGateConfig::publish_run_report`). Consent to L3 auto-merge is
+/// consent to merge the PR, not to publish the run's transcript-derived
+/// report to the tracker, so the merged comment must stay exactly what it
+/// was before this attachment existed unless an operator opts in. Same
+/// fixture as the test above, only the flag differs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l3_merged_comment_omits_the_run_report_when_publishing_is_disabled() {
+    let setup = make_setup().await;
+    let task_id_str = "mock:test#report-off";
+    seed_l3_task(&setup.src, task_id_str).await;
+    setup
+        .src
+        .arm_merge_readiness(MergeReadiness::Ready { head_ref: None })
+        .await;
+    setup.src.arm_merge_outcome(MergeOutcome::Merged).await;
+
+    let run_id = RunId::new();
+    let project = std::env::temp_dir().join(format!("surge-merge-gate-report-off-{run_id}"));
+    let writer = setup.runs.create_run(run_id, &project, None).await.unwrap();
+    writer
+        .append_event(surge_core::run_event::VersionedEventPayload::new(
+            surge_core::run_event::EventPayload::RunCompleted {
+                terminal_node: NodeKey::try_new("end").unwrap(),
+            },
+        ))
+        .await
+        .unwrap();
+    writer.flush().await.unwrap();
+
+    {
+        let guard = setup.conn.lock().await;
+        seed_ticket(&guard, task_id_str, &run_id.to_string());
+    }
+
+    let rx = setup.tx.subscribe();
+    let _handle = spawn_gate(&setup, rx, false);
+    setup.tx.send(completed_event(run_id)).unwrap();
+
+    let comments = wait_for_comments(&setup.src, 1).await;
+    assert_eq!(comments.len(), 1);
+    let body = &comments[0].1;
+    assert_eq!(
+        body, "Surge L3 auto-merge: PR merged ✓ (checks green + review approved).",
+        "publish_run_report=false must post exactly the plain success comment, no attachment"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_merge_is_pinned_to_readiness_head() {
     // The readiness verdict carries the head SHA it validated; the gate must
     // pass that exact SHA to merge_pr so GitHub rejects a moved head rather
     // than merging unreviewed code.
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#49";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -340,7 +462,7 @@ async fn l3_merge_is_pinned_to_readiness_head() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let _ = wait_for_comments(&setup.src, 1).await;
@@ -353,9 +475,9 @@ async fn l3_merge_is_pinned_to_readiness_head() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_blocked_posts_merge_blocked_comment_and_escalates() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#43";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -370,7 +492,7 @@ async fn l3_blocked_posts_merge_blocked_comment_and_escalates() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let comments = wait_for_comments(&setup.src, 1).await;
@@ -404,9 +526,9 @@ async fn l3_blocked_posts_merge_blocked_comment_and_escalates() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_merge_conflict_escalates() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#48";
     seed_l3_task(&setup.src, task_id_str).await;
     // Readiness says go, but the merge call itself hits a conflict (head
@@ -427,7 +549,7 @@ async fn l3_merge_conflict_escalates() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let comments = wait_for_comments(&setup.src, 1).await;
@@ -458,12 +580,12 @@ async fn l3_merge_conflict_escalates() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_already_merged_is_success() {
     // A manual merge raced the gate; merge_pr reports AlreadyMerged. The gate
     // treats it as a success terminal — surge:merged + success escalation,
     // never merge-blocked — instead of a false conflict alarm.
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#50";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -482,7 +604,7 @@ async fn l3_already_merged_is_success() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let _ = wait_for_comments(&setup.src, 1).await;
@@ -508,11 +630,11 @@ async fn l3_already_merged_is_success() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l3_default_readiness_blocks_when_provider_does_not_implement() {
     // No `arm_merge_readiness` — MockTaskSource falls back to the same
     // Blocked reason a PR-less provider (Linear) surfaces.
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#44";
     seed_l3_task(&setup.src, task_id_str).await;
 
@@ -523,7 +645,7 @@ async fn l3_default_readiness_blocks_when_provider_does_not_implement() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     let comments = wait_for_comments(&setup.src, 1).await;
@@ -541,9 +663,9 @@ async fn l3_default_readiness_blocks_when_provider_does_not_implement() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_l3_task_is_a_no_op() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#45";
     seed_l1_task(&setup.src, task_id_str).await;
     setup
@@ -559,7 +681,7 @@ async fn non_l3_task_is_a_no_op() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup.tx.send(completed_event(run_id)).unwrap();
 
     // Positive anchor: the gate resolves the policy via fetch_task before it
@@ -580,9 +702,9 @@ async fn non_l3_task_is_a_no_op() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idempotent_double_merge() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#46";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -598,7 +720,7 @@ async fn idempotent_double_merge() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
 
     let event = completed_event(run_id);
     setup.tx.send(event.clone()).unwrap();
@@ -615,9 +737,9 @@ async fn idempotent_double_merge() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_run_outcome_does_not_trigger_gate() {
-    let setup = make_setup();
+    let setup = make_setup().await;
     let task_id_str = "mock:test#47";
     seed_l3_task(&setup.src, task_id_str).await;
     setup
@@ -633,7 +755,7 @@ async fn failed_run_outcome_does_not_trigger_gate() {
     }
 
     let rx = setup.tx.subscribe();
-    let _handle = spawn_gate(&setup, rx);
+    let _handle = spawn_gate(&setup, rx, false);
     setup
         .tx
         .send(GlobalDaemonEvent::RunFinished {

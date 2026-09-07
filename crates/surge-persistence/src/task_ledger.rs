@@ -79,6 +79,46 @@ pub struct TaskLedgerIndexRecord {
     pub updated_at_ms: i64,
 }
 
+impl TaskLedgerIndexRecord {
+    /// Whether this row is backed by verifier evidence, or merely declared —
+    /// spec §10/R30's single predicate
+    /// ([`surge_core::evidence::is_evidence_backed`]), read through this
+    /// row's own `{status, verified}` fields rather than a caller re-deriving
+    /// the check from the raw fields itself. `surge ledger` and `surge inbox`
+    /// both call this instead of keeping their own copy of the rule.
+    #[must_use]
+    pub fn is_evidence_backed(&self) -> bool {
+        surge_core::evidence::is_evidence_backed(&surge_core::evidence::NodeOutcome::new(
+            self.status,
+            self.verified,
+        ))
+    }
+
+    /// This row with `verified` set to [`Self::is_evidence_backed`] rather
+    /// than the raw stored flag.
+    ///
+    /// `surge ledger`/`surge ready`'s table already reads the VERIFIED
+    /// column through `is_evidence_backed()`; their `--json` output must not
+    /// disagree with the very table it is the machine-readable form of by
+    /// serializing the raw field underneath it instead. No production
+    /// writer builds a `verified: true` row that is not also `Completed`
+    /// today (see this type's own doc), so this is a no-op in the ordinary
+    /// case — it exists so a future divergence changes what `--json`
+    /// reports, rather than silently disagreeing with the table next to it.
+    ///
+    /// Takes `self` by value rather than `&self`: both call sites
+    /// (`surge ledger`/`surge ready`'s `--json` paths) already own a
+    /// `Vec<TaskLedgerIndexRecord>` they do not need afterward, so mutating
+    /// in place and moving it back out costs nothing — a `&self` signature
+    /// would force a `self.clone()` in here on every record, for owners who
+    /// never needed the original back.
+    #[must_use]
+    pub fn with_verified_normalized(mut self) -> Self {
+        self.verified = self.is_evidence_backed();
+        self
+    }
+}
+
 /// Registry-backed store for cross-run task-ledger lookups.
 #[derive(Clone)]
 pub struct TaskLedgerStore {
@@ -307,6 +347,65 @@ mod tests {
 
         let fetched = store.get(run, "m1-t1").unwrap().unwrap();
         assert_eq!(fetched, record);
+    }
+
+    #[test]
+    fn is_evidence_backed_matches_completed_and_verified_only() {
+        let store = store();
+        let run = RunId::new();
+        let verified = store
+            .upsert(&upsert(run, "backed", RoadmapStatus::Completed, true, None))
+            .unwrap();
+        assert!(verified.is_evidence_backed());
+
+        let unverified = store
+            .upsert(&upsert(
+                run,
+                "unbacked",
+                RoadmapStatus::ReadyForVerification,
+                false,
+                None,
+            ))
+            .unwrap();
+        assert!(!unverified.is_evidence_backed());
+    }
+
+    /// `surge ledger --json`/`surge ready --json` must not disagree with
+    /// their own table on the same row: the table already reads the
+    /// VERIFIED column through `is_evidence_backed()`
+    /// (`ledger::print_ledger_table`/`ready::print_ready_table`), so
+    /// `with_verified_normalized` — the method their `--json` output calls
+    /// before serializing — must report the identical boundary case a
+    /// `verified: true` row that never reached `Completed` reads "no" on the
+    /// table for.
+    #[test]
+    fn with_verified_normalized_matches_the_table_on_the_boundary_case() {
+        let store = store();
+        let run = RunId::new();
+        let stale_flag = store
+            .upsert(&upsert(
+                run,
+                "stale",
+                RoadmapStatus::FailedVerification,
+                true,
+                None,
+            ))
+            .unwrap();
+        assert!(
+            stale_flag.verified,
+            "the raw field this test exercises must actually be set"
+        );
+        let normalized = stale_flag.clone().with_verified_normalized();
+        assert!(
+            !normalized.verified,
+            "a verified:true row that never reached Completed must serialize as \
+             verified:false, matching the table's is_evidence_backed() column"
+        );
+        assert_eq!(
+            normalized.status, stale_flag.status,
+            "only verified changes"
+        );
+        assert_eq!(normalized.task_id, stale_flag.task_id);
     }
 
     #[test]

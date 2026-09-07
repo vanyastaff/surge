@@ -114,7 +114,7 @@ async fn report(run: &str, format: RunReportFormat) -> Result<()> {
         .open_run_reader(run_id)
         .await
         .with_context(|| format!("open event log for run {run_id}"))?;
-    let events = read_run_events(&reader, run_id).await?;
+    let events = read_run_events(&reader).await?;
     let compiled = RunReport::compile(run_id, &events);
 
     let rendered = match format {

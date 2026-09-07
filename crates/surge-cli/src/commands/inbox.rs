@@ -32,10 +32,11 @@ use chrono::{DateTime, Utc};
 use clap::Args;
 use serde::Serialize;
 use surge_core::capacity::{CapacityStatus, WakeBasis};
-use surge_core::{Attention, RunState, TerminalReason};
+use surge_core::{Attention, RunId, RunState, TerminalReason};
 use surge_orchestrator::engine::capacity::CanonicalRuntimeId;
 use surge_persistence::runs::Storage;
 use surge_persistence::runs::registry::{RunFilter, RunSummary};
+use surge_persistence::task_ledger::TaskLedgerIndexFilter;
 
 use crate::commands::common::surge_home_dir;
 use crate::commands::run_fold::fold_run_state;
@@ -69,6 +70,16 @@ struct InboxEntry {
     /// Terminal reason when done (`completed` / `failed` / `aborted`), else null.
     #[serde(skip_serializing_if = "Option::is_none")]
     done_reason: Option<&'static str>,
+    /// Whether a `done_reason == "completed"` run's success is backed by
+    /// verifier evidence (spec §10/R30's shared
+    /// [`surge_core::evidence::is_evidence_backed`] predicate, read via
+    /// [`surge_persistence::task_ledger::TaskLedgerIndexRecord::is_evidence_backed`]
+    /// — the same predicate `surge run report` and `surge ledger` apply).
+    /// `None` for every other `done_reason` (failed/aborted/crashed) and for
+    /// every non-"done" attention: the question is only meaningful for a
+    /// claimed success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_backed: Option<bool>,
     /// Active node for a working/blocked run, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     active_node: Option<String>,
@@ -217,14 +228,34 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
         // syntax — every other attention has no wake time to show.
         wake_at: None,
         wake_basis: None,
+        // Set only for a "done"+"completed" entry, via struct-update syntax
+        // below (both branches that can produce one) — every other
+        // attention/reason has no evidence-backing question to answer.
+        evidence_backed: None,
         started_at_ms: summary.started_at_ms,
     };
 
     if summary.status.is_terminal() {
         // No reader opened, no event read, for any terminal status —
-        // `Completed` included, exactly as before, and `Failed`/`Aborted`/
-        // `Crashed` now alike (see this fn's own doc for why that is a
-        // deliberate narrowing of the old scan's class, not a regression).
+        // `Failed`/`Aborted`/`Crashed` alike (see this fn's own doc for why
+        // that is a deliberate narrowing of the old scan's class, not a
+        // regression). `Completed` is the one exception: it costs one extra
+        // indexed registry query (not an event-log read) to answer spec
+        // §10/R30's "was this proven" question — see
+        // `evidence_backed_for_completed_run`.
+        if summary.status == surge_core::RunStatus::Completed {
+            let evidence_backed = evidence_backed_for_completed_run(storage, summary.id).await;
+            return Ok(InboxEntry {
+                evidence_backed,
+                ..base(
+                    "done",
+                    Some(terminal_label(summary.status)),
+                    None,
+                    None,
+                    CapacityStatus::NeverObserved,
+                )
+            });
+        }
         return Ok(base(
             "done",
             Some(terminal_label(summary.status)),
@@ -274,8 +305,77 @@ async fn classify(storage: &std::sync::Arc<Storage>, summary: &RunSummary) -> Re
             wake_basis: Some(basis),
             ..base("waiting", None, active_node, None, capacity)
         },
-        Attention::Done(reason) => base("done", Some(reason_label(reason)), None, None, capacity),
+        // A run whose registry status has not yet caught up to a
+        // `RunCompleted`/`RunFailed`/`RunAborted` its own log already
+        // recorded (see the module doc's `Attention::Done` handling above).
+        // `evidence_backed` still needs the registry's task-ledger index,
+        // not the just-folded `state`: the fold's `RunMemory` (including its
+        // `LedgerState`) is discarded the moment a terminal event lands
+        // (`run_state::fold`'s own doc), so this queries the same registry
+        // index the terminal-status branch above does, for the same one
+        // reason (`Completed`) — matching it exactly keeps both `Done`
+        // sources of this entry answering spec §10/R30 the same way.
+        Attention::Done(reason) => {
+            let evidence_backed = match reason {
+                TerminalReason::Completed => {
+                    evidence_backed_for_completed_run(storage, summary.id).await
+                },
+                TerminalReason::Failed | TerminalReason::Aborted => None,
+            };
+            InboxEntry {
+                evidence_backed,
+                ..base("done", Some(reason_label(reason)), None, None, capacity)
+            }
+        },
     })
+}
+
+/// Whether a `Completed` run's terminal success is backed by verifier
+/// evidence (spec §10/R30) — a cheap, indexed registry query (the same
+/// `task_ledger_index` `surge ledger` reads), not a full event-log read.
+/// `classify`'s terminal-status short-circuit exists precisely so a
+/// completed/failed/aborted/crashed run costs no reader open at all (see the
+/// module doc); this must not undo that for the one class ("completed") the
+/// question is even meaningful for.
+///
+/// Zero ledger rows for this run reads `Some(false)`, not `None`: a flow
+/// that never ran a verifier at all is exactly the "success without proof"
+/// case R30 exists to flag, not an unknown. Degrades to `None` only on a
+/// storage error — "we could not find out" is a different fact from "we
+/// asked and found nothing," the same distinction `runtime_capacity_status`
+/// draws for the capacity column.
+///
+/// `all`, not `any`, across every ledger row this run recorded: one verified
+/// task among several rejected ones is not a proven run. `!is_empty()` is
+/// required alongside `all` because `all` on an empty iterator is vacuously
+/// `true`, which would contradict the zero-rows case above.
+async fn evidence_backed_for_completed_run(
+    storage: &std::sync::Arc<Storage>,
+    run_id: RunId,
+) -> Option<bool> {
+    let records = storage
+        .task_ledger_store()
+        .list(&TaskLedgerIndexFilter {
+            status: None,
+            project_path: None,
+            run_id: Some(run_id),
+            discovered_only: false,
+            limit: None,
+        })
+        .inspect_err(|err| {
+            tracing::debug!(
+                run_id = %run_id,
+                error = %err,
+                "task-ledger index read failed; evidence-backed status unknown"
+            );
+        })
+        .ok()?;
+    Some(
+        !records.is_empty()
+            && records
+                .iter()
+                .all(surge_persistence::task_ledger::TaskLedgerIndexRecord::is_evidence_backed),
+    )
 }
 
 /// Point-read the registry's current capacity status for the runtime a
@@ -413,19 +513,41 @@ fn print_inbox_to(out: &mut impl std::io::Write, entries: &[InboxEntry], show_do
         print_capacity_line(out, e);
     }
 
+    // Spec §10/R30: a completed-but-unverified run must read differently
+    // from a proven one even in the default (collapsed) view, not only
+    // under `--all` — an operator skimming the count line is exactly who
+    // "done ≠ done-and-proven" needs to reach.
+    let unverified = done
+        .iter()
+        .filter(|e| e.evidence_backed == Some(false))
+        .count();
+    let unverified_suffix = if unverified > 0 {
+        format!(", {unverified} ⚠ unverified")
+    } else {
+        String::new()
+    };
     if show_done {
-        let _ = writeln!(out, "\n✔ DONE ({})", done.len());
+        let _ = writeln!(out, "\n✔ DONE ({}{unverified_suffix})", done.len());
         for e in &done {
+            let marker = if e.evidence_backed == Some(false) {
+                "  ⚠ unverified — no authorized verifier confirmed this"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 out,
-                "  {}  {}",
+                "  {}  {}{marker}",
                 short_run(&e.run_id),
                 e.done_reason.unwrap_or("done")
             );
             print_capacity_line(out, e);
         }
     } else {
-        let _ = writeln!(out, "\n✔ DONE: {} (use --all to list)", done.len());
+        let _ = writeln!(
+            out,
+            "\n✔ DONE: {}{unverified_suffix} (use --all to list)",
+            done.len()
+        );
     }
 }
 
@@ -647,6 +769,231 @@ mod tests {
         let d = find(done);
         assert_eq!(d.attention, "done");
         assert_eq!(d.done_reason, Some("completed"));
+        // Spec §10/R30: a completed run that never ran a verifier reads
+        // `Some(false)`, never `None` — "success without proof" is a known
+        // fact, not an unanswered question.
+        assert_eq!(d.evidence_backed, Some(false));
+    }
+
+    /// Spec §10/R30's three-surface requirement, the `surge inbox` third:
+    /// two completed runs in the same project, one whose task ledger has an
+    /// authorized `TaskVerified` and one with no ledger activity at all,
+    /// must come back with different `evidence_backed` values — the same
+    /// [`surge_core::evidence::is_evidence_backed`] predicate `surge run
+    /// report` and `surge ledger` apply, read here through
+    /// [`surge_persistence::task_ledger::TaskLedgerIndexRecord::is_evidence_backed`]
+    /// over the registry's task-ledger index rather than a second, inbox-local
+    /// copy of the rule.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn evidence_backed_distinguishes_a_verified_completion_from_an_unverified_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        // Verified: a `TaskVerified` event lands in the per-run ledger view,
+        // then gets mirrored into the registry index exactly the way the
+        // engine does at run completion (`engine::mirror_task_ledger`).
+        let verified_run = RunId::new();
+        let wv = storage
+            .create_run(verified_run, &project, None)
+            .await
+            .unwrap();
+        append(
+            &wv,
+            vec![
+                run_started(),
+                EventPayload::TaskVerified {
+                    task_id: "t1".into(),
+                    node: NodeKey::try_from("verify_1").unwrap(),
+                    evidence: ContentHash::compute(b"verification-report"),
+                },
+            ],
+        )
+        .await;
+        wv.flush().await.unwrap();
+        storage
+            .sync_task_ledger_index(verified_run, &project)
+            .await
+            .unwrap();
+        storage
+            .set_run_status(&verified_run, RunStatus::Completed, Some(2))
+            .await
+            .unwrap();
+
+        // Unverified: completes successfully but never touches the ledger.
+        let unverified_run = RunId::new();
+        let wu = storage
+            .create_run(unverified_run, &project, None)
+            .await
+            .unwrap();
+        append(&wu, vec![run_started()]).await;
+        wu.flush().await.unwrap();
+        storage
+            .sync_task_ledger_index(unverified_run, &project)
+            .await
+            .unwrap();
+        storage
+            .set_run_status(&unverified_run, RunStatus::Completed, Some(1))
+            .await
+            .unwrap();
+
+        // Boundary case, constructed directly against the registry store
+        // (bypassing normal event replay, the way `task_ledger::tests` and
+        // `ledger::tests` pin the same boundary at their own layers): a row
+        // whose `verified` flag disagrees with its `status`. No production
+        // writer can build this combination through the event log today
+        // (`views.rs`'s `TaskStatusChanged`/`TaskVerified` handling always
+        // sets them together), but the predicate this entry reads through
+        // must not take that on faith either — this is the case a `status
+        // == Completed && verified` → `||` mutation would silently pass
+        // through as evidence-backed.
+        let boundary_run = RunId::new();
+        storage
+            .create_run(boundary_run, &project, None)
+            .await
+            .unwrap();
+        storage
+            .task_ledger_store()
+            .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                run_id: boundary_run,
+                task_id: "t1".into(),
+                project_path: project.clone(),
+                status: surge_core::RoadmapStatus::ReadyForVerification,
+                verified: true,
+                discovered_from: None,
+                last_authority_node: None,
+                updated_seq: 1,
+                observed_at_ms: 0,
+            })
+            .unwrap();
+        storage
+            .set_run_status(&boundary_run, RunStatus::Completed, Some(1))
+            .await
+            .unwrap();
+
+        let entries = collect_entries(&storage, Some(project.clone()), 100)
+            .await
+            .unwrap();
+        let find = |id: RunId| {
+            entries
+                .iter()
+                .find(|e| e.run_id == id.to_string())
+                .unwrap_or_else(|| panic!("missing {id}"))
+        };
+        assert_eq!(find(verified_run).evidence_backed, Some(true));
+        assert_eq!(find(unverified_run).evidence_backed, Some(false));
+        assert_eq!(find(boundary_run).evidence_backed, Some(false));
+    }
+
+    /// The aggregation the review round asked to pin: a run with one
+    /// verified task and several rejected ones must not read as a proven
+    /// success. `evidence_backed_for_completed_run` requires `!is_empty() &&
+    /// all(..)` over every ledger row this run recorded — mutating that back
+    /// to `.any(..)` turns this run's mixed-outcome fixture green when it
+    /// should read `Some(false)`. Every fixture above this one carries 0 or 1
+    /// ledger row, so none of them can catch that mutation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn evidence_backed_requires_every_task_verified_not_just_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let mixed_run = RunId::new();
+        storage.create_run(mixed_run, &project, None).await.unwrap();
+        storage
+            .task_ledger_store()
+            .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                run_id: mixed_run,
+                task_id: "t1".into(),
+                project_path: project.clone(),
+                status: surge_core::RoadmapStatus::Completed,
+                verified: true,
+                discovered_from: None,
+                last_authority_node: None,
+                updated_seq: 1,
+                observed_at_ms: 0,
+            })
+            .unwrap();
+        for (i, task_id) in ["t2", "t3", "t4", "t5"].into_iter().enumerate() {
+            storage
+                .task_ledger_store()
+                .upsert(&surge_persistence::task_ledger::TaskLedgerIndexUpsert {
+                    run_id: mixed_run,
+                    task_id: task_id.into(),
+                    project_path: project.clone(),
+                    status: surge_core::RoadmapStatus::FailedVerification,
+                    verified: false,
+                    discovered_from: None,
+                    last_authority_node: None,
+                    updated_seq: 2 + i as u64,
+                    observed_at_ms: 0,
+                })
+                .unwrap();
+        }
+        storage
+            .set_run_status(&mixed_run, RunStatus::Completed, Some(1))
+            .await
+            .unwrap();
+
+        let entries = collect_entries(&storage, Some(project.clone()), 100)
+            .await
+            .unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.run_id == mixed_run.to_string())
+            .unwrap_or_else(|| panic!("missing {mixed_run}"));
+        assert_eq!(entry.evidence_backed, Some(false));
+    }
+
+    /// `classify`'s own doc names a race window: a run whose event log
+    /// already recorded `RunCompleted` but whose registry `RunStatus`
+    /// hasn't caught up yet (still non-terminal) takes the *fold* path
+    /// (`Attention::Done`), not the terminal fast path
+    /// `evidence_backed_distinguishes_a_verified_completion_from_an_unverified_one`
+    /// above exercises — a second, independent place `evidence_backed` gets
+    /// computed. `cargo mutants` found this path uncovered: replacing
+    /// `evidence_backed.flatten()`'s result with `None` in that arm survived
+    /// every test until this one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn evidence_backed_is_computed_on_the_fold_path_too_when_registry_status_lags() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run_id = RunId::new();
+        let writer = storage.create_run(run_id, &project, None).await.unwrap();
+        // Registry status is left at `create_run`'s default (`Bootstrapping`,
+        // non-terminal) — deliberately never calling `set_run_status` — so
+        // `classify` takes the fold path below, not the terminal fast path.
+        append(
+            &writer,
+            vec![
+                run_started(),
+                EventPayload::RunCompleted {
+                    terminal_node: NodeKey::try_from("end").unwrap(),
+                },
+            ],
+        )
+        .await;
+        writer.flush().await.unwrap();
+        storage
+            .sync_task_ledger_index(run_id, &project)
+            .await
+            .unwrap();
+
+        let entries = collect_entries(&storage, Some(project.clone()), 100)
+            .await
+            .unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.run_id == run_id.to_string())
+            .unwrap_or_else(|| panic!("missing {run_id}"));
+        assert_eq!(entry.attention, "done");
+        assert_eq!(
+            entry.evidence_backed,
+            Some(false),
+            "no verifier ran, so this must read Some(false), not None"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -768,6 +1115,7 @@ mod tests {
             capacity: CapacityStatus::NeverObserved,
             wake_at: Some(wake_at),
             wake_basis: Some(WakeBasis::ObservedReset),
+            evidence_backed: None,
             started_at_ms: 0,
         };
 
@@ -786,6 +1134,73 @@ mod tests {
         assert!(
             text.contains("observed provider reset"),
             "the wake basis must be printed, got: {text}"
+        );
+    }
+
+    fn done_entry(run_id: &str, evidence_backed: Option<bool>) -> InboxEntry {
+        InboxEntry {
+            run_id: run_id.into(),
+            project_path: PathBuf::from("/proj"),
+            attention: "done",
+            done_reason: Some("completed"),
+            active_node: None,
+            prompt: None,
+            capacity: CapacityStatus::NeverObserved,
+            wake_at: None,
+            wake_basis: None,
+            evidence_backed,
+            started_at_ms: 0,
+        }
+    }
+
+    /// Spec §10/R30, `surge inbox`'s printed (non-JSON) rendering: an
+    /// unverified completed run must read differently from a verified one,
+    /// in the collapsed default view (the count line) and under `--all`
+    /// (the per-entry marker) alike — pinned as one test each so a mutation
+    /// that only fixes one view still fails the other.
+    #[test]
+    fn print_inbox_flags_an_unverified_done_entry_distinctly_from_a_verified_one() {
+        // `short_run` prints only the last 8 characters of `run_id` — these
+        // two ids are built so that suffix is unambiguous ("UNVERIF1" /
+        // "VERIFIE2"), so the per-line assertions below can find the right
+        // printed row rather than matching on a prefix the renderer drops.
+        let entries = vec![
+            done_entry(&format!("{}UNVERIF1", "x".repeat(20)), Some(false)),
+            done_entry(&format!("{}VERIFIE2", "x".repeat(20)), Some(true)),
+        ];
+
+        let collapsed = {
+            let mut out = Vec::new();
+            print_inbox_to(&mut out, &entries, false);
+            String::from_utf8(out).unwrap()
+        };
+        assert!(
+            collapsed.contains("1 ⚠ unverified"),
+            "the collapsed DONE count line must call out the one unverified \
+             success, got: {collapsed}"
+        );
+
+        let expanded = {
+            let mut out = Vec::new();
+            print_inbox_to(&mut out, &entries, true);
+            String::from_utf8(out).unwrap()
+        };
+        let lines: Vec<&str> = expanded.lines().collect();
+        let unverified_line = lines
+            .iter()
+            .find(|l| l.contains("UNVERIF1"))
+            .expect("unverified entry printed");
+        let verified_line = lines
+            .iter()
+            .find(|l| l.contains("VERIFIE2"))
+            .expect("verified entry printed");
+        assert!(
+            unverified_line.contains("unverified"),
+            "the unverified entry's own line must carry the marker, got: {unverified_line}"
+        );
+        assert!(
+            !verified_line.contains("unverified"),
+            "a verified entry must not carry the unverified marker, got: {verified_line}"
         );
     }
 

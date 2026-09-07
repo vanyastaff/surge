@@ -341,6 +341,8 @@ fn main() -> std::process::ExitCode {
                     source_map_arc,
                     conn_arc,
                     Arc::clone(&notifier),
+                    Arc::clone(&storage),
+                    config.merge_gate.publish_run_report,
                 );
             } else {
                 info!("intake disabled; run-completion → tracker-comment hook not started");

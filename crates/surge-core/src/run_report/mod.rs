@@ -73,6 +73,7 @@ pub use render::{render_html, render_json, render_markdown};
 use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::context_pack::PackReceipt;
+use crate::evidence::{NodeOutcome, is_evidence_backed};
 use crate::graph::Graph;
 use crate::id::RunId;
 use crate::keys::{NodeKey, OutcomeKey};
@@ -101,6 +102,20 @@ pub struct RunReport {
     /// Whether, and how, the run reached a terminal lifecycle event —
     /// R27.1's "explicit run not finished" for a torn log.
     pub completion: RunCompletion,
+    /// Whether a [`RunCompletion::Completed`] success is backed by verifier
+    /// evidence, or merely declared (spec §10/R30) — `true` iff every task
+    /// this run's ledger ever tracked (not only the ones with an actual
+    /// verifier verdict — see `compile`'s `ledger_task_ids`) is
+    /// [`is_evidence_backed`], and at least one such task exists: one
+    /// rejected/unverified/merely-discovered task among several verified
+    /// ones still means the run is not a proven success. `None` when
+    /// `completion` is not `Completed`: the question "was this proven" is
+    /// only meaningful for a claimed success, not for a failure, an abort,
+    /// or a run still in flight. `surge inbox` and `surge ledger` answer the
+    /// same question through the same predicate, over the same set of
+    /// tasks (the registry's `task_ledger_index`) — see
+    /// `surge_core::evidence`'s module doc for how the three line up.
+    pub evidence_backed: Option<bool>,
     /// Every escalation the run raised, in event order — "why did this run
     /// stop making progress," which [`Self::completion`] alone cannot
     /// answer for an [`RunCompletion::Incomplete`] run.
@@ -111,8 +126,13 @@ pub struct RunReport {
     /// Every declared outcome a node reported (`OutcomeReported`), in the
     /// order the run reported them.
     pub outcomes: Vec<OutcomeEntry>,
-    /// Every verifier verdict the run recorded — R33's evidence that a
-    /// terminal success was actually checked, not merely declared.
+    /// Each task's *current* verifier verdict — R33's evidence that a
+    /// terminal success was actually checked, not merely declared. One entry
+    /// per `task_id`, not a full history: a later verdict for a task
+    /// (including a non-`Completed` `TaskStatusChanged` that sends it back
+    /// for re-verification) replaces an earlier one, so this always reflects
+    /// the ledger's own current state, the same state `surge inbox`/`surge
+    /// ledger` read.
     pub verdicts: Vec<VerifierVerdict>,
     /// Every artifact produced, by a node or by a bootstrap stage.
     pub evidence: Vec<EvidenceEntry>,
@@ -158,6 +178,7 @@ impl RunReport {
             run_id,
             header: RunHeader::default(),
             completion: RunCompletion::Incomplete,
+            evidence_backed: None,
             escalations: Vec::new(),
             nodes: Vec::new(),
             outcomes: Vec::new(),
@@ -197,6 +218,26 @@ impl RunReport {
         // duplicate. `report.nodes` itself stays in first-seen (execution)
         // order — a `HashMap` alone would not preserve that.
         let mut node_positions: HashMap<NodeKey, usize> = HashMap::new();
+        // Every task id the ledger ever tracked (`TaskDiscovered`,
+        // `TaskVerified`, `TaskStatusChanged` alike), mapped to its
+        // `{status, verified}` pair — spec §10's "same fact on every
+        // surface" requires this to be the SAME *set of tasks*
+        // `surge_persistence::task_ledger` mirrors into the registry
+        // (`LedgerState.tasks`'s key set), not just the narrower set that
+        // happened to receive a verifier verdict: a task that was only ever
+        // `TaskDiscovered` (never verified, never rejected) is a row in
+        // `task_ledger_index` and must count against this run's proof the
+        // same way it counts there — see [`RunReport::evidence_backed`]'s
+        // computation below, which reads this map (through the same
+        // [`is_evidence_backed`] predicate every other surface uses)
+        // instead of `report.verdicts`. Each arm below mirrors the matching
+        // `LedgerState::record_*` method line for line (see each arm's own
+        // comment) — deliberately narrower than a full `LedgerState` fold
+        // (this module's doc explains why `compile` does not share that):
+        // only the two fields [`NodeOutcome`] needs, not the whole
+        // `LedgerTask`.
+        let mut ledger_task_ids: std::collections::BTreeMap<String, (RoadmapStatus, bool)> =
+            std::collections::BTreeMap::new();
 
         for event in events {
             // Positional header timestamps — every event updates these,
@@ -344,6 +385,16 @@ impl RunReport {
                         },
                     }
                 },
+                EventPayload::TaskDiscovered { task_id, .. } => {
+                    // Mirrors `LedgerState::record_discovered` exactly:
+                    // `or_insert_with` — first-write-wins, `{Pending, false}`
+                    // — does not overwrite a status this task_id already has
+                    // (an out-of-order log where the verdict-bearing event
+                    // was read first).
+                    ledger_task_ids
+                        .entry(task_id.clone())
+                        .or_insert((RoadmapStatus::Pending, false));
+                },
                 EventPayload::TaskVerified {
                     task_id,
                     node,
@@ -359,30 +410,41 @@ impl RunReport {
                     } else {
                         VerdictResult::Unauthorized
                     };
-                    report.verdicts.push(VerifierVerdict {
-                        task_id: task_id.clone(),
-                        node: node.clone(),
-                        result,
-                    });
+                    // Mirrors `LedgerState::record_verified` exactly: an
+                    // *unauthorized* verification does not touch the ledger
+                    // task's tracked state at all (only increments a
+                    // rejected-verification counter this compiler does not
+                    // need) — it is still surfaced in `report.verdicts`
+                    // below (R33 needs a reviewer to see it), but it must
+                    // not by itself introduce or change this task_id's
+                    // evidence-backed bit, exactly as it does not in the
+                    // live fold.
+                    if authorized {
+                        ledger_task_ids.insert(task_id.clone(), (RoadmapStatus::Completed, true));
+                    }
+                    upsert_verdict(
+                        &mut report.verdicts,
+                        VerifierVerdict {
+                            task_id: task_id.clone(),
+                            node: node.clone(),
+                            result,
+                        },
+                    );
                 },
                 EventPayload::TaskStatusChanged {
                     task_id,
-                    to: RoadmapStatus::FailedVerification,
+                    to,
                     authority_node,
                     ..
                 } => {
-                    report.verdicts.push(VerifierVerdict {
-                        task_id: task_id.clone(),
-                        node: authority_node.clone(),
-                        result: VerdictResult::Rejected,
-                    });
+                    record_task_status_change(
+                        &mut ledger_task_ids,
+                        &mut report.verdicts,
+                        task_id,
+                        *to,
+                        authority_node,
+                    );
                 },
-                // Every other ledger transition (Pending/Running/Paused/
-                // ReadyForVerification/Completed-via-TaskVerified/Failed/
-                // Skipped) is not a verifier verdict — `verdicts` is
-                // specifically about verification outcomes, not the whole
-                // task-ledger lifecycle.
-                EventPayload::TaskStatusChanged { .. } => {},
                 EventPayload::ArtifactProduced {
                     node,
                     artifact,
@@ -556,8 +618,7 @@ impl RunReport {
                 // (`ToolCalled`, `ToolResultReceived`, already summarized by
                 // `cost` and `evidence`), loop bookkeeping
                 // (`LoopIterationStarted`, `LoopIterationCompleted`,
-                // `LoopCompleted`), ledger discovery
-                // (`TaskDiscovered` — not a verdict), the dead
+                // `LoopCompleted`), the dead
                 // `ApprovalRequested`/`ApprovalDecided` primitive (see
                 // `ApprovalEntry`'s own doc), a version-skew warning
                 // (`RuntimeVersionWarning`), hook execution telemetry
@@ -580,7 +641,6 @@ impl RunReport {
                 | EventPayload::LoopIterationStarted { .. }
                 | EventPayload::LoopIterationCompleted { .. }
                 | EventPayload::LoopCompleted { .. }
-                | EventPayload::TaskDiscovered { .. }
                 | EventPayload::ApprovalRequested { .. }
                 | EventPayload::ApprovalDecided { .. }
                 | EventPayload::RuntimeVersionWarning { .. }
@@ -591,6 +651,44 @@ impl RunReport {
                 | EventPayload::NotifyDelivered { .. } => {},
             }
         }
+
+        // Evidence-backing is only a meaningful question for a claimed
+        // success (spec §10/R30) — computed last, over `ledger_task_ids`
+        // (built through the event loop above), not threaded field-by-field
+        // since a task's bit seen before the eventual `RunCompleted` is not
+        // yet known to matter.
+        //
+        // Read over `ledger_task_ids`, NOT `report.verdicts`: the two are
+        // different denominators. `verdicts` is scoped to tasks that
+        // received an actual verifier verdict event; `ledger_task_ids`
+        // additionally includes every task `TaskDiscovered` alone ever
+        // introduced. `surge_persistence::task_ledger`'s registry mirror
+        // (what `surge inbox`/`surge ledger` read) tracks the *latter* set
+        // — a task discovered but never verified is still a
+        // `task_ledger_index` row — so computing this over `verdicts` would
+        // silently disagree with those two surfaces on any run with a
+        // discovered-but-unverified task (spec §10: the same fact on every
+        // surface, at the level of *which tasks count*, not only how each
+        // one is scored).
+        //
+        // `all`, not `any`: every task this run's ledger ever tracked must
+        // be evidence-backed, not merely one of them. `!is_empty()` is
+        // required alongside `all` because `all` on an empty iterator is
+        // vacuously `true`, and a `Completed` run with no ledger activity at
+        // all (never ran a verifier) is exactly the "success without proof"
+        // case this field exists to flag, not a free pass.
+        report.evidence_backed = match &report.completion {
+            RunCompletion::Completed { .. } => Some(
+                !ledger_task_ids.is_empty()
+                    && ledger_task_ids.values().all(|(status, verified)| {
+                        is_evidence_backed(&NodeOutcome::new(*status, *verified))
+                    }),
+            ),
+            RunCompletion::Failed { .. }
+            | RunCompletion::Aborted { .. }
+            | RunCompletion::Parked { .. }
+            | RunCompletion::Incomplete => None,
+        };
 
         report
     }
@@ -615,6 +713,88 @@ fn ensure_node_index(
         });
         nodes.len() - 1
     })
+}
+
+/// Insert `verdict`, replacing any existing entry for the same `task_id`.
+///
+/// [`RunReport::verdicts`] holds each task's *current* verifier verdict, not
+/// a full history of every verification attempt — a later verdict for a
+/// task supersedes an earlier one. This mirrors
+/// [`crate::run_state::LedgerState::record_status_change`]'s upsert-by-
+/// `task_id` semantics for the same reason: [`RunReport::evidence_backed`]
+/// (and the "Verifier verdicts" report section itself) must read a task's
+/// current state, not an entry a later event already superseded.
+fn upsert_verdict(verdicts: &mut Vec<VerifierVerdict>, verdict: VerifierVerdict) {
+    verdicts.retain(|v| v.task_id != verdict.task_id);
+    verdicts.push(verdict);
+}
+
+/// Fold one `TaskStatusChanged` event into `ledger_task_ids` and `verdicts`.
+/// Mirrors [`crate::run_state::LedgerState::record_status_change`] exactly
+/// for `ledger_task_ids`: upsert the entry, always set `status = to`, and
+/// clear `verified` unless `to == Completed`.
+fn record_task_status_change(
+    ledger_task_ids: &mut std::collections::BTreeMap<String, (RoadmapStatus, bool)>,
+    verdicts: &mut Vec<VerifierVerdict>,
+    task_id: &str,
+    to: RoadmapStatus,
+    authority_node: &NodeKey,
+) {
+    let entry = ledger_task_ids
+        .entry(task_id.to_owned())
+        .or_insert((RoadmapStatus::Pending, false));
+    entry.0 = to;
+    if to != RoadmapStatus::Completed {
+        entry.1 = false;
+    }
+    match to {
+        RoadmapStatus::FailedVerification => {
+            upsert_verdict(
+                verdicts,
+                VerifierVerdict {
+                    task_id: task_id.to_owned(),
+                    node: authority_node.clone(),
+                    result: VerdictResult::Rejected,
+                },
+            );
+        },
+        // A `Completed` transition alone carries no verdict of its own —
+        // only an actual `TaskVerified` event does. Any verdict already
+        // recorded for this task stands.
+        RoadmapStatus::Completed => {},
+        RoadmapStatus::Pending
+        | RoadmapStatus::Running
+        | RoadmapStatus::Paused
+        | RoadmapStatus::ReadyForVerification
+        | RoadmapStatus::Failed
+        | RoadmapStatus::Skipped => {
+            // A task sent back here after an earlier `TaskVerified` must be
+            // re-verified before it counts again, but it must still count
+            // in the denominator (`ledger_task_ids` above) — a task that
+            // *fails outright after being verified* must drag the aggregate
+            // down, not silently shrink out of it. Production emits exactly
+            // this sequence (`TaskVerified` →
+            // `TaskStatusChanged{to: ReadyForVerification}`,
+            // `stage::agent::emit_ledger_event`) when a re-verification
+            // cycle starts.
+            //
+            // Only replace an *existing* verdict entry — a task_id that
+            // never had one (e.g. one only ever `TaskDiscovered`) gets no
+            // spurious `Superseded` row in `verdicts`; it is still tracked
+            // for `evidence_backed` via `ledger_task_ids`, just not
+            // displayed in the "Verifier verdicts" section.
+            if verdicts.iter().any(|v| v.task_id == task_id) {
+                upsert_verdict(
+                    verdicts,
+                    VerifierVerdict {
+                        task_id: task_id.to_owned(),
+                        node: authority_node.clone(),
+                        result: VerdictResult::Superseded,
+                    },
+                );
+            }
+        },
+    }
 }
 
 /// Whether, and how, the run reached a terminal lifecycle event — or is
@@ -823,6 +1003,19 @@ pub enum VerdictResult {
     /// of fact that decision needs to see, not one this report should hide
     /// behind an empty `verdicts` list.
     Unauthorized,
+    /// This task previously had a verdict (`Verified`/`Rejected`/
+    /// `Unauthorized`), but a later `TaskStatusChanged` moved it to some
+    /// other non-`Completed` status (back to `Pending`/`Running`/`Paused`/
+    /// `ReadyForVerification`, or an outright `Failed`) — the earlier
+    /// verdict no longer holds and must be re-earned. Recorded explicitly
+    /// rather than removing the task's entry from [`RunReport::verdicts`]:
+    /// dropping it would shrink [`is_evidence_backed`]'s denominator, and a
+    /// task that failed *after* being verified would then silently stop
+    /// counting against the run instead of correctly failing it. Mirrors
+    /// `run_state::LedgerState::record_status_change`, which *clears*
+    /// `verified` on such a transition rather than deleting the task's
+    /// ledger row.
+    Superseded,
 }
 
 /// One evidence artifact.
