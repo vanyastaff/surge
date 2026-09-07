@@ -71,9 +71,16 @@ fn parse_retry_after(error: &str) -> Option<u64> {
 /// `resolve_agent` routes away from — exactly the kind of side effect a
 /// prior round of review caught happening to `surge-acp::pool`'s own
 /// routing classifier for the same reason. Fallback routing and the
-/// capacity model are different questions with different costs for
-/// over-inclusion (a routing decision vs. a displayed line) and must be
-/// widened, if ever, on purpose and separately.
+/// capacity model are different questions and must be widened, if ever, on
+/// purpose and separately — **not**, as an earlier version of this doc
+/// said, because over-inclusion in the capacity model "only" costs a
+/// displayed line: Task 12 gave `looks_like_rate_limit` a second, load-
+/// bearing caller on the engine dispatch path (see
+/// [`HealthTracker::record_failure`]'s own updated doc, a few lines below),
+/// so its breadth now has real dispatch-gating cost too. The two
+/// classifiers still must not be merged — they answer different questions
+/// with different failure directions — but neither is risk-free to widen
+/// anymore.
 fn is_rate_limited_for_routing(error: &str) -> bool {
     let lower = error.to_lowercase();
     lower.contains("429") || lower.contains("rate limit") || lower.contains("too many requests")
@@ -338,10 +345,33 @@ impl HealthTracker {
             // doesn't recognize (`rate_limit_error` — Anthropic's actual
             // error `type`, `rate_limit_exceeded`, `quota exceeded`,
             // `insufficient_quota`, `resource_exhausted`, `overloaded_error`,
-            // "usage limit reached") still populates this, since
-            // over-inclusion here only changes what an operator is shown,
-            // not a routing decision. Gated on registration like every
-            // other field on `health`, above.
+            // "usage limit reached") still populates this. Gated on
+            // registration like every other field on `health`, above.
+            //
+            // **Stale-rationale warning, corrected by Task 12 (M5):** this
+            // comment used to justify `RATE_LIMIT_PATTERNS`' breadth by
+            // saying over-inclusion here "only changes what an operator is
+            // shown, not a routing decision." That was true when it was
+            // written, but it is no longer true of the pattern list itself
+            // — only of *this one call site*. `self.capacity` (written
+            // here, read by `Self::capacity_status` for `surge doctor`) is
+            // still display-only, but `RATE_LIMIT_PATTERNS` backs the
+            // *shared* `surge_core::capacity::looks_like_rate_limit`
+            // classifier, and Task 12 gave that classifier a second,
+            // load-bearing caller: `classify_prompt_dispatch_error`
+            // (`bridge/worker.rs`) uses it to decide
+            // `SendMessageError::RateLimited` vs. a generic `Bridge` error
+            // on the live engine dispatch path, and a `RateLimited` there
+            // feeds `CapacityLedger::observe` → `CapacityPolicy::decide`,
+            // which can return `Decision::Park` — actually stopping
+            // dispatch, not just labeling a line in this tracker. A pattern
+            // this list recognizes as "rate limit" but that is not really a
+            // quota/capacity condition (`overloaded_error` is Anthropic's
+            // 529-style transient-overload signal, not exhaustion — see
+            // ADR-0016 §M1) now parks a run that could otherwise have
+            // retried or failed normally, instead of only mislabeling a
+            // `surge doctor` line. Widen this list with that cost in mind,
+            // not on the assumption that it is still free.
             if let Some(window) = CapacityWindow::from_observed_error(agent, error, Utc::now()) {
                 self.capacity.insert(agent.to_string(), window);
             }

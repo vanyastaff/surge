@@ -162,8 +162,8 @@ pub fn is_loop_guard_cause(cause: EscalationCause) -> bool {
 
 /// One run [`list_loop_guard_stopped_runs`] could not scan — its per-run
 /// event log could not be opened or read. The scan continues past it
-/// rather than failing the whole cross-run query: mirrors
-/// `surge-cli::commands::inbox::scan_run_capacity`'s rule, "a run whose
+/// rather than failing the whole cross-run query: the same degrade-per-run
+/// principle any cross-run scan over per-run readers needs — "a run whose
 /// reader has already been pruned must never block the rest of the
 /// listing" — a stale-registry-row-with-no-per-run-directory case that
 /// really occurs (`OpenError::RunNotFound`), not a hypothetical one.

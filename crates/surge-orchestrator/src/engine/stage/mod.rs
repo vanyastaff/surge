@@ -188,47 +188,14 @@ impl From<StageError> for EngineError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use surge_core::capacity::{CapacityWindow, RemainingShare};
-
-    /// Pins the exact invariant `surge-cli`'s inbox capacity scan depends on.
-    /// `resolve_stage_error` (`engine/run_task.rs`) persists
-    /// `format!("stage error at {node}: {error}")` as `StageFailed.reason`,
-    /// and `surge-cli`'s `scan_capacity_signal` (`commands/inbox.rs`) re-runs
-    /// `CapacityWindow::from_observed_error` against that exact string —
-    /// never against `StageError` itself. Today this only works because
-    /// `RateLimited`'s `#[error(...)]` format splices `details` in verbatim,
-    /// and its own `retry_after`/`runtime` debug formatting uses `retry_after`
-    /// (underscore) rather than `retry-after`/`retry after`, so it never
-    /// shadows the real marker inside `details`. Renaming `details`, dropping
-    /// it from the format string, or introducing a literal "retry after"
-    /// ahead of it would silently break the inbox's capacity signal without
-    /// failing any test that looks at `StageError` in isolation — this one
-    /// goes through the full persisted string on purpose. If it goes red,
-    /// the fix belongs in the `#[error(...)]` format, not in this test.
-    #[test]
-    fn rate_limited_display_still_classifies_through_the_full_stage_failed_reason() {
-        let node = surge_core::keys::NodeKey::try_from("plan_1").unwrap();
-        let error = StageError::RateLimited {
-            runtime: Some("claude-acp".to_string()),
-            retry_after: Some(Duration::from_secs(30)),
-            details: "429 Too Many Requests: Retry-After: 30".to_string(),
-        };
-        // Exact construction `resolve_stage_error` uses for `StageFailed.reason`.
-        let raw_reason = format!("stage error at {node}: {error}");
-
-        let observed_at = chrono::Utc::now();
-        let window = CapacityWindow::from_observed_error("claude-acp", &raw_reason, observed_at)
-            .expect(
-                "the inbox's scan_capacity_signal must still classify a persisted \
-                 RateLimited StageFailed.reason as a rate-limit signal",
-            );
-        assert_eq!(window.remaining(), Some(RemainingShare::EXHAUSTED));
-        assert_eq!(
-            window.resets_at(),
-            Some(observed_at + chrono::Duration::seconds(30))
-        );
-    }
-}
+// Task 12 M5: the regression test that used to live here
+// (`rate_limited_display_still_classifies_through_the_full_stage_failed_reason`)
+// pinned the exact persisted `StageFailed.reason` format because
+// `surge-cli`'s inbox capacity scan (`scan_capacity_signal`) re-classified
+// that string via `CapacityWindow::from_observed_error`. That scan is
+// deleted (`commands/inbox.rs`'s module doc): the inbox's capacity column is
+// now a registry point-lookup, not a re-derivation from any run's own
+// journal, so nothing reclassifies `StageFailed.reason` at read time anymore
+// and this format has no remaining reader to protect. Removed rather than
+// repurposed — its assertion (`from_observed_error` succeeds against the
+// persisted string) has no live consumer to describe.

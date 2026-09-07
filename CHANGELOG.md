@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Provider rate-limit parking: park, wake, and see it in the inbox
+
+- **A run no longer dispatches into a provider it already knows is
+  rate-limited.** Before starting a node, Surge checks whether the node's
+  agent runtime has a known-exhausted rate-limit window; if so, the run
+  parks (`RunStatus::Parked`) with a recorded wake time instead of
+  dispatching and finding out from a fresh 429. A rate limit hit *during*
+  a dispatch parks the run immediately too, ahead of any configured
+  on-error retry, so a rate-limited node no longer burns a retry attempt
+  on every pass through a retry loop before the run finally gives up.
+- **Parked runs wake themselves up.** A scheduler in `surge daemon`
+  resumes a parked run once its recorded wake time passes — no operator
+  action and no daemon restart required. The resumed run's budget re-arms
+  exactly the way a manually-resumed run's already does. When the
+  provider gave no usable reset time, Surge parks on a configurable blind
+  backoff instead (see the new `[capacity]` section of `surge.toml`
+  below), and raises a visible escalation (a desktop notification and an
+  inbox-visible flag) after several blind parks in a row with no
+  successful dispatch between them — a signal that something may be stuck
+  outright, not merely rate-limited.
+- **`surge inbox` shows parked runs, and why they're waiting.** A new
+  WAITING group lists every parked run alongside its wake time and
+  whether that time is an actual provider-observed reset or a policy
+  guess. `--format json` carries the same two facts (`wake_at`,
+  `wake_basis`) as structured fields on the entry, not only as the
+  `"waiting"` status string.
+- **New `[capacity]` section in `surge.toml`**: `blind_backoff` (how long
+  to park on a guess when no provider reset time is known — delete the
+  line to opt out of blind parking entirely), `blind_park_limit` (how
+  many consecutive blind parks are tolerated before Surge escalates), and
+  `jitter_max` (spreads multiple runs parked on the same exhausted
+  runtime across a short window instead of all waking in the same
+  instant). [ADR 0016](docs/adr/0016-capacity-parking-and-wake.md).
+
+Deliberately not shipped, named so an operator does not assume otherwise:
+**no rotation across accounts** — Surge does not track more than one login
+per agent runtime today, so an exhausted runtime parks; it does not fail
+over to a different account of the same agent, and there is no
+`surge.toml` field to enable one. **A node's estimated work does not
+factor into the parking decision** — the comparison machinery exists
+internally, but nothing in this delivery feeds it real per-node cost
+data, so today's decision is only "is the runtime currently exhausted,"
+never "would this specific node's work fit in what's left of the
+window." **The capacity window is learned only from an observed
+rate-limit error, never from an agent's own usage reporting** — no
+current agent-runtime integration exposes a rate-limit window or reset
+time for Surge to read proactively, so a runtime Surge has never seen
+fail reads as clean, and Surge cannot warn before the first 429 happens.
+
 ### Added — Skill binding, trust gate, and the `SkillBound` event
 
 - **`AgentConfig::declared_skills()`** — a node's `skills = [...]` declaration
