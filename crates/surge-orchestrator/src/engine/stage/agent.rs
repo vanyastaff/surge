@@ -630,12 +630,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             // historical data if it must collapse aliases there too — a
             // fact for that reader to state, not something this write-site
             // can undo.
-            agent_id: resolved_profile.as_ref().map(|rp| {
-                let raw_agent_id = &rp.profile.runtime.agent_id;
-                surge_acp::Registry::builtin()
-                    .normalize_agent_id(raw_agent_id)
-                    .unwrap_or_else(|| raw_agent_id.clone())
-            }),
+            agent_id: resolved_profile
+                .as_ref()
+                .map(|rp| canonical_runtime_id_for(rp).into_string()),
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
@@ -696,12 +693,9 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                 // profiles reference it. Whether Surge can ever observe two
                 // distinct logins sharing one runtime is an open question
                 // for the capacity ledger's design (M2), not settled here.
-                runtime: resolved_profile.as_ref().map(|rp| {
-                    let raw_agent_id = &rp.profile.runtime.agent_id;
-                    surge_acp::Registry::builtin()
-                        .normalize_agent_id(raw_agent_id)
-                        .unwrap_or_else(|| raw_agent_id.clone())
-                }),
+                runtime: resolved_profile
+                    .as_ref()
+                    .map(|rp| canonical_runtime_id_for(rp).into_string()),
                 retry_after,
                 details,
             },
@@ -2156,6 +2150,127 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     }
 }
 
+/// The canonical agent-runtime id for an already-resolved profile —
+/// normalize `rp.profile.runtime.agent_id` through `surge_acp::Registry`,
+/// falling back to the raw id when normalization fails despite a profile
+/// resolving successfully. `normalize_agent_id` legitimately returns `None`
+/// for a real, shipped case: the bundled `mock` profile
+/// (`bundled/profiles/mock-1.0.toml`, `agent_id = "mock"`) is special-cased
+/// for `AgentKind` derivation without ever touching the registry, so
+/// falling back to the raw id here (rather than discarding the identity
+/// into `None`) keeps a mock-profile run's capacity signal keying
+/// consistently instead of vanishing for want of a registry entry.
+///
+/// The **one** place this normalize-or-raw-fallback computation happens —
+/// `SessionOpened.agent_id` and `StageError::RateLimited.runtime`
+/// (both below) and Task 12 M3's pre-dispatch capacity check
+/// ([`resolve_profile_runtime_id`]) all call this, so the three facts can
+/// never quietly diverge on what "the runtime" means for the same profile
+/// (Task 12 M3, acceptance criterion A).
+fn canonical_runtime_id_for(rp: &ResolvedProfile) -> crate::engine::capacity::CanonicalRuntimeId {
+    crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        &rp.profile.runtime.agent_id,
+    )
+}
+
+/// Resolve the canonical agent-runtime id a node's `agent_config.profile`
+/// would use, **without** resolving the rest of the profile or opening a
+/// session — Task 12 M3's pre-dispatch capacity check
+/// (`engine::run_task`) needs only this, before `execute_agent_stage` does
+/// its own (separate, fuller) resolve for prompt/hooks/sandbox.
+///
+/// `None` when there is no profile registry wired (the legacy mock-only
+/// path — no runtime identity exists to check capacity for at all) *or*
+/// the profile reference itself does not resolve. A genuine profile
+/// resolution failure is reported exactly once, by `execute_agent_stage`'s
+/// own resolve moments later — this function must not duplicate that
+/// error, only silently decline to produce a capacity key when it cannot.
+#[must_use]
+pub(crate) fn resolve_profile_runtime_id(
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    profile_str: &str,
+) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
+    let registry = profile_registry?;
+    let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).ok()?;
+    let resolved = registry.resolve(&key_ref).ok()?;
+    Some(canonical_runtime_id_for(&resolved))
+}
+
+/// Why a candidate rotation target was refused (Task 12 §1(1), revision 6).
+///
+/// R41 ("rotate across configured accounts of the same agent instead of
+/// parking") is **not deliverable** on today's account model: A1 (Task 12
+/// revision 5/6) keys capacity on the canonical agent-runtime registry id
+/// because that is the only identity the engine path can produce, and
+/// `builtin_registry.json` carries exactly one launch configuration per
+/// runtime — so two profiles naming the same runtime resolve to the same
+/// command, the same login, the same capacity key. "Rotating" between them
+/// would not change which account is exhausted; it would silently repeat
+/// the already-exhausted dispatch with extra steps, which is worse than
+/// refusing outright (see `docs/adr/0016-capacity-parking-and-wake.md`,
+/// A2, for the follow-up account model that would make rotation real).
+///
+/// [`verify_rotation_target`] always returns one of these — every arm is a
+/// refusal, none is "rotation approved" — kept as a named enum (not a bare
+/// `bool`/`Option`) so a caller's `match` states *which* structural reason
+/// applied, for the operator-visible log line, without re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationRefusal {
+    /// The current node's own `agent_id` does not resolve to a registry
+    /// entry with a known `runtime` — nothing to rotate *from*.
+    CurrentRuntimeUnresolved,
+    /// The candidate profile's `agent_id` does not resolve to a registry
+    /// entry with a known `runtime` — nothing to rotate *to*.
+    CandidateRuntimeUnresolved,
+    /// Both resolved, but to different runtimes — rotation, as specified,
+    /// is "the next profile of the **same** runtime" (a different account
+    /// on the same agent CLI), not a switch to a different agent entirely.
+    DifferentRuntimes {
+        /// Runtime the current node's profile targets.
+        current: surge_core::RuntimeKind,
+        /// Runtime the candidate profile targets.
+        candidate: surge_core::RuntimeKind,
+    },
+    /// Both resolved to the identical runtime — the case R41 originally
+    /// asked for. Refused anyway: one runtime has exactly one launch
+    /// configuration today, so this candidate is the same account, and
+    /// "rotating" to it is a no-op that would silently repeat the
+    /// already-exhausted dispatch.
+    SameRuntimeIsSameAccount {
+        /// The runtime both profiles resolve to.
+        runtime: surge_core::RuntimeKind,
+    },
+}
+
+/// Verify whether `candidate_agent_id` is a usable R41 rotation target for
+/// a node currently running `current_agent_id`. **Always refuses** — see
+/// [`RotationRefusal`]'s doc for why every structural case, including the
+/// one the original R41 design called "allowed", is not deliverable today.
+/// Kept as a real (not stubbed) verification against `registry` — proven
+/// by the four cases in this module's tests — so the shape is ready for
+/// R41's own follow-up ticket to consume once a genuine second-account
+/// model exists, rather than imagined.
+#[must_use]
+pub fn verify_rotation_target(
+    registry: &surge_acp::Registry,
+    current_agent_id: &str,
+    candidate_agent_id: &str,
+) -> RotationRefusal {
+    let runtime_of = |agent_id: &str| registry.find_normalized(agent_id).and_then(|e| e.runtime);
+
+    let Some(current) = runtime_of(current_agent_id) else {
+        return RotationRefusal::CurrentRuntimeUnresolved;
+    };
+    let Some(candidate) = runtime_of(candidate_agent_id) else {
+        return RotationRefusal::CandidateRuntimeUnresolved;
+    };
+    if current != candidate {
+        return RotationRefusal::DifferentRuntimes { current, candidate };
+    }
+    RotationRefusal::SameRuntimeIsSameAccount { runtime: current }
+}
+
 /// Resolve `profile_str` (the value of `AgentConfig::profile`) into an
 /// `AgentKind` using the profile registry, with the M5 mock fast path as
 /// the documented fallback when no registry is wired.
@@ -2666,5 +2781,98 @@ mod tests {
 
         assert_eq!(effective.len(), 1);
         assert_eq!(effective[0].command, "node-cmd");
+    }
+
+    /// A registry whose one entry ("no-runtime") resolves but carries
+    /// `runtime: None` — `Registry::builtin()`'s five entries all populate
+    /// `runtime` (verified against `builtin_registry.json`), so this is
+    /// the only way to exercise `RotationRefusal::CandidateRuntimeUnresolved`
+    /// / `CurrentRuntimeUnresolved` against a *resolving* id rather than an
+    /// unknown one. `Registry::from_config` always sets `runtime: None` on
+    /// every entry it builds (the custom-agent path has no `RuntimeKind` to
+    /// supply), which is exactly the shape case (b) needs.
+    fn registry_with_one_runtimeless_entry() -> surge_acp::Registry {
+        surge_acp::Registry::from_config(std::collections::HashMap::from([(
+            "no-runtime".to_string(),
+            surge_core::config::AgentConfig {
+                command: "true".to_string(),
+                args: vec![],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        )]))
+    }
+
+    #[test]
+    fn rotation_refused_when_current_agent_id_does_not_resolve() {
+        // Case (a): `agent_id` not present in the registry at all.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "totally-unknown-agent", "claude-acp");
+        assert_eq!(refusal, RotationRefusal::CurrentRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_current_entry_has_no_runtime() {
+        // Case (b), the current side: the entry exists (resolves) but
+        // carries `runtime: None`. Candidate is a real, runtime-populated
+        // id (`"claude-acp"`) to show the current-side check fires first,
+        // regardless of whether the candidate would otherwise resolve.
+        let registry = surge_acp::Registry::merged(
+            surge_acp::Registry::builtin(),
+            registry_with_one_runtimeless_entry(),
+        );
+        let refusal = verify_rotation_target(&registry, "no-runtime", "claude-acp");
+        assert_eq!(refusal, RotationRefusal::CurrentRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_candidate_entry_has_no_runtime() {
+        // Case (b), the candidate side: current resolves fine, candidate
+        // resolves but has no known runtime.
+        let mut registry = surge_acp::Registry::builtin();
+        registry = surge_acp::Registry::merged(registry, registry_with_one_runtimeless_entry());
+        let refusal = verify_rotation_target(&registry, "claude-acp", "no-runtime");
+        assert_eq!(refusal, RotationRefusal::CandidateRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_runtimes_differ() {
+        // Case (c): both resolve, to different runtimes.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "claude-acp", "codex-acp");
+        assert_eq!(
+            refusal,
+            RotationRefusal::DifferentRuntimes {
+                current: surge_core::RuntimeKind::ClaudeCode,
+                candidate: surge_core::RuntimeKind::Codex,
+            }
+        );
+    }
+
+    #[test]
+    fn rotation_refused_when_runtimes_are_the_same_account() {
+        // Case (d) — the one the original R41 design called "allowed".
+        // `"claude"` and `"claude-code"` are both registry aliases that
+        // normalize to the identical `"claude-acp"` entry
+        // (`REGISTRY_ID_ALIASES`), so this also proves the refusal fires
+        // even when the two agent_id spellings differ but the underlying
+        // account does not.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "claude", "claude-code");
+        assert_eq!(
+            refusal,
+            RotationRefusal::SameRuntimeIsSameAccount {
+                runtime: surge_core::RuntimeKind::ClaudeCode,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_profile_runtime_id_is_none_without_a_profile_registry() {
+        // The legacy no-registry path: no runtime identity exists to check
+        // capacity for, so the pre-dispatch capacity check must skip
+        // entirely rather than fabricate a key.
+        assert!(resolve_profile_runtime_id(None, "mock").is_none());
     }
 }

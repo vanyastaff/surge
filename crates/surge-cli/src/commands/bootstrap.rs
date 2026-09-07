@@ -61,7 +61,7 @@ async fn prompt_command(prompt: String, worktree_root: Option<PathBuf>) -> Resul
     println!("bootstrap_run_id={bootstrap_run_id}");
     let (config, project_root) = load_project_config_for_current_repo()?;
     let worktree = create_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
-    let (engine, storage) = build_local_engine(&worktree).await?;
+    let (engine, storage) = build_local_engine(&worktree, &config).await?;
     let project_context =
         surge_orchestrator::project_context::load_project_context_seed(&project_root, &config);
 
@@ -102,7 +102,7 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
     let bootstrap_run_id = parse_run_id(&run_id)?;
     let (config, project_root) = load_project_config_for_current_repo()?;
     let worktree = existing_bootstrap_worktree(&bootstrap_run_id, worktree_root, &config)?;
-    let (engine, _storage) = build_local_engine(&worktree).await?;
+    let (engine, _storage) = build_local_engine(&worktree, &config).await?;
     let handle = engine
         .resume_run(bootstrap_run_id, worktree.clone())
         .await?;
@@ -111,6 +111,13 @@ async fn resume_command(run_id: String, worktree_root: Option<PathBuf>) -> Resul
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(anyhow!("bootstrap run failed: {error}")),
         RunOutcome::Aborted { reason } => return Err(anyhow!("bootstrap run aborted: {reason}")),
+        RunOutcome::Parked { wake_at } => {
+            return Err(anyhow!(
+                "bootstrap run parked until {wake_at} (provider rate limit exhausted); the \
+                 worktree and event log are intact — run `surge bootstrap resume {bootstrap_run_id}` \
+                 again after that time"
+            ));
+        },
         _ => return Err(anyhow!("bootstrap run reached an unknown terminal outcome")),
     }
 
@@ -278,7 +285,10 @@ fn prompt_for_gate_decision(
     }
 }
 
-async fn build_local_engine(worktree: &Path) -> Result<(Arc<Engine>, Arc<Storage>)> {
+async fn build_local_engine(
+    worktree: &Path,
+    config: &SurgeConfig,
+) -> Result<(Arc<Engine>, Arc<Storage>)> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;
@@ -302,7 +312,13 @@ async fn build_local_engine(worktree: &Path) -> Result<(Arc<Engine>, Arc<Storage
         notifier,
         None,
         Some(profile_registry),
-        EngineConfig::default(),
+        // Task 12 M3, acceptance criterion B: bootstrap runs dispatch
+        // agent nodes exactly like a follow-up run, so they get the same
+        // `[capacity]`-derived policy rather than the hardcoded default.
+        EngineConfig {
+            capacity: (&config.capacity).into(),
+            ..EngineConfig::default()
+        },
     ));
     Ok((engine, storage))
 }

@@ -88,6 +88,24 @@ fn make_setup() -> Setup {
     }
 }
 
+/// Polling helper for `RunOutcome::Parked` (Task 12 M3): unlike every other
+/// outcome, a parked run does **not** transition the ticket FSM to a
+/// terminal state (see `format_completion`'s doc — no `TicketState`
+/// represents "paused, resumes on its own", so the ticket is left
+/// untouched). Waits up to 2 seconds for the tracker comment to arrive
+/// instead of polling for a state change that will never happen.
+async fn wait_for_comment(src: &Arc<MockTaskSource>) -> Vec<(surge_intake::types::TaskId, String)> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        let comments = src.posted_comments().await;
+        if !comments.is_empty() {
+            return comments;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Vec::new()
+}
+
 /// Polling helper modelled on the deadline+loop pattern in
 /// `daemon_queue_full.rs` / `daemon_queue_drain.rs`. Waits up to 2
 /// seconds for `lookup_ticket_by_run_id` to return a row whose state
@@ -236,6 +254,75 @@ async fn run_aborted_posts_abort_comment_and_transitions_state() {
     assert_eq!(comments.len(), 1);
     assert!(comments[0].1.starts_with("Run aborted:"));
     assert!(comments[0].1.contains("user pressed Stop"));
+}
+
+/// Task 12 M3: a parked run must post an accurate "paused" comment and
+/// leave the ticket's FSM state exactly where it was (`Active`, from
+/// `seed_ticket`) — not `Failed`/`Aborted`. Before this milestone's fix,
+/// `format_completion`'s catch-all folded every non-Completed/Failed/
+/// Aborted `RunOutcome` onto `Aborted`, which would have told the human
+/// the run stopped when it is actually parked, working as designed, and
+/// will resume on its own.
+#[tokio::test]
+async fn run_parked_posts_pause_comment_and_leaves_ticket_state_untouched() {
+    let Setup {
+        src,
+        map,
+        conn,
+        tx,
+        rx,
+    } = make_setup();
+    let run_id = RunId::new();
+    let run_id_str = run_id.to_string();
+    {
+        let guard = conn.lock().await;
+        seed_ticket(&guard, "mock:test#4", &run_id_str);
+    }
+
+    let _handle = intake_completion::spawn(rx, map, Arc::clone(&conn));
+
+    let wake_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:05:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    tx.send(GlobalDaemonEvent::RunFinished {
+        run_id,
+        outcome: RunOutcome::Parked { wake_at },
+    })
+    .unwrap();
+
+    let comments = wait_for_comment(&src).await;
+    assert_eq!(
+        comments.len(),
+        1,
+        "consumer did not post a comment within deadline"
+    );
+    assert!(
+        comments[0].1.contains("paused") && comments[0].1.contains("2026-01-01"),
+        "expected a pause comment naming the wake time, got: {}",
+        comments[0].1
+    );
+    let lower = comments[0].1.to_lowercase();
+    assert!(
+        !lower.contains("fail") && !lower.contains("abort"),
+        "comment must not read as a failure, got: {}",
+        comments[0].1
+    );
+
+    // Give the (already-completed) state-update branch a moment to run if
+    // it were ever going to — then assert the ticket is still `Active`.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let row = {
+        let guard = conn.lock().await;
+        IntakeRepo::new(&guard)
+            .lookup_ticket_by_run_id(&run_id_str)
+            .unwrap()
+            .expect("ticket row must still exist")
+    };
+    assert_eq!(
+        row.state,
+        TicketState::Active,
+        "a parked run must not transition the ticket FSM — it is not finished"
+    );
 }
 
 #[tokio::test]

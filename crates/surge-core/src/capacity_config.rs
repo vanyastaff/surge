@@ -7,6 +7,7 @@
 //! other config) from the pure policy it configures, and `capacity.rs` is
 //! already close to this crate's own size-budget guidance without it.
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -115,10 +116,28 @@ impl CapacityConfig {
             // this absurd is a mistake worth catching here, at load time,
             // with a message that names the field — not silently clamped
             // three layers away with no operator-visible signal at all.
+            //
+            // Two representability layers, and both must hold (Task 12 M3,
+            // review finding #2 on the M1 ticket): `chrono::Duration` (a
+            // signed nanosecond count) has a *much* wider range than
+            // `DateTime<Utc>` (bounded to roughly ±262,000 years, chrono's
+            // proleptic-Gregorian `NaiveDate` limit). A value like
+            // `9_000_000_000_000s` (~285,000 years) passes
+            // `chrono::Duration::try_seconds` cleanly — it is nowhere near
+            // that type's own i64-nanosecond ceiling — yet still overflows
+            // `Utc::now() + backoff` once added to a real instant. Checking
+            // only the first layer let exactly that value load without
+            // error and reach `decide`'s clamp silently — the "silent
+            // clamp three layers down" this validator's own doc says it
+            // exists to prevent. Anchoring the check at an actual
+            // `checked_add_signed` from `now` (not a fixed epoch) proves
+            // the value the operator wrote is still representable *today*,
+            // which is what `decide` will actually attempt at dispatch
+            // time.
             let representable = i64::try_from(backoff.as_secs())
                 .ok()
                 .and_then(chrono::Duration::try_seconds)
-                .is_some();
+                .is_some_and(|delta| Utc::now().checked_add_signed(delta).is_some());
             if !representable {
                 return Err(crate::SurgeError::Config(format!(
                     "capacity.blind_backoff ({}s) is too large to represent as a wake-up time; \
@@ -128,6 +147,37 @@ impl CapacityConfig {
             }
         }
         Ok(())
+    }
+}
+
+/// Build the pure policy this section configures (Task 12 M3, acceptance
+/// criterion B).
+///
+/// Before M3, `[capacity]` was a documented knob nothing read: every
+/// `surge.toml` `surge init` writes carries a real, editable
+/// `blind_backoff`, but no production caller ever turned it into a
+/// [`crate::capacity::CapacityPolicy`] — an operator could edit the line
+/// and change nothing. This `From` impl is the one conversion the engine's
+/// production wiring (`surge-cli`, `surge-daemon`) calls at startup so that
+/// stops being true; see those crates' `Engine` construction sites for the
+/// call.
+///
+/// `blind_park_limit` has no field on [`crate::capacity::CapacityPolicy`]:
+/// that cap is consumed by the caller that counts consecutive blind parks
+/// across the event log (`surge-daemon`'s wake scheduler, Task 12 M4) —
+/// `decide` itself is a single, stateless call and never enforces it (see
+/// that field's own doc). `rotation` is always
+/// [`crate::capacity::RotationPolicy::Disabled`]: Task 12 M3 does not wire
+/// a verified rotation candidate into this conversion (R41 is deferred to
+/// its own follow-up — see `docs/adr/0016-capacity-parking-and-wake.md`,
+/// A2), and there is no `surge.toml` field yet for a caller to have
+/// supplied one from.
+impl From<&CapacityConfig> for crate::capacity::CapacityPolicy {
+    fn from(cfg: &CapacityConfig) -> Self {
+        Self {
+            blind_backoff: cfg.blind_backoff,
+            rotation: crate::capacity::RotationPolicy::Disabled,
+        }
     }
 }
 
@@ -209,6 +259,45 @@ mod tests {
     }
 
     #[test]
+    fn blind_backoff_representable_as_a_chrono_duration_but_not_as_a_wake_up_instant_is_rejected() {
+        // Task 12 M3, acceptance criterion C: `validate` closed only one of
+        // two representability layers. `chrono::Duration::try_seconds`
+        // checks fit against that type's own i64-nanosecond range (roughly
+        // 292 billion years) — nowhere near this value — so a
+        // pre-criterion-C `validate` accepted it. `DateTime<Utc>` is bounded
+        // to roughly +/-262,000 years (chrono's proleptic-Gregorian
+        // `NaiveDate` limit); 9_000_000_000_000s is about 285,000 years,
+        // which overflows that *second* layer. Before the fix, this value
+        // loaded cleanly and was silently clamped to `DateTime::<Utc>::
+        // MAX_UTC` three layers down inside `CapacityPolicy::decide` —
+        // exactly the outcome this validator's own doc says it exists to
+        // prevent. Proven directly against `chrono::Duration::try_seconds`
+        // below so this test cannot pass for the wrong reason (a value that
+        // was never going to clear the first layer either).
+        let absurd_secs: u64 = 9_000_000_000_000;
+        assert!(
+            i64::try_from(absurd_secs)
+                .ok()
+                .and_then(chrono::Duration::try_seconds)
+                .is_some(),
+            "test premise broken: {absurd_secs}s must clear the chrono::Duration layer alone \
+             for this test to actually exercise the second (calendar) layer"
+        );
+
+        let cfg = CapacityConfig {
+            blind_backoff: Some(Duration::from_secs(absurd_secs)),
+            blind_park_limit: 1,
+        };
+        let err = cfg
+            .validate()
+            .expect_err("a backoff that overflows DateTime<Utc> must be rejected at load time");
+        assert!(
+            err.to_string().contains("blind_backoff"),
+            "error must name the offending field, got: {err}"
+        );
+    }
+
+    #[test]
     fn realistic_blind_backoff_values_pass_validation() {
         for secs in [1, 60, 300, 3600, 86_400, 30 * 86_400] {
             let cfg = CapacityConfig {
@@ -228,5 +317,37 @@ mod tests {
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: CapacityConfig = toml::from_str(&toml_s).unwrap();
         assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn from_capacity_config_carries_blind_backoff_and_disables_rotation() {
+        // Task 12 M3, acceptance criterion B's mapping half: a configured
+        // `blind_backoff` must survive the conversion into
+        // `CapacityPolicy` unchanged (this is the value the production
+        // wiring in `surge-cli`/`surge-daemon` reads at startup), and
+        // rotation must come out `Disabled` regardless of input — there is
+        // no `surge.toml` field yet that could turn it on (R41 is
+        // deferred; see this impl's own doc).
+        let cfg = CapacityConfig {
+            blind_backoff: Some(Duration::from_secs(777)),
+            blind_park_limit: 9,
+        };
+        let policy = crate::capacity::CapacityPolicy::from(&cfg);
+        assert_eq!(policy.blind_backoff, Some(Duration::from_secs(777)));
+        assert_eq!(policy.rotation, crate::capacity::RotationPolicy::Disabled);
+    }
+
+    #[test]
+    fn from_capacity_config_carries_operator_opt_out() {
+        // The `None` (opted-out) case must also survive unchanged — a
+        // silently-reintroduced default here would be the same "config
+        // that lies about what it does" defect this section's own module
+        // doc says the `[capacity]` section exists to avoid.
+        let cfg = CapacityConfig {
+            blind_backoff: None,
+            blind_park_limit: 1,
+        };
+        let policy = crate::capacity::CapacityPolicy::from(&cfg);
+        assert_eq!(policy.blind_backoff, None);
     }
 }

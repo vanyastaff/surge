@@ -106,6 +106,46 @@ pub(crate) struct RunTaskParams {
     /// `runtime.agent_id`. When `None`, the M5 mock-only fast path
     /// remains active.
     pub profile_registry: Option<Arc<crate::profile_loader::ProfileRegistry>>,
+    /// Durable rate-limit capacity ledger (Task 12 M2/M3, R34-R38.1).
+    /// Consulted before every agent-node dispatch and updated the moment a
+    /// `StageError::RateLimited` is observed — see
+    /// `crate::engine::capacity::CapacityLedger`.
+    pub capacity_ledger: Arc<dyn crate::engine::capacity::CapacityLedger>,
+    /// Per-run work-duration estimator (Task 12 M3, R37/R37.1) — see
+    /// `crate::engine::capacity::WorkEstimator`. `None` from this is the
+    /// common case (a node's first dispatch) and must never itself cause a
+    /// parking decision.
+    pub capacity_estimator: Arc<dyn crate::engine::capacity::WorkEstimator>,
+    /// Capacity-aware dispatch policy, built from `SurgeConfig.capacity`
+    /// by the engine's production wiring (`surge-cli`, `surge-daemon`) at
+    /// startup — Task 12 M3 acceptance criterion B. `EngineConfig::default`
+    /// carries `surge_core::capacity_config::CapacityConfig::default`'s
+    /// conservative backoff, matching what `surge init` writes.
+    pub capacity_policy: surge_core::capacity::CapacityPolicy,
+    /// Registry-level storage handle (Task 12 M3) — the run task's own
+    /// door onto `runs.status`/`runs.wake_at`, used only to call
+    /// [`surge_persistence::runs::Storage::set_run_parked`] when
+    /// `CapacityPolicy::decide` returns `Decision::Park`. Every other
+    /// registry write for this run (initial insert, terminal status)
+    /// happens outside the run task (see `runs::views`'s doc on why
+    /// `RunParked`/`RunWokeFromPark` are handled this way, not via the
+    /// per-run event fold) — parking is the one registry-status
+    /// transition the run task itself must make, because it is the only
+    /// party that knows `wake_at` at the moment it happens.
+    pub storage: Arc<surge_persistence::runs::Storage>,
+    /// `true` for exactly one upcoming agent-node dispatch when this run is
+    /// being resumed from `RunStatus::Parked` (Task 12 M3 review, BLOCKING
+    /// #1) — set by `Engine::resume_run`, consumed (flipped to `false`) by
+    /// the first `dispatch_agent_node_with_capacity_gate` call that reads
+    /// it. `AtomicBool` because `RunTaskParams` is held by `&self`
+    /// reference through the run-task loop, never `&mut`. See that
+    /// function's own doc for why this bypass exists: without it, a
+    /// runtime whose reset time was never learned re-parks on the same
+    /// unrefreshed `runtime_capacity` row forever, because nothing but a
+    /// genuine dispatch attempt can refresh it, and the precheck this
+    /// field bypasses is what was preventing that attempt from ever
+    /// happening.
+    pub capacity_precheck_bypass_once: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) async fn execute(params: RunTaskParams) -> RunOutcome {
@@ -169,6 +209,22 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
             StageDispatch::StageResult(result) => result,
             StageDispatch::Continue => continue,
             StageDispatch::Failed(error) => return failed(&params, error).await,
+            StageDispatch::Park {
+                wake_at,
+                basis,
+                runtime,
+                details,
+            } => {
+                return parked(
+                    &params,
+                    &state.cursor.node,
+                    wake_at,
+                    basis,
+                    runtime,
+                    details,
+                )
+                .await;
+            },
         };
 
         let resolution = match resolve_stage_result(&params, &mut state, &node, stage_result).await
@@ -558,6 +614,26 @@ enum StageDispatch {
     StageResult(Result<StageOutcome, StageError>),
     Continue,
     Failed(String),
+    /// Do not dispatch this node. Park the run instead (Task 12,
+    /// R37/R37.1) — the run task's caller writes `RunParked`, transitions
+    /// the registry to `RunStatus::Parked`, and returns cleanly, leaving
+    /// the worktree in place.
+    Park {
+        /// When the run is expected to resume on its own.
+        wake_at: chrono::DateTime<chrono::Utc>,
+        /// Why `wake_at` is what it is — carried through to `RunParked`.
+        basis: surge_core::capacity::WakeBasis,
+        /// Canonical agent-runtime id the parked capacity window belongs
+        /// to. `None` only via the legacy no-profile-registry path.
+        runtime: Option<String>,
+        /// Raw bridge error text from the `StageError::RateLimited` that
+        /// triggered this park, when parking happened reactively (post-429)
+        /// rather than at the pre-dispatch check. `None` for a pre-dispatch
+        /// park (nothing was attempted, so there is no error text) — folded
+        /// into `RunParked.reason` so the operator reading `surge inbox`
+        /// sees the actual provider text, not just Surge's own summary.
+        details: Option<String>,
+    },
 }
 
 async fn dispatch_node_stage(
@@ -566,7 +642,9 @@ async fn dispatch_node_stage(
     node: &surge_core::node::Node,
 ) -> StageDispatch {
     let stage_result = match &node.config {
-        NodeConfig::Agent(cfg) => execute_agent_node(params, state, node, cfg).await,
+        NodeConfig::Agent(cfg) => {
+            return dispatch_agent_node_with_capacity_gate(params, state, node, cfg).await;
+        },
         NodeConfig::Branch(cfg) => execute_branch_stage(BranchStageParams {
             node: &state.cursor.node,
             branch_config: cfg,
@@ -593,6 +671,237 @@ async fn dispatch_node_stage(
         NodeConfig::Subgraph(cfg) => return enter_subgraph_node(params, state, cfg).await,
     };
     StageDispatch::StageResult(stage_result)
+}
+
+/// Task 12 M3: run `CapacityPolicy::decide` around an agent node's actual
+/// dispatch, at the two points a decision can change what happens next.
+///
+/// 1. **Before dispatch** — read the ledger's current status for the
+///    node's resolved runtime and weigh it against
+///    `params.capacity_estimator`'s estimate. `Decision::Park` here means
+///    the node is never dispatched at all.
+/// 2. **After a `StageError::RateLimited`** from the dispatch attempt
+///    itself — the fresh 429 is `observe`d into the ledger and `decide`
+///    runs again on that freshly-built window *before* the error reaches
+///    `resolve_stage_result`'s `on_error` hook chain. This is what keeps
+///    parking ahead of the retry cycle: a hook that routes the failure
+///    back to this same node (a common "retry on failure" pipeline shape)
+///    would otherwise re-dispatch straight into the same exhausted window,
+///    burning an attempt against a wall that will not move before
+///    `wake_at` (see this module's own "zero retries after 429" test).
+async fn dispatch_agent_node_with_capacity_gate(
+    params: &RunTaskParams,
+    state: &mut RunExecutionState,
+    node: &surge_core::node::Node,
+    cfg: &surge_core::agent_config::AgentConfig,
+) -> StageDispatch {
+    // Resolved once, reused by both the precheck and (on a non-rate-limited
+    // result) the post-dispatch clear below — one profile resolve per
+    // dispatch, not two.
+    let runtime = crate::engine::stage::agent::resolve_profile_runtime_id(
+        params.profile_registry.as_deref(),
+        cfg.profile.as_ref(),
+    );
+
+    // Task 12 M3 review, BLOCKING #1: a run resuming from `RunStatus::
+    // Parked` gets exactly one dispatch with the precheck bypassed. This
+    // is the mechanism that keeps a runtime whose reset time was *never
+    // learned* (`resets_at: None`, so `blind_backoff` is the only
+    // applicable rule) from re-parking on the same stale
+    // `runtime_capacity` row forever: nothing but a genuine attempt can
+    // ever refresh (or refute) that row, and without this bypass the
+    // precheck below would keep preventing exactly that attempt from
+    // happening. Consumed (flipped to `false`) on read, so it fires at
+    // most once per resume, and only for the very next agent dispatch —
+    // every dispatch after it goes through the precheck normally.
+    let bypass_precheck = params
+        .capacity_precheck_bypass_once
+        .swap(false, std::sync::atomic::Ordering::SeqCst);
+
+    if !bypass_precheck && let Some(runtime) = runtime.clone() {
+        match capacity_decision_for(params, &state.cursor.node, &runtime).await {
+            surge_core::capacity::Decision::Park { wake_at, basis } => {
+                return StageDispatch::Park {
+                    wake_at,
+                    basis,
+                    runtime: Some(runtime.into_string()),
+                    details: None,
+                };
+            },
+            surge_core::capacity::Decision::Dispatch { degraded } => {
+                warn_on_degraded_dispatch(&state.cursor.node, degraded);
+            },
+            surge_core::capacity::Decision::Rotate { .. } => {
+                // `CapacityPolicy::decide` never emits this in this
+                // delivery — `RotationPolicy` is always `Disabled` (Task
+                // 12 M3 acceptance criterion B's `From<&CapacityConfig>`
+                // never sets `Enabled`, and R41's live verification is
+                // deferred; see `engine::stage::agent::RotationRefusal`).
+                // Matched explicitly, not folded into a `_` arm, so a
+                // future live `Rotate` cannot silently fall through to an
+                // ordinary dispatch under this arm's name.
+                tracing::error!(
+                    target: "engine::capacity",
+                    node = %state.cursor.node,
+                    "Decision::Rotate reached the engine but is not implemented by this \
+                     delivery; dispatching instead of rotating"
+                );
+            },
+        }
+    }
+
+    let result = execute_agent_node(params, state, node, cfg).await;
+
+    // Only a *typed* rate-limit failure with a resolved runtime carries
+    // enough to build an observation — borrow first so a non-matching
+    // `result` (success, or any other `StageError`) is returned unmoved.
+    let rate_limit = match &result {
+        Err(StageError::RateLimited {
+            runtime: Some(raw_runtime),
+            retry_after,
+            details,
+        }) => Some((raw_runtime.clone(), *retry_after, details.clone())),
+        _ => None,
+    };
+    let Some((raw_runtime, retry_after, details)) = rate_limit else {
+        // Not rate-limited (success, or any other `StageError`): if this
+        // node's profile resolves to a runtime, clear any stale exhaustion
+        // record for it. This is the other half of BLOCKING #1's fix — a
+        // real, non-rate-limited outcome is proof the runtime is not (or
+        // no longer) exhausted, and is what lets a row with no learned
+        // reset time stop haunting every future dispatch instead of only
+        // the one right after a bypassed park.
+        if let Some(runtime) = runtime
+            && let Err(error) = params.capacity_ledger.clear(&runtime).await
+        {
+            tracing::warn!(
+                target: "engine::capacity",
+                node = %state.cursor.node,
+                %runtime,
+                %error,
+                "capacity ledger clear failed; a stale exhaustion record for this runtime \
+                 may persist"
+            );
+        }
+        return StageDispatch::StageResult(result);
+    };
+
+    let observed_at = chrono::Utc::now();
+    let window = surge_core::capacity::CapacityWindow::observed_429(
+        raw_runtime.clone(),
+        retry_after,
+        observed_at,
+    );
+    // `raw_runtime` is already the canonical id (constructed via
+    // `CanonicalRuntimeId::resolve` at `StageError::RateLimited`'s own
+    // construction site in `engine::stage::agent`) — re-resolved here
+    // through the same registry to produce the typed key `observe` now
+    // requires, not to normalize it a second time (idempotent either way).
+    let canonical_runtime = crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        &raw_runtime,
+    );
+    if let Err(error) = params
+        .capacity_ledger
+        .observe(&canonical_runtime, &window)
+        .await
+    {
+        tracing::warn!(
+            target: "engine::capacity",
+            node = %state.cursor.node,
+            runtime = %raw_runtime,
+            %error,
+            "capacity ledger observe failed; this run still parks from the in-memory window, \
+             but other runs on this runtime will not see the observation"
+        );
+    }
+    let status = surge_core::capacity::CapacityStatus::Known(window);
+    // `estimate: None` — the window is already exhausted (`observed_429`
+    // always sets `remaining: EXHAUSTED`), so rules 1-4 decide before
+    // `decide` would ever consult an estimate.
+    match params.capacity_policy.decide(None, &status, observed_at) {
+        surge_core::capacity::Decision::Park { wake_at, basis } => StageDispatch::Park {
+            wake_at,
+            basis,
+            runtime: Some(raw_runtime),
+            details: Some(details),
+        },
+        // Rule 4's explicit operator opt-out (`blind_backoff` removed):
+        // fall through to the ordinary error path unchanged — the on_error
+        // hook chain, and any retry it routes to, behave exactly as they
+        // did before this milestone. The operator chose this trade-off.
+        // `Rotate` cannot be reached here for the same reason as above.
+        surge_core::capacity::Decision::Dispatch { .. }
+        | surge_core::capacity::Decision::Rotate { .. } => StageDispatch::StageResult(result),
+    }
+}
+
+/// Pre-dispatch half of [`dispatch_agent_node_with_capacity_gate`]: read the
+/// ledger's current status for `runtime` and weigh it against
+/// `params.capacity_estimator`'s estimate.
+async fn capacity_decision_for(
+    params: &RunTaskParams,
+    node: &surge_core::keys::NodeKey,
+    runtime: &crate::engine::capacity::CanonicalRuntimeId,
+) -> surge_core::capacity::Decision {
+    let status = match params.capacity_ledger.status(runtime).await {
+        Ok(status) => status,
+        Err(error) => {
+            // A local storage fault must not masquerade as a provider
+            // capacity signal — degrading to `NeverObserved` (dispatch)
+            // preserves this milestone's pre-existing behavior (no check
+            // at all) rather than introducing a new way for a run to
+            // stall on an infrastructure problem instead of a rate limit.
+            tracing::warn!(
+                target: "engine::capacity",
+                %node,
+                %runtime,
+                %error,
+                "capacity ledger read failed; dispatching as if never observed"
+            );
+            surge_core::capacity::CapacityStatus::NeverObserved
+        },
+    };
+    // Fetch an estimate only where it could possibly change the outcome:
+    // `decide`'s rules 1-4 (a `Known`, *exhausted* window, or no window at
+    // all) never consult `estimate` — rule 5 dispatches unconditionally
+    // when there is no window to compare against. The one branch that can
+    // read `estimate` is rule 6, reachable only from a `Known` window that
+    // is *not* exhausted (see `CapacityPolicy::decide`'s own doc on why
+    // that is structurally rare with today's producers, but not
+    // impossible via a persisted row this crate did not itself write).
+    // Reading `stage_executions` and averaging it on every single agent
+    // dispatch — the overwhelming majority of which are `NeverObserved` or
+    // `Known(exhausted)` — for a comparison `decide` cannot use in either
+    // case was Task 12 M3 review finding #5.
+    let estimate = if matches!(&status, surge_core::capacity::CapacityStatus::Known(w) if !w.is_exhausted())
+    {
+        params.capacity_estimator.estimate(node).await
+    } else {
+        None
+    };
+    params
+        .capacity_policy
+        .decide(estimate.as_ref(), &status, chrono::Utc::now())
+}
+
+/// Log a `Decision::Dispatch { degraded: Some(_) }` at the specific reason
+/// `decide` named, rather than re-deriving the condition from the status
+/// again at the call site (see `surge_core::capacity::Degraded`'s doc on
+/// why `decide` returns the reason instead of leaving the caller to work
+/// it out).
+fn warn_on_degraded_dispatch(
+    node: &surge_core::keys::NodeKey,
+    degraded: Option<surge_core::capacity::Degraded>,
+) {
+    if let Some(reason) = degraded {
+        tracing::warn!(
+            target: "engine::capacity",
+            %node,
+            reason = ?reason,
+            "dispatching despite a degraded capacity signal"
+        );
+    }
 }
 
 async fn execute_agent_node(
@@ -1742,6 +2051,75 @@ async fn failed(params: &RunTaskParams, error: String) -> RunOutcome {
         },
     });
     RunOutcome::Failed { error }
+}
+
+/// Clean run-task exit for `StageDispatch::Park` (Task 12, R37/R37.1):
+/// writes `RunParked` to this run's own event log, transitions the
+/// registry to `RunStatus::Parked` with `wake_at` recorded (the write
+/// [`Storage::set_run_parked`] exists for — see `RunTaskParams::storage`'s
+/// doc), and returns without touching the worktree at all — recovery
+/// (`surge-daemon`) requires it to still exist.
+async fn parked(
+    params: &RunTaskParams,
+    node: &surge_core::keys::NodeKey,
+    wake_at: chrono::DateTime<chrono::Utc>,
+    basis: surge_core::capacity::WakeBasis,
+    runtime: Option<String>,
+    details: Option<String>,
+) -> RunOutcome {
+    let runtime_display = runtime.as_deref().unwrap_or("<unknown>");
+    let mut reason = match basis {
+        surge_core::capacity::WakeBasis::ObservedReset => format!(
+            "runtime {runtime_display} exhausted; parking until the provider-observed reset \
+             at {wake_at}"
+        ),
+        surge_core::capacity::WakeBasis::PolicyBackoff => format!(
+            "runtime {runtime_display} exhausted with no usable reset time known; parking on \
+             the configured blind-backoff policy until {wake_at}"
+        ),
+    };
+    // Task 12 M3 review, "misc": the raw provider/bridge error text was
+    // being discarded on the park path (no `StageFailed` is ever written
+    // for a parked dispatch, so it had nowhere else to land) — exactly the
+    // string an operator reading `surge inbox` on a parked run wants to
+    // see. `None` for a pre-dispatch park (nothing was attempted, so there
+    // is no error text to fold in).
+    if let Some(details) = details {
+        reason.push_str(" — provider said: ");
+        reason.push_str(&details);
+    }
+
+    let _ = params
+        .writer
+        .append_event(VersionedEventPayload::new(EventPayload::RunParked {
+            wake_at,
+            runtime,
+            worktree: params.worktree_path.clone(),
+            basis,
+            reason,
+        }))
+        .await;
+
+    if let Err(error) = params
+        .storage
+        .set_run_parked(&params.run_id, wake_at.timestamp_millis())
+        .await
+    {
+        tracing::warn!(
+            target: "engine::capacity",
+            %node,
+            run_id = %params.run_id,
+            %error,
+            "failed to record Parked status in the registry; this run's own event log still \
+             shows RunParked, but surge inbox / crash recovery will not see it as parked"
+        );
+    }
+
+    let outcome = RunOutcome::Parked { wake_at };
+    let _ = params.event_tx.send(EngineRunEvent::Terminal {
+        outcome: outcome.clone(),
+    });
+    outcome
 }
 
 #[cfg(test)]

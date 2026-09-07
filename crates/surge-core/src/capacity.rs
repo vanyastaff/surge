@@ -741,8 +741,20 @@ impl CapacityStatus {
 }
 
 /// How long a node's dispatch is expected to take, learned from history
-/// (e.g. `stage_executions` for nodes of the same archetype — see
-/// `surge_orchestrator`'s `WorkEstimator` seam, M3) rather than guessed.
+/// rather than guessed — see `surge_orchestrator::engine::capacity::
+/// WorkEstimator`, the seam that produces one.
+///
+/// **What M3 actually built, stated precisely because an earlier revision
+/// of this doc described a different (unimplemented) shape**: the live
+/// producer (`RunHistoryWorkEstimator`) averages the wall-clock *duration*
+/// of every completed prior attempt of the **same node in the same run** —
+/// not a median, not grouped by "archetype" (no such grouping exists in
+/// this crate), and not incorporating cost (`stage_executions.cost_usd` is
+/// read by the producer's own SQL projection but never factored into the
+/// estimate — `WorkEstimate` carries only a duration, see below). A
+/// cross-run or archetype-grouped estimator is a different implementation
+/// of the same [`surge_orchestrator`]-side `WorkEstimator` trait, not a
+/// change to this type or to [`CapacityPolicy::decide`].
 ///
 /// Deliberately does **not** implement [`Default`], even though clippy may
 /// suggest one: a `Default` would hand every caller a `WorkEstimate` that
@@ -927,33 +939,49 @@ pub enum Decision {
 ///
 /// # Rule order (load-bearing, pinned by this module's tests)
 ///
+/// Rules 2 and 3 answer two **different questions** and must never share a
+/// branch (Task 12 M3 review — this conflation was a livelock: a
+/// year-old observation whose reset had long since passed was parking on
+/// `blind_backoff` forever instead of dispatching, because "no *usable*
+/// reset time" used to mean both "never learned one" and "learned one, but
+/// it elapsed"):
+/// - "we never learned a reset time" — we know nothing, so a policy guess
+///   (`blind_backoff`) is the only honest option (rules 3/4);
+/// - "we learned a reset time, and it has already passed" — the window has,
+///   in all likelihood, opened; the *stale* observation is not a reason to
+///   guess again, it is a reason to try (rule 2, unconditional, ignoring
+///   `blind_backoff` entirely).
+///
 /// 1. The runtime is exhausted ([`CapacityWindow::is_exhausted`]) **and** a
 ///    usable (still-future) reset time is known
 ///    ([`CapacityWindow::seconds_until_reset`] returns `Some`) →
 ///    [`Decision::Park`] with [`WakeBasis::ObservedReset`] and
 ///    `wake_at == `[`CapacityWindow::resets_at`]`().unwrap()`.
-/// 2. Exhausted, no *usable* reset time (none was ever learned, or the one
-///    that was has already elapsed), and [`Self::blind_backoff`] is
-///    configured → [`Decision::Park`] with [`WakeBasis::PolicyBackoff`] and
-///    `wake_at == now + blind_backoff`.
-/// 3. Exhausted, no usable reset time, and the operator has removed
-///    `blind_backoff` from `surge.toml` → [`Decision::Dispatch`], flagged
-///    [`Degraded::ExhaustedNoResetTime`] or [`Degraded::ExhaustedResetElapsed`]
-///    depending on which "no usable time" case applies. This is rule 2's
-///    predecessor surviving as an explicit, human-chosen opt-out of the
-///    blind-backoff mechanism, not a silent default.
-/// 4. Not exhausted, and `estimate` is `None` → [`Decision::Dispatch`] with
+/// 2. Exhausted, and a reset time **was** learned but has already elapsed
+///    → [`Decision::Dispatch`], flagged [`Degraded::ExhaustedResetElapsed`],
+///    **regardless of [`Self::blind_backoff`]** — an operator-configured
+///    blind backoff governs only the "never learned one at all" case
+///    (rules 3/4), never this one.
+/// 3. Exhausted, no reset time was **ever** learned, and
+///    [`Self::blind_backoff`] is configured → [`Decision::Park`] with
+///    [`WakeBasis::PolicyBackoff`] and `wake_at == now + blind_backoff`.
+/// 4. Exhausted, no reset time was ever learned, and the operator has
+///    removed `blind_backoff` from `surge.toml` → [`Decision::Dispatch`],
+///    flagged [`Degraded::ExhaustedNoResetTime`] — an explicit,
+///    human-chosen opt-out of the blind-backoff mechanism, not a silent
+///    default.
+/// 5. Not exhausted, and `estimate` is `None` → [`Decision::Dispatch`] with
 ///    `degraded: None`, unconditionally. **This is the one negative
 ///    guarantee this module makes measurable**: the absence of a
 ///    [`WorkEstimate`] must never, by itself, cause a refusal — see this
 ///    module's own red-before-green test for it.
-/// 5. Otherwise (not exhausted, `estimate` is `Some`) — attempt the
+/// 6. Otherwise (not exhausted, `estimate` is `Some`) — attempt the
 ///    comparison against the runtime's remaining capacity. **Structurally
 ///    unreachable with any `CapacityWindow` this crate's own constructors
 ///    can produce today**: [`CapacityWindow::remaining`] is only ever
 ///    `None` or exactly [`RemainingShare::EXHAUSTED`] (the sole live
 ///    constructor is [`CapacityWindow::observed_429`], and an exhausted
-///    window is already handled by rules 1–3 above), so a genuine fraction
+///    window is already handled by rules 1–4 above), so a genuine fraction
 ///    strictly between the two never occurs in production, and
 ///    [`CapacityWindow::window`] is populated only by the rare
 ///    [`CapacityWindow::with_learned_window`] path. This module still
@@ -965,12 +993,14 @@ pub enum Decision {
 ///    comparable window, which no production caller can do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapacityPolicy {
-    /// Blind backoff duration used by rules 2/3 when no reset time observed
-    /// by the provider is usable. `None` means the operator has opted out
-    /// of blind parking (`surge.toml`'s `[capacity].blind_backoff` removed)
-    /// — `decide` then dispatches anyway, flagged
-    /// [`Degraded::ExhaustedNoResetTime`]/[`Degraded::ExhaustedResetElapsed`],
-    /// rather than inventing a duration.
+    /// Blind backoff duration used by rules 3/4 when no reset time was
+    /// **ever** learned for the runtime — never consulted for a reset
+    /// time that was learned but has since elapsed (rule 2 always
+    /// dispatches that case, unconditionally; see the type doc). `None`
+    /// means the operator has opted out of blind parking (`surge.toml`'s
+    /// `[capacity].blind_backoff` removed) — `decide` then dispatches
+    /// anyway, flagged [`Degraded::ExhaustedNoResetTime`], rather than
+    /// inventing a duration.
     pub blind_backoff: Option<Duration>,
     /// R41 seam. See [`RotationPolicy`]'s doc: `decide` never emits
     /// [`Decision::Rotate`] from this field in this delivery.
@@ -1000,26 +1030,36 @@ impl CapacityPolicy {
             // evidence of anything (see that method's own doc); checking
             // `is_some()` alone would have parked on a `wake_at` already in
             // the past.
-            if let Some(wake_at) = window.resets_at()
-                && window.seconds_until_reset(now).is_some()
-            {
-                return Decision::Park {
-                    wake_at,
-                    basis: WakeBasis::ObservedReset,
+            if let Some(wake_at) = window.resets_at() {
+                // A reset time was learned at some point — two possibilities,
+                // and (Task 12 M3 review) they must never share a branch:
+                if window.seconds_until_reset(now).is_some() {
+                    // Rule 1: still usable (in the future).
+                    return Decision::Park {
+                        wake_at,
+                        basis: WakeBasis::ObservedReset,
+                    };
+                }
+                // Rule 2: the learned reset has already passed. Dispatch,
+                // unconditionally — `self.blind_backoff` is not consulted
+                // here at all. This used to fall into the same match as
+                // "never learned a reset time", which meant a
+                // long-since-elapsed, one-time observation kept re-parking
+                // on `blind_backoff` forever (a livelock: the row is never
+                // refreshed by a real attempt because the attempt never
+                // happens). A stale, known-elapsed reset is evidence the
+                // window has probably opened, not a reason to guess again.
+                return Decision::Dispatch {
+                    degraded: Some(Degraded::ExhaustedResetElapsed),
                 };
             }
 
-            // Rules 2/3: no *usable* reset time — either none was ever
-            // learned, or the one that was has gone stale. `blind_backoff`
-            // alone decides Park vs. Dispatch; the elapsed-vs-never
-            // distinction only matters to the `None` (Dispatch) arm, so it
-            // is computed there, not hoisted above the match — hoisting it
-            // previously left a value computed and then silently discarded
-            // on the `Some(backoff)` arm, which is exactly the shape that
-            // let a broken elapsed/never check hide behind a passing test
-            // suite (a mutation to that check has no observable effect on
-            // a branch that never reads it).
+            // No reset time was ever learned at all. `blind_backoff` alone
+            // decides Park vs. Dispatch — this is the only branch it
+            // governs (see rule 2's doc above for why it must not also
+            // govern the "learned and elapsed" case).
             return match self.blind_backoff {
+                // Rule 3.
                 Some(backoff) => Decision::Park {
                     // Never panics on an operator-configured `backoff`:
                     // clamp to the latest representable instant rather than
@@ -1033,24 +1073,21 @@ impl CapacityPolicy {
                         .unwrap_or(DateTime::<Utc>::MAX_UTC),
                     basis: WakeBasis::PolicyBackoff,
                 },
+                // Rule 4.
                 None => Decision::Dispatch {
-                    degraded: Some(if window.resets_at().is_some() {
-                        Degraded::ExhaustedResetElapsed
-                    } else {
-                        Degraded::ExhaustedNoResetTime
-                    }),
+                    degraded: Some(Degraded::ExhaustedNoResetTime),
                 },
             };
         }
 
-        // Rule 4: no estimate — never a refusal, on any non-exhausted
+        // Rule 5: no estimate — never a refusal, on any non-exhausted
         // status (`NeverObserved`, `Unclassified`, or a `Known` window that
         // is not exhausted).
         let Some(estimate) = estimate else {
             return Decision::Dispatch { degraded: None };
         };
 
-        // Rule 5: otherwise, attempt the comparison (see the type doc for
+        // Rule 6: otherwise, attempt the comparison (see the type doc for
         // why this is unreachable with today's producers).
         match status.window().and_then(|w| compare_estimate(estimate, w)) {
             Some(true) => Decision::Dispatch { degraded: None },
@@ -1661,7 +1698,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule2_exhausted_no_reset_time_with_blind_backoff_parks_on_policy_backoff() {
+    fn decide_rule3_never_learned_reset_time_with_blind_backoff_parks_on_policy_backoff() {
         let now = t("2026-01-01T00:00:00Z");
         let window = CapacityWindow::observed_429("claude-acp", None, now);
         let status = CapacityStatus::Known(window);
@@ -1679,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule3_exhausted_no_reset_time_blind_backoff_off_dispatches_degraded() {
+    fn decide_rule4_never_learned_reset_time_blind_backoff_off_dispatches_degraded() {
         let now = t("2026-01-01T00:00:00Z");
         let window = CapacityWindow::observed_429("claude-acp", None, now);
         let status = CapacityStatus::Known(window);
@@ -1692,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule3_elapsed_reset_time_blind_backoff_off_dispatches_reset_elapsed() {
+    fn decide_rule2_elapsed_reset_time_blind_backoff_off_still_dispatches_reset_elapsed() {
         // The check for "usable" reset time lives in `seconds_until_reset`,
         // not `resets_at().is_some()` (§2 of the plan) — a stale `resets_at`
         // must not be read as evidence of anything, and must not silently
@@ -1738,35 +1775,119 @@ mod tests {
     }
 
     #[test]
-    fn decide_elapsed_reset_time_with_blind_backoff_parks_on_policy_backoff() {
-        // Crossed case (review finding #5, mutation E): the combination
-        // "resets_at elapsed" + "blind_backoff configured" had no test at
-        // all before this one — `decide_rule2_*` only covers "never had a
-        // reset time" + backoff configured, and `decide_rule3_elapsed_*`
-        // only covers "elapsed" + no backoff. Asserting the exact
-        // `wake_at` (derived from `now + backoff`, not from the stale
-        // `resets_at`) pins the elapsed sub-case independently of the
-        // never-had-one sub-case.
+    fn decide_elapsed_reset_time_dispatches_even_with_blind_backoff_configured() {
+        // Task 12 M3 review, BLOCKING #1 — this test used to assert the
+        // opposite (`Park` on `blind_backoff`) and passed, because rule
+        // 2/3 shared one branch: "no *usable* reset time" conflated "never
+        // learned one" with "learned one, and it elapsed". That is a
+        // livelock, not a corner case — the reviewer's own probe was
+        // exactly this shape (a year-old observation, a 30s window): the
+        // row is never refreshed by a real attempt because `decide` never
+        // lets one happen, so a `blind_backoff`-configured runtime would
+        // re-park on the same stale `resets_at` forever. A known, elapsed
+        // reset must dispatch unconditionally — `blind_backoff` governs
+        // only "never learned a reset time at all" (see the type doc).
         let observed_at = t("2026-01-01T00:00:00Z");
         let window =
             CapacityWindow::observed_429("claude-acp", Some(Duration::from_secs(30)), observed_at);
-        let well_after_reset = t("2026-01-01T01:00:00Z");
+        let a_year_later = t("2027-01-01T00:00:30Z");
         let status = CapacityStatus::Known(window);
         let policy = CapacityPolicy {
             blind_backoff: Some(Duration::from_secs(300)),
             rotation: RotationPolicy::Disabled,
         };
         assert_eq!(
-            policy.decide(None, &status, well_after_reset),
-            Decision::Park {
-                wake_at: well_after_reset + chrono::Duration::seconds(300),
-                basis: WakeBasis::PolicyBackoff,
-            }
+            policy.decide(None, &status, a_year_later),
+            Decision::Dispatch {
+                degraded: Some(Degraded::ExhaustedResetElapsed),
+            },
+            "a known, elapsed reset must dispatch regardless of a configured blind_backoff"
         );
     }
 
     #[test]
-    fn decide_rule4_missing_estimate_never_causes_refusal_on_any_non_exhausted_status() {
+    fn decide_never_learned_reset_time_still_parks_on_blind_backoff() {
+        // The other half of the same fix, made an explicit, separate test
+        // (not just the inverse of the one above) so a mutation that swaps
+        // which of the two cases gets `Park` vs. `Dispatch` fails *both*
+        // tests, not just one: "never learned a reset time at all" must
+        // still take the blind-backoff branch — rule 2's fix must not have
+        // also swallowed rule 3.
+        let window = CapacityWindow::observed_429("claude-acp", None, t("2026-01-01T00:00:00Z"));
+        assert_eq!(
+            window.resets_at(),
+            None,
+            "test premise: no reset time learned"
+        );
+        let now = t("2026-01-01T00:05:00Z");
+        let status = CapacityStatus::Known(window);
+        let policy = CapacityPolicy {
+            blind_backoff: Some(Duration::from_secs(300)),
+            rotation: RotationPolicy::Disabled,
+        };
+        assert_eq!(
+            policy.decide(None, &status, now),
+            Decision::Park {
+                wake_at: now + chrono::Duration::seconds(300),
+                basis: WakeBasis::PolicyBackoff,
+            },
+            "never having learned a reset time must still take the blind-backoff branch"
+        );
+    }
+
+    /// Mutation test the review demanded explicitly: swapping which of the
+    /// two "no usable reset time" sub-cases gets `Park` vs. `Dispatch`
+    /// must fail the suite. Implemented directly (not just by relying on
+    /// the two tests above individually) — this one test's own two
+    /// assertions cannot both hold if the branches are swapped, so it
+    /// fails on either direction of the swap by itself.
+    #[test]
+    fn decide_elapsed_vs_never_learned_are_not_interchangeable() {
+        let policy = CapacityPolicy {
+            blind_backoff: Some(Duration::from_secs(300)),
+            rotation: RotationPolicy::Disabled,
+        };
+        let now = t("2026-06-01T00:00:00Z");
+
+        let elapsed = CapacityWindow::observed_429(
+            "claude-acp",
+            Some(Duration::from_secs(30)),
+            t("2026-01-01T00:00:00Z"),
+        );
+        let never_learned = CapacityWindow::observed_429("claude-acp", None, now);
+
+        let elapsed_decision = policy.decide(None, &CapacityStatus::Known(elapsed), now);
+        let never_learned_decision =
+            policy.decide(None, &CapacityStatus::Known(never_learned), now);
+
+        assert!(
+            matches!(
+                elapsed_decision,
+                Decision::Dispatch {
+                    degraded: Some(Degraded::ExhaustedResetElapsed)
+                }
+            ),
+            "elapsed must dispatch, got {elapsed_decision:?}"
+        );
+        assert!(
+            matches!(
+                never_learned_decision,
+                Decision::Park {
+                    basis: WakeBasis::PolicyBackoff,
+                    ..
+                }
+            ),
+            "never-learned must park, got {never_learned_decision:?}"
+        );
+        assert_ne!(
+            std::mem::discriminant(&elapsed_decision),
+            std::mem::discriminant(&never_learned_decision),
+            "the two cases must never collapse onto the same Decision variant"
+        );
+    }
+
+    #[test]
+    fn decide_rule5_missing_estimate_never_causes_refusal_on_any_non_exhausted_status() {
         // RED-before-GREEN acceptance criterion: the absence of a
         // `WorkEstimate` must never, by itself, cause anything other than a
         // clean dispatch — on *every* status that is not exhausted.
@@ -1786,7 +1907,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule5_estimate_present_but_never_observed_flags_not_comparable() {
+    fn decide_rule6_estimate_present_but_never_observed_flags_not_comparable() {
         let now = Utc::now();
         let estimate = WorkEstimate::new(Duration::from_secs(120));
         assert_eq!(
@@ -1798,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule5_comparable_window_estimate_fits_dispatches_cleanly() {
+    fn decide_rule6_comparable_window_estimate_fits_dispatches_cleanly() {
         let now = Utc::now();
         // 1 hour window, half remaining => 30 min available; 20 min estimate fits.
         let status = CapacityStatus::Known(comparable_window(0.5, 3600));
@@ -1810,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule5_comparable_window_estimate_exceeds_remaining() {
+    fn decide_rule6_comparable_window_estimate_exceeds_remaining() {
         let now = Utc::now();
         // 1 hour window, half remaining => 30 min available; 50 min estimate does not fit.
         let status = CapacityStatus::Known(comparable_window(0.5, 3600));
@@ -1824,7 +1945,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_rule5_full_window_is_comparable_not_flagged() {
+    fn decide_rule6_full_window_is_comparable_not_flagged() {
         // A full, known-length window is the *most* comparable case there
         // is (review finding #3): `remaining == RemainingShare::FULL` must
         // not be treated as "not a real fraction."

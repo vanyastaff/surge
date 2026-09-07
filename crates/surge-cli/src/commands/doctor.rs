@@ -331,7 +331,11 @@ fn collect_telegram_health() -> Result<TelegramHealth> {
 }
 
 /// Pretty-print a Unix epoch ms value as a UTC RFC 3339 timestamp.
-fn format_unix_ms(ms: i64) -> String {
+///
+/// `pub(crate)` (not private): `daemon::recover`'s dry-run/preview table
+/// renders a `wake_at_ms` the same way, so it reuses this converter rather
+/// than growing a second, possibly-diverging one-off `format!`.
+pub(crate) fn format_unix_ms(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
         .map_or_else(|| format!("{ms} ms"), |dt| dt.to_rfc3339())
 }

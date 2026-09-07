@@ -129,6 +129,19 @@ fn main() -> std::process::ExitCode {
             }),
         );
 
+        // Loaded here, before the engine is constructed, so its
+        // `[capacity]` section can reach `CapacityPolicy` via
+        // `EngineConfig::capacity` below (Task 12 M3, acceptance
+        // criterion B) — moved up from where it previously loaded (after
+        // engine construction, only for the TaskRouter) for that reason.
+        let config = match surge_core::config::SurgeConfig::discover() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load surge.toml; using defaults");
+                surge_core::config::SurgeConfig::default()
+            },
+        };
+
         let engine = Arc::new(Engine::new_full(
             Arc::clone(&bridge),
             Arc::clone(&storage),
@@ -136,7 +149,10 @@ fn main() -> std::process::ExitCode {
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
             Some(profile_registry),
-            EngineConfig::default(),
+            EngineConfig {
+                capacity: (&config.capacity).into(),
+                ..EngineConfig::default()
+            },
         ));
 
         // Keep a clone of the concrete engine handle for the cockpit's
@@ -151,14 +167,8 @@ fn main() -> std::process::ExitCode {
             let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
         }
 
-        // --- Plan C T9.2: Load surge.toml and spawn TaskRouter ---
-        let config = match surge_core::config::SurgeConfig::discover() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load surge.toml; skipping TaskRouter spawn");
-                surge_core::config::SurgeConfig::default()
-            }
-        };
+        // --- Plan C T9.2: spawn TaskRouter from the config already loaded
+        // above ---
 
         let mut sources: Vec<Arc<dyn TaskSource>> = Vec::new();
         let mut source_map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();

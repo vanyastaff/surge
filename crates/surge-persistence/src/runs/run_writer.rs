@@ -51,6 +51,19 @@ impl RunWriter {
         self.reader.worktree_path()
     }
 
+    /// A cloned, independent read-only handle onto this run's database.
+    ///
+    /// `RunReader` is cheap to clone (a small `r2d2_sqlite` pool + `Arc`s —
+    /// see its own doc), so this hands out an owned, `'static` reader a
+    /// caller can hold past this `RunWriter`'s own lifetime — e.g. Task
+    /// 12 M3's per-run `WorkEstimator`, which needs its own handle to
+    /// re-read `stage_executions()` fresh on every capacity check, not a
+    /// borrow tied to the `RunTaskParams` that owns the writer.
+    #[must_use]
+    pub fn reader(&self) -> RunReader {
+        self.reader.clone()
+    }
+
     /// Returns true if `close()` has been called.
     #[must_use]
     pub fn is_closed(&self) -> bool {

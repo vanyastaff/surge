@@ -22,6 +22,23 @@ pub struct EngineConfig {
     /// and pre-registry callers; production wiring (CLI / daemon) should
     /// always populate this with `ProfileRegistry::load()`.
     pub profile_registry: Option<Arc<ProfileRegistry>>,
+    /// Capacity-aware dispatch policy every run's pre-dispatch check and
+    /// post-429 park decision runs against (Task 12 M3, R37/R37.1;
+    /// acceptance criterion B).
+    ///
+    /// `EngineConfig::default` carries
+    /// `surge_core::capacity_config::CapacityConfig::default`'s
+    /// conservative blind backoff (matching what `surge init` writes) with
+    /// rotation disabled — the same default a fresh install gets. **This
+    /// is not the field a config file's `[capacity]` section actually
+    /// reaches production runs through** — the engine's production wiring
+    /// (`surge-cli`'s `commands::engine`/`commands::bootstrap`,
+    /// `surge-daemon`'s `main`) overrides this with
+    /// `CapacityPolicy::from(&SurgeConfig::discover(..).capacity)` at
+    /// startup, before constructing the `Engine`. A caller that builds an
+    /// `Engine` directly (most tests) gets this default instead, which is
+    /// intentional — those callers do not read a `surge.toml` at all.
+    pub capacity: surge_core::capacity::CapacityPolicy,
 }
 
 impl Default for EngineConfig {
@@ -29,6 +46,9 @@ impl Default for EngineConfig {
         Self {
             snapshot_policy: SnapshotPolicy::StageBoundary,
             profile_registry: None,
+            capacity: surge_core::capacity::CapacityPolicy::from(
+                &surge_core::capacity_config::CapacityConfig::default(),
+            ),
         }
     }
 }

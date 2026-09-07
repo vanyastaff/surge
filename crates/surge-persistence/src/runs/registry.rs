@@ -200,6 +200,36 @@ pub fn set_run_parked(
     Ok(())
 }
 
+/// Resume a parked run: transition its status away from
+/// [`RunStatus::Parked`] and clear `wake_at` back to `NULL`, in the same
+/// statement — the exact inverse of [`set_run_parked`], and with the same
+/// atomicity discipline for the same reason (Task 12 M3 review, BLOCKING
+/// #3): a row must never be observably "still `Parked` with `wake_at`
+/// cleared" or "un-parked with a stale `wake_at`" for even one read.
+///
+/// Without this, a resumed parked run keeps `status = 'parked'` with its
+/// original (now-past) `wake_at` forever: [`due_parked`] returns it again
+/// on every subsequent scan (a second resume attempt racing the first),
+/// [`crate::runs::storage::Storage::snapshot_active_runs`] never sees it
+/// (its status filter excludes `Parked`), and a daemon crash immediately
+/// after resuming leaves it permanently unrecoverable by the normal
+/// stale-pid path (which only rewrites `Running`/`Bootstrapping`).
+///
+/// # Errors
+/// Returns [`StorageError`] when the registry DB cannot be reached.
+pub fn clear_parked(
+    pool: &Pool<SqliteConnectionManager>,
+    run_id: &RunId,
+    resumed_status: RunStatus,
+) -> Result<(), StorageError> {
+    let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    conn.execute(
+        "UPDATE runs SET status = ?, wake_at = NULL WHERE id = ?",
+        params![resumed_status.as_str(), run_id.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Parked runs whose `wake_at` has passed as of `now_ms` — the daemon wake
 /// scheduler's (Task 12 M4) source of "what needs resuming".
 ///
@@ -354,6 +384,46 @@ mod tests {
         let got = get_run(&pool, &s.id).unwrap().unwrap();
         assert_eq!(got.status, RunStatus::Parked);
         assert_eq!(got.wake_at_ms, Some(1_700_000_100_000));
+    }
+
+    #[test]
+    fn clear_parked_transitions_status_and_nulls_wake_at() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let s = fixture_summary(RunId::new(), Some(1));
+        insert_run(&pool, &s).unwrap();
+        set_run_parked(&pool, &s.id, 1_700_000_100_000).unwrap();
+
+        clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
+
+        let got = get_run(&pool, &s.id).unwrap().unwrap();
+        assert_eq!(got.status, RunStatus::Running);
+        assert_eq!(
+            got.wake_at_ms, None,
+            "wake_at must be cleared in the same write, not left stale"
+        );
+    }
+
+    #[test]
+    fn clear_parked_run_is_no_longer_returned_by_due_parked() {
+        // Task 12 M3 review, BLOCKING #3: a resumed parked run must not be
+        // resumed a second time by a later `due_parked` scan.
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+        let s = fixture_summary(RunId::new(), Some(1));
+        insert_run(&pool, &s).unwrap();
+        let now_ms = 1_700_000_000_000_i64;
+        set_run_parked(&pool, &s.id, now_ms - 1_000).unwrap();
+        assert_eq!(due_parked(&pool, now_ms).unwrap().len(), 1);
+
+        clear_parked(&pool, &s.id, RunStatus::Running).unwrap();
+
+        assert!(
+            due_parked(&pool, now_ms).unwrap().is_empty(),
+            "a resumed run must not still be due"
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! `RunHandle` returned by `Engine::start_run` / `resume_run`.
 
+use chrono::{DateTime, Utc};
+
 use crate::engine::error::EngineError;
 use surge_core::id::RunId;
 use surge_core::keys::NodeKey;
@@ -27,6 +29,20 @@ pub enum RunOutcome {
     Aborted {
         /// Reason string supplied by the caller of `stop_run`.
         reason: String,
+    },
+    /// The run task exited cleanly to park — a provider rate-limit window
+    /// is exhausted (`CapacityPolicy::decide` returned `Decision::Park`,
+    /// Task 12 R37/R37.1). Not a final outcome the way the other three
+    /// are: the registry transitions to `RunStatus::Parked` (not a
+    /// terminal status — see that type's doc) with `wake_at` recorded, the
+    /// worktree is left in place, and the run resumes on its own once
+    /// `wake_at` passes (`Engine::resume_run`, Task 12 M4's wake
+    /// scheduler). Consumers that only handle genuinely-final outcomes
+    /// (`#[non_exhaustive]` already forces a wildcard arm on this enum)
+    /// should treat an unhandled `Parked` as "not done yet", not "failed".
+    Parked {
+        /// When the run is expected to resume on its own.
+        wake_at: DateTime<Utc>,
     },
 }
 

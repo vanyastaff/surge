@@ -28,6 +28,7 @@
 
 // Submodules added incrementally as later phases land.
 pub mod bootstrap;
+pub mod capacity;
 pub mod config;
 pub mod daemon_facade;
 pub mod elevation;

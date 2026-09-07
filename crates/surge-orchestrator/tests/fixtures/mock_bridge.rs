@@ -57,11 +57,16 @@ pub struct MockBridge {
     pinned_session_ids: Mutex<VecDeque<SessionId>>,
     /// Text of the most recent `send_message` (for prompt-injection assertions).
     last_prompt: Mutex<Option<String>>,
-    /// Error to return from the next `send_message` call instead of `Ok(())`.
-    /// Consumed (popped) after one use so later calls in the same test
-    /// succeed again, mirroring `pinned_session_ids`' one-shot-per-entry
-    /// scripting style.
-    next_send_message_error: Mutex<Option<SendMessageError>>,
+    /// Errors to return from successive `send_message` calls instead of
+    /// `Ok(())`. Consumed (popped from the front) one per call, so a test
+    /// that queues N errors scripts exactly the next N `send_message`
+    /// calls to fail (in order) and every call after that to succeed —
+    /// mirroring `pinned_session_ids`' one-shot-per-entry scripting style,
+    /// generalized from a single slot to a queue so a test can script more
+    /// than one dispatch attempt to fail (e.g. "this run must never reach
+    /// a second agent's `send_message`, but if it does, it must fail fast
+    /// rather than hang waiting for an event nobody scripted").
+    next_send_message_errors: Mutex<VecDeque<SendMessageError>>,
 }
 
 impl MockBridge {
@@ -73,7 +78,7 @@ impl MockBridge {
             tx,
             pinned_session_ids: Mutex::new(VecDeque::new()),
             last_prompt: Mutex::new(None),
-            next_send_message_error: Mutex::new(None),
+            next_send_message_errors: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -109,11 +114,13 @@ impl MockBridge {
         self.scripted_events.lock().await.push_back(event);
     }
 
-    /// Script the next `send_message` call to fail with `err` instead of
-    /// succeeding. Consumed (popped) after one use.
+    /// Queue `err` to be returned by the next `send_message` call that
+    /// hasn't already been scripted to fail. Calling this N times queues N
+    /// successive failures (in call order); every call after the queue
+    /// drains succeeds.
     #[allow(dead_code)] // not exercised by every test binary sharing the fixture
     pub async fn fail_next_send_message(&self, err: SendMessageError) {
-        *self.next_send_message_error.lock().await = Some(err);
+        self.next_send_message_errors.lock().await.push_back(err);
     }
 
     /// Drain the scripted-event queue and broadcast each event to subscribers.
@@ -198,7 +205,7 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::SendMessage { session });
-        if let Some(err) = self.next_send_message_error.lock().await.take() {
+        if let Some(err) = self.next_send_message_errors.lock().await.pop_front() {
             return Err(err);
         }
         Ok(())

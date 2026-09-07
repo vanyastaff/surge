@@ -143,6 +143,17 @@ async fn recover(dry_run: bool) -> Result<()> {
             },
             RecoveryAction::SkipTerminal => "skip (terminal)".to_string(),
             RecoveryAction::SkipAlreadyActive => "skip (active)".to_string(),
+            RecoveryAction::SkipParked { wake_at_ms } => match wake_at_ms {
+                // Same UTC RFC 3339 rendering `doctor`'s health sections use
+                // for every other epoch-ms value in this CLI (e.g. "last Bot
+                // API call") — reused, not reinvented, so a parked run's
+                // wake time reads the same way every other timestamp does.
+                Some(ms) => format!(
+                    "parked (not due until {})",
+                    crate::commands::doctor::format_unix_ms(*ms)
+                ),
+                None => "parked (no wake_at recorded)".to_string(),
+            },
         };
         println!(
             "{:<28} {:<14} {:<16} {}",

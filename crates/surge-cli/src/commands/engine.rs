@@ -203,6 +203,14 @@ async fn run_command(
         ));
     }
 
+    // Loaded here, before the engine is constructed, so its `[capacity]`
+    // section can reach `CapacityPolicy` via `EngineConfig::capacity`
+    // below (Task 12 M3, acceptance criterion B) — `surge.toml`'s
+    // `blind_backoff` was a documented knob nothing read until this wiring
+    // existed.
+    let app_config =
+        SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
+
     let facade: Arc<dyn EngineFacade> = if daemon {
         ensure_daemon_running().await?;
         let socket = surge_daemon::pidfile::socket_path()?;
@@ -243,7 +251,10 @@ async fn run_command(
             notifier,
             None, // mcp_registry: not wired in the CLI in-process path
             Some(profile_registry),
-            EngineConfig::default(),
+            EngineConfig {
+                capacity: (&app_config.capacity).into(),
+                ..EngineConfig::default()
+            },
         ));
         Arc::new(surge_orchestrator::engine::facade::LocalEngineFacade::new(
             engine,
@@ -253,8 +264,6 @@ async fn run_command(
     let run_id = RunId::new();
     println!("{run_id}");
 
-    let app_config =
-        SurgeConfig::discover_from(&worktree_path).context("load surge config for worktree")?;
     let mut run_config = surge_orchestrator::project_context::with_project_context_seed(
         EngineRunConfig::default(),
         &worktree_path,

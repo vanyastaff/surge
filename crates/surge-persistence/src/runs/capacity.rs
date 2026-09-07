@@ -96,6 +96,36 @@ pub fn observe(
     Ok(())
 }
 
+/// Clear any durable exhaustion record for `runtime`. Idempotent — a
+/// runtime with no row is a no-op, not an error.
+///
+/// # Why this exists (Task 12 M3 review, BLOCKING #1)
+///
+/// A `runtime_capacity` row otherwise lives forever: nothing before this
+/// function ever deleted one, and `observe`'s only real caller is the
+/// post-429 path in `surge-orchestrator::engine::run_task` — meaning the
+/// row can only ever be *refreshed* by a genuine dispatch attempt. For an
+/// exhausted window with no learned reset time (`resets_at: None`), the
+/// caller's own `CapacityPolicy::decide` parks on `blind_backoff` every
+/// single time it is consulted — with no attempt ever happening to refresh
+/// (or refute) that stale conclusion, a run can re-park on the same
+/// unrefreshed row forever. Calling this once a real, non-rate-limited
+/// dispatch on `runtime` completes breaks that cycle: the outcome (success
+/// or a non-capacity failure) is itself proof the runtime is not currently
+/// exhausted, so the stale row is deleted rather than left to keep
+/// answering `Known(exhausted)` to every future read.
+///
+/// # Errors
+/// Returns [`StorageError`] when the registry DB cannot be reached.
+pub fn clear(pool: &Pool<SqliteConnectionManager>, runtime: &str) -> Result<(), StorageError> {
+    let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
+    conn.execute(
+        "DELETE FROM runtime_capacity WHERE runtime = ?",
+        params![runtime],
+    )?;
+    Ok(())
+}
+
 /// Point-read the durable capacity status for one canonical agent-runtime
 /// id. Never writes.
 ///
@@ -543,6 +573,46 @@ mod tests {
             window.resets_at(),
             Some(observed_at() + chrono::Duration::seconds(90)),
             "the second observation must replace the first, not merge with it"
+        );
+    }
+
+    #[test]
+    fn clear_removes_the_row_and_status_reads_never_observed_again() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+        observe(
+            &pool,
+            &CapacityWindow::observed_429("claude-acp", None, observed_at()),
+        )
+        .unwrap();
+        assert!(matches!(
+            status(&pool, "claude-acp").unwrap(),
+            CapacityStatus::Known(_)
+        ));
+
+        clear(&pool, "claude-acp").unwrap();
+
+        assert_eq!(
+            status(&pool, "claude-acp").unwrap(),
+            CapacityStatus::NeverObserved,
+            "a cleared runtime must read back as never observed, not as a stale Known"
+        );
+    }
+
+    #[test]
+    fn clear_on_a_runtime_with_no_row_is_a_harmless_no_op() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+        // No `observe` call at all for this runtime.
+        clear(&pool, "claude-acp").unwrap();
+
+        assert_eq!(
+            status(&pool, "claude-acp").unwrap(),
+            CapacityStatus::NeverObserved
         );
     }
 

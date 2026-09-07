@@ -51,6 +51,17 @@ pub enum BootstrapError {
     /// Bootstrap run was aborted.
     #[error("bootstrap run aborted: {0}")]
     RunAborted(String),
+    /// Bootstrap run parked instead of dispatching — a provider rate-limit
+    /// window is exhausted (Task 12, R37/R37.1). Not a failure: the
+    /// worktree and event log are intact, and the run resumes on its own
+    /// once `wake_at` passes (`Engine::resume_run`) — via `surge bootstrap
+    /// resume <run_id>` today, or Task 12 M4's wake scheduler once a
+    /// daemon drives it automatically.
+    #[error("bootstrap run parked until {wake_at} (provider rate limit exhausted)")]
+    RunParked {
+        /// When the run is expected to resume on its own.
+        wake_at: chrono::DateTime<chrono::Utc>,
+    },
     /// No post-bootstrap `PipelineMaterialized` event was found.
     #[error("bootstrap did not materialize a follow-up graph")]
     MaterializedGraphMissing,
@@ -98,6 +109,7 @@ pub async fn run_bootstrap_in_worktree(
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(BootstrapError::RunFailed(error)),
         RunOutcome::Aborted { reason } => return Err(BootstrapError::RunAborted(reason)),
+        RunOutcome::Parked { wake_at } => return Err(BootstrapError::RunParked { wake_at }),
     }
 
     let materialized = materialized_run_from_completed(engine, run_id).await?;
