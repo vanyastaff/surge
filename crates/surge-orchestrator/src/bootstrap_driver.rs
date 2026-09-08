@@ -51,6 +51,17 @@ pub enum BootstrapError {
     /// Bootstrap run was aborted.
     #[error("bootstrap run aborted: {0}")]
     RunAborted(String),
+    /// Bootstrap run parked instead of dispatching — a provider rate-limit
+    /// window is exhausted (Task 12, R37/R37.1). Not a failure: the
+    /// worktree and event log are intact, and the run resumes on its own
+    /// once `wake_at` passes (`Engine::resume_run`) — via `surge bootstrap
+    /// resume <run_id>` today, or Task 12 M4's wake scheduler once a
+    /// daemon drives it automatically.
+    #[error("bootstrap run parked until {wake_at} (provider rate limit exhausted)")]
+    RunParked {
+        /// When the run is expected to resume on its own.
+        wake_at: chrono::DateTime<chrono::Utc>,
+    },
     /// No post-bootstrap `PipelineMaterialized` event was found.
     #[error("bootstrap did not materialize a follow-up graph")]
     MaterializedGraphMissing,
@@ -64,6 +75,18 @@ pub enum BootstrapError {
 /// This is the testable form used by CLI / daemon code that already knows the
 /// isolated run worktree.
 ///
+/// `memory_store_path` is forwarded verbatim into the bootstrap run's
+/// `EngineRunConfig` (see that field's doc comment on
+/// `engine::config::EngineRunConfig::memory_store_path`): `None` — every
+/// production caller — resolves the real `MemoryStore::default_path()`
+/// (`~/.surge/memory.db`) the way a bootstrap failure always should;
+/// `Some(path)` is test-only, redirecting a driven-to-failure bootstrap run
+/// (e.g. the edit-loop cap) away from the developer's own store. Before this
+/// parameter existed, every caller of this function — including the
+/// `fixtures::bootstrap::BootstrapHarness` test harness — had no way to
+/// override it at all, because this function built `EngineRunConfig` fresh
+/// internally rather than accepting one.
+///
 /// # Errors
 /// Returns [`BootstrapError`] if the engine run fails, the event log cannot be
 /// read, no follow-up graph was materialized, or any required bootstrap
@@ -75,6 +98,7 @@ pub async fn run_bootstrap_in_worktree(
     run_id: RunId,
     worktree_path: PathBuf,
     project_context: Option<ProjectContextSeed>,
+    memory_store_path: Option<PathBuf>,
 ) -> Result<MaterializedRun, BootstrapError> {
     let bundled = BundledFlows::by_name_latest(BOOTSTRAP_FLOW_NAME)
         .ok_or(BootstrapError::BundledFlowMissing)?;
@@ -88,6 +112,7 @@ pub async fn run_bootstrap_in_worktree(
     let run_config = EngineRunConfig {
         initial_prompt: prompt,
         project_context,
+        memory_store_path,
         ..EngineRunConfig::default()
     };
     let handle = engine
@@ -98,6 +123,7 @@ pub async fn run_bootstrap_in_worktree(
         RunOutcome::Completed { .. } => {},
         RunOutcome::Failed { error } => return Err(BootstrapError::RunFailed(error)),
         RunOutcome::Aborted { reason } => return Err(BootstrapError::RunAborted(reason)),
+        RunOutcome::Parked { wake_at } => return Err(BootstrapError::RunParked { wake_at }),
     }
 
     let materialized = materialized_run_from_completed(engine, run_id).await?;

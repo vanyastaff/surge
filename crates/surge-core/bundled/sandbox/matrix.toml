@@ -243,3 +243,40 @@ mode = "full-access"
 flags = []
 verified = false
 note = "Declared-unverified (Task 6) — Goose ACP surface stable; sandbox CLI flags not yet enumerated."
+
+# ── DeepSeek Harness (developer preview) ─────────────────────────────────────
+# DSH's ACP profile (`dsh --profile acp`) is documented as a zero-option
+# command — its own help text takes no flags at all (see
+# packages/bundle/acp-app/src/index.ts upstream). There is no CLI surface to
+# map any SandboxMode tier onto, so every row stays declared-unverified, same
+# as Cursor/Copilot/OpenCode/Goose above. See `docs/sandbox-matrix.md` for the
+# operator-facing summary and `RuntimeVersionPolicy` in `versions.toml` for
+# the separate (and, for this runtime, exact) version pin.
+
+[[rows]]
+runtime = "dsh"
+mode = "read-only"
+flags = []
+verified = false
+note = "Developer preview — `dsh --profile acp` exposes no CLI sandbox-tier flags; DSH's own permission model is unverified against surge's ACP client-side gate."
+
+[[rows]]
+runtime = "dsh"
+mode = "workspace-write"
+flags = []
+verified = false
+note = "Developer preview — `dsh --profile acp` exposes no CLI sandbox-tier flags; DSH's own permission model is unverified against surge's ACP client-side gate."
+
+[[rows]]
+runtime = "dsh"
+mode = "workspace-network"
+flags = []
+verified = false
+note = "Developer preview — `dsh --profile acp` exposes no CLI sandbox-tier flags; DSH's own permission model is unverified against surge's ACP client-side gate."
+
+[[rows]]
+runtime = "dsh"
+mode = "full-access"
+flags = []
+verified = false
+note = "Developer preview — `dsh --profile acp` exposes no CLI sandbox-tier flags; DSH's own permission model is unverified against surge's ACP client-side gate."

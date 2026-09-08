@@ -6,8 +6,11 @@ pub mod branch;
 pub mod human_gate;
 pub mod loop_stage;
 pub mod notify;
+pub mod skill_binding;
 pub mod subgraph_stage;
 pub mod terminal;
+
+use std::time::Duration;
 
 use crate::engine::error::EngineError;
 use surge_core::keys::OutcomeKey;
@@ -18,8 +21,28 @@ use thiserror::Error;
 pub type StageResult = Result<OutcomeKey, StageError>;
 
 /// Errors that can occur during a single stage's execution.
+///
+/// `#[non_exhaustive]`: this crate alone decides this taxonomy and is
+/// expected to keep growing it, so no external crate may match it
+/// exhaustively — every addition here would otherwise be a breaking change
+/// for such a caller. The trade-off is explicit: an external `match` is
+/// forced to carry a wildcard arm from day one, so a genuinely new failure
+/// mode lands quietly in that wildcard until the caller deliberately gives
+/// it its own handling.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StageError {
+    /// A `LoopGuard` trip ended this stage (`.autopilot/competitive-waves/spec.md`
+    /// §15). Distinct from `AgentCrashed`: nothing crashed — the engine
+    /// deliberately stops a node that stopped making progress ("escalating
+    /// instead of burning budget", R39). Returned only after the session has
+    /// already been closed and the matching `SessionClosed { disposition:
+    /// ForcedClose }` event recorded. Carries the typed
+    /// [`crate::guard::LoopGuardTrip`] so a caller does not have to parse
+    /// this error's `Display` text apart to tell which guard tripped.
+    #[error("{0}")]
+    LoopGuardTripped(crate::guard::LoopGuardTrip),
+
     /// The ACP agent process crashed or the session ended abnormally.
     #[error("agent crashed: {0}")]
     AgentCrashed(String),
@@ -43,6 +66,50 @@ pub enum StageError {
     /// An ACP bridge call failed.
     #[error("bridge error: {0}")]
     Bridge(String),
+
+    /// The agent hit a provider-side rate limit or usage quota while this
+    /// stage was mid-turn — matched directly off
+    /// `surge_acp::bridge::error::SendMessageError::RateLimited`, never by
+    /// re-parsing its rendered `Display` text. Kept as its own variant —
+    /// rather than folded into [`Self::Bridge`] and stringified — so a
+    /// capacity-aware caller can park the run on a known (or unknown) reset
+    /// time instead of burning its retry budget against a wall that will
+    /// not move (R37).
+    #[error("agent rate limited (runtime = {runtime:?}, retry_after = {retry_after:?}): {details}")]
+    RateLimited {
+        /// The resolved profile's runtime registry id (e.g. `"claude-acp"`),
+        /// normalized through `surge_acp::Registry::normalize_agent_id` so
+        /// aliases of one entry collapse to the same string — or, when
+        /// normalization fails despite a profile being resolved (e.g. the
+        /// bundled `mock` profile, not itself a registry id or alias), the
+        /// raw `agent_id`, so an unrecognized-but-real identity is never
+        /// silently discarded. `None` **only** on the legacy
+        /// no-profile-registry path, where no id is known at all — a
+        /// placeholder string here would be fabricating an identity nothing
+        /// observed.
+        ///
+        /// **Resolved (Task 12 revision 6, A1):** this key names the agent
+        /// runtime, not a separately-tracked login — and today those two
+        /// coincide for every installation Surge can express (see
+        /// `surge_core::capacity`'s module doc, "Why the key is the
+        /// runtime"). `builtin_registry.json` carries exactly one launch
+        /// configuration per runtime, so there is no second axis a second
+        /// login could be keyed on yet. Where a future installation *can*
+        /// distinguish two logins sharing one runtime, this field's
+        /// granularity errs toward the safe side: it collapses both into
+        /// one capacity window, which over-parks (a false-positive refusal)
+        /// rather than under-parks (dispatching into a wall) — see A2 in
+        /// `docs/adr/0016-capacity-parking-and-wake.md` for the follow-up
+        /// that would actually distinguish them.
+        runtime: Option<String>,
+        /// Provider-supplied retry delay, when the raw ACP error text
+        /// carried one. Mirrors
+        /// `surge_acp::bridge::error::SendMessageError::RateLimited::retry_after`.
+        retry_after: Option<Duration>,
+        /// Raw error text carried over from the bridge-level error, kept
+        /// for debugging.
+        details: String,
+    },
 
     /// The run was cancelled while the stage was executing.
     #[error("cancelled")]
@@ -84,6 +151,35 @@ pub enum StageError {
         /// The configured cap value.
         cap: u32,
     },
+
+    /// A node's declared skill failed to resolve against the discovered
+    /// catalog — not found, malformed manifest, or ambiguous content across
+    /// ProjectDir/UserDir/Registry candidates.
+    #[error("skill resolution failed: {0}")]
+    SkillResolutionFailed(#[from] surge_core::skill::SkillError),
+
+    /// An unpinned, unhashed, or content-changed skill's trust prompt was
+    /// denied or went unanswered within the timeout. The node does not
+    /// start.
+    #[error("skill approval rejected (timeout or explicit denial)")]
+    SkillApprovalRejected,
+
+    /// A node's `custom_fields["skills"]` declaration does not deserialize
+    /// as a list of `surge_core::skill::SkillRef` — a graph-authoring
+    /// mistake, not an internal engine condition. Kept as its own variant
+    /// (rather than flattened into `Internal(String)`) so the typed
+    /// `DeclaredSkillsError` — which names the malformed TOML and why —
+    /// survives to whatever reports the failure, matching the file+reason
+    /// standard `SkillError::MalformedFrontmatter` already holds for a
+    /// broken `SKILL.md` (History 15 / R09.1).
+    #[error("node {node} declares invalid skills: {source}")]
+    InvalidSkillsDeclaration {
+        /// The node whose declaration failed to parse.
+        node: surge_core::keys::NodeKey,
+        /// The typed parse failure.
+        #[source]
+        source: surge_core::agent_config::DeclaredSkillsError,
+    },
 }
 
 impl From<StageError> for EngineError {
@@ -91,3 +187,15 @@ impl From<StageError> for EngineError {
         EngineError::Internal(format!("stage error: {e}"))
     }
 }
+
+// Task 12 M5: the regression test that used to live here
+// (`rate_limited_display_still_classifies_through_the_full_stage_failed_reason`)
+// pinned the exact persisted `StageFailed.reason` format because
+// `surge-cli`'s inbox capacity scan (`scan_capacity_signal`) re-classified
+// that string via `CapacityWindow::from_observed_error`. That scan is
+// deleted (`commands/inbox.rs`'s module doc): the inbox's capacity column is
+// now a registry point-lookup, not a re-derivation from any run's own
+// journal, so nothing reclassifies `StageFailed.reason` at read time anymore
+// and this format has no remaining reader to protect. Removed rather than
+// repurposed — its assertion (`from_observed_error` succeeds against the
+// persisted string) has no live consumer to describe.

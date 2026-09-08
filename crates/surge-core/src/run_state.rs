@@ -1,5 +1,6 @@
 //! Run state machine — derived purely by folding events.
 
+use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
 use crate::graph::Graph;
@@ -12,6 +13,7 @@ use crate::roadmap_patch::{
     RoadmapPatchTarget,
 };
 use crate::run_event::{BootstrapDecision, BootstrapStage, EventPayload, RunEvent};
+use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +34,37 @@ pub struct PendingHumanInput {
     pub requested_seq: u64,
 }
 
+/// Tracks that the pipeline is paused waiting for a provider rate-limit
+/// window to reset (Task 12, R37/R37.1). Set when a `RunParked` event is
+/// folded; cleared by `RunWokeFromPark`. Modeled the same way as
+/// [`PendingHumanInput`] — an `Option` field on [`RunState::Pipeline`], not
+/// a separate `RunState` variant, because parking is a pause layered on top
+/// of wherever the pipeline already was, not a different place to be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedUntil {
+    /// When the run is expected to resume on its own.
+    pub wake_at: DateTime<Utc>,
+    /// Why `wake_at` is what it is — an actually-observed provider reset, or
+    /// a configured blind-backoff guess. Carried through the fold (not
+    /// re-derived from `reason`) so a consumer that must branch on it
+    /// exactly (e.g. a consecutive-blind-park escalation counter) can match
+    /// on a real value instead of parsing display text.
+    pub basis: WakeBasis,
+    /// Free-form, human-readable explanation for display.
+    pub reason: String,
+    /// Canonical agent-runtime registry id the parked capacity window
+    /// belongs to, forwarded verbatim from [`EventPayload::RunParked
+    /// .runtime`] — `None` on the legacy no-profile-registry path, where no
+    /// such id is ever known (see that field's own doc). This is a **run**
+    /// fact (which runtime *this* run parked on), not the runtime's own
+    /// current capacity status — a consumer that wants the latter (e.g.
+    /// `surge inbox`'s capacity column) resolves this into a
+    /// `CanonicalRuntimeId` and does a registry point-lookup, rather than
+    /// this fold trying to answer a question that belongs to the registry,
+    /// not the journal.
+    pub runtime: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunState {
     NotStarted,
@@ -49,6 +82,9 @@ pub enum RunState {
         /// Set when a `HumanInputRequested` event is folded; cleared by
         /// `HumanInputResolved` or `HumanInputTimedOut`.
         pending_human_input: Option<PendingHumanInput>,
+        /// Set when a `RunParked` event is folded; cleared by
+        /// `RunWokeFromPark`. See [`ParkedUntil`].
+        parked: Option<ParkedUntil>,
     },
     Terminal {
         kind: TerminalReason,
@@ -64,6 +100,27 @@ pub enum Attention {
     /// tool-driven `request_human_input`). This is the "needs me right now"
     /// bucket the inbox surfaces first.
     NeedsInput,
+    /// Paused waiting for a provider rate-limit window to reset (Task 12);
+    /// will resume on its own at `until` with no operator action needed —
+    /// distinct from [`Self::NeedsInput`], which does need one.
+    Waiting {
+        /// When the run is expected to resume on its own.
+        until: DateTime<Utc>,
+        /// Why `until` is what it is — an actually-observed provider reset
+        /// vs. a configured blind-backoff guess (Task 12 M5). Carried
+        /// straight from [`ParkedUntil::basis`] rather than re-derived, so
+        /// `surge inbox` can show *why* the run wakes when it does, not just
+        /// when.
+        basis: WakeBasis,
+        /// The runtime this run parked on, straight from
+        /// [`ParkedUntil::runtime`] — `None` on the legacy
+        /// no-profile-registry path. A consumer wanting the runtime's
+        /// *current* capacity status (not just which one this run is
+        /// waiting on) resolves this through `CanonicalRuntimeId::resolve`
+        /// and reads the registry directly; this field only answers "which
+        /// runtime," never "is it still exhausted."
+        runtime: Option<String>,
+    },
     /// Executing with no human in the loop.
     Working,
     /// Reached a terminal state — no further attention needed.
@@ -75,8 +132,14 @@ impl RunState {
     ///
     /// A run is [`Attention::NeedsInput`] when the fold shows an unresolved
     /// gate: a bootstrap stage awaiting approval, or a Pipeline holding a
-    /// `pending_human_input`. Everything else in-flight is
-    /// [`Attention::Working`]; a terminal run is [`Attention::Done`].
+    /// `pending_human_input` — checked first, since a run that is somehow
+    /// both blocked on a human *and* parked (not reachable through today's
+    /// engine wiring, which parks only right before dispatching a fresh
+    /// node stage, never mid-stage where a pending human input would live)
+    /// still needs the human decision made before anything else matters.
+    /// [`Attention::Waiting`] comes next for a parked Pipeline. Everything
+    /// else in-flight is [`Attention::Working`]; a terminal run is
+    /// [`Attention::Done`].
     #[must_use]
     pub fn attention(&self) -> Attention {
         match self {
@@ -92,6 +155,14 @@ impl RunState {
                 pending_human_input: Some(_),
                 ..
             } => Attention::NeedsInput,
+            Self::Pipeline {
+                parked: Some(parked),
+                ..
+            } => Attention::Waiting {
+                until: parked.wake_at,
+                basis: parked.basis,
+                runtime: parked.runtime.clone(),
+            },
             Self::Pipeline { .. } => Attention::Working,
             Self::Terminal { kind, .. } => Attention::Done(*kind),
         }
@@ -379,7 +450,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
             },
         }),
         (
-            RunState::Bootstrapping { stage: _, .. },
+            RunState::Bootstrapping { .. },
             EventPayload::BootstrapApprovalDecided {
                 stage,
                 decision: BootstrapDecision::Approve,
@@ -400,6 +471,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 },
                 memory: RunMemory::default(),
                 pending_human_input: None,
+                parked: None,
             })
         },
         (state @ RunState::Pipeline { .. }, EventPayload::StageEntered { node, attempt }) => {
@@ -407,6 +479,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 memory,
                 pending_human_input,
+                parked,
                 ..
             } = state
             {
@@ -418,6 +491,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     },
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -437,6 +511,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 let aref = ArtifactRef {
@@ -457,6 +532,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -475,6 +551,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 memory
@@ -491,6 +568,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -511,6 +589,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 memory.costs.tokens_in += u64::from(*prompt_tokens);
@@ -522,6 +601,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -562,6 +642,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 memory,
+                parked,
                 ..
             } = state
             {
@@ -576,6 +657,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                         schema: schema.clone(),
                         requested_seq: event.seq,
                     }),
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -594,6 +676,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 *memory.node_visits.entry(to.clone()).or_insert(0) += 1;
@@ -602,6 +685,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -612,6 +696,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 memory,
+                parked,
                 ..
             } = state
             {
@@ -620,6 +705,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input: None,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -634,6 +720,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 graph,
                 cursor,
                 memory,
+                parked,
                 ..
             } = state
             {
@@ -642,6 +729,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input: None,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -661,6 +749,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 memory
@@ -671,6 +760,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -689,6 +779,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 memory
@@ -699,6 +790,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -710,6 +802,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 // Defense in depth: fold honors the verification only when the
@@ -726,6 +819,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -744,6 +838,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
             } = state
             {
                 memory.apply_event(event);
@@ -752,6 +847,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
                 })
             } else {
                 unreachable!()
@@ -765,6 +861,7 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                 cursor,
                 mut memory,
                 pending_human_input,
+                parked,
                 ..
             } = state
             {
@@ -779,6 +876,61 @@ pub fn apply(state: RunState, event: &RunEvent) -> Result<RunState, FoldError> {
                     cursor,
                     memory,
                     pending_human_input,
+                    parked,
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (
+            state @ RunState::Pipeline { .. },
+            EventPayload::RunParked {
+                wake_at,
+                runtime,
+                basis,
+                reason,
+                ..
+            },
+        ) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                pending_human_input,
+                ..
+            } = state
+            {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                    parked: Some(ParkedUntil {
+                        wake_at: *wake_at,
+                        basis: *basis,
+                        reason: reason.clone(),
+                        runtime: runtime.clone(),
+                    }),
+                })
+            } else {
+                unreachable!()
+            }
+        },
+        (state @ RunState::Pipeline { .. }, EventPayload::RunWokeFromPark { .. }) => {
+            if let RunState::Pipeline {
+                graph,
+                cursor,
+                memory,
+                pending_human_input,
+                ..
+            } = state
+            {
+                Ok(RunState::Pipeline {
+                    graph,
+                    cursor,
+                    memory,
+                    pending_human_input,
+                    parked: None,
                 })
             } else {
                 unreachable!()
@@ -1085,6 +1237,7 @@ struct RoadmapPatchArtifactUpdate {
 mod tests {
     use super::*;
     use crate::approvals::ApprovalPolicy;
+    use crate::capacity::WakeBasis;
     use crate::id::RunId;
     use crate::run_event::RunConfig;
     use crate::sandbox::SandboxMode;
@@ -2396,5 +2549,101 @@ mod tests {
             } => {},
             other => panic!("expected Pipeline with cleared pending_human_input, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn run_parked_sets_pipeline_parked_and_attention_waiting() {
+        let mut events = ledger_run_prefix();
+        let wake_at = Utc::now() + chrono::Duration::minutes(5);
+        events.push(make_event(
+            3,
+            EventPayload::RunParked {
+                wake_at,
+                runtime: Some("claude-acp".into()),
+                worktree: PathBuf::from("/tmp/worktree"),
+                basis: WakeBasis::ObservedReset,
+                reason: "provider rate limit exhausted".into(),
+            },
+        ));
+
+        let parked_state = fold(&events).unwrap();
+        let RunState::Pipeline {
+            parked: Some(parked),
+            ..
+        } = &parked_state
+        else {
+            panic!("expected Pipeline with parked set, got {parked_state:?}");
+        };
+        assert_eq!(parked.wake_at, wake_at);
+        assert_eq!(parked.basis, WakeBasis::ObservedReset);
+        assert_eq!(
+            parked_state.attention(),
+            Attention::Waiting {
+                until: wake_at,
+                basis: WakeBasis::ObservedReset,
+                runtime: Some("claude-acp".into())
+            },
+            "a parked pipeline must classify as Waiting, not Working — it resumes on its \
+             own, unlike NeedsInput, but is not simply Working either"
+        );
+    }
+
+    #[test]
+    fn attention_waiting_carries_policy_backoff_basis_too_not_just_observed_reset() {
+        // Task 12 M5: the sibling of the test above, with the *other*
+        // `WakeBasis` variant — pins that `attention()` actually forwards
+        // `ParkedUntil::basis`, rather than a hardcoded `ObservedReset` that
+        // would make the previous test pass for the wrong reason.
+        let mut events = ledger_run_prefix();
+        let wake_at = Utc::now() + chrono::Duration::minutes(5);
+        events.push(make_event(
+            3,
+            EventPayload::RunParked {
+                wake_at,
+                runtime: None,
+                worktree: PathBuf::from("/tmp/worktree"),
+                basis: WakeBasis::PolicyBackoff,
+                reason: "blind backoff, no observed reset time".into(),
+            },
+        ));
+
+        let parked_state = fold(&events).unwrap();
+        assert_eq!(
+            parked_state.attention(),
+            Attention::Waiting {
+                until: wake_at,
+                basis: WakeBasis::PolicyBackoff,
+                runtime: None
+            },
+            "attention() must forward the real WakeBasis, not default to ObservedReset"
+        );
+    }
+
+    #[test]
+    fn run_woke_from_park_clears_pipeline_parked_and_attention_reverts_to_working() {
+        let mut events = ledger_run_prefix();
+        let wake_at = Utc::now() + chrono::Duration::minutes(5);
+        events.push(make_event(
+            3,
+            EventPayload::RunParked {
+                wake_at,
+                runtime: Some("claude-acp".into()),
+                worktree: PathBuf::from("/tmp/worktree"),
+                basis: WakeBasis::PolicyBackoff,
+                reason: "blind backoff, no observed reset time".into(),
+            },
+        ));
+        events.push(make_event(4, EventPayload::RunWokeFromPark {}));
+
+        let resumed_state = fold(&events).unwrap();
+        match &resumed_state {
+            RunState::Pipeline { parked: None, .. } => {},
+            other => panic!("expected Pipeline with parked cleared, got {other:?}"),
+        }
+        assert_eq!(
+            resumed_state.attention(),
+            Attention::Working,
+            "a woken run must go back to Working, not stay Waiting"
+        );
     }
 }

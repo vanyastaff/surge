@@ -5,6 +5,7 @@ use crate::edge::ExceededAction;
 use crate::hooks::Hook;
 use crate::keys::{NodeKey, ProfileKey};
 use crate::sandbox::SandboxConfig;
+use crate::skill::SkillRef;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -30,6 +31,48 @@ pub struct AgentConfig {
     #[serde(default)]
     pub custom_fields: BTreeMap<String, toml::Value>,
 }
+
+impl AgentConfig {
+    /// Skills declared on this node, read from `custom_fields["skills"]`.
+    ///
+    /// Node-level skill declarations ride the existing `custom_fields`
+    /// extension point rather than a dedicated field: `custom_fields` is
+    /// additive by construction (any reader that doesn't recognize a key
+    /// just ignores it), so this capability doesn't force every
+    /// `AgentConfig` struct literal across the workspace to grow a new
+    /// field. A missing `"skills"` key means the node declared none — not
+    /// an error. A present-but-malformed entry is a graph-authoring
+    /// mistake and is surfaced typed, never silently dropped (see
+    /// [`DeclaredSkillsError`]).
+    ///
+    /// Each declared [`SkillRef`] is a request, not a discovery result:
+    /// `hash: None` means "match by name/provider/version" (the flow author
+    /// hasn't pinned a specific pack version); `hash: Some(_)` pins the
+    /// exact content the author trusts. Binding this list against a
+    /// [`crate::skill::SkillCatalog`] and gating an unpinned or
+    /// hash-mismatched entry behind operator approval is the engine's job,
+    /// not this method's.
+    ///
+    /// # Errors
+    /// [`DeclaredSkillsError`] when `custom_fields["skills"]` exists but
+    /// does not deserialize as an array of skill references.
+    #[must_use = "a malformed declaration (Err) must be surfaced, not silently dropped"]
+    pub fn declared_skills(&self) -> Result<Vec<SkillRef>, DeclaredSkillsError> {
+        match self.custom_fields.get("skills") {
+            None => Ok(Vec::new()),
+            Some(value) => value
+                .clone()
+                .try_into::<Vec<SkillRef>>()
+                .map_err(DeclaredSkillsError),
+        }
+    }
+}
+
+/// `custom_fields["skills"]` exists but is not a valid list of skill
+/// references (wrong shape, unknown `provider` tag, ...).
+#[derive(Debug, thiserror::Error)]
+#[error("node's custom_fields.skills is not a valid skill reference list: {0}")]
+pub struct DeclaredSkillsError(#[source] toml::de::Error);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Binding {
@@ -266,5 +309,61 @@ mod tests {
         let toml_s = toml::to_string(&cfg).unwrap();
         let parsed: AgentConfig = toml::from_str(&toml_s).unwrap();
         assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn declared_skills_absent_key_returns_empty() {
+        let cfg = AgentConfig {
+            profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+            prompt_overrides: None,
+            tool_overrides: None,
+            sandbox_override: None,
+            approvals_override: None,
+            bindings: Vec::new(),
+            rules_overrides: None,
+            limits: NodeLimits::default(),
+            hooks: Vec::new(),
+            custom_fields: BTreeMap::new(),
+        };
+        assert_eq!(cfg.declared_skills().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn declared_skills_parses_toml_declared_list() {
+        use crate::skill::SkillProvider;
+
+        let toml_s = r#"
+            profile = "implementer@1.0"
+
+            [custom_fields]
+            skills = [
+                { name = "code-reviewer", provider = "project_dir" },
+                { name = "rust-expert", provider = "user_dir", version = "2.0", hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
+            ]
+        "#;
+        let cfg: AgentConfig = toml::from_str(toml_s).unwrap();
+        let declared = cfg.declared_skills().unwrap();
+
+        assert_eq!(declared.len(), 2);
+        assert_eq!(declared[0].name, "code-reviewer");
+        assert_eq!(declared[0].provider, SkillProvider::ProjectDir);
+        assert_eq!(declared[0].version, None);
+        assert_eq!(declared[0].hash, None);
+        assert_eq!(declared[1].name, "rust-expert");
+        assert_eq!(declared[1].provider, SkillProvider::UserDir);
+        assert_eq!(declared[1].version.as_deref(), Some("2.0"));
+        assert!(declared[1].hash.is_some());
+    }
+
+    #[test]
+    fn declared_skills_malformed_entry_is_typed_error() {
+        let toml_s = r#"
+            profile = "implementer@1.0"
+
+            [custom_fields]
+            skills = [ { provider = "project_dir" } ]
+        "#;
+        let cfg: AgentConfig = toml::from_str(toml_s).unwrap();
+        assert!(cfg.declared_skills().is_err());
     }
 }

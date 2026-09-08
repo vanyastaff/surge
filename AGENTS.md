@@ -10,7 +10,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 
 - **Language:** Rust 2024 edition (MSRV 1.96)
 - **Async runtime:** `tokio`
-- **Agent protocol:** `agent-client-protocol` (ACP)
+- **Agent protocol:** `agent-client-protocol` — Agent Client Protocol (ACP)
 - **Database:** SQLite via `rusqlite` + `r2d2` pool
 - **Workspace:** 12 crates under `crates/`
 - **Build:** `cargo` (workspace)
@@ -133,3 +133,72 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 - **Workspace-managed dependencies.** Add new dependencies to the root `Cargo.toml` `[workspace.dependencies]`, then reference them in member crates with `{ workspace = true }`.
 - **One git worktree per run.** Use `git2`; respect the `.worktrees/` local convention for in-progress branches.
 - **Tests live next to code** in `#[cfg(test)] mod tests { ... }`. Snapshots use `insta`; properties use `proptest`; benches use `criterion` with `harness = false` under `crates/<crate>/benches/`.
+
+<!-- autopilot:start -->
+## Autopilot runs
+
+Feature work in this repo can be flown by the `/autopilot` skill. Requirements,
+specification and tasks for a run live in `.autopilot/<slug>/`; progress is
+`.autopilot/dashboard.html`. Rule: a requirement in `manifest.md` can only be
+retired by the user.
+
+If a run was interrupted, say «продолжи автопилот» — state is restored from
+`.autopilot/state.js` and nothing needs to be re-asked.
+
+Current run: `competitive-waves` — the five waves of
+[`docs/competitive-plan-2026-09.md`](docs/competitive-plan-2026-09.md).
+
+### Gotchas found during that run
+
+- **`#[derive(Deserialize)]` defeats a constructor invariant even with private
+  fields.** The derived impl expands *inside the owning module*, so it builds the
+  struct with a literal and sees private fields. Making fields private is not
+  enough — route deserialization through the validating constructor, either with a
+  hand-written `Deserialize` or `#[serde(try_from = "Raw…")]`. Found on
+  `MemoryClaim`, whose `Verified` status must carry its evidence.
+- **`clippy::unused_async` on a body with no `.await` is fixed with
+  `async move { … }` inside a plain `fn`, not with an immediately-invoked closure
+  plus `std::future::ready`.** The lint only looks at `async fn`, so `async move`
+  silences it *and* keeps the body lazy; the `ready` form makes it eager, which
+  moves side effects (a status write, a `create_dir_all`) from first poll to call
+  time.
+- **A `use` needed only by `#[cfg(test)] mod tests` must live inside that module.**
+  Put it at module top level and the non-test build fails `unused_imports` under
+  `-D warnings` — invisible to a per-crate check, visible to the workspace gate.
+- **An acceptance oracle written from the same idea as the code confirms the code
+  rather than checking it.** A directory-walk oracle for the skill catalog counted
+  a symlink loop exactly the way the scanner did: every assertion green, catalog
+  useless. Build the oracle from different evidence — a fixed list of paths, a
+  canonical-path set — not from a second implementation of the same walk.
+- **`MemoryClaimId` serializes as a bare ULID but `Display`/`FromStr` render it as
+  `claim-<ULID>`.** A JSON fixture built from `to_string()` fails at id parsing, so
+  the test never reaches the invariant it was written for — use
+  `as_ulid().to_string()`. One such fixture meant the hand-written `Deserialize`
+  guard was never exercised by any test while looking covered.
+- **A lint suppression handed out to work around someone else's broken baseline
+  becomes a mask over your own defects the moment that baseline is fixed.** During
+  the clippy-debt cleanup, executors were told to run with `-A` for the baseline
+  lints; when the baseline went clean, one of those flags was still hiding a
+  `print_literal` in brand-new code. Retire a temporary suppression at the same
+  moment its reason disappears, not later.
+- **Classifying a locator by the shape of its string loses inputs silently.** The
+  memory audit's file-vs-URL split cost one repair round on `C:\…` (a drive letter
+  read as a URI scheme, so Windows records were never staleness-checked while the
+  run stayed green), and `file:///…` plus unix paths with a colon in the first
+  segment are still mis-sorted. For this class, existence on disk is a more
+  reliable test than string form — it errs toward "checked" instead of toward
+  "silently skipped".
+- **`#[expect(dead_code)]` is unusable on a shared test fixture.** Every file in
+  `tests/` compiles the fixture into its own binary, so `dead_code` is evaluated
+  per-binary: in the one binary that *does* use the item, the expectation goes
+  unfulfilled and `unfulfilled_lint_expectations` becomes a hard error under
+  `-D warnings`. The honest fix is a real unit test inside the fixture's own
+  `#[cfg(test)] mod tests` — it is duplicated into every consuming binary, so the
+  item is genuinely used everywhere.
+- **`cargo clippy … -- -D warnings` silently stops linting dependents once one
+  crate fails.** Two baseline errors in `surge-core` meant `surge-persistence`,
+  `surge-git` and `surge-mcp` were never linted at all — 18 further errors were
+  hiding behind them. When checking one crate's own zone while the baseline is
+  red, pass `-A` for the baseline lints, or "clippy clean" means "clippy never
+  ran".
+<!-- autopilot:end -->

@@ -2,7 +2,7 @@
 
 Surge owns a small set of **artifact contracts** — the on-disk shapes that
 agents (Surge-internal orchestrator, Copilot CLI, Zed Agent, any
-ACP-compatible implementation) exchange. Until now those shapes were
+Agent Client Protocol (ACP) implementation) exchange. Until now those shapes were
 documented prose-first and re-encoded by hand in every agent prompt profile.
 
 `surge artifact schema` makes the contract **self-describing**: surge-core

@@ -5,12 +5,12 @@ mod fixtures;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
-use surge_core::branch_config::BranchConfig;
+use surge_core::branch_config::{BranchArm, BranchConfig, CompareOp, Predicate};
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
-use surge_core::node::{Node, NodeConfig, Position};
+use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
 use surge_core::terminal_config::{TerminalConfig, TerminalKind};
 use surge_orchestrator::engine::tools::ToolDispatcher;
 use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
@@ -93,15 +93,35 @@ async fn three_node_branch_run_writes_two_snapshots() {
     let b2 = NodeKey::try_from("b2").unwrap();
     let end = NodeKey::try_from("end").unwrap();
 
+    // A single predicate arm routing to the same outcome as
+    // `default_outcome` — `surge_core::validate`'s `BranchWithoutArms` rule
+    // requires at least one arm, and matching or not changes nothing
+    // observable here since both paths lead to "done".
+    let done_arm = || BranchArm {
+        condition: Predicate::EnvVar {
+            name: "SURGE_ENGINE_SNAPSHOT_TEST_UNSET".into(),
+            op: CompareOp::Eq,
+            value: String::new(),
+        },
+        outcome: OutcomeKey::try_from("done").unwrap(),
+    };
+    let done_outcome_decl = || OutcomeDecl {
+        id: OutcomeKey::try_from("done").unwrap(),
+        description: "branch routed to done".into(),
+        edge_kind_hint: EdgeKind::Forward,
+        is_terminal: false,
+        ledger_effect: Default::default(),
+    };
+
     let mut nodes = BTreeMap::new();
     nodes.insert(
         b1.clone(),
         Node {
             id: b1.clone(),
             position: Position::default(),
-            declared_outcomes: vec![],
+            declared_outcomes: vec![done_outcome_decl()],
             config: NodeConfig::Branch(BranchConfig {
-                predicates: vec![],
+                predicates: vec![done_arm()],
                 default_outcome: OutcomeKey::try_from("done").unwrap(),
             }),
         },
@@ -111,9 +131,9 @@ async fn three_node_branch_run_writes_two_snapshots() {
         Node {
             id: b2.clone(),
             position: Position::default(),
-            declared_outcomes: vec![],
+            declared_outcomes: vec![done_outcome_decl()],
             config: NodeConfig::Branch(BranchConfig {
-                predicates: vec![],
+                predicates: vec![done_arm()],
                 default_outcome: OutcomeKey::try_from("done").unwrap(),
             }),
         },

@@ -109,12 +109,12 @@ fn render_document(result: &MappingResult) -> String {
 fn write_output(rendered: &str, output: Option<&PathBuf>) -> Result<()> {
     match output {
         Some(path) => {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!("migrate-spec: failed to create {}", parent.display())
-                    })?;
-                }
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("migrate-spec: failed to create {}", parent.display())
+                })?;
             }
             fs::write(path, rendered)
                 .with_context(|| format!("migrate-spec: failed to write {}", path.display()))?;

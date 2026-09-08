@@ -2,7 +2,7 @@
 //! implemented incrementally in Phase 5 (lifecycle), Phase 9 (resolve),
 //! Phase 11 (stop).
 
-use crate::engine::config::{EngineConfig, EngineRunConfig};
+use crate::engine::config::{EngineConfig, EngineRunConfig, RunSeedArtifact};
 use crate::engine::error::EngineError;
 use crate::engine::event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 use crate::engine::handle::RunHandle;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::graph::Graph;
 use surge_core::id::RunId;
+use surge_core::mcp_config::McpServerRef;
 use surge_core::roadmap_patch::{RoadmapPatchApplyResult, RoadmapPatchId, RoadmapPatchTarget};
 use surge_core::run_event::{EventPayload, VersionedEventPayload};
 
@@ -64,6 +65,31 @@ pub(crate) struct ActiveRun {
     /// Queued operator steer messages. `Engine::submit_steer` pushes here; the
     /// run task drains at the next stage boundary and delivers into the prompt.
     pub pending_steers: crate::engine::steer::SteerQueue,
+}
+
+/// The per-run resolution/steer/cancellation state `start_run` and
+/// `resume_run` both build identically, then split between `self.runs`
+/// (as an [`ActiveRun`], for engine-level resolve/stop methods) and the
+/// spawned run task's own [`crate::engine::run_task::RunTaskParams`].
+/// Pulled out by [`Engine::register_active_run`] (Task 12 M3) so neither
+/// caller has to carry this bookkeeping inline — it was already
+/// byte-for-byte duplicated between the two before this extraction.
+struct FreshRunRegistration {
+    cancel: tokio_util::sync::CancellationToken,
+    gate_resolutions: Arc<
+        tokio::sync::Mutex<
+            HashMap<
+                surge_core::keys::NodeKey,
+                tokio::sync::oneshot::Sender<crate::engine::stage::human_gate::HumanGateResolution>,
+            >,
+        >,
+    >,
+    tool_resolutions:
+        Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    roadmap_amendment_rx:
+        tokio::sync::mpsc::Receiver<crate::engine::run_task::RoadmapAmendmentCommand>,
+    pending_elevations: Arc<crate::engine::elevation::PendingElevations>,
+    pending_steers: crate::engine::steer::SteerQueue,
 }
 
 impl Engine {
@@ -230,19 +256,75 @@ impl Engine {
         self.storage.clone()
     }
 
+    /// Build the two Task 12 M3 capacity ports a `RunTaskParams` needs,
+    /// shared verbatim between `start_run` and `resume_run`.
+    ///
+    /// The ledger is engine-wide (shared across every run this `Engine`
+    /// hosts, keyed by canonical runtime — an exhausted runtime is a fact
+    /// about the runtime, not about any one run). The estimator is
+    /// per-run (reads only `writer`'s own `stage_executions`) — built from
+    /// a cloned `RunReader` (cheap; see `RunWriter::reader`'s doc) so it
+    /// keeps working independently of `writer` itself, which the caller
+    /// moves into `RunTaskParams` right after this call.
+    fn capacity_ports_for(
+        &self,
+        writer: &surge_persistence::runs::run_writer::RunWriter,
+    ) -> (
+        Arc<dyn crate::engine::capacity::CapacityLedger>,
+        Arc<dyn crate::engine::capacity::WorkEstimator>,
+    ) {
+        let ledger: Arc<dyn crate::engine::capacity::CapacityLedger> = Arc::new(
+            crate::engine::capacity::PersistentCapacityLedger::new(self.storage.clone()),
+        );
+        let estimator: Arc<dyn crate::engine::capacity::WorkEstimator> = Arc::new(
+            crate::engine::capacity::RunHistoryWorkEstimator::new(writer.reader()),
+        );
+        (ledger, estimator)
+    }
+
+    /// Build a fresh run's resolution/steer/cancellation state, register it
+    /// in `self.runs` as an [`ActiveRun`], and hand back the pieces the
+    /// caller's `RunTaskParams` needs. See [`FreshRunRegistration`]'s doc.
+    async fn register_active_run(&self, run_id: RunId) -> FreshRunRegistration {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let gate_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let tool_resolutions =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
+        let pending_elevations = crate::engine::elevation::PendingElevations::new();
+        let pending_steers = crate::engine::steer::new_queue();
+        let active = ActiveRun {
+            cancel: cancel.clone(),
+            gate_resolutions: gate_resolutions.clone(),
+            tool_resolutions: tool_resolutions.clone(),
+            roadmap_amendments: roadmap_amendment_tx,
+            pending_elevations: pending_elevations.clone(),
+            pending_steers: pending_steers.clone(),
+        };
+        self.runs.write().await.insert(run_id, active);
+        FreshRunRegistration {
+            cancel,
+            gate_resolutions,
+            tool_resolutions,
+            roadmap_amendment_rx,
+            pending_elevations,
+            pending_steers,
+        }
+    }
+
     /// Start a new run.
     pub async fn start_run(
         &self,
         run_id: RunId,
         graph: Graph,
         worktree_path: PathBuf,
-        run_config: EngineRunConfig,
+        mut run_config: EngineRunConfig,
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
-        use crate::engine::validate::validate_for_m6;
+        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
         use tokio::sync::broadcast;
-        use tokio_util::sync::CancellationToken;
 
         tracing::info!(
             target: "surge.path.exercised",
@@ -252,7 +334,21 @@ impl Engine {
             "entered engine path",
         );
 
-        validate_for_m6(&graph)?;
+        // A profile registry lets validation resolve profile references and
+        // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
+        // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
+        // impl. No registry keeps today's resolver-free behavior unchanged.
+        match self.config.profile_registry.as_ref() {
+            Some(registry) => validate_for_m6_with_resolver(&graph, registry.as_ref())?,
+            None => validate_for_m6(&graph)?,
+        }
+
+        run_config.memory_store_path =
+            self.resolve_memory_store_path(run_config.memory_store_path.take());
+
+        // No registry wired keeps today's behavior unchanged — see
+        // `seed_profile_catalog`'s doc for what this seeds and why.
+        self.seed_profile_catalog(&mut run_config)?;
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
@@ -279,45 +375,18 @@ impl Engine {
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
 
-        // Per-run MCP registry: prefer the run-config-supplied list over
-        // the engine-level fallback. If `run_config.mcp_servers` is
-        // non-empty a fresh `McpRegistry` is built for this run; otherwise
-        // we fall back to the engine-wide registry (typically `None` for
-        // daemon mode, where the per-run list is the only source).
-        let per_run_mcp_registry = if run_config.mcp_servers.is_empty() {
-            self.mcp_registry.clone()
-        } else {
-            Some(Arc::new(surge_mcp::McpRegistry::from_config(
-                &run_config.mcp_servers,
-                Some(worktree_path.as_path()),
-            )))
-        };
+        let per_run_mcp_registry =
+            self.resolve_run_mcp_registry(&run_config.mcp_servers, &worktree_path);
         let mcp_servers_clone = run_config.mcp_servers.clone();
 
         let (event_tx, event_rx) = broadcast::channel(256);
-        let cancel = CancellationToken::new();
-
-        let gate_resolutions =
-            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let tool_resolutions =
-            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
-        let pending_elevations = crate::engine::elevation::PendingElevations::new();
-        let pending_steers = crate::engine::steer::new_queue();
-        let active = ActiveRun {
-            cancel: cancel.clone(),
-            gate_resolutions: gate_resolutions.clone(),
-            tool_resolutions: tool_resolutions.clone(),
-            roadmap_amendments: roadmap_amendment_tx,
-            pending_elevations: pending_elevations.clone(),
-            pending_steers: pending_steers.clone(),
-        };
-        self.runs.write().await.insert(run_id, active);
+        let registration = self.register_active_run(run_id).await;
 
         // Captured before `worktree_path` moves into params — used by the
         // post-completion task-ledger mirror. Matches the RunStarted event's
         // `project_path` (which is the worktree path today).
         let project_path_for_ledger = worktree_path.clone();
+        let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let params = RunTaskParams {
             run_id,
             writer,
@@ -329,20 +398,26 @@ impl Engine {
             worktree_path,
             run_config,
             event_tx,
-            cancel,
+            cancel: registration.cancel,
             resume_cursor: None,
             resume_memory: None,
             resume_frames: None,
             resume_root_traversal_counts: None,
             resume_applied_graph_revision_seq: None,
-            gate_resolutions,
-            tool_resolutions,
-            roadmap_amendments: roadmap_amendment_rx,
-            pending_elevations: pending_elevations.clone(),
-            pending_steers,
+            gate_resolutions: registration.gate_resolutions,
+            tool_resolutions: registration.tool_resolutions,
+            roadmap_amendments: registration.roadmap_amendment_rx,
+            pending_elevations: registration.pending_elevations,
+            pending_steers: registration.pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry: self.config.profile_registry.clone(),
+            capacity_ledger,
+            capacity_estimator,
+            capacity_policy: self.config.capacity.clone(),
+            storage: self.storage.clone(),
+            // A fresh run was never parked — nothing to bypass.
+            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(false),
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -363,6 +438,60 @@ impl Engine {
             events: event_rx,
             completion: join,
         })
+    }
+
+    /// Resolve the per-run MCP registry: prefer the run-config-supplied list
+    /// over the engine-level fallback. If `mcp_servers` is non-empty a fresh
+    /// `McpRegistry` is built for this run; otherwise fall back to the
+    /// engine-wide registry (typically `None` for daemon mode, where the
+    /// per-run list is the only source).
+    fn resolve_run_mcp_registry(
+        &self,
+        mcp_servers: &[McpServerRef],
+        worktree_path: &Path,
+    ) -> Option<Arc<surge_mcp::McpRegistry>> {
+        if mcp_servers.is_empty() {
+            self.mcp_registry.clone()
+        } else {
+            Some(Arc::new(surge_mcp::McpRegistry::from_config(
+                mcp_servers,
+                Some(worktree_path),
+            )))
+        }
+    }
+
+    /// Resolve the effective memory-store override for a run: the per-run
+    /// `EngineRunConfig::memory_store_path` if the caller set one, else
+    /// this engine's own `EngineConfig::memory_store_path` fallback (Task
+    /// 12 M4 review). One fact, one place — both `start_run` and
+    /// `resume_run` call this rather than each re-deriving the same
+    /// "prefer per-run, fall back to engine-level" rule, which is exactly
+    /// the kind of two-call-site invariant that drifts apart if it is
+    /// spelled out twice.
+    fn resolve_memory_store_path(&self, per_run: Option<PathBuf>) -> Option<PathBuf> {
+        per_run.or_else(|| self.config.memory_store_path.clone())
+    }
+
+    /// Seed the resolved profile registry as the `profile_catalog` run
+    /// artifact so bootstrap profiles (`flow-generator@1.0` above all) can
+    /// bind Agent nodes to profiles that actually exist
+    /// (`profile_loader::render_profile_catalog`) instead of naming them
+    /// from prompt text. A no-op when no registry is wired — `start_run`'s
+    /// resolver-free default behavior is unchanged in that case.
+    fn seed_profile_catalog(&self, run_config: &mut EngineRunConfig) -> Result<(), EngineError> {
+        let Some(registry) = self.config.profile_registry.as_ref() else {
+            return Ok(());
+        };
+        let catalog = crate::profile_loader::render_profile_catalog(registry);
+        let seed = RunSeedArtifact::new(
+            PROFILE_CATALOG_ARTIFACT_NAME,
+            PROFILE_CATALOG_ARTIFACT_RELPATH,
+            catalog,
+            PROFILE_CATALOG_PRODUCER_NODE,
+        )
+        .map_err(|e| EngineError::Internal(format!("profile catalog producer key: {e}")))?;
+        run_config.seed_artifacts.push(seed);
+        Ok(())
     }
 
     async fn build_startup_events(
@@ -567,7 +696,6 @@ impl Engine {
         use crate::engine::replay::replay;
         use crate::engine::run_task::{RunTaskParams, execute};
         use tokio::sync::broadcast;
-        use tokio_util::sync::CancellationToken;
 
         tracing::info!(
             target: "surge.path.exercised",
@@ -581,12 +709,82 @@ impl Engine {
             return Err(EngineError::RunAlreadyActive(run_id));
         }
 
+        // Task 12 M3 review, BLOCKING #3: a parked run's registry row
+        // (`status = 'parked'`, `wake_at` = the original park time) must
+        // not survive unchanged into this resumed execution — otherwise it
+        // lies forever afterward: `due_parked` keeps returning it (a
+        // second resume attempt racing this one), `snapshot_active_runs`
+        // never sees it (its filter excludes `Parked`), and a crash right
+        // after this resume is unrecoverable via the normal stale-pid path
+        // (which only rewrites `Running`/`Bootstrapping`). Cleared here,
+        // atomically with the status transition (`Storage::clear_parked`
+        // — the same "both columns in one write" discipline
+        // `set_run_parked` itself already applies), before anything else
+        // about the resume proceeds. Also the source of truth for whether
+        // this resumed run's first agent dispatch bypasses the capacity
+        // precheck once (see `RunTaskParams::capacity_precheck_bypass_once`'s
+        // doc) — a resumed *non*-parked run (e.g. crash recovery of a
+        // `Crashed` row) gets no such bypass.
+        // Neither of these two may be best-effort. If the row still reads
+        // `parked` with its old `wake_at` while the run proceeds, the
+        // `RunWokeFromPark` written below sets `parked_worktree = None` in
+        // the event-log fold (`runs/query.rs`), so the next `due_parked`
+        // scan selects this same — now *running* — run, finds no recorded
+        // worktree, and `wake_scheduler`'s `fail_honestly` kills it. A
+        // transient storage error would fail a healthy run, which is worse
+        // than refusing to resume. Both the read and the clear therefore
+        // propagate.
+        let summary = self
+            .storage
+            .get_run(&run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let was_parked = matches!(&summary, Some(s) if s.status == surge_core::RunStatus::Parked);
+        if was_parked {
+            self.storage
+                .clear_parked(&run_id, surge_core::RunStatus::Running)
+                .await
+                .map_err(|e| {
+                    EngineError::Storage(format!(
+                        "resume refused: could not clear the Parked registry row for \
+                         {run_id} ({e}); resuming would leave it due for the wake scan, \
+                         which would then fail this run for an unrecorded worktree"
+                    ))
+                })?;
+        }
+
         let writer = self
             .storage
             .open_run_writer(run_id)
             .await
             .map_err(|e| EngineError::Storage(e.to_string()))?;
         self.spawn_event_forwarder(run_id, &writer);
+
+        // Task 12 M4: `RunWokeFromPark` is declared (`run_event.rs`) and
+        // folded (`run_state.rs` clears `RunState::Pipeline.parked`, which
+        // is what turns off `Attention::Waiting`), but nothing wrote it —
+        // this is that write. `Engine::resume_run` is the single choke
+        // point every real wake goes through (the daemon's wake scheduler
+        // and crash recovery's due-parked fallthrough both resume only via
+        // `server::resume_run_tracked` → this method), so writing it here,
+        // gated on the *same* `was_parked` fact that already clears the
+        // registry row above, covers both triggers without a second write
+        // site. Best-effort like `RunParked`'s own append in
+        // `run_task.rs::parked` — a failed append here must not abort an
+        // otherwise-successful resume.
+        if was_parked
+            && let Err(error) = writer
+                .append_event(VersionedEventPayload::new(EventPayload::RunWokeFromPark {}))
+                .await
+        {
+            tracing::warn!(
+                target: "engine::capacity",
+                %run_id,
+                %error,
+                "failed to append RunWokeFromPark; the run resumed but its log will not show \
+                 when it woke, and RunState::Pipeline.parked will not fold clear"
+            );
+        }
 
         let reader = self
             .storage
@@ -616,24 +814,7 @@ impl Engine {
         }
 
         let (event_tx, event_rx) = broadcast::channel(256);
-        let cancel = CancellationToken::new();
-        let gate_resolutions =
-            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let tool_resolutions =
-            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
-
-        let pending_elevations = crate::engine::elevation::PendingElevations::new();
-        let pending_steers = crate::engine::steer::new_queue();
-        let active = ActiveRun {
-            cancel: cancel.clone(),
-            gate_resolutions: gate_resolutions.clone(),
-            tool_resolutions: tool_resolutions.clone(),
-            roadmap_amendments: roadmap_amendment_tx,
-            pending_elevations: pending_elevations.clone(),
-            pending_steers: pending_steers.clone(),
-        };
-        self.runs.write().await.insert(run_id, active);
+        let registration = self.register_active_run(run_id).await;
 
         // Reconstruct EngineRunConfig from the persisted RunConfig so that
         // mcp_servers and the frozen budget survive a daemon restart + resume.
@@ -647,6 +828,12 @@ impl Engine {
             // Re-arm spend enforcement with the run's frozen budget.
             resume_run_config.budget = persisted.budget;
         }
+        // Task 12 M4 review: `memory_store_path` is deliberately never
+        // persisted (see `EngineRunConfig::memory_store_path`'s own doc),
+        // so there is nothing to recover from `replayed.run_config` above —
+        // this resumed run's only source for it is the engine-level
+        // fallback, the same one `start_run` consults.
+        resume_run_config.memory_store_path = self.resolve_memory_store_path(None);
 
         // Build a per-run McpRegistry exactly like start_run does.
         let per_run_mcp_registry = if resume_run_config.mcp_servers.is_empty() {
@@ -664,6 +851,7 @@ impl Engine {
         // Captured before `worktree_path` moves into params (post-completion
         // task-ledger mirror; matches RunStarted's project_path).
         let project_path_for_ledger = worktree_path.clone();
+        let (capacity_ledger, capacity_estimator) = self.capacity_ports_for(&writer);
         let params = RunTaskParams {
             run_id,
             writer,
@@ -675,20 +863,25 @@ impl Engine {
             worktree_path,
             run_config: resume_run_config,
             event_tx,
-            cancel,
+            cancel: registration.cancel,
             resume_cursor: Some(replayed.cursor),
             resume_memory: Some(replayed.memory),
             resume_frames: None,
             resume_root_traversal_counts: None,
             resume_applied_graph_revision_seq: Some(replayed.applied_graph_revision_seq),
-            gate_resolutions,
-            tool_resolutions,
-            roadmap_amendments: roadmap_amendment_rx,
-            pending_elevations: pending_elevations.clone(),
-            pending_steers,
+            gate_resolutions: registration.gate_resolutions,
+            tool_resolutions: registration.tool_resolutions,
+            roadmap_amendments: registration.roadmap_amendment_rx,
+            pending_elevations: registration.pending_elevations,
+            pending_steers: registration.pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry: self.config.profile_registry.clone(),
+            capacity_ledger,
+            capacity_estimator,
+            capacity_policy: self.config.capacity.clone(),
+            storage: self.storage.clone(),
+            capacity_precheck_bypass_once: std::sync::atomic::AtomicBool::new(was_parked),
         };
 
         let runs_for_cleanup = self.runs.clone();
@@ -1108,8 +1301,23 @@ pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
 /// run start (`.surge/memory/`).
 pub(crate) const PROJECT_MEMORY_ARTIFACT_NAME: &str = "project_memory";
 
+/// Canonical artifact name for the resolved profile-registry catalogue
+/// (`profile_loader::render_profile_catalog`) seeded at run start.
+/// `flow-generator@1.0` binds this to pick profiles by what the registry
+/// actually holds instead of from names memorized in its own prompt.
+pub(crate) const PROFILE_CATALOG_ARTIFACT_NAME: &str = "profile_catalog";
+
 /// Synthetic producer node for the run-level project context seed.
 const PROJECT_CONTEXT_PRODUCER_NODE: &str = "project_context_seed";
+
+/// Relative path within the worktree where the seeded profile catalogue is
+/// stored.
+const PROFILE_CATALOG_ARTIFACT_RELPATH: &str = ".surge/profile_catalog.md";
+
+/// Synthetic producer node id recorded on the seeded profile-catalogue
+/// `ArtifactProduced` event. No real node produces it — same reasoning as
+/// `PROJECT_CONTEXT_PRODUCER_NODE` above.
+const PROFILE_CATALOG_PRODUCER_NODE: &str = "profile_catalog_seed";
 
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";

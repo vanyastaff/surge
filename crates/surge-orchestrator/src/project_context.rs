@@ -11,9 +11,12 @@ use surge_acp::bridge::sandbox::AlwaysAllowSandbox;
 use surge_acp::bridge::session::{AgentKind, MessageContent, SessionConfig};
 use surge_acp::client::PermissionPolicy;
 use surge_core::ContentHash;
+use surge_core::MemoryClaim;
 use surge_core::agent_config::{ArtifactSource, Binding, TemplateVar};
+use surge_core::context_pack::{ContextPack, ContextPackConfig, PackReceipt};
 use surge_core::keys::OutcomeKey;
 use surge_core::profile::keyref::parse_key_ref;
+use surge_persistence::memory::MemoryStore;
 use tracing::{debug, info, warn};
 
 use crate::engine::config::{EngineRunConfig, ProjectContextSeed};
@@ -406,18 +409,36 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 
 /// Seed every config-derived field on an [`EngineRunConfig`].
 ///
-/// Currently covers two seeds, both unconditionally needed on every run
+/// Currently covers four seeds, all unconditionally needed on every run
 /// regardless of entry point (CLI in-process, daemon IPC server,
 /// daemon-side ticket launcher):
 ///
 /// - **`project_context`** — read from the configured `project.md` when
 ///   `init.project_context_auto_seed` is enabled and the run config
 ///   does not already carry one.
+/// - **`project_memory`** — repo-resident `.surge/memory/` notes, same as
+///   before, now with a confidence-ordered, budget-limited selection of
+///   memory claims from the claim store appended (`context_pack`'s
+///   selection — `.autopilot/competitive-waves/spec.md` §8, §23; see
+///   [`merged_project_memory_seed`]). Either half may be absent.
 /// - **`mcp_servers`** — cloned from `SurgeConfig::mcp_servers` so the
 ///   engine can build its `Arc<McpRegistry>` per run. This is a
 ///   structural copy (no I/O), but keeping it next to the file-backed
 ///   project-context seed prevents the two from drifting at individual
 ///   call sites — every entry point now goes through the same helper.
+/// - **`tool_call_loop_guard`** / **`output_spill`** — copied from
+///   `SurgeConfig` when (and only when) the run config leaves them `None`,
+///   so an operator's `surge.toml` thresholds
+///   (`.autopilot/competitive-waves/spec.md` §15, §16) actually reach
+///   `RoutingToolDispatcher` instead of every run silently falling back to
+///   `EngineRunConfig::default()`'s conservative values. `None` is the
+///   explicit "unset" signal — unlike `mcp_servers`'s `is_empty()` check,
+///   comparing against `T::default()` here would conflate "never set" with
+///   "set to exactly the default", and a caller that deliberately chose the
+///   default value would have it silently overwritten the moment
+///   `SurgeConfig` carried a different one. This is the single choke point
+///   all four entry points funnel through — the loop-guard/output-spill
+///   config would otherwise need copying at each of them individually.
 #[must_use]
 pub fn with_project_context_seed(
     mut run_config: EngineRunConfig,
@@ -428,10 +449,20 @@ pub fn with_project_context_seed(
         run_config.project_context = load_project_context_seed(project_root, config);
     }
     if run_config.project_memory.is_none() {
-        run_config.project_memory = load_project_memory_seed(project_root);
+        run_config.project_memory = merged_project_memory_seed(
+            project_root,
+            config,
+            run_config.memory_store_path.as_deref(),
+        );
     }
     if run_config.mcp_servers.is_empty() && !config.mcp_servers.is_empty() {
         run_config.mcp_servers = config.mcp_servers.clone();
+    }
+    if run_config.tool_call_loop_guard.is_none() {
+        run_config.tool_call_loop_guard = Some(config.tool_call_loop_guard);
+    }
+    if run_config.output_spill.is_none() {
+        run_config.output_spill = Some(config.output_spill);
     }
     run_config
 }
@@ -538,6 +569,132 @@ pub fn load_project_memory_seed(project_root: &Path) -> Option<ProjectContextSee
         "loaded project memory seed"
     );
     Some(ProjectContextSeed::new(dir, full))
+}
+
+/// Build the combined `project_memory` seed: repo-resident `.surge/memory/`
+/// notes ([`load_project_memory_seed`], unchanged) plus, appended, a
+/// confidence-ordered, budget-limited selection of memory claims from the
+/// claim store (`.autopilot/competitive-waves/spec.md` §8, §23 —
+/// `surge_core::context_pack::ContextPack::build`'s selection feeds this
+/// seed instead of a project accumulating unbounded raw notes as the only
+/// form of cross-run memory). Either half may be absent; the result is
+/// `None` only when both are.
+///
+/// `store_path_override` is `EngineRunConfig::memory_store_path` forwarded
+/// unchanged from [`with_project_context_seed`]; see
+/// [`load_memory_claims_seed`] for how it is resolved.
+fn merged_project_memory_seed(
+    project_root: &Path,
+    config: &surge_core::SurgeConfig,
+    store_path_override: Option<&Path>,
+) -> Option<ProjectContextSeed> {
+    let notes = load_project_memory_seed(project_root);
+    let claims_pack = load_memory_claims_seed(config, store_path_override);
+
+    let mut body = String::new();
+    if let Some(notes) = &notes {
+        body.push_str(&notes.content);
+    }
+    if let Some(claims_pack) = &claims_pack {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(claims_pack);
+    }
+    if body.is_empty() {
+        return None;
+    }
+
+    // The notes directory stays the seed's nominal `path` when notes
+    // contributed (unchanged from before this function existed); fall back
+    // to the project root when only the claims pack did.
+    let path = notes.map_or_else(|| project_root.join(PROJECT_MEMORY_DIR), |seed| seed.path);
+    Some(ProjectContextSeed::new(path, body))
+}
+
+/// Render a confidence-ordered, budget-limited selection of `claims` into
+/// the markdown block [`merged_project_memory_seed`] appends to the
+/// `project_memory` seed.
+///
+/// Pure: the actual selection is
+/// [`surge_core::context_pack::ContextPack::build`]; this only formats the
+/// result. Returns `None` for the body when nothing was selected (an empty
+/// `claims`, or a budget too small to admit even the cheapest candidate) —
+/// the receipt is still returned so the caller can log it either way.
+fn render_memory_claims_pack(
+    claims: Vec<MemoryClaim>,
+    budget: ContextPackConfig,
+) -> (Option<String>, PackReceipt) {
+    let (pack, receipt) = ContextPack::build(claims, budget);
+    if pack.is_empty() {
+        return (None, receipt);
+    }
+
+    let mut body = String::from("## Memory claims (confidence-ordered, budget-limited)\n\n");
+    for claim in pack.claims() {
+        body.push_str(&format!(
+            "- [{confidence}] {text} (source: {source})\n",
+            confidence = claim.confidence(),
+            text = claim.text(),
+            source = claim.provenance().source,
+        ));
+    }
+    (Some(body), receipt)
+}
+
+/// Load memory claims from the claim store and select them into a pack
+/// under `config.context_pack`'s budget. Tolerant of every failure — a
+/// missing/unreadable store yields no claims, exactly like
+/// [`load_project_memory_seed`] tolerates a missing `.surge/memory/`
+/// directory; memory-claim recall must never be the reason a run fails to
+/// start.
+///
+/// `store_path_override` mirrors
+/// `engine::hooks::memory_writeback::record_node_failure`'s parameter of
+/// the same name and the same `EngineRunConfig::memory_store_path` field:
+/// `Some(path)` reads from there instead (test-only), `None` (every
+/// production run) resolves `MemoryStore::default_path()`.
+///
+/// The receipt this produces is not yet persisted to the run event log
+/// (`surge_core::run_event` is out of scope for the task that added this —
+/// see `.autopilot/competitive-waves/tickets/06-context-pack.md`); it is
+/// logged here so it is at least operator-visible in the interim.
+fn load_memory_claims_seed(
+    config: &surge_core::SurgeConfig,
+    store_path_override: Option<&Path>,
+) -> Option<String> {
+    let store_path = match store_path_override {
+        Some(path) => path.to_path_buf(),
+        None => MemoryStore::default_path().ok()?,
+    };
+    if !store_path.exists() {
+        return None;
+    }
+    let store = MemoryStore::open(&store_path)
+        .inspect_err(
+            |error| warn!(%error, "memory claim store unreadable; run starts without memory claims"),
+        )
+        .ok()?;
+    let claims = store
+        .list_claims()
+        .inspect_err(
+            |error| warn!(%error, "failed to list memory claims; run starts without memory claims"),
+        )
+        .ok()?;
+    if claims.is_empty() {
+        return None;
+    }
+
+    let (body, receipt) = render_memory_claims_pack(claims, config.context_pack);
+    info!(
+        selected = receipt.selected.len(),
+        dropped = receipt.dropped.len(),
+        reason = ?receipt.reason,
+        budget = receipt.budget,
+        used = receipt.used,
+        "context pack assembled from memory claims"
+    );
+    body
 }
 
 /// Load the configured project context file as a stable run seed.
@@ -1275,5 +1432,325 @@ mod memory_seed_tests {
         let b = load_project_memory_seed(dir.path()).unwrap();
         assert_eq!(a.content, b.content);
         assert_eq!(a.hash, b.hash);
+    }
+}
+
+#[cfg(test)]
+mod render_memory_claims_pack_tests {
+    use super::*;
+    use surge_core::MemoryClaimId;
+    use surge_core::content_hash::ContentHash;
+    use surge_core::memory::{ClaimStatus, Confidence, Provenance};
+
+    fn claim(text: &str, confidence: Confidence) -> MemoryClaim {
+        let hash = ContentHash::compute(text.as_bytes());
+        MemoryClaim::new(
+            MemoryClaimId::new(),
+            text,
+            Provenance::unverified("test:fixture", hash),
+            confidence,
+            ClaimStatus::Unverified,
+        )
+        .expect("Unverified status is always constructible")
+    }
+
+    #[test]
+    fn renders_selected_claims_and_omits_dropped_ones() {
+        // Verified costs exactly 25 estimated tokens (100 chars / 4); a
+        // cheap Asserted claim would fit on its own but must lose to the
+        // budget once the verified claim is admitted first (confidence
+        // order, not size, decides admission).
+        let verified = claim(&"v".repeat(100), Confidence::Verified);
+        let asserted = claim("cheap and dropped", Confidence::Asserted);
+
+        let (body, receipt) = render_memory_claims_pack(
+            vec![asserted.clone(), verified.clone()],
+            ContextPackConfig { budget_tokens: 25 },
+        );
+
+        let body = body.expect("at least the verified claim was selected");
+        assert!(body.contains(verified.text()), "{body}");
+        assert!(body.contains("[verified]"), "{body}");
+        assert!(!body.contains(asserted.text()), "{body}");
+        assert_eq!(receipt.selected, vec![verified.id()]);
+        assert_eq!(receipt.dropped, vec![asserted.id()]);
+    }
+
+    #[test]
+    fn returns_no_body_when_nothing_fits_the_budget() {
+        let oversized = claim(&"x".repeat(400), Confidence::Asserted);
+
+        let (body, receipt) =
+            render_memory_claims_pack(vec![oversized], ContextPackConfig { budget_tokens: 1 });
+
+        assert!(body.is_none());
+        assert!(receipt.selected.is_empty());
+    }
+}
+
+/// Proves `ContextPack::build` is reachable from a real production entry
+/// point, not just called directly from a test: `with_project_context_seed`
+/// is the choke point all four run-start callers (CLI in-process, daemon
+/// IPC, daemon ticket launcher, and this crate's own tests above) funnel
+/// through, per its own doc comment. This test drives it end to end
+/// against a real, on-disk `MemoryStore` — the same one
+/// `load_memory_claims_seed` opens in production via
+/// `MemoryStore::default_path()` — rather than calling
+/// `ContextPack::build`/`render_memory_claims_pack` directly.
+#[cfg(test)]
+mod with_project_context_seed_memory_claims_tests {
+    use super::*;
+    use crate::engine::config::EngineRunConfig;
+    use surge_core::MemoryClaimId;
+    use surge_core::content_hash::ContentHash;
+    use surge_core::memory::{ClaimStatus, Confidence, Provenance};
+
+    fn claim(text: &str, confidence: Confidence) -> MemoryClaim {
+        let hash = ContentHash::compute(text.as_bytes());
+        MemoryClaim::new(
+            MemoryClaimId::new(),
+            text,
+            Provenance::unverified("test:fixture", hash),
+            confidence,
+            ClaimStatus::Unverified,
+        )
+        .expect("Unverified status is always constructible")
+    }
+
+    /// `EngineRunConfig` with `memory_store_path` pointed at `store_path`,
+    /// mirroring `tests/memory_writeback_test.rs`'s
+    /// `run_config_with_memory_store` helper. Every test in this module
+    /// must route through this (or its own explicit `Some(path)`) rather
+    /// than `EngineRunConfig::default()` directly, or
+    /// `load_memory_claims_seed` would resolve the developer's real
+    /// `~/.surge/memory.db` instead of a throwaway store — no `$HOME` /
+    /// `SURGE_HOME` env mutation needed, since the path travels explicitly
+    /// through `EngineRunConfig` the same way the engine's own write-back
+    /// path (`engine::hooks::memory_writeback`) already does.
+    fn run_config_with_memory_store(store_path: PathBuf) -> EngineRunConfig {
+        EngineRunConfig {
+            memory_store_path: Some(store_path),
+            ..EngineRunConfig::default()
+        }
+    }
+
+    #[test]
+    fn with_project_context_seed_folds_a_confidence_ordered_claims_pack_into_project_memory() {
+        let memory_dir = tempfile::tempdir().unwrap();
+        let store_path = memory_dir.path().join("memory.db");
+        let project_root = tempfile::tempdir().unwrap();
+
+        // Verified costs exactly 25 estimated tokens (100 chars / 4); the
+        // cheap Asserted claim would fit the budget on its own, but must
+        // lose out once the verified claim is admitted first — proving
+        // the real store -> `ContextPack::build` -> seed path preserves
+        // confidence order, not just budget arithmetic.
+        let verified = claim(&"v".repeat(100), Confidence::Verified);
+        let asserted = claim("cheap and dropped", Confidence::Asserted);
+        let verified_text = verified.text().to_string();
+        let asserted_text = asserted.text().to_string();
+
+        {
+            let store = MemoryStore::open(&store_path).expect("open memory store");
+            store.add_claim(&verified).expect("add verified claim");
+            store.add_claim(&asserted).expect("add asserted claim");
+        }
+
+        let config = surge_core::SurgeConfig {
+            context_pack: ContextPackConfig { budget_tokens: 25 },
+            ..surge_core::SurgeConfig::default()
+        };
+
+        let seeded = with_project_context_seed(
+            run_config_with_memory_store(store_path),
+            project_root.path(),
+            &config,
+        );
+
+        let seed = seeded
+            .project_memory
+            .expect("claims pack seeds project_memory");
+        assert!(
+            seed.content.contains(&verified_text),
+            "selected (verified) claim text missing from seed:\n{}",
+            seed.content
+        );
+        assert!(
+            !seed.content.contains(&asserted_text),
+            "dropped (over-budget) claim text must not appear in seed:\n{}",
+            seed.content
+        );
+    }
+
+    #[test]
+    fn with_project_context_seed_falls_back_to_notes_only_when_the_claim_store_is_empty() {
+        let memory_dir = tempfile::tempdir().unwrap();
+        // Deliberately never opened: `load_memory_claims_seed` must treat a
+        // non-existent store exactly like an absent one, same as
+        // `load_project_memory_seed` tolerates a missing `.surge/memory/`.
+        let store_path = memory_dir.path().join("memory.db");
+        let project_root = tempfile::tempdir().unwrap();
+        let mem_dir = project_root.path().join(PROJECT_MEMORY_DIR);
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("note.md"), "a curated note\n").unwrap();
+
+        let config = surge_core::SurgeConfig::default();
+        let seeded = with_project_context_seed(
+            run_config_with_memory_store(store_path),
+            project_root.path(),
+            &config,
+        );
+
+        let seed = seeded
+            .project_memory
+            .expect("notes alone seed project_memory");
+        assert!(seed.content.contains("a curated note"));
+        assert!(!seed.content.contains("Memory claims"));
+    }
+}
+
+#[cfg(test)]
+mod with_project_context_seed_threshold_tests {
+    use super::*;
+    use crate::engine::config::EngineRunConfig;
+    use surge_core::loop_config::ToolCallLoopGuardConfig;
+    use surge_core::spill_config::OutputSpillConfig;
+
+    /// This was the exact half of the wiring the first review found dead:
+    /// three harness tests proved `EngineRunConfig` reaches the dispatcher,
+    /// but none proved `SurgeConfig` reaches `EngineRunConfig`. A run
+    /// config that leaves both fields `None` (the default) must pick up
+    /// whatever non-default thresholds `surge.toml` carries.
+    ///
+    /// `memory_store_path` is pointed at a throwaway (never-created) path
+    /// so this test's `with_project_context_seed` call cannot open the
+    /// developer's real `~/.surge/memory.db` — the pre-existing
+    /// hermeticity gap `.autopilot/competitive-waves/tickets/06-context-pack.md`
+    /// recorded for these three threshold tests.
+    #[test]
+    fn unset_thresholds_are_filled_from_surge_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 7,
+                node_wall_clock_limit_secs: 42,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 123,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+        let run_config = EngineRunConfig {
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
+            ..EngineRunConfig::default()
+        };
+
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(config.tool_call_loop_guard),
+            "an unset run config must pick up surge.toml's threshold"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(config.output_spill),
+            "an unset run config must pick up surge.toml's cap"
+        );
+    }
+
+    /// A caller that already set an explicit (non-default) value must keep
+    /// it even when `SurgeConfig` carries a *different* non-default value.
+    ///
+    /// `memory_store_path` is pointed at a throwaway path for the same
+    /// hermeticity reason as `unset_thresholds_are_filled_from_surge_config`
+    /// above.
+    #[test]
+    fn explicit_caller_value_is_not_clobbered_by_surge_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 99,
+                node_wall_clock_limit_secs: 999,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 999,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+
+        let caller_guard = ToolCallLoopGuardConfig {
+            max_repeat_tool_calls: 1,
+            node_wall_clock_limit_secs: 1,
+        };
+        let caller_spill = OutputSpillConfig {
+            max_output_bytes: 1,
+        };
+        let run_config = EngineRunConfig {
+            tool_call_loop_guard: Some(caller_guard),
+            output_spill: Some(caller_spill),
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
+            ..EngineRunConfig::default()
+        };
+
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(caller_guard),
+            "an explicitly set threshold must survive seeding untouched"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(caller_spill),
+            "an explicitly set cap must survive seeding untouched"
+        );
+    }
+
+    /// The precise case review condition 2 named: a caller that explicitly
+    /// chose exactly the *default* value (`Some(T::default())`, not `None`)
+    /// must still not be overwritten. A sentinel comparison
+    /// (`run_config.x == T::default()`) cannot tell this apart from "never
+    /// set" and would silently clobber it the moment `SurgeConfig` carried a
+    /// different value — this is the failure mode `Option`-as-unset exists
+    /// to rule out structurally, not just by convention.
+    /// `memory_store_path` is pointed at a throwaway path for the same
+    /// hermeticity reason as `unset_thresholds_are_filled_from_surge_config`
+    /// above.
+    #[test]
+    fn explicit_default_valued_setting_is_not_mistaken_for_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = tempfile::tempdir().unwrap();
+        let config = surge_core::SurgeConfig {
+            tool_call_loop_guard: ToolCallLoopGuardConfig {
+                max_repeat_tool_calls: 99,
+                node_wall_clock_limit_secs: 999,
+            },
+            output_spill: OutputSpillConfig {
+                max_output_bytes: 999,
+            },
+            ..surge_core::SurgeConfig::default()
+        };
+        let run_config = EngineRunConfig {
+            tool_call_loop_guard: Some(ToolCallLoopGuardConfig::default()),
+            output_spill: Some(OutputSpillConfig::default()),
+            memory_store_path: Some(memory_dir.path().join("memory.db")),
+            ..EngineRunConfig::default()
+        };
+
+        let seeded = with_project_context_seed(run_config, dir.path(), &config);
+
+        assert_eq!(
+            seeded.tool_call_loop_guard,
+            Some(ToolCallLoopGuardConfig::default()),
+            "a caller-chosen default value must not be mistaken for unset"
+        );
+        assert_eq!(
+            seeded.output_spill,
+            Some(OutputSpillConfig::default()),
+            "a caller-chosen default cap must not be mistaken for unset"
+        );
     }
 }

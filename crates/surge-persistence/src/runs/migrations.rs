@@ -73,6 +73,14 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0014-task-ledger-index",
         include_str!("migrations/registry/0014_task_ledger_index.sql"),
     ),
+    (
+        "registry-0015-runtime-capacity",
+        include_str!("migrations/registry/0015_runtime_capacity.sql"),
+    ),
+    (
+        "registry-0016-runs-wake-at",
+        include_str!("migrations/registry/0016_runs_wake_at.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -209,6 +217,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table' AND name='runtime_capacity'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "0015 must create runtime_capacity");
+
+        let has_wake_at: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name = 'wake_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_wake_at, 1, "0016 must add runs.wake_at");
 
         let applied: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations", [], |r| r.get(0))

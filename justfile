@@ -78,7 +78,7 @@ test-crate crate *args:
 [group("test")]
 [doc("Run the ignored M5 engine integration tests (rebuilds mock_acp_agent first)")]
 test-ignored: build-mock-agent
-    cargo test -p surge-orchestrator --tests -- --ignored
+    cargo test -p surge-acp -p surge-orchestrator --tests -- --ignored
 
 [group("test")]
 [doc("Run the full test suite — workspace tests + ignored integration tests")]

@@ -64,12 +64,18 @@ pub mod bootstrap_driver;
 pub mod engine;
 pub mod feature_driver;
 pub mod flow_amendment;
+/// Engine-level loop hygiene for a node's agent stage — repeat-tool-call and
+/// wall-clock guards. See `.autopilot/competitive-waves/spec.md` §15.
+pub mod guard;
 pub mod profile_loader;
 pub mod project_context;
 pub mod prompt;
 pub mod roadmap_amendment;
 pub mod roadmap_document;
 pub mod roadmap_target;
+/// Output-spill policy for oversized tool results. See
+/// `.autopilot/competitive-waves/spec.md` §16.
+pub mod spill;
 pub mod triage;
 
 /// TOML source of the `Triage Author` bootstrap profile, bundled at compile time.

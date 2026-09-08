@@ -11,7 +11,9 @@ use std::time::Duration;
 use surge_core::approvals::ApprovalChannel;
 use surge_core::human_gate_config::{HumanGateConfig, HumanGateMode, TimeoutAction};
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::run_event::{BootstrapDecision, EventPayload, VersionedEventPayload};
+use surge_core::run_event::{
+    BootstrapDecision, EscalationCause, EventPayload, VersionedEventPayload,
+};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 use tokio::sync::oneshot;
@@ -44,6 +46,19 @@ pub struct HumanGateResolution {
     /// Full JSON response payload (must contain an `"outcome"` field).
     pub response: serde_json::Value,
 }
+
+/// Node-keyed decision registry `Engine::resolve_human_input` drains.
+///
+/// Shared (behind an `Arc`) by `RunTaskParams::gate_resolutions` and any
+/// stage that pauses on an operator decision routed through the generic
+/// `HumanInputRequested`/`HumanInputResolved` pair — today `HumanGate`
+/// nodes and the skill-trust prompt
+/// (`engine::stage::skill_binding::bind_skills`). A caller registers a
+/// sender for its node immediately before requesting the decision (never
+/// earlier) so a stale, unread entry can never sit in the map — see
+/// `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
+pub type GateResolutions =
+    tokio::sync::Mutex<std::collections::HashMap<NodeKey, oneshot::Sender<HumanGateResolution>>>;
 
 /// Execute a single `NodeKind::HumanGate` stage.
 ///
@@ -221,6 +236,7 @@ pub async fn execute_human_gate_stage(p: HumanGateStageParams<'_>) -> StageResul
                         EventPayload::EscalationRequested {
                             stage: Some(stage),
                             reason: reason.clone(),
+                            cause: EscalationCause::BootstrapEditLoopExhausted,
                         },
                     ))
                     .await

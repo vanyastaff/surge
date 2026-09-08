@@ -20,6 +20,7 @@ pub mod lifecycle;
 pub mod pidfile;
 pub mod recovery;
 pub mod server;
+pub mod wake_scheduler;
 
 pub use error::DaemonError;
 pub use server::{ServerConfig, run as run_server, run_with_registry};

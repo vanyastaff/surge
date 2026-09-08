@@ -21,6 +21,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use surge_core::capacity::CapacityStatus;
 use surge_core::config::{AgentConfig, BackoffStrategy, ResilienceConfig};
 use surge_core::{SurgeError, SurgeEvent};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
@@ -293,6 +294,16 @@ impl AgentPool {
     /// Configure a fallback agent for a primary agent.
     pub async fn set_fallback(&self, primary: &str, fallback: &str) {
         self.health.lock().await.set_fallback(primary, fallback);
+    }
+
+    /// Capacity status Surge has for `name` (an already configured agent
+    /// runtime), learned from real request failures — never a fabricated
+    /// default. Distinguishes "no signal yet" (a fresh runtime, the common
+    /// case, R35.1) from "failed, but not a recognized rate-limit shape"
+    /// (see [`CapacityStatus`]).
+    #[must_use]
+    pub async fn capacity_status(&self, name: &str) -> CapacityStatus {
+        self.health.lock().await.capacity_status(name)
     }
 
     /// Pre-connect to the default agent in the background.
@@ -985,6 +996,22 @@ async fn prompt(
 
         for agent_name in &candidates {
             if let Err(e) = connect(state, agent_name).await {
+                // R34–R36: previously this left `HealthTracker` completely
+                // untouched. This is specifically the *reconnect-within-
+                // prompt-dispatch* path (a fallback candidate, or a
+                // previously-connected agent whose connection dropped) —
+                // **not** an agent's very first contact, which goes through
+                // `create_session` → `validate_agent_auth` → `connect`
+                // (line ~798) and propagates a failure there via `?`
+                // without touching `HealthTracker` at all. An agent that
+                // fails on every attempt from a cold start still reports
+                // `CapacityStatus::NeverObserved` until it reaches this
+                // loop at least once.
+                let health = state.borrow().health.clone();
+                health
+                    .lock()
+                    .await
+                    .record_connect_failure(agent_name, &e.to_string());
                 last_error = Some(e);
                 continue;
             }
@@ -1206,6 +1233,24 @@ pub(crate) fn is_auth_failure(error_msg: &str) -> bool {
 /// - HTTP 429 status code
 /// - "rate limit exceeded" or "too many requests"
 /// - "rate_limit_exceeded"
+///
+/// Deliberately **not** delegated to
+/// `surge_core::capacity::looks_like_rate_limit` (R34–R36's shared
+/// observation classifier), even though the two questions look similar. An
+/// earlier revision of this module unified them, and a review round caught
+/// the consequence: `looks_like_rate_limit`'s wider set (it also recognizes
+/// `insufficient_quota`, `resource_exhausted`, `overloaded_error`, "usage
+/// limit reached" — real provider shapes this function never needed to act
+/// on) silently changed *this* function's answer for those four patterns,
+/// which changes what `send_prompt_with_retry` below does: this function
+/// returning `true` short-circuits the retry loop into an immediate
+/// `Err(SurgeError::RateLimit{..})` instead of the normal
+/// reconnect-and-retry path. That is a real policy change to land
+/// deliberately, with tests proving the new short-circuit behavior for
+/// whichever pattern is added — not a side effect of reusing a
+/// classifier built for a lower-stakes question (surfacing something to an
+/// operator, where over-inclusion costs nothing). Keep this list's own,
+/// narrower patterns; widen it only alongside dedicated tests.
 fn is_rate_limit(error_msg: &str) -> bool {
     let msg_lower = error_msg.to_lowercase();
     msg_lower.contains("429")
@@ -1224,6 +1269,20 @@ fn is_rate_limit(error_msg: &str) -> bool {
 /// - "wait 30s"
 ///
 /// Returns the number of seconds to wait, or a default of 60 seconds if not found.
+///
+/// **Intentionally separate from `surge_core::capacity::{parse_retry_after_secs,
+/// parse_reset_hint}`: observation vs. policy. Do not unify these — see
+/// `docs/adr/0016-capacity-parking-and-wake.md`.** This function backs this
+/// pool's own retry-loop backoff, which has to sleep on *some* number even
+/// when the provider said nothing — hence the unanchored numeric fallback
+/// below and the 60-second default a caller of this function applies. The
+/// `surge-core` pair answers a different question ("what reset time did the
+/// provider actually say", an observation Surge either records verbatim or
+/// not at all) and must never inherit this function's invented default or
+/// its fallback — pinned by `parse_retry_after_behavior_is_unchanged_by_task_12`
+/// below: a future "these look similar, let's merge them" refactor must not
+/// silently change this pool's backoff behavior (a prior round of review
+/// already found exactly that happening once).
 fn parse_retry_after(error_msg: &str) -> u64 {
     use std::str::FromStr;
 
@@ -1468,6 +1527,49 @@ mod tests {
 
         assert_eq!(handle.session_id, "test-session");
         assert_eq!(handle.agent_name, "test-agent");
+    }
+
+    /// Exercises the real pool-level path (R34–R36): `capacity_status`
+    /// reflects whatever `record_failure` (called by the pool's own
+    /// prompt-dispatch failure handling in production) observed, and stays
+    /// `NeverObserved` for an agent that has never failed — the common, "no
+    /// data yet" case (R35.1).
+    #[tokio::test]
+    async fn test_pool_capacity_status_reflects_observed_429() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+        configs.insert("other-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        // Never failed: no signal.
+        assert_eq!(
+            pool.capacity_status("other-agent").await,
+            CapacityStatus::NeverObserved
+        );
+
+        // Simulate what the real prompt-dispatch failure path does on a
+        // 429 response.
+        pool.health()
+            .lock()
+            .await
+            .record_failure("test-agent", "429 Too Many Requests; Retry-After: 45");
+
+        let window = pool
+            .capacity_status("test-agent")
+            .await
+            .window()
+            .cloned()
+            .expect("observed 429 must be reflected through the pool's public API");
+        assert_eq!(window.runtime(), "test-agent");
+        assert!(window.is_exhausted());
     }
 
     /// `warm_up` must not panic or block — it fires and forgets.
@@ -1754,6 +1856,22 @@ mod tests {
         assert!(!is_rate_limit("404 Not Found"));
     }
 
+    /// Pins this function's scope against `surge_core::capacity`'s wider
+    /// observation-only classifier (R34–R36): a prior revision delegated
+    /// here, which silently short-circuited the retry loop below for these
+    /// four provider shapes instead of the normal reconnect-and-retry path
+    /// — a real policy change nobody had decided to make. If this function
+    /// is ever re-delegated to `looks_like_rate_limit` without a deliberate
+    /// decision (and dedicated tests for the new short-circuit behavior),
+    /// this test goes red.
+    #[test]
+    fn test_is_rate_limit_excludes_capacity_only_patterns() {
+        assert!(!is_rate_limit("insufficient_quota"));
+        assert!(!is_rate_limit("resource_exhausted"));
+        assert!(!is_rate_limit("overloaded_error"));
+        assert!(!is_rate_limit("usage limit reached"));
+    }
+
     #[test]
     fn test_is_rate_limit_case_insensitive() {
         assert!(is_rate_limit("rAtE LiMiT"));
@@ -1799,6 +1917,33 @@ mod tests {
             parse_retry_after("HTTP/1.1 429 Too Many Requests\nRetry-After: 15\n"),
             15
         );
+    }
+
+    /// Regression (Task 12 M1): pins this pool's own `parse_retry_after` as
+    /// unchanged by the addition of `surge_core::capacity::parse_reset_hint`
+    /// — the two are deliberately separate functions (observation vs.
+    /// policy; see this function's own doc and ADR-0016), and a future
+    /// "let's unify the two retry-after parsers" refactor is exactly the
+    /// change this test exists to catch, since it would otherwise pass
+    /// every other test in this file (they only assert this pool's own
+    /// behavior, not that it stayed independent of `surge-core`'s). The
+    /// unanchored numeric fallback and the 60-second default in particular
+    /// must survive: `surge_core::capacity::parse_reset_hint` deliberately
+    /// does **not** implement either.
+    #[test]
+    fn parse_retry_after_behavior_is_unchanged_by_task_12() {
+        // Unanchored fallback: `surge_core::capacity::parse_reset_hint`
+        // returns `None` for exactly this shape (no anchor connects the
+        // number to a recognized reset-time phrase) — this pool must still
+        // resolve *some* concrete number, because its retry loop has to
+        // sleep on one.
+        assert_eq!(
+            parse_retry_after("rate limited, wait ~45 seconds and retry"),
+            45
+        );
+        // Invented default when nothing at all is recognized — a behavior
+        // `surge_core::capacity`'s functions refuse to have by design.
+        assert_eq!(parse_retry_after("no timing information whatsoever"), 60);
     }
 
     // ── Token validation tests ────────────────────────────────────

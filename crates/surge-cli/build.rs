@@ -18,10 +18,10 @@ fn main() {
     // (`ref: refs/heads/<branch>`) and its file content does NOT change on a
     // new commit — the branch ref file does. Without this, incremental
     // builds keep a stale SHA/date after HEAD advances on the same branch.
-    if let Some(sym) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
-        if let Some(ref_path) = git(&["rev-parse", "--git-path", sym.as_str()]) {
-            println!("cargo:rerun-if-changed={ref_path}");
-        }
+    if let Some(sym) = git(&["symbolic-ref", "--quiet", "HEAD"])
+        && let Some(ref_path) = git(&["rev-parse", "--git-path", sym.as_str()])
+    {
+        println!("cargo:rerun-if-changed={ref_path}");
     }
     println!("cargo:rerun-if-changed=build.rs");
 

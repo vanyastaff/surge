@@ -139,6 +139,59 @@ consumer:
    `intake_emit_log` so retries no-op. The `merged` row is written **before**
    the follow-up comment/label, because the merge is irreversible.
 
+### Run Report attachment (optional — reads report data outside the machine)
+
+On a successful merge, the gate can attach the run's own Run Report (the
+same document `surge run report --format md` prints, compiled fresh from
+that run's event log — see `surge_core::run_report`'s module doc) to the
+`surge:merged` comment — a reviewer sees whether the merge was backed by an
+authorized verifier without opening a second tool.
+
+**Off by default**, via `merge_gate.publish_run_report` in `surge.toml`:
+
+```toml
+[merge_gate]
+publish_run_report = true   # default: false
+```
+
+Turning this on means the *content* of the run's event log — not just the
+fact that it merged — leaves the machine, through whichever tracker
+`post_comment` targets. Tagging a ticket `surge:auto` is consent to let
+Surge merge the PR; it is **not** by itself consent to publish the run's own
+transcript-derived report to that tracker, which is why this is a second,
+separate opt-in rather than bundled into L3.
+
+Before the attachment is posted:
+
+- It goes through the same credential-pattern scan
+  (`surge_acp::secrets::redact_secrets`) an agent's own file reads go
+  through, applied to the whole rendered report. **This is best-effort
+  against known credential *shapes*** (API keys, DSNs with embedded
+  credentials, JWTs, …) — a dozen or so recognized patterns. Free text an
+  operator or agent wrote (`initial_prompt`, a steer message, the operator's
+  own answer to a `HumanInputRequested` prompt, an outcome summary) is *not*
+  scanned for meaning — anything in there that isn't shaped like a known
+  credential pattern is posted verbatim. Do not rely on this pass to catch
+  sensitive text that isn't a recognizable secret format.
+- Absolute paths (worktree/artifact paths, which embed the machine's home
+  directory — `SURGE_HOME` if set, else `$HOME/.surge`) are shortened to
+  `~/...`.
+- The Markdown itself is escaped against HTML-tag injection (a `<script>`
+  or `</details>` in report text cannot break out of the comment) and
+  Markdown-structure injection (an embedded blank line plus `##` cannot
+  forge a fake section) — see `surge_core::run_report::render_markdown`'s
+  own doc for the mechanism. This does *not* extend the credential scan
+  above; it only stops the text from being *misinterpreted*, not from
+  containing something sensitive in the first place.
+- The attachment is dropped (the comment still posts, without it) rather
+  than truncated if it would push the comment over GitHub's per-comment
+  size limit.
+- On Linear (which does not render inline HTML), the attachment loses its
+  collapsible `<details>` wrapper — see the code's own doc for why, and for
+  why this is currently moot: Linear's readiness check always reports
+  `Blocked` (below), so an L3 Linear ticket never reaches this attachment
+  path at all today.
+
 ### GitHub readiness check
 
 `TaskSource::check_merge_readiness` is implemented for GitHub via
@@ -297,6 +350,11 @@ label_filters = ["surge:enabled", "surge:auto", "surge:template/*"]
 `label_filters` is provider-side filtering and is independent of
 `AutomationPolicy` — surge will still ignore tickets that pass the filter if
 their labels resolve to `Disabled`.
+
+```toml
+[merge_gate]
+publish_run_report = false   # default; see "Run Report attachment" above
+```
 
 ## See also
 

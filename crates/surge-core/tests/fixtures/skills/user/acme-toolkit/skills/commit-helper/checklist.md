@@ -1,0 +1,2 @@
+- [ ] Subject under 72 chars
+- [ ] Type prefix present

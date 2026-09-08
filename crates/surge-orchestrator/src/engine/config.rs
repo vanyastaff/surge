@@ -22,6 +22,38 @@ pub struct EngineConfig {
     /// and pre-registry callers; production wiring (CLI / daemon) should
     /// always populate this with `ProfileRegistry::load()`.
     pub profile_registry: Option<Arc<ProfileRegistry>>,
+    /// Capacity-aware dispatch policy every run's pre-dispatch check and
+    /// post-429 park decision runs against (Task 12 M3, R37/R37.1;
+    /// acceptance criterion B).
+    ///
+    /// `EngineConfig::default` carries
+    /// `surge_core::capacity_config::CapacityConfig::default`'s
+    /// conservative blind backoff (matching what `surge init` writes) with
+    /// rotation disabled — the same default a fresh install gets. **This
+    /// is not the field a config file's `[capacity]` section actually
+    /// reaches production runs through** — the engine's production wiring
+    /// (`surge-cli`'s `commands::engine`/`commands::bootstrap`,
+    /// `surge-daemon`'s `main`) overrides this with
+    /// `CapacityPolicy::from(&SurgeConfig::discover(..).capacity)` at
+    /// startup, before constructing the `Engine`. A caller that builds an
+    /// `Engine` directly (most tests) gets this default instead, which is
+    /// intentional — those callers do not read a `surge.toml` at all.
+    pub capacity: surge_core::capacity::CapacityPolicy,
+    /// Engine-level fallback for [`EngineRunConfig::memory_store_path`]
+    /// (Task 12 M4 review): consulted by [`crate::engine::engine::Engine::start_run`]
+    /// and [`crate::engine::engine::Engine::resume_run`] whenever the
+    /// per-run field is `None`. Exists specifically because
+    /// `EngineRunConfig::memory_store_path` is deliberately never copied
+    /// into the persisted `RunConfig` (see that field's own doc for why) —
+    /// which means a *resumed* run has no way to recover a per-run
+    /// override the original `start_run` call was given; it rebuilds
+    /// `EngineRunConfig::default()` from scratch. A caller that needs a
+    /// resumed run to keep writing to a non-default memory store (every
+    /// integration test that exercises resume + a stage failure) sets it
+    /// **here**, once, at `Engine` construction — not per-run — so both
+    /// `start_run` and `resume_run` resolve the same value without needing
+    /// anything to survive a trip through the event log.
+    pub memory_store_path: Option<std::path::PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -29,6 +61,10 @@ impl Default for EngineConfig {
         Self {
             snapshot_policy: SnapshotPolicy::StageBoundary,
             profile_registry: None,
+            capacity: surge_core::capacity::CapacityPolicy::from(
+                &surge_core::capacity_config::CapacityConfig::default(),
+            ),
+            memory_store_path: None,
         }
     }
 }
@@ -101,6 +137,53 @@ pub struct EngineRunConfig {
     /// folded cumulative cost.
     #[serde(default)]
     pub budget: surge_core::budget::BudgetGuard,
+    /// Engine-level guard against a node's agent stage repeating an
+    /// identical tool call, or running past a wall-clock budget, instead of
+    /// burning the run's budget silently
+    /// (`.autopilot/competitive-waves/spec.md` §15). `None` means
+    /// "unset" — deliberately not a concrete `ToolCallLoopGuardConfig`
+    /// defaulted value, so `crate::project_context::with_project_context_seed`
+    /// can tell "the caller never set this" apart from "the caller set it
+    /// to exactly the conservative default" and only fills the former from
+    /// `SurgeConfig::tool_call_loop_guard`. `run_task.rs` resolves the
+    /// final value with `.unwrap_or_default()` right before building
+    /// `AgentStageParams` — nothing downstream of that point ever sees
+    /// `None`.
+    #[serde(default)]
+    pub tool_call_loop_guard: Option<surge_core::loop_config::ToolCallLoopGuardConfig>,
+    /// Threshold beyond which a tool's output moves to the artifact store
+    /// instead of flowing to the node in full (§16). Same `None`-means-unset
+    /// wiring and resolution as `tool_call_loop_guard` above.
+    #[serde(default)]
+    pub output_spill: Option<surge_core::spill_config::OutputSpillConfig>,
+    /// Test-only override of `MemoryStore::default_path()`
+    /// (`~/.surge/memory.db`), consumed by both
+    /// `engine::hooks::memory_writeback::record_node_failure` (writes a
+    /// failure claim) and `project_context::load_memory_claims_seed` (reads
+    /// the claims pack a run seeds `project_memory` from). `None` — the
+    /// only value any production caller sets — keeps the real default path;
+    /// integration tests set `Some(tempdir_path)` so a run's memory reads
+    /// and writes land in a throwaway store instead of mutating the
+    /// process-wide `$HOME`/`SURGE_HOME` environment variables
+    /// (`tests/memory_writeback_test.rs`,
+    /// `project_context::with_project_context_seed_memory_claims_tests`).
+    /// Deliberately never copied into `surge_core::run_event::RunConfig`
+    /// (`Engine::startup_run_events`'s `core_run_config`), so it is not part
+    /// of the persisted run schema and does not, by itself, survive a
+    /// daemon restart + resume: `Engine::resume_run` rebuilds
+    /// `EngineRunConfig::default()` from scratch (`memory_store_path:
+    /// None`), with nothing in the event log to recover a per-run override
+    /// from.
+    ///
+    /// **A resumed run is not left writing to the real default path on
+    /// that account** (Task 12 M4 review, closed the same milestone that
+    /// made resume routine instead of restart-only): [`EngineConfig::
+    /// memory_store_path`] is the engine-level fallback both `start_run`
+    /// and `resume_run` consult when this field is `None` — set it once at
+    /// `Engine` construction (not per-run) and every run on that engine,
+    /// including a resumed one, resolves the same store.
+    #[serde(default)]
+    pub memory_store_path: Option<std::path::PathBuf>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -203,6 +286,9 @@ impl Default for EngineRunConfig {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
+            memory_store_path: None,
         }
     }
 }
@@ -239,6 +325,21 @@ mod tests {
     }
 
     #[test]
+    fn engine_run_config_default_has_no_memory_store_path_override() {
+        let cfg = EngineRunConfig::default();
+        assert!(cfg.memory_store_path.is_none());
+    }
+
+    #[test]
+    fn engine_run_config_missing_memory_store_path_deserializes_to_none() {
+        // Persisted/legacy configs from before this field existed must still
+        // decode, defaulting to the real `MemoryStore::default_path()`.
+        let json = r#"{"human_input_timeout":"5m","stage_timeout_override":null}"#;
+        let parsed: EngineRunConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.memory_store_path.is_none());
+    }
+
+    #[test]
     fn engine_run_config_with_mcp_servers_serde_roundtrip() {
         let cfg = EngineRunConfig {
             human_input_timeout: Duration::from_secs(120),
@@ -257,6 +358,9 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -289,6 +393,9 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig::default(),
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -335,6 +442,9 @@ mod tests {
             seed_artifacts: Vec::new(),
             bootstrap: BootstrapRunConfig { edit_loop_cap: 5 },
             budget: surge_core::budget::BudgetGuard::default(),
+            tool_call_loop_guard: None,
+            output_spill: None,
+            memory_store_path: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

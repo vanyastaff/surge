@@ -3,7 +3,7 @@
 Status: research note, last checked 2026-07-07.
 
 This page tracks adjacent products and patterns that matter for Surge. It is not
-a support matrix; see [Agent runtimes](agent-runtimes.md) for ACP runtime wiring.
+a support matrix; see [Agent runtimes](agent-runtimes.md) for Agent Client Protocol (ACP) runtime wiring.
 The goal here is product direction: what each tool is trying to own, what Surge
 can learn from it, and where Surge should deliberately be different.
 

@@ -6,7 +6,18 @@
 // ── Schema Version ──────────────────────────────────────────────────
 
 /// Current schema version for memory database.
-pub const SCHEMA_VERSION: i32 = 1;
+///
+/// **v1:** discoveries/patterns/gotchas/file_contexts, free-text entries.
+///
+/// **v2:** adds `memory_claims` — memory as claims with per-entry
+/// provenance (source, content hash, verifying command, timestamp),
+/// three-level [`surge_core::memory::Confidence`], and
+/// [`surge_core::memory::ClaimStatus`]. Additive: the v1 tables and their
+/// rows are kept as-is (existing callers keep working); a v1 database is
+/// migrated forward by materializing every existing row as an unverified,
+/// `Asserted`-confidence claim (see `MemoryStore::migrate_one_step`) — see
+/// `docs/schema-versioning.md`.
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// Schema version table DDL.
 pub const CREATE_SCHEMA_VERSION_TABLE: &str = r#"
@@ -264,6 +275,28 @@ CREATE TRIGGER IF NOT EXISTS file_contexts_fts_delete AFTER DELETE ON file_conte
 END
 "#;
 
+// ── Memory Claim Tables (v2) ────────────────────────────────────────
+
+/// Memory claims table: memory as claims with per-entry provenance,
+/// confidence, and verification status.
+///
+/// `source`/`source_hash` are always populated (every claim has a
+/// locator and a hash of that locator's content at capture time);
+/// `verified_by`/`verified_at` stay `NULL` until the claim is actually
+/// re-checked against its source.
+pub const CREATE_MEMORY_CLAIMS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_claims (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    verified_by TEXT,
+    verified_at INTEGER,
+    confidence TEXT NOT NULL,
+    status TEXT NOT NULL
+)
+"#;
+
 // ── Indexes ─────────────────────────────────────────────────────────
 
 /// Index discoveries by spec_id for fast lookup by spec.
@@ -379,4 +412,6 @@ pub const SCHEMA_DDL: &[&str] = &[
     CREATE_FILE_CONTEXTS_TASK_INDEX,
     CREATE_FILE_CONTEXTS_LANGUAGE_INDEX,
     CREATE_FILE_CONTEXTS_MODULE_INDEX,
+    // Memory Claims (v2)
+    CREATE_MEMORY_CLAIMS_TABLE,
 ];

@@ -7,6 +7,237 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Run Report: `surge run report <id> --format json|md|html`
+
+- **`RunReport::compile(run_id, events) -> RunReport`** (`surge_core::run_report`)
+  compiles nine named sections — `nodes`, `outcomes`, `verdicts`, `evidence`,
+  `cost`, `skills`, `memory_receipts`, `steers`, `approvals` — as a **pure
+  projection of the event log**: no database connection, no live engine
+  handle, no `surge.toml`. A run whose log never reaches a terminal event
+  compiles with `completion: RunCompletion::Incomplete` instead of erroring
+  or guessing — a crashed or still-running run is exactly as reportable as a
+  finished one. See [ADR 0017](docs/adr/0017-run-report-is-a-log-projection.md)
+  for why this deliberately does not reuse `run_state::fold` (whose
+  `RunMemory` bookkeeping is discarded at the terminal transition — wrong
+  lifetime for a report) or the `surge-persistence` materialized SQL views
+  (wrong dependency direction for a `surge-core` type testable from a bare
+  event-fixture slice).
+- **`skills` reconstructs every skill a run bound entirely from `SkillBound`
+  events** (R14) — name, provider, content hash, and whether the trust gate
+  was active — with no dependency on a node's declaration or `surge.toml`.
+- **`verdicts` cross-checks verification authority**, not just presence: a
+  `TaskVerified` event is folded as `Verified` only when the graph active at
+  that point actually granted the reporting node verification authority
+  (`run_state::node_has_verification_authority`, the same predicate
+  `LedgerState::record_verified` trusts); otherwise it is surfaced as
+  `VerdictResult::Unauthorized` rather than silently accepted or dropped —
+  R33 asks a reviewer to accept/reject a run from the report alone, and a
+  log entry that claims verification without the authority to grant it is
+  exactly the kind of fact that judgment needs to see.
+- **`RunReport::header`** carries `RunStarted.initial_prompt` and the first/
+  last event timestamps — the identifying "what was this run even asked to
+  do, and when" facts a reviewer needs before any of the nine sections make
+  sense. **`RunReport::escalations`** lists every `EscalationRequested`
+  (typed `EscalationCause`, since Task 17) the run raised, so a run a loop
+  guard stopped reports *why* instead of a bare, reasonless `Incomplete`.
+- **`RunCompletion::Parked`** is its own completion state, read straight
+  from `RunParked`/`RunWokeFromPark` — a run paused on a provider rate limit
+  proves *why* it paused and *when* it resumes, which collapsing it into the
+  same `Incomplete` bucket as a genuinely unexplained stall would throw away.
+- **`OutcomeStatus::RejectedByHook`** — an `OutcomeRejectedByHook` event
+  flips the matching `outcomes` entry's status in place (or, for a torn log
+  missing the original report, still records the rejection) rather than
+  reporting a hook-rejected outcome exactly like an accepted one. The same
+  half-the-trust-story gap `VerdictResult::Unauthorized` already closed for
+  verifier verdicts, applied to outcomes.
+- **`CostTotals.uncosted_token_events`** counts `TokensConsumed` events with
+  no recorded price; every renderer says "at least $X (+N events without a
+  recorded price)" rather than silently treating unpriced spend as free.
+- **`surge run report <run_id> --format json|md|html`** (default `md` via
+  `#[arg(default_value = "md")]`, `crates/surge-cli/src/commands/run.rs`).
+  Output is written with a discarded-error `writeln!`, not `println!`,
+  which would otherwise panic on `BrokenPipe` (e.g. piping a large HTML
+  report to `| head`) the same way `inbox.rs::print_inbox_to` already
+  avoids. The HTML form is one self-contained file — inline `<style>`,
+  **every** interpolated value HTML-escaped uniformly (not only the fields
+  judged risky — a validated `NodeKey`, a hex `ContentHash`, and a
+  `{:?}`-formatted enum are escaped too, so the guarantee holds even if a
+  future field's validation loosens), no `<link>`/`<script src>`/CDN/
+  external `http(s)://` reference of any kind — so it opens and reads
+  identically in a PR viewer, an offline archive, or years later with no
+  network reachable at all.
+- **`crates/surge-cli/src/commands/run_fold.rs`** gained
+  `read_run_events(reader, run_id)`, factored out of the pre-existing
+  `fold_run_state` so `surge run report` and `surge inbox`/`surge resolve`
+  share the one `ReadEvent → RunEvent` conversion instead of a second reader
+  deriving it independently.
+
+Named rather than silently absent: **`memory_receipts` is always empty
+today.** `surge_core::context_pack::PackReceipt` exists and is computed at
+run start, but no `EventPayload` variant carries it into the event log yet
+(a follow-up already named in that module's own doc). The field, and its
+rendering in all three formats, exist and are wired to the log exactly like
+every other section — they simply have nothing to read until a future
+change emits the event. `RunReport::caveats` names this gap as a real field
+on the type, populated by `compile` itself, so the **JSON** form carries the
+same warning the Markdown/HTML prose does — a bare `"memory_receipts": []`
+with nothing alongside it would read to a machine consumer as "memory was
+not used," which is exactly the false reading this field prevents.
+
+### Added — Provider rate-limit parking: park, wake, and see it in the inbox
+
+- **A run no longer dispatches into a provider it already knows is
+  rate-limited.** Before starting a node, Surge checks whether the node's
+  agent runtime has a known-exhausted rate-limit window; if so, the run
+  parks (`RunStatus::Parked`) with a recorded wake time instead of
+  dispatching and finding out from a fresh 429. A rate limit hit *during*
+  a dispatch parks the run immediately too, ahead of any configured
+  on-error retry, so a rate-limited node no longer burns a retry attempt
+  on every pass through a retry loop before the run finally gives up.
+- **Parked runs wake themselves up.** A scheduler in `surge daemon`
+  resumes a parked run once its recorded wake time passes — no operator
+  action and no daemon restart required. The resumed run's budget re-arms
+  exactly the way a manually-resumed run's already does. When the
+  provider gave no usable reset time, Surge parks on a configurable blind
+  backoff instead (see the new `[capacity]` section of `surge.toml`
+  below), and raises a visible escalation (a desktop notification and an
+  inbox-visible flag) after several blind parks in a row with no
+  successful dispatch between them — a signal that something may be stuck
+  outright, not merely rate-limited.
+- **`surge inbox` shows parked runs, and why they're waiting.** A new
+  WAITING group lists every parked run alongside its wake time and
+  whether that time is an actual provider-observed reset or a policy
+  guess. `--format json` carries the same two facts (`wake_at`,
+  `wake_basis`) as structured fields on the entry, not only as the
+  `"waiting"` status string.
+- **New `[capacity]` section in `surge.toml`**: `blind_backoff` (how long
+  to park on a guess when no provider reset time is known — delete the
+  line to opt out of blind parking entirely), `blind_park_limit` (how
+  many consecutive blind parks are tolerated before Surge escalates), and
+  `jitter_max` (spreads multiple runs parked on the same exhausted
+  runtime across a short window instead of all waking in the same
+  instant). [ADR 0016](docs/adr/0016-capacity-parking-and-wake.md).
+
+Deliberately not shipped, named so an operator does not assume otherwise:
+**no rotation across accounts** — Surge does not track more than one login
+per agent runtime today, so an exhausted runtime parks; it does not fail
+over to a different account of the same agent, and there is no
+`surge.toml` field to enable one. **A node's estimated work does not
+factor into the parking decision** — the comparison machinery exists
+internally, but nothing in this delivery feeds it real per-node cost
+data, so today's decision is only "is the runtime currently exhausted,"
+never "would this specific node's work fit in what's left of the
+window." **The capacity window is learned only from an observed
+rate-limit error, never from an agent's own usage reporting** — no
+current agent-runtime integration exposes a rate-limit window or reset
+time for Surge to read proactively, so a runtime Surge has never seen
+fail reads as clean, and Surge cannot warn before the first 429 happens.
+
+### Added — Skill binding, trust gate, and the `SkillBound` event
+
+- **`AgentConfig::declared_skills()`** — a node's `skills = [...]` declaration
+  (read from `custom_fields["skills"]`, an array of `surge_core::skill::SkillRef`)
+  resolves and binds at stage entry, exactly like a context `Binding`
+  (`project.md`) — never lazily mid-stage. Declared on `custom_fields` rather
+  than a dedicated field so the capability doesn't force every `AgentConfig`
+  struct literal across the workspace to grow it. A malformed declaration is
+  its own typed `StageError::InvalidSkillsDeclaration { node, source }`, not
+  flattened into `StageError::Internal(String)`.
+- **`engine::stage::skill_binding::bind_skills`** — resolves each declared
+  skill against the node's discovered `SkillCatalog` and, once bound, hands
+  the caller each skill's resolved instructions
+  (`skill_binding::BoundSkill::instructions`) so `engine::stage::agent`
+  appends them to the agent's system prompt at session-open time — the
+  content actually reaches the agent, not just the event log.
+- **Trust gate delivered through the rendered path.** An unpinned, unhashed,
+  or content-changed skill gates behind an operator decision emitted as
+  `EventPayload::HumanInputRequested` / `HumanInputResolved` /
+  `HumanInputTimedOut` — the same events `cockpit::dispatch::decide_action`
+  and `surge inbox` already render — resolved through the engine's existing
+  node-keyed `gate_resolutions` registry and `Engine::resolve_human_input`.
+  The sender is registered into that registry only at the moment a prompt is
+  actually requested, never eagerly at stage entry, so a node whose skills
+  all bind without approval never touches the registry, and a prompt can
+  never be resolved against a stale, already-abandoned entry. A denial or an
+  unanswered prompt is `StageError::SkillApprovalRejected` — the node does
+  not start, and nothing is bound for it.
+- **`ApprovalConfig::skill_approval`** now gates real behavior (previously
+  read nowhere): default enabled, so a profile that never mentions it keeps
+  the trust check active; set to `false` to bind every declared skill on
+  that node without a prompt. Every `SkillBound` event records
+  `gate_enabled: bool` so a disabled gate is visible in the log, not silent.
+- **`EventPayload::SkillBound`** carries `node: NodeKey` explicitly (not
+  positional "nearest preceding `StageEntered`" inference), so a single
+  event reconstructs the full "node → skill → hash" triple by itself — the
+  event log alone is enough to know which skill, at which content, entered
+  which node (R17).
+- **`default_skill_roots`** scans `.claude/plugins` alongside `.claude/skills`
+  under both the worktree and the user's home directory. The Agent Plugins
+  corpus measured on a real machine (352 `SKILL.md`, 47
+  `.claude-plugin/plugin.json` manifests) lives under `~/.claude/plugins`,
+  not `~/.claude/skills` — scanning only the latter would never bind a
+  single one of those 47 packages.
+  See [ADR 0015](docs/adr/0015-skill-binding-trust-via-content-hash.md).
+- **Event schema v6** (`surge_core::migrations::MAX_SUPPORTED_VERSION`) adds
+  the `SkillBound` variant, carrying `node`, `name`, `provider`, `hash`, and
+  `gate_enabled`. **Not "purely additive"**: an unknown enum variant has no
+  representation for an old reader to fall back on at all (unlike an
+  optional field, which can default) — the version is bumped precisely so a
+  v5-max reader fails closed with a clean `SurgeError::SchemaTooNew` instead
+  of an opaque unknown-variant decode error, the same reasoning as the
+  v2/v4/v5 bumps before it. See
+  [docs/schema-versioning.md](docs/schema-versioning.md#event-payloads-run-log).
+- **Ambiguous unpinned names reach the operator, not a hard failure.**
+  Measured on a real `~/.claude/plugins` corpus: 49 of 99 skill names have
+  more than one physically distinct pack (up to five per name). An unpinned
+  declaration of one of those names used to fail
+  `StageError::SkillResolutionFailed` before the node ever asked anyone —
+  roughly half the corpus, silently un-bindable. `bind_skills` now resolves
+  a `hash: Some(pin)` declaration directly against that pin (narrowing to
+  exact content — never ambiguous, per Решение §4) and only falls back to a
+  name/provider(/version) lookup — where `SkillError::Ambiguous` is expected
+  corpus shape, not a failure — when the pin doesn't match anything current.
+  The resulting approval prompt names every candidate's hash; the
+  lexicographically smallest is the one that binds if approved (a stable,
+  deterministic tie-break, not a guess).
+- **Skill catalog discovery moved off the async worker thread and is cached
+  per run.** `SkillCatalog::discover` synchronously walks and hashes every
+  pack under (now four) roots — hundreds of packs on a real corpus — and was
+  being called inline from an async fn on every single agent node that
+  declares skills. It now runs via `tokio::task::spawn_blocking` and is
+  discovered at most once per run (cached on the run's execution state),
+  reused by every later node instead of re-walking the filesystem each time.
+- **`ApprovalConfig::skill_approval` also honors the resolved profile**, not
+  only a node's own `approvals_override` — the same node-then-profile
+  precedence `engine::stage::agent::effective_approvals` already establishes
+  for every other approval flag.
+- **Declared skills validated at graph load**, not lazily the first time a
+  node's stage runs: `surge_core::validation::validate` now calls
+  `AgentConfig::declared_skills()` on every agent node (top-level and inside
+  subgraphs) and reports a malformed one as
+  `ValidationErrorKind::InvalidSkillsDeclaration { node, reason }` — the run
+  fails before `PipelineMaterialized`, before a worktree exists, matching
+  the "a broken declaration does not fail the run silently" standard History
+  15 already set for a broken `SKILL.md` (R09.1).
+- **`AgentConfig::declared_skills()` is `#[must_use]`.**
+
+### Added — Memory as claims: per-entry provenance and confidence
+
+- **`surge_core::memory`** — a memory entry is now a claim, not free text:
+  `MemoryClaim { id, text, provenance, confidence, status }`, with
+  `Provenance { source, hash, verified_by, verified_at }` and a three-level
+  `Confidence` (`verified` / `name_matched` / `asserted` — never a bool).
+  `ClaimStatus::Verified` requires both `verified_by` and `verified_at` to
+  be set; `MemoryClaim::new` rejects the combination otherwise
+  (`UnprovenVerifiedStatus`). Anything ingested from a transcript or
+  conversation starts `unverified` at capture time (`MemoryClaim::from_transcript`).
+- **Memory DB schema bumped v1 → v2** (`surge_persistence::memory::schema::SCHEMA_VERSION`)
+  — adds the `memory_claims` table. Opening a v1 database backfills every
+  existing discovery/pattern/gotcha/file-context row into an unverified,
+  `Asserted`-confidence claim in one atomic migration step; the v1 tables
+  and their rows are left in place. See
+  [docs/schema-versioning.md](docs/schema-versioning.md#memory-db-surge-persistence).
+
 ### Added — Crash recovery (v0.1 blocker)
 
 - **New `surge-daemon::recovery` module** — daemon startup brings runs the

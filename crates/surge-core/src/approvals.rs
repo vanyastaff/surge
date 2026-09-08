@@ -17,7 +17,14 @@ pub struct ApprovalConfig {
     pub mcp_elicitations: bool,
     #[serde(default)]
     pub request_permissions: bool,
-    #[serde(default)]
+    /// Gate an unpinned, unhashed, or content-drifted declared skill behind
+    /// operator approval before it binds (`engine::stage::skill_binding`).
+    /// Defaults to enabled (`true`): a profile that never mentions this key
+    /// is protected. Set `false` to bind every declared skill for this node
+    /// without a trust prompt regardless of hash state; each `SkillBound`
+    /// event still records `gate_enabled: false` so the disabled protection
+    /// is visible in the log rather than silent.
+    #[serde(default = "default_skill_approval")]
     pub skill_approval: bool,
     #[serde(default)]
     pub elevation: bool,
@@ -41,7 +48,7 @@ impl Default for ApprovalConfig {
             sandbox_approval: false,
             mcp_elicitations: false,
             request_permissions: false,
-            skill_approval: false,
+            skill_approval: default_skill_approval(),
             elevation: true,
             elevation_channels: Vec::new(),
             elevation_timeout: None,
@@ -57,6 +64,12 @@ impl ApprovalConfig {
         self.elevation_timeout
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_ELEVATION_TIMEOUT_SECS))
     }
+}
+
+/// `serde(default)` value for [`ApprovalConfig::skill_approval`] — enabled,
+/// so a profile that omits the key keeps the trust gate active.
+fn default_skill_approval() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +147,23 @@ mod tests {
         let cfg = ApprovalConfig::default();
         assert_eq!(cfg.policy, ApprovalPolicy::OnRequest);
         assert!(cfg.elevation);
+        assert!(
+            cfg.skill_approval,
+            "a profile that never mentions skill_approval keeps the trust gate active"
+        );
+    }
+
+    #[test]
+    fn skill_approval_omitted_from_toml_defaults_to_enabled() {
+        // A profile authored before this key existed (or one that simply
+        // never mentions it) must not silently lose skill-trust gating.
+        let cfg: ApprovalConfig = toml::from_str(
+            r#"
+            policy = "on-request"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.skill_approval);
     }
 
     #[test]

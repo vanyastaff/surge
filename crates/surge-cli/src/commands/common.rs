@@ -2,7 +2,7 @@
 //! `resolve`, `steer`, `run`). Extracted to a single home so fixes — e.g. the
 //! run-id suffix guards below — land once instead of drifting across copies.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -29,6 +29,21 @@ pub(crate) fn surge_home_dir() -> Result<PathBuf> {
     }
     let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
     Ok(base.join(".surge"))
+}
+
+/// Resolve the project root: the enclosing git repository's root if `cwd` is
+/// inside one, else `cwd` itself. Shared by `surge project describe` and
+/// `surge memory audit` — both need "the directory `Provenance::source`'s
+/// file-path locators are relative to"
+/// (`.autopilot/competitive-waves/interfaces.md`, "Контракт локаторов
+/// памяти"), not whichever directory the command happened to be invoked
+/// from; a memory claim's source is captured once, elsewhere, and must
+/// classify and stale-check the same way regardless of the operator's `cwd`
+/// on audit day.
+pub(crate) fn project_root(cwd: &Path) -> PathBuf {
+    surge_git::GitManager::discover()
+        .map(|manager| manager.repo_path().to_path_buf())
+        .unwrap_or_else(|_| cwd.to_path_buf())
 }
 
 /// Resolve a run id, accepting the full ULID or a unique short suffix (as shown

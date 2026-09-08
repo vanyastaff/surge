@@ -137,6 +137,12 @@ async fn run_crashing_agent(
     build_graph: impl FnOnce(&Path) -> Graph,
 ) -> (RunOutcome, Vec<surge_persistence::runs::reader::ReadEvent>) {
     let dir = tempfile::tempdir().unwrap();
+    // Two of this file's three tests drive the run to a genuine
+    // `RunOutcome::Failed` (the crash is never suppressed), which trips
+    // `engine::hooks::memory_writeback::record_node_failure` — route it at
+    // a throwaway store instead of the developer's real `~/.surge/memory.db`.
+    let memory_dir = tempfile::tempdir().unwrap();
+    let store_path = memory_dir.path().join("memory.db");
     let storage = Storage::open(dir.path()).await.unwrap();
     let mock = Arc::new(MockBridge::new());
     let bridge: Arc<dyn BridgeFacade> = mock.clone();
@@ -162,7 +168,10 @@ async fn run_crashing_agent(
             run_id,
             graph,
             dir.path().to_path_buf(),
-            EngineRunConfig::default(),
+            EngineRunConfig {
+                memory_store_path: Some(store_path),
+                ..EngineRunConfig::default()
+            },
         )
         .await
         .expect("start_run");

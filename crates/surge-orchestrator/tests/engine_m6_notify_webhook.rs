@@ -14,7 +14,7 @@ use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
 use surge_core::id::RunId;
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey};
-use surge_core::node::{Node, NodeConfig, Position};
+use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
 use surge_core::notify_config::{
     NotifyChannel, NotifyConfig, NotifyFailureAction, NotifySeverity, NotifyTemplate,
 };
@@ -32,7 +32,17 @@ fn build_notify_webhook_graph(webhook_url: String) -> Graph {
     let notify_node = Node {
         id: notify_key.clone(),
         position: Position::default(),
-        declared_outcomes: vec![],
+        // `surge_core::validate`'s Notify-specific rule requires a
+        // `delivered` outcome to be declared (the engine emits it on every
+        // successful delivery) — this also matches the edge below, which
+        // routes on exactly that outcome.
+        declared_outcomes: vec![OutcomeDecl {
+            id: delivered_outcome.clone(),
+            description: "webhook delivered".into(),
+            edge_kind_hint: EdgeKind::Forward,
+            is_terminal: false,
+            ledger_effect: Default::default(),
+        }],
         config: NodeConfig::Notify(NotifyConfig {
             channel: NotifyChannel::Webhook { url: webhook_url },
             template: NotifyTemplate {

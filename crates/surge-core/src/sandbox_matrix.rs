@@ -223,6 +223,28 @@ mod tests {
     }
 
     #[test]
+    fn dsh_declares_all_four_modes_unverified() {
+        // DSH's ACP profile is a documented zero-option command (`dsh
+        // --profile acp`) — there is no CLI flag to verify per SandboxMode,
+        // so every row stays declared-unverified (same posture as
+        // Cursor/Copilot/OpenCode/Goose) rather than inventing flags.
+        let m = default_matrix();
+        for mode in [
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::WorkspaceNetwork,
+            SandboxMode::FullAccess,
+        ] {
+            let row = m
+                .lookup(RuntimeKind::DeepSeekHarness, mode)
+                .unwrap_or_else(|| panic!("default matrix must declare dsh + {mode:?}"));
+            assert!(!row.verified, "dsh + {mode:?} must be declared-unverified");
+            assert!(row.flags.is_empty(), "dsh + {mode:?} must carry no flags");
+            assert!(!row.note.is_empty(), "dsh + {mode:?} must explain the gap",);
+        }
+    }
+
+    #[test]
     fn unsupported_returns_true_for_custom() {
         // SandboxMode::Custom is not part of the runtime × mode matrix.
         let m = default_matrix();
@@ -310,6 +332,7 @@ mod tests {
                 RuntimeKind::CopilotCli,
                 RuntimeKind::OpenCode,
                 RuntimeKind::Goose,
+                RuntimeKind::DeepSeekHarness,
             ][..]),
             mode in proptest::sample::select(&[
                 SandboxMode::ReadOnly,

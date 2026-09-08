@@ -1,0 +1,119 @@
+# Cross-Verifier — sealed verifier bound to a different vendor (v1.0).
+#
+# Identical in role to `verifier@2.0` — sealed read-only sandbox, verification
+# authority, produces `verification-report.toml` — with one deliberate
+# difference: it runs on Codex, not Claude Code.
+#
+# That difference is the whole point. A verifier sharing the implementer's
+# runtime cannot catch that runtime's systematic blind spots; it can only
+# repeat them with more confidence. Cross-vendor verification is the one
+# capability that is *only* possible for an agent-agnostic orchestrator, and
+# the `SameRuntimeVerification` validation rule (W5) exists to say when a flow
+# has not taken it.
+#
+# Before this profile existed W5 could warn and nothing could answer it: all
+# bundled profiles resolved to `claude-code`, so no flow assembled from them
+# could verify across vendors. Point a flow's verifier node at
+# `cross-verifier@1.0` and the finding goes away for the right reason.
+#
+# Requires the Codex CLI on PATH (`codex`, launched over ACP via
+# `npx @zed-industries/codex-acp`). `surge doctor` reports whether it is
+# present; a flow that names this profile on a machine without Codex fails at
+# graph load with `ProfileNotFound`-adjacent resolution, not mid-run.
+
+schema_version = 1
+
+[role]
+id = "cross-verifier"
+version = "1.0.0"
+display_name = "Cross-Verifier"
+category = "agents"
+description = "Sealed read-only verifier on a different agent runtime than the implementer: runs build/test/lint, checks acceptance criteria, certifies a task verified."
+when_to_use = "Wherever verifier@2.0 would be used, when the implementer runs on Claude Code. Choosing this over verifier@2.0 is what makes a flow's verification cross-vendor."
+
+[runtime]
+# `recommended_model` is advisory: it is read only by the profile-merge logic
+# in `profile/registry.rs` and is never sent to the runtime, which selects its
+# own model. Left empty on purpose — the agent registry declares `models: []`
+# for the Codex entry, so this tree carries no Codex model name to state, and
+# inventing one would be worse than saying nothing.
+recommended_model = ""
+default_temperature = 0.0
+default_max_tokens = 64000
+# Normalizes to the `codex-acp` registry entry. This single line is the
+# difference from verifier@2.0 that W5 checks for.
+agent_id = "codex"
+
+# Sealed: read-only filesystem, no network, no shell writes. A verifier that
+# can edit the workspace cannot be trusted to certify it. Codex CLI's
+# `--sandbox=read-only` is a verified row in the delegation matrix, so this
+# tier is enforced by the runtime's own sandbox rather than declared and hoped
+# for.
+[sandbox]
+mode = "read-only"
+
+[verification]
+authority = true
+
+[tools]
+default_shell_allowlist = ["cargo"]
+
+[[outcomes]]
+id = "passed"
+description = "All commands green, all acceptance criteria met. Certifies the task verified."
+edge_kind_hint = "forward"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[outcomes]]
+id = "failed"
+description = "One or more commands red, OR acceptance criteria unmet. Route back to Implementer."
+edge_kind_hint = "backtrack"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
+[approvals]
+policy = "on-request"
+
+[prompt]
+system = """\
+You are the Cross-Verifier. You are running on a different model vendor than
+the agent that wrote this code, and that is deliberate: your job is to catch
+what an agent sharing the implementer's blind spots would wave through. Do not
+assume the implementation is close to correct.
+
+Run the project's verification commands and check the Spec contract acceptance
+criteria from `{{spec}}` (`spec.toml` entries and/or `spec.md` compatibility
+checkboxes). Treat any invariant recorded in the accumulated project memory
+`{{project_memory}}` as a check that must still hold. You run in a sealed
+read-only sandbox: you cannot edit the workspace, and you must not try to.
+
+Process:
+1. Run, in order, only the commands the project actually uses (read `Makefile` / `justfile` / `taskfile.yml` / `package.json` / `Cargo.toml` first).
+2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps`.
+3. For each `[[spec.subtasks.acceptance_criteria]]` entry or `## Acceptance Criteria` checkbox in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
+
+Always write `verification-report.toml` recording the task id, the outcome
+(`passed` | `failed`), a one-line summary, and one `[[checks]]` entry per
+command you ran (`command`, `result`, optional `note`). Its hash is the
+evidence attached to the verified ledger transition.
+
+Rules:
+- Do not edit code. Verification is read-only over the implementation.
+- Judge the implementation against the spec, not against how you would have written it. A different-but-correct approach passes.
+- Report concrete failures: command, exit code, the first 30 lines of relevant output.
+- `passed`: every command green AND every acceptance criterion satisfied. Anything less is `failed`.
+"""

@@ -224,7 +224,7 @@ fn decide_action(tap: &RunEventTap) -> Option<CardAction> {
                 error: error.clone(),
             },
         }),
-        EventPayload::EscalationRequested { stage, reason } => Some(CardAction {
+        EventPayload::EscalationRequested { stage, reason, .. } => Some(CardAction {
             event_kind: "EscalationRequested",
             kind: CardKind::Escalation,
             node_key: "__escalation__",
@@ -403,11 +403,11 @@ mod tests {
 
         async fn close(&self, card_id: &str, now_ms: i64) -> Result<()> {
             let mut cards = self.cards.lock().unwrap();
-            if let Some(card) = cards.iter_mut().find(|c| c.card_id == card_id) {
-                if card.closed_at.is_none() {
-                    card.closed_at = Some(now_ms);
-                    card.updated_at = now_ms;
-                }
+            if let Some(card) = cards.iter_mut().find(|c| c.card_id == card_id)
+                && card.closed_at.is_none()
+            {
+                card.closed_at = Some(now_ms);
+                card.updated_at = now_ms;
             }
             Ok(())
         }
@@ -571,6 +571,7 @@ mod tests {
                 EventPayload::EscalationRequested {
                     stage: Some(BootstrapStage::Flow),
                     reason: "edit loop cap exceeded".into(),
+                    cause: surge_core::run_event::EscalationCause::BootstrapEditLoopExhausted,
                 },
             ),
             &ctx,

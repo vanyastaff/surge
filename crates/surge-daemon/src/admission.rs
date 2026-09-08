@@ -96,11 +96,11 @@ impl AdmissionController {
     /// Returns the admitted [`RunId`].
     pub async fn pop_queued(&self) -> Option<RunId> {
         let mut inner = self.inner.lock().await;
-        if inner.active.len() < self.max_active {
-            if let Some(id) = inner.queue.pop_front() {
-                inner.active.insert(id);
-                return Some(id);
-            }
+        if inner.active.len() < self.max_active
+            && let Some(id) = inner.queue.pop_front()
+        {
+            inner.active.insert(id);
+            return Some(id);
         }
         None
     }

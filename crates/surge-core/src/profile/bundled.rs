@@ -37,6 +37,7 @@ const IMPLEMENTER_2_0_TOML: &str = include_str!("../../bundled/profiles/implemen
 const TEST_AUTHOR_TOML: &str = include_str!("../../bundled/profiles/test-author-1.0.toml");
 const VERIFIER_TOML: &str = include_str!("../../bundled/profiles/verifier-1.0.toml");
 const VERIFIER_2_0_TOML: &str = include_str!("../../bundled/profiles/verifier-2.0.toml");
+const CROSS_VERIFIER_TOML: &str = include_str!("../../bundled/profiles/cross-verifier-1.0.toml");
 const REVIEWER_TOML: &str = include_str!("../../bundled/profiles/reviewer-1.0.toml");
 const PR_COMPOSER_TOML: &str = include_str!("../../bundled/profiles/pr-composer-1.0.toml");
 
@@ -55,7 +56,7 @@ const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
-pub const BUNDLED_COUNT: usize = 19;
+pub const BUNDLED_COUNT: usize = 20;
 
 /// Look-up table for compile-time bundled profiles.
 ///
@@ -90,6 +91,7 @@ impl BundledRegistry {
             parse(TEST_AUTHOR_TOML, "test-author"),
             parse(VERIFIER_TOML, "verifier"),
             parse(VERIFIER_2_0_TOML, "verifier"),
+            parse(CROSS_VERIFIER_TOML, "cross-verifier"),
             parse(REVIEWER_TOML, "reviewer"),
             parse(PR_COMPOSER_TOML, "pr-composer"),
             // Specialized (Task 11).
@@ -168,6 +170,44 @@ mod tests {
         assert_eq!(keys.len(), original_len, "duplicate bundled (id, version)");
     }
 
+    /// The cross-verifier is a verifier in every respect except the one that
+    /// matters: it does not run the implementer's runtime. Before it existed,
+    /// W5 (`SameRuntimeVerification`) could warn and nothing in the bundled
+    /// set could answer — every profile resolved to `claude-code`.
+    #[test]
+    fn cross_verifier_is_a_sealed_authority_on_a_different_runtime() {
+        let cross =
+            BundledRegistry::by_name_latest("cross-verifier").expect("cross-verifier bundled");
+        let verifier = BundledRegistry::by_name_latest("verifier").expect("verifier bundled");
+        let implementer =
+            BundledRegistry::by_name_latest("implementer").expect("implementer bundled");
+
+        assert_eq!(cross.sandbox.mode, SandboxMode::ReadOnly, "runs sealed");
+        assert!(cross.verification.authority, "declares authority");
+        let passed = cross
+            .outcomes
+            .iter()
+            .find(|o| o.id.as_ref() == "passed")
+            .expect("passed outcome");
+        assert!(
+            passed
+                .produced_artifacts
+                .iter()
+                .any(|a| a.contract.kind == ArtifactKind::VerificationReport),
+            "produces a verification-report, like any verifier"
+        );
+
+        assert_ne!(
+            cross.runtime.agent_id, implementer.runtime.agent_id,
+            "the whole point: a cross-verifier must not share the implementer's runtime"
+        );
+        assert_eq!(
+            verifier.runtime.agent_id, implementer.runtime.agent_id,
+            "and verifier@2.0 does share it — which is why W5 fires on the \
+             bundled flows and why this profile had to exist"
+        );
+    }
+
     #[test]
     fn verifier_2_0_is_sealed_and_authoritative() {
         let p = BundledRegistry::by_name_latest("verifier").expect("verifier bundled");
@@ -212,6 +252,37 @@ mod tests {
         assert!(
             !p.verification.authority,
             "an implementer never carries verification authority"
+        );
+    }
+
+    /// `flow-generator@1.0` used to name profiles from prose in its own
+    /// prompt (`implementer@2.0`, `verifier@2.0` hardcoded in the text)
+    /// with no catalogue of what actually exists in the registry — a
+    /// bundled-profile drift (`implementer@2.0` was never referenced by
+    /// any bundled flow) and a hard block on community profiles ever
+    /// being chosen. This asserts the fix: the profile declares a
+    /// `profile_catalog` expected binding sourced from a run artifact, so
+    /// generation composes from `ProfileRegistry::list()` instead of
+    /// memory.
+    #[test]
+    fn flow_generator_declares_profile_catalog_binding() {
+        use crate::profile::ExpectedBindingSource;
+
+        let p = BundledRegistry::by_name_latest("flow-generator").expect("flow-generator bundled");
+        let binding = p
+            .bindings
+            .expected
+            .iter()
+            .find(|b| b.name == "profile_catalog")
+            .expect("flow-generator@1.0 must declare a profile_catalog expected binding");
+        assert_eq!(
+            binding.source,
+            ExpectedBindingSource::RunArtifact,
+            "profile_catalog is seeded as a run artifact by Engine::start_run"
+        );
+        assert!(
+            p.prompt.system.contains("{{profile_catalog}}"),
+            "the prompt must actually reference the bound catalogue, not just declare it"
         );
     }
 

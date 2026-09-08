@@ -3,6 +3,8 @@
 //! Five enums by API surface, no `From` between them and `crate::SurgeError`
 //! (legacy domain) per spec §4.7. The bridge speaks its own error vocabulary.
 
+use std::time::Duration;
+
 use surge_core::SessionId;
 use thiserror::Error;
 
@@ -65,7 +67,17 @@ pub enum OpenSessionError {
 }
 
 /// Errors from `AcpBridge::send_message`.
+///
+/// `#[non_exhaustive]`: this crate alone decides this taxonomy and is
+/// expected to keep growing it, so no external crate may match it
+/// exhaustively — every addition here would otherwise be a breaking change
+/// for such a caller (e.g. `surge-cli`'s `classify_send_error`, which
+/// already carries a wildcard arm for exactly this reason). The trade-off
+/// is explicit: an external `match` is forced to carry that wildcard arm
+/// from day one, so a genuinely new failure mode lands quietly in it until
+/// the caller deliberately gives it its own handling.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SendMessageError {
     /// No session with this id exists in the bridge's session map.
     #[error("session {session} not found")]
@@ -94,6 +106,30 @@ pub enum SendMessageError {
          (run the agent's own login, or set its API key); details: {details}"
     )]
     AgentAuthenticationFailed {
+        /// Raw error text from the agent/ACP layer, kept for debugging.
+        details: String,
+    },
+
+    /// The agent rejected the prompt because the account has hit a
+    /// provider-side rate limit or usage quota (HTTP 429, or a
+    /// provider-specific exhaustion signal such as `rate_limit_error`,
+    /// `insufficient_quota`, or `RESOURCE_EXHAUSTED`), classified from the
+    /// raw ACP error text by
+    /// [`surge_core::capacity::looks_like_rate_limit`]. Like
+    /// [`Self::AgentAuthenticationFailed`], this is an operator/account
+    /// condition — not a bridge transport failure — so it gets its own
+    /// variant instead of being buried in [`Self::Bridge`].
+    #[error(
+        "agent reported a rate limit / quota exhaustion (retry_after = {retry_after:?}); \
+         details: {details}"
+    )]
+    RateLimited {
+        /// Provider-supplied retry delay, when the raw error text also
+        /// carried a recoverable one
+        /// ([`surge_core::capacity::parse_retry_after_secs`]). `None` means
+        /// a rate limit was recognized but the text carried no usable reset
+        /// time — never invent a default here; see that function's doc.
+        retry_after: Option<Duration>,
         /// Raw error text from the agent/ACP layer, kept for debugging.
         details: String,
     },

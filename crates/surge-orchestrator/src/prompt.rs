@@ -250,6 +250,14 @@ mod tests {
                 TemplateVar("project_context".into()),
                 "## Project name\nsurge\n\n## Primary language\nRust".into(),
             ),
+            (
+                TemplateVar("profile_catalog".into()),
+                "| profile | display name | runtime | sandbox | verifier | outcomes | when to use |\n\
+                 |---|---|---|---|---|---|---|\n\
+                 | `implementer@1.0` | Implementer | claude-acp | workspace-write | no | implemented, blocked, partial | Default execution profile. |\n\
+                 | `verifier@2.0` | Verifier | claude-acp | read-only | yes | passed, failed | Sealed verification authority. |\n"
+                    .into(),
+            ),
         ]
     }
 

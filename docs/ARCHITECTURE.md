@@ -15,7 +15,7 @@ Surge keeps that spirit — **describe → walk away → return to a PR** — an
 | Concern | sandcastle | surge |
 |---|---|---|
 | Language | TypeScript | Rust |
-| Agent runtime | wraps provider directly | speaks **ACP** to any conformant agent (Claude Code, Codex, Gemini, custom) |
+| Agent runtime | wraps provider directly | speaks **Agent Client Protocol (ACP)** to any conformant agent (Claude Code, Codex, Gemini, custom) |
 | Sandbox | provider-supplied (Docker/Podman/Vercel) | **delegated to the agent runtime** (Codex CLI sandbox, Claude Code skills, etc.); surge never reimplements OS isolation |
 | Workflow | imperative loop / template | declarative `flow.toml` graph with typed outcomes and edges |
 | State | per-run, in-memory-ish | append-only event log → replay, time-travel, fork-from-here |

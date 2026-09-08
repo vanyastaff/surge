@@ -404,12 +404,11 @@ async fn try_one_attempt(
         .map_err(|e| AttemptError::Retryable(format!("decision rejected: {e}")))?;
 
     // For Enqueued, splice in the inbox_summary.md if present.
-    if let TriageDecision::Enqueued { summary, .. } = &mut decision {
-        if summary.is_empty() {
-            if let Ok(md) = std::fs::read_to_string(scratch_dir.join("inbox_summary.md")) {
-                *summary = md;
-            }
-        }
+    if let TriageDecision::Enqueued { summary, .. } = &mut decision
+        && summary.is_empty()
+        && let Ok(md) = std::fs::read_to_string(scratch_dir.join("inbox_summary.md"))
+    {
+        *summary = md;
     }
 
     // Sanity-check the agent's reported outcome string against the parsed decision.

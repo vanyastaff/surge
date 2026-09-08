@@ -100,6 +100,9 @@ define_id!(SubtaskId, "sub");
 define_id!(RunId, "run");
 define_id!(SessionId, "session");
 
+// Identifier for a `crate::memory::MemoryClaim`.
+define_id!(MemoryClaimId, "claim");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,12 +183,27 @@ mod tests {
     }
 
     #[test]
+    fn memory_claim_id_displays_with_prefix() {
+        let id = MemoryClaimId::new();
+        assert!(id.to_string().starts_with("claim-"));
+    }
+
+    #[test]
+    fn memory_claim_id_roundtrips_via_string() {
+        let id = MemoryClaimId::new();
+        let s = id.to_string();
+        let parsed: MemoryClaimId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
     fn short_is_12_chars_for_all_ids() {
         assert_eq!(SpecId::new().short().len(), 12);
         assert_eq!(TaskId::new().short().len(), 12);
         assert_eq!(SubtaskId::new().short().len(), 12);
         assert_eq!(RunId::new().short().len(), 12);
         assert_eq!(SessionId::new().short().len(), 12);
+        assert_eq!(MemoryClaimId::new().short().len(), 12);
     }
 
     #[test]

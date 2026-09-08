@@ -172,6 +172,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
     use surge_core::approvals::ApprovalPolicy;
+    use surge_core::budget::BudgetGuard;
     use surge_core::content_hash::ContentHash;
     use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
     use surge_core::id::RunId;
@@ -247,7 +248,7 @@ mod tests {
         );
 
         let run_config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -313,7 +314,7 @@ mod tests {
 
         // Persist RunConfig with an empty mcp_servers list (mirrors pre-M7 runs).
         let run_config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -368,7 +369,7 @@ mod tests {
         let previous_graph_hash = ContentHash::compute(b"base-flow");
         let graph_hash = ContentHash::compute(b"amended-flow");
         let run_config = RunConfig {
-            budget: Default::default(),
+            budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

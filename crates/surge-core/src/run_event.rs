@@ -2,6 +2,7 @@
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
 use crate::archetype::ArchetypeMetadata;
+use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
 use crate::graph::Graph;
@@ -14,6 +15,7 @@ use crate::roadmap_patch::{
     RoadmapPatchTarget,
 };
 use crate::sandbox::SandboxMode;
+use crate::skill::SkillProvider;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -84,6 +86,42 @@ pub enum EventPayload {
     RunAborted {
         reason: String,
     },
+    /// Pipeline execution paused because a provider rate-limit window is
+    /// exhausted (`CapacityPolicy::decide` returned `Decision::Park` —
+    /// Task 12, R37/R37.1). Schema v7.
+    RunParked {
+        /// When the run is expected to resume on its own.
+        wake_at: DateTime<Utc>,
+        /// Canonical agent-runtime registry id the parked capacity window
+        /// belongs to (see `surge_core::capacity`'s module doc, "Why the
+        /// key is the runtime"). `None` on the legacy no-profile-registry
+        /// path, where no such id is ever known.
+        runtime: Option<String>,
+        /// The run's worktree path, recorded directly rather than
+        /// reconstructed from `<worktrees_root>/<run_id>` the way
+        /// `surge-daemon`'s crash recovery does — that reconstruction
+        /// documents its own limitation ("runs launched via `--worktree
+        /// <custom>` do not record their path and are not resumable
+        /// here"); parking has the real path in hand at the moment it
+        /// happens, at zero extra cost, so it does not need to guess.
+        worktree: PathBuf,
+        /// Why `wake_at` is what it is — an actually-observed provider
+        /// reset, or a configured blind-backoff guess. A field of its own,
+        /// not folded into `reason`'s free text: a consecutive-blind-park
+        /// escalation counter (rule 4 of `CapacityPolicy::decide`'s order)
+        /// has to branch on this exactly, and re-deriving a typed fact by
+        /// parsing a display string is the same defect `StageError::Bridge`
+        /// used to have before it grew a typed `RateLimited` variant.
+        basis: WakeBasis,
+        /// Free-form, human-readable explanation for display (`surge
+        /// inbox`, logs) — not meant to be parsed back into a fact; see
+        /// `basis` for that.
+        reason: String,
+    },
+    /// The parked run in `RunParked` resumed: either its `wake_at` passed
+    /// and the daemon's wake scheduler resumed it, or an operator resumed
+    /// it manually. Schema v7.
+    RunWokeFromPark {},
 
     // Bootstrap
     BootstrapStageStarted {
@@ -186,7 +224,25 @@ pub enum EventPayload {
     SessionOpened {
         node: NodeKey,
         session: SessionId,
+        /// The node's flow-authored profile (e.g. `"implementer@1.0"`) —
+        /// a role/behavior identity, **not** a runtime identifier. Kept
+        /// for its existing readers; do not key capacity/runtime tracking
+        /// off this field (see `agent_id`).
         agent: String,
+        /// The actual runtime identity the session was opened against
+        /// (`ResolvedProfile.profile.runtime.agent_id`, normalized through
+        /// the registry when that resolves, falling back to the raw id
+        /// otherwise — see this field's construction in
+        /// `engine::stage::agent::execute_agent_stage`) — this is what
+        /// `surge_core::capacity::CapacityWindow.runtime` and
+        /// `AgentPool`/`SurgeConfig.agents` key by. Additive,
+        /// `#[serde(default)]`: a run recorded before this field existed,
+        /// or one opened via the no-profile-registry legacy path, decodes
+        /// as `None` rather than failing to parse (no schema bump per
+        /// `docs/schema-versioning.md` — an optional field with a serde
+        /// default).
+        #[serde(default)]
+        agent_id: Option<String>,
     },
     ToolCalled {
         session: SessionId,
@@ -482,6 +538,48 @@ pub enum EventPayload {
         /// Free-form operator-readable explanation (e.g., the cap value
         /// and the failure mode).
         reason: String,
+        /// Typed origin of this escalation (`.autopilot/competitive-waves/spec.md`
+        /// §15, History 45). Five independent paths raise this event today —
+        /// a `LoopGuard` trip (two kinds), MCP restart-exhaustion, and two
+        /// distinct edit-loop caps (bootstrap flow validation, roadmap
+        /// amendment approval) — and `reason` alone does not let a consumer
+        /// tell them apart without parsing prose back apart, which is
+        /// exactly what a durable, queryable trace must not require.
+        /// `#[serde(default)]` keeps every pre-existing `EscalationRequested`
+        /// log decodable as `Unspecified` — additive optional field, no
+        /// schema bump (`docs/schema-versioning.md`'s "Principles": an
+        /// old reader tolerating an unrecognized field is not the same
+        /// change as rewriting already-stored rows; `EdgeTraversed::kind`
+        /// shipped the same way, unversioned).
+        #[serde(default)]
+        cause: EscalationCause,
+    },
+
+    /// A skill pack was bound onto `node` at stage entry (skills bind once,
+    /// never mid-stage). `hash` is the content hash resolved *at bind time*,
+    /// not whatever the node's declaration pinned — replaying the log
+    /// therefore reconstructs the exact triple "node → skill → hash" from
+    /// this event alone, with no positional inference from a preceding
+    /// `StageEntered`. `gate_enabled` records whether the trust gate
+    /// (`ApprovalConfig::skill_approval`) was active for this bind: `false`
+    /// means the node's approval config explicitly disabled it and this
+    /// skill bound without a trust prompt regardless of hash state — kept
+    /// on the event so a disabled protection is visible in the log, not
+    /// silent. Schema v6.
+    SkillBound {
+        /// Node the skill was bound onto.
+        node: NodeKey,
+        /// The skill's declared name.
+        name: String,
+        /// Which root the bound pack was found under.
+        provider: SkillProvider,
+        /// Content hash of the pack as resolved at bind time.
+        hash: ContentHash,
+        /// Whether the operator-approval trust gate was active for this
+        /// bind. `false` means it was explicitly disabled by
+        /// `ApprovalConfig::skill_approval` and this skill bound without a
+        /// pin/hash check.
+        gate_enabled: bool,
     },
 }
 
@@ -513,6 +611,8 @@ impl EventPayload {
             Self::RunCompleted { .. } => "RunCompleted",
             Self::RunFailed { .. } => "RunFailed",
             Self::RunAborted { .. } => "RunAborted",
+            Self::RunParked { .. } => "RunParked",
+            Self::RunWokeFromPark { .. } => "RunWokeFromPark",
             Self::BootstrapStageStarted { .. } => "BootstrapStageStarted",
             Self::BootstrapArtifactProduced { .. } => "BootstrapArtifactProduced",
             Self::BootstrapApprovalRequested { .. } => "BootstrapApprovalRequested",
@@ -563,6 +663,7 @@ impl EventPayload {
             Self::SubgraphExited { .. } => "SubgraphExited",
             Self::NotifyDelivered { .. } => "NotifyDelivered",
             Self::EscalationRequested { .. } => "EscalationRequested",
+            Self::SkillBound { .. } => "SkillBound",
         }
     }
 }
@@ -573,6 +674,62 @@ pub enum BootstrapStage {
     Description,
     Roadmap,
     Flow,
+}
+
+/// Typed origin of an [`EventPayload::EscalationRequested`] event — see that
+/// variant's doc for why free-form `reason` prose cannot carry this
+/// distinction on its own.
+///
+/// **Adding a variant here needs a schema bump; adding a field to an
+/// existing `EventPayload` variant does not (see `docs/schema-versioning.md`).
+/// Do not assume the same exception covers both.** `#[serde(default)]` on
+/// `EscalationRequested::cause` only rescues a *missing* key — an old
+/// reader's `EventPayload` decode still succeeds because it never expected
+/// the key at all. It does nothing for an *unrecognized value* once the key
+/// is present: `#[serde(rename_all = "snake_case")]` on this enum has no
+/// `#[serde(other)]` fallback, so a 7th variant's snake_case tag is a value
+/// an old reader's `EscalationCause` deserializer has never heard of, and
+/// deserializing it fails the same way an unknown `EventPayload` variant
+/// tag does. Bump `MAX_SUPPORTED_VERSION` when this enum grows.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationCause {
+    /// No typed cause recorded: either a payload written before this field
+    /// existed, or (should one ever exist) an escalation path not yet
+    /// migrated to a specific variant. Never emitted by current code — every
+    /// call site names its cause explicitly.
+    #[default]
+    Unspecified,
+    /// `LoopGuard` observed the same tool call repeated past
+    /// `max_repeat_tool_calls`.
+    LoopGuardRepeatedToolCall,
+    /// `LoopGuard` observed the node running past `node_wall_clock_limit_secs`.
+    LoopGuardNodeDeadline,
+    /// An MCP server's restart policy exhausted its reconnect-attempt budget.
+    McpRestartsExhausted,
+    /// The bootstrap flow's edit-loop cap was exceeded for a stage (either
+    /// the Flow Generator's validation-retry path, or the operator
+    /// repeatedly choosing `Edit` at a `HumanGate`).
+    BootstrapEditLoopExhausted,
+    /// A roadmap-amendment patch's operator-approval edit-loop cap was
+    /// exceeded. Distinct from `BootstrapEditLoopExhausted`: a different
+    /// subsystem (mid-run roadmap patch approval, not pipeline bootstrap),
+    /// so collapsing the two would reintroduce the exact "conflates
+    /// unrelated escalation causes" problem this field exists to remove.
+    RoadmapAmendmentEditLoopExhausted,
+    /// A run's `CapacityConfig::blind_park_limit` (Task 12, R37/R37.1) was
+    /// reached: the run parked on a guessed (`WakeBasis::PolicyBackoff`)
+    /// backoff this many consecutive times, with no successful dispatch
+    /// (`StageCompleted`) between any of them. Not a correctness bug — each
+    /// wake still makes exactly one real attempt (the resume-time capacity
+    /// precheck bypass) and self-corrects the moment the runtime recovers
+    /// or a real reset time is learned — but a long streak is evidence the
+    /// runtime may be genuinely down or misconfigured, which nothing but a
+    /// human can resolve. Raised by `surge-daemon::wake_scheduler`, at most
+    /// once per streak (cleared by the next `StageCompleted`), not on every
+    /// tick past the limit.
+    CapacityBlindParkLimitExceeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -947,6 +1104,7 @@ mod tests {
             node: NodeKey::try_from("agent_1").unwrap(),
             session,
             agent: "claude-opus-4-7".into(),
+            agent_id: Some("claude-code".into()),
         };
         let closed = EventPayload::SessionClosed {
             session,
@@ -1098,6 +1256,21 @@ mod tests {
     }
 
     #[test]
+    fn skill_bound_roundtrip() {
+        let payload = EventPayload::SkillBound {
+            node: NodeKey::try_from("implement").unwrap(),
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            hash: ContentHash::compute(b"skill-pack-content"),
+            gate_enabled: true,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "SkillBound");
+    }
+
+    #[test]
     fn sandbox_elevation_roundtrip() {
         let req = EventPayload::SandboxElevationRequested {
             node: NodeKey::try_from("impl_1").unwrap(),
@@ -1235,6 +1408,38 @@ mod tests {
         let bytes = payload.to_bincode().unwrap();
         let parsed = EventPayload::from_bincode(&bytes).unwrap();
         assert_eq!(payload, parsed);
+    }
+
+    #[test]
+    fn escalation_requested_roundtrips_with_typed_cause() {
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "node loop guard: node has run for 3600s, past its 3600s wall-clock budget; \
+                      escalating"
+                .into(),
+            cause: EscalationCause::LoopGuardNodeDeadline,
+        };
+        let bytes = payload.to_bincode().unwrap();
+        let parsed = EventPayload::from_bincode(&bytes).unwrap();
+        assert_eq!(payload, parsed);
+        assert_eq!(payload.discriminant_str(), "EscalationRequested");
+    }
+
+    #[test]
+    fn escalation_requested_legacy_json_defaults_cause_to_unspecified() {
+        // Every `EscalationRequested` ever persisted before this field
+        // existed omits `cause` entirely. `#[serde(default)]` must keep
+        // those logs decodable, distinguishable from a genuinely-typed
+        // escalation only by carrying `Unspecified`.
+        let legacy_json = r#"{"type":"escalation_requested","reason":"cap exceeded"}"#;
+        let parsed: EventPayload = serde_json::from_str(legacy_json).unwrap();
+        match parsed {
+            EventPayload::EscalationRequested { stage, cause, .. } => {
+                assert_eq!(stage, None);
+                assert_eq!(cause, EscalationCause::Unspecified);
+            },
+            other => panic!("expected EscalationRequested, got {other:?}"),
+        }
     }
 
     #[test]

@@ -45,7 +45,48 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// v1..v4 payloads decode cleanly (they never contain the new variants). The
 /// version is bumped so a v4-max reader rejects a ledger event with a clean
 /// [`SurgeError::SchemaTooNew`] rather than an unknown-variant decode error.
-pub const MAX_SUPPORTED_VERSION: u32 = 5;
+///
+/// **v6 (introduced 2026-09):** adds [`EventPayload::SkillBound`] (skill
+/// binding + trust gate), carrying `node`, `name`, `provider`, `hash`, and
+/// `gate_enabled`. A v5-max reader has no representation for this variant at
+/// all — decoding one is not a matter of a missing optional field defaulting
+/// cleanly, it is an unknown enum tag the v5 decoder cannot construct — so
+/// the version is bumped precisely so that reader fails closed with
+/// [`SurgeError::SchemaTooNew`] instead of an opaque unknown-variant decode
+/// error (the same reasoning as the v2/v4/v5 bumps above: a new variant is
+/// never "purely additive" from an old reader's point of view, even though
+/// every *existing* v1..v5 payload keeps decoding unchanged because none of
+/// them ever contained it). `SkillBound`'s own field set was still being
+/// shaped under this same v6 the week it was introduced — no v6 payload has
+/// ever left this development branch — so its five-field shape here is the
+/// v6 shape, not a v7 change; see `docs/adr/0015-skill-binding-trust-via-content-hash.md`.
+///
+/// **v7 (introduced 2026-09):** adds [`EventPayload::RunParked`] and
+/// [`EventPayload::RunWokeFromPark`] (Task 12 M1 — provider rate-limit
+/// parking, R37/R37.1). Two new self-contained variants, unconditionally
+/// bumped for the identical reason as v6: `docs/schema-versioning.md`'s
+/// field-composition exception (which let a v6 *field* change on
+/// `SkillBound` ride under the version already bumped for its variant) does
+/// not extend to a *new variant* — that exception was never about variants,
+/// and "no tagged release has shipped v6 yet" is a risk-radius observation,
+/// not a version-policy exemption; a v6-max reader still cannot construct
+/// either new variant at all (not merely default a missing field), so it
+/// must fail closed with [`SurgeError::SchemaTooNew`] rather than an opaque
+/// unknown-variant decode error, exactly like v2/v4/v5/v6 before it.
+///
+/// **v8 (introduced 2026-09):** adds [`crate::run_event::EscalationCause::CapacityBlindParkLimitExceeded`]
+/// (Task 12 M4, blind-park-limit escalation). Bumped for the reason
+/// [`crate::run_event::EscalationCause`]'s own doc names: that enum has
+/// `#[serde(rename_all = "snake_case")]` with no `#[serde(other)]`
+/// fallback, so a v7-max reader does not merely miss an optional field on a
+/// new tag — it cannot decode the tag at all, the same "unknown enum
+/// variant" failure mode a new `EventPayload` variant has (v2/v4/v5/v6/v7).
+/// Every `EscalationRequested` payload written before this version keeps
+/// decoding unchanged (`cause` defaults to `Unspecified` when absent;
+/// existing named causes are untouched) — only a payload that actually
+/// carries the new tag needs the bump, exactly like v6/v7's own "old
+/// payloads decode cleanly, they simply never contain the new thing."
+pub const MAX_SUPPORTED_VERSION: u32 = 8;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -159,6 +200,68 @@ impl Migration for IdentityV5 {
     }
 }
 
+/// Identity migration for v6 — the schema bump that introduced the
+/// `SkillBound` variant (skill binding + trust gate). The wire shape is
+/// unchanged (same JSON-encoded [`VersionedEventPayload`] wrapper); old
+/// payloads decode cleanly because they never carry the new variant. The
+/// `schema_version` field is the only signal that distinguishes v1..v5 from
+/// v6 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV6;
+
+impl Migration for IdentityV6 {
+    fn version(&self) -> u32 {
+        6
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v6 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity migration for v7 — the schema bump that introduced the
+/// `RunParked` / `RunWokeFromPark` variants (Task 12 M1, provider
+/// rate-limit parking). The wire shape is unchanged (same JSON-encoded
+/// [`VersionedEventPayload`] wrapper); old payloads decode cleanly because
+/// they never carry either new variant. The `schema_version` field is the
+/// only signal that distinguishes v1..v6 from v7 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV7;
+
+impl Migration for IdentityV7 {
+    fn version(&self) -> u32 {
+        7
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v7 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
+/// Identity migration for v8 — the schema bump that introduced
+/// `EscalationCause::CapacityBlindParkLimitExceeded` (Task 12 M4). The wire
+/// shape is unchanged (same JSON-encoded [`VersionedEventPayload`]
+/// wrapper); old `EscalationRequested` payloads decode cleanly because they
+/// never carry this cause tag.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV8;
+
+impl Migration for IdentityV8 {
+    fn version(&self) -> u32 {
+        8
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v8 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -166,7 +269,8 @@ pub struct MigrationChain {
 
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
-    /// [`IdentityV3`], [`IdentityV4`], and [`IdentityV5`].
+    /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
+    /// [`IdentityV7`], and [`IdentityV8`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -176,6 +280,9 @@ impl MigrationChain {
                 Box::new(IdentityV3),
                 Box::new(IdentityV4),
                 Box::new(IdentityV5),
+                Box::new(IdentityV6),
+                Box::new(IdentityV7),
+                Box::new(IdentityV8),
             ],
         }
     }
@@ -284,7 +391,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 5);
+        assert_eq!(wrapper.schema_version, 8);
     }
 
     #[test]
@@ -292,8 +399,63 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 5 }
+            SurgeError::SchemaTooNew { found: 99, max: 8 }
         ));
+    }
+
+    #[test]
+    fn v6_skill_bound_event_round_trips() {
+        use crate::content_hash::ContentHash;
+        use crate::skill::SkillProvider;
+
+        let payload = EventPayload::SkillBound {
+            node: NodeKey::try_from("implement").unwrap(),
+            name: "code-reviewer".into(),
+            provider: SkillProvider::ProjectDir,
+            hash: ContentHash::compute(b"skill-pack-content"),
+            gate_enabled: true,
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v7_run_parked_event_round_trips() {
+        use crate::capacity::WakeBasis;
+
+        let payload = EventPayload::RunParked {
+            wake_at: chrono::Utc::now(),
+            runtime: Some("claude-acp".into()),
+            worktree: std::path::PathBuf::from("/tmp/run-worktree"),
+            basis: WakeBasis::PolicyBackoff,
+            reason: "no observed reset time; blind backoff".into(),
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v7_run_woke_from_park_event_round_trips() {
+        let payload = EventPayload::RunWokeFromPark {};
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v8_capacity_blind_park_limit_escalation_round_trips() {
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "runtime exhausted 5 consecutive times with no successful dispatch".into(),
+            cause: EscalationCause::CapacityBlindParkLimitExceeded,
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl EngineFacade for RecoveryStubFacade {
         run_id: RunId,
         _worktree_path: PathBuf,
     ) -> Result<RunHandle, surge_orchestrator::engine::EngineError> {
-        self.resume_calls.lock().unwrap().push(run_id.clone());
+        self.resume_calls.lock().unwrap().push(run_id);
 
         let (tx, rx) = broadcast::channel(8);
         let _ = tx.send(EngineRunEvent::Terminal {
@@ -111,18 +111,12 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
 
     // Run A — worktree present → must be resumed.
     let run_a = RunId::new();
-    let _wa = storage
-        .create_run(run_a.clone(), "/proj", None)
-        .await
-        .unwrap();
+    let _wa = storage.create_run(run_a, "/proj", None).await.unwrap();
     std::fs::create_dir_all(worktrees_root.join(run_a.to_string())).unwrap();
 
     // Run B — worktree absent → must be marked Failed.
     let run_b = RunId::new();
-    let _wb = storage
-        .create_run(run_b.clone(), "/proj", None)
-        .await
-        .unwrap();
+    let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();
@@ -147,7 +141,7 @@ async fn recover_resumes_live_worktree_and_fails_lost_worktree() {
 
     // Run A resumed exactly once.
     let resumed = stub.resume_calls.lock().unwrap().clone();
-    assert_eq!(resumed, vec![run_a.clone()], "only run A should resume");
+    assert_eq!(resumed, vec![run_a], "only run A should resume");
 
     // Run B marked Failed in the registry.
     let b = storage.get_run(&run_b).await.unwrap().unwrap();
@@ -168,10 +162,7 @@ async fn second_recovery_pass_does_not_refail_terminal_run() {
     let worktrees_root = tmp.path().join("worktrees");
 
     let run_b = RunId::new();
-    let _wb = storage
-        .create_run(run_b.clone(), "/proj", None)
-        .await
-        .unwrap();
+    let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
 
     let stub = Arc::new(RecoveryStubFacade::new());
     let facade: Arc<dyn EngineFacade> = stub.clone();

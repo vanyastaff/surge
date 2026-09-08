@@ -129,6 +129,19 @@ fn main() -> std::process::ExitCode {
             }),
         );
 
+        // Loaded here, before the engine is constructed, so its
+        // `[capacity]` section can reach `CapacityPolicy` via
+        // `EngineConfig::capacity` below (Task 12 M3, acceptance
+        // criterion B) — moved up from where it previously loaded (after
+        // engine construction, only for the TaskRouter) for that reason.
+        let config = match surge_core::config::SurgeConfig::discover() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load surge.toml; using defaults");
+                surge_core::config::SurgeConfig::default()
+            },
+        };
+
         let engine = Arc::new(Engine::new_full(
             Arc::clone(&bridge),
             Arc::clone(&storage),
@@ -136,7 +149,10 @@ fn main() -> std::process::ExitCode {
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
             Some(profile_registry),
-            EngineConfig::default(),
+            EngineConfig {
+                capacity: (&config.capacity).into(),
+                ..EngineConfig::default()
+            },
         ));
 
         // Keep a clone of the concrete engine handle for the cockpit's
@@ -151,14 +167,8 @@ fn main() -> std::process::ExitCode {
             let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
         }
 
-        // --- Plan C T9.2: Load surge.toml and spawn TaskRouter ---
-        let config = match surge_core::config::SurgeConfig::discover() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load surge.toml; skipping TaskRouter spawn");
-                surge_core::config::SurgeConfig::default()
-            }
-        };
+        // --- Plan C T9.2: spawn TaskRouter from the config already loaded
+        // above ---
 
         let mut sources: Vec<Arc<dyn TaskSource>> = Vec::new();
         let mut source_map: HashMap<String, Arc<dyn TaskSource>> = HashMap::new();
@@ -285,6 +295,28 @@ fn main() -> std::process::ExitCode {
             "crash recovery pass complete"
         );
 
+        // Periodic wake for runs parked mid-session (Task 12 M4) — the
+        // recurring counterpart to the one-shot startup scan above. Spawned
+        // strictly AFTER recovery finishes (same ordering reason as the
+        // TaskRouter/inbox subsystems below): recovery's own due-parked
+        // resume and this scheduler's tick both funnel through
+        // `server::resume_run_tracked`, whose `Engine::resume_run` guards
+        // re-entry with `EngineError::RunAlreadyActive` — but recovery
+        // completing first, before this scheduler starts polling, means
+        // there is no window for the two to race the same run at all.
+        let wake_scheduler = surge_daemon::wake_scheduler::WakeScheduler {
+            storage: Arc::clone(&storage),
+            facade: Arc::clone(&facade),
+            admission: Arc::clone(&admission),
+            broadcast: Arc::clone(&broadcast_registry),
+            clock: Arc::new(surge_persistence::runs::SystemClock),
+            notifier: Arc::clone(&notifier),
+            blind_park_limit: config.capacity.blind_park_limit,
+            poll_interval: surge_daemon::wake_scheduler::DEFAULT_POLL_INTERVAL,
+        };
+        let shutdown_for_wake = shutdown.clone();
+        tokio::spawn(wake_scheduler.run(shutdown_for_wake));
+
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
                 sources,
@@ -309,6 +341,8 @@ fn main() -> std::process::ExitCode {
                     source_map_arc,
                     conn_arc,
                     Arc::clone(&notifier),
+                    Arc::clone(&storage),
+                    config.merge_gate.publish_run_report,
                 );
             } else {
                 info!("intake disabled; run-completion → tracker-comment hook not started");

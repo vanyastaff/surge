@@ -27,6 +27,13 @@
 //! Each executed hook produces a [`HookExecutionRecord`] that callers can
 //! persist via [`record_hook_executed`] as `EventPayload::HookExecuted`.
 
+/// Memory write-back at a node's terminal failure (`.autopilot/competitive-waves/spec.md`
+/// §24, R22/R23/R23.1). Unrelated to the profile-hook chain above — it lives
+/// under `engine::hooks` because it is the same class of thing: an
+/// engine-owned interception point at a stage boundary, not something the
+/// agent under execution can trigger.
+pub mod memory_writeback;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;

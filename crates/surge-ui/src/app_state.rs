@@ -219,12 +219,19 @@ impl AppState {
                         existing.ended_at.get_or_insert_with(chrono::Utc::now);
                     }
                 } else {
-                    // Unknown run id AND unknown outcome — synthesize a
-                    // stub with our best guess (Aborted is least
-                    // misleading for "we don't know what happened, but
-                    // we know it ended"). Real `started_at` is
-                    // unrecoverable here.
-                    let stub_status = new_status.unwrap_or(RunStatus::Aborted);
+                    // Unknown run id AND an outcome that doesn't map to a
+                    // known `RunStatus` (e.g. `RunOutcome::Parked`, Task 12
+                    // — not a failure or cancellation, and this UI-facing
+                    // `RunStatus` has no variant for it yet): the `_` arm
+                    // three lines above already refused to guess `Aborted`
+                    // for the *known*-run case for exactly this reason
+                    // (review finding: `unwrap_or` here was quietly
+                    // reversing that decision for the unknown-run case).
+                    // `Active` is the same "least specific, least false"
+                    // choice applied consistently — it does not claim the
+                    // run failed or was cancelled, which `Aborted` would.
+                    // Real `started_at` is unrecoverable here either way.
+                    let stub_status = new_status.unwrap_or(RunStatus::Active);
                     self.runs.push(UiRun {
                         run_id: *run_id,
                         status: stub_status,

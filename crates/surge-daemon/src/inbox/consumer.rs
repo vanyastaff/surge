@@ -162,7 +162,14 @@ impl InboxActionConsumer {
         Ok(())
     }
 
-    #[allow(clippy::unused_async)]
+    // Sibling handlers on this dispatch surface (`handle_start`, `handle_skip`)
+    // await real I/O; `async fn` here keeps the three call sites in `tick`
+    // uniform rather than exposing which handler happens to await nothing today.
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "matches the other InboxActionKind handlers dispatched uniformly via `.await` in `tick`; `std::future::ready`/`async move` alternatives would make this handler eagerly evaluate its DB read instead of lazily-until-polled like its siblings"
+    )]
     async fn handle_snooze(&self, row: &InboxActionRow) -> Result<(), String> {
         let ticket_row = {
             let conn = self

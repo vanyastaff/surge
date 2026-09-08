@@ -57,6 +57,16 @@ pub struct MockBridge {
     pinned_session_ids: Mutex<VecDeque<SessionId>>,
     /// Text of the most recent `send_message` (for prompt-injection assertions).
     last_prompt: Mutex<Option<String>>,
+    /// Errors to return from successive `send_message` calls instead of
+    /// `Ok(())`. Consumed (popped from the front) one per call, so a test
+    /// that queues N errors scripts exactly the next N `send_message`
+    /// calls to fail (in order) and every call after that to succeed —
+    /// mirroring `pinned_session_ids`' one-shot-per-entry scripting style,
+    /// generalized from a single slot to a queue so a test can script more
+    /// than one dispatch attempt to fail (e.g. "this run must never reach
+    /// a second agent's `send_message`, but if it does, it must fail fast
+    /// rather than hang waiting for an event nobody scripted").
+    next_send_message_errors: Mutex<VecDeque<SendMessageError>>,
 }
 
 impl MockBridge {
@@ -68,10 +78,16 @@ impl MockBridge {
             tx,
             pinned_session_ids: Mutex::new(VecDeque::new()),
             last_prompt: Mutex::new(None),
+            next_send_message_errors: Mutex::new(VecDeque::new()),
         }
     }
 
-    /// Text of the most recent `send_message` prompt, if any.
+    /// Text of the most recent `send_message` prompt, if any. Used by tests
+    /// that assert on prompt content (e.g. operator-steering injection in
+    /// `engine_task_ledger_test.rs`); see also
+    /// [`tests::last_prompt_reflects_last_send_message`] below, which
+    /// exercises it directly so every binary sharing this fixture module
+    /// (not just the one asserting on steering) sees it as used.
     pub async fn last_prompt(&self) -> Option<String> {
         self.last_prompt.lock().await.clone()
     }
@@ -96,6 +112,15 @@ impl MockBridge {
     /// Queue an event to be broadcast on the next `pump_scripted_events()`.
     pub async fn enqueue_event(&self, event: BridgeEvent) {
         self.scripted_events.lock().await.push_back(event);
+    }
+
+    /// Queue `err` to be returned by the next `send_message` call that
+    /// hasn't already been scripted to fail. Calling this N times queues N
+    /// successive failures (in call order); every call after the queue
+    /// drains succeeds.
+    #[allow(dead_code)] // not exercised by every test binary sharing the fixture
+    pub async fn fail_next_send_message(&self, err: SendMessageError) {
+        self.next_send_message_errors.lock().await.push_back(err);
     }
 
     /// Drain the scripted-event queue and broadcast each event to subscribers.
@@ -180,6 +205,9 @@ impl BridgeFacade for MockBridge {
             .lock()
             .await
             .push(RecordedCall::SendMessage { session });
+        if let Some(err) = self.next_send_message_errors.lock().await.pop_front() {
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -305,6 +333,17 @@ mod tests {
             RecordedCall::ReplyToTool { call_id, .. } => assert_eq!(call_id, "call-1"),
             other => panic!("expected ReplyToTool, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn last_prompt_reflects_last_send_message() {
+        let m = MockBridge::new();
+        assert_eq!(m.last_prompt().await, None, "nothing sent yet");
+        let session = SessionId::new();
+        m.send_message(session, MessageContent::Text("hello from test".into()))
+            .await
+            .unwrap();
+        assert_eq!(m.last_prompt().await.as_deref(), Some("hello from test"));
     }
 
     #[tokio::test]

@@ -139,6 +139,7 @@ pub async fn run_feature_planner(
         steers: Vec::new(),
         node: &node,
         agent_config: &agent_config,
+        bound_skills: &[],
         declared_outcomes: &declared_outcomes,
         bridge: params.bridge,
         writer: params.writer,
@@ -151,6 +152,12 @@ pub async fn run_feature_planner(
         human_input_timeout: params.human_input_timeout,
         mcp_registry: params.mcp_registry,
         mcp_servers: params.mcp_servers,
+        // The Feature Planner driver runs standalone (see module doc) and
+        // has no `SurgeConfig` of its own to read a `surge.toml` override
+        // from; the engine's conservative defaults still apply the guard
+        // and spill policy to this node rather than leaving it unguarded.
+        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: Some(params.profile_registry.clone()),
         hook_executor: params.hook_executor,
         pending_elevations: crate::engine::elevation::PendingElevations::new(),

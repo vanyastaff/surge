@@ -16,7 +16,7 @@ use surge_core::roadmap_patch::{
     RoadmapPatchConflict, RoadmapPatchDependency, RoadmapPatchId, RoadmapPatchItem,
     RoadmapPatchOperation, RoadmapPatchStatus, RoadmapPatchTarget,
 };
-use surge_core::run_event::{EventPayload, VersionedEventPayload};
+use surge_core::run_event::{EscalationCause, EventPayload, VersionedEventPayload};
 use surge_core::{Graph, RoadmapArtifact, RoadmapMilestone, RoadmapPatch, RoadmapStatus, RunId};
 use surge_notify::{
     NotifyMessage, RoadmapAmendmentNotificationKind, RoadmapAmendmentNotificationPayload,
@@ -960,6 +960,7 @@ async fn append_edit_loop_escalation(
             EventPayload::EscalationRequested {
                 stage: None,
                 reason,
+                cause: EscalationCause::RoadmapAmendmentEditLoopExhausted,
             },
         ))
         .await?;

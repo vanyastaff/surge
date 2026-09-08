@@ -17,11 +17,11 @@ pub const SURGE_HOME_ENV: &str = "SURGE_HOME";
 /// Returns [`SurgeError::Config`] when neither `SURGE_HOME` is set nor
 /// `dirs::home_dir()` can identify a home directory.
 pub fn surge_home() -> Result<PathBuf, SurgeError> {
-    if let Ok(custom) = std::env::var(SURGE_HOME_ENV) {
-        if !custom.is_empty() {
-            tracing::debug!(target: "profile::paths", path = %custom, "SURGE_HOME override active");
-            return Ok(PathBuf::from(custom));
-        }
+    if let Ok(custom) = std::env::var(SURGE_HOME_ENV)
+        && !custom.is_empty()
+    {
+        tracing::debug!(target: "profile::paths", path = %custom, "SURGE_HOME override active");
+        return Ok(PathBuf::from(custom));
     }
     dirs::home_dir().map(|h| h.join(".surge")).ok_or_else(|| {
         SurgeError::Config("cannot determine SURGE_HOME (no $SURGE_HOME, no $HOME)".into())

@@ -20,7 +20,7 @@ The CLI freezes these into the run at start, so enforcement is deterministic
 and **replayable**: the same event log always reproduces the same budget
 decisions (no wall-clock, no live config re-read mid-run).
 
-> Note: USD enforcement requires per-event `cost_usd`, which the current ACP
+> Note: USD enforcement requires per-event `cost_usd`, which the current Agent Client Protocol (ACP)
 > bridge path does not yet populate (`cost_usd` is `None`). Until a pricing
 > layer lands, set `budget_tokens` for hard enforcement; `budget_usd` still
 > drives the analytics surfaces.

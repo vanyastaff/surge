@@ -99,6 +99,20 @@ pub struct McpEscalation {
     pub attempts: u32,
 }
 
+/// A `LoopGuard` trip observed during dispatch (repeated tool call, or a
+/// node past its wall-clock budget). Mirrors [`McpEscalation`]: the agent
+/// stage drains these and appends a replay-safe `EscalationRequested`
+/// event. Carries the guard's typed `LoopGuardTrip` rather than a
+/// pre-formatted string, so a consumer that wants the typed reason (e.g. a
+/// durable "guard-tripped" trace) is not forced to parse
+/// `LoopGuardTrip::operator_message()` back apart.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoopEscalation {
+    /// What the guard found.
+    pub trip: crate::guard::LoopGuardTrip,
+}
+
 /// Routes non-special ACP tool calls to implementations. Engine calls
 /// `dispatch` for every `ToolCall` whose name is not `report_stage_outcome`
 /// or `request_human_input` (those are engine-handled).
@@ -112,6 +126,15 @@ pub trait ToolDispatcher: Send + Sync {
     /// expose its built-in catalog (`read_file`, `write_file`, `shell_exec`,
     /// etc.). Used by `RoutingToolDispatcher` to assemble the
     /// session-level tool list.
+    ///
+    /// **Contract, not decoration:** every agent stage wraps its
+    /// dispatcher in `RoutingToolDispatcher` unconditionally (guard/spill
+    /// apply to every node), and routing only recognizes a tool name that
+    /// appears here — this list is no longer a passive catalog handed to
+    /// the agent, it is what makes a name reachable in `dispatch` at all.
+    /// An implementor that handles a tool in `dispatch` but omits it here
+    /// will see that tool routed as `Unsupported` and `dispatch` never
+    /// called for it.
     fn declared_tools(&self) -> Vec<DeclaredTool> {
         Vec::new()
     }
@@ -123,6 +146,23 @@ pub trait ToolDispatcher: Send + Sync {
     fn drain_mcp_escalations(&self) -> Vec<McpEscalation> {
         Vec::new()
     }
+
+    /// Drain loop-guard escalations accumulated since the last call.
+    /// Default empty (engine dispatcher never escalates);
+    /// `RoutingToolDispatcher` overrides. Mirrors `drain_mcp_escalations`:
+    /// the agent stage drains after each tool dispatch and appends
+    /// `EscalationRequested`.
+    fn drain_loop_escalations(&self) -> Vec<LoopEscalation> {
+        Vec::new()
+    }
+
+    /// Poll this dispatcher's node wall-clock deadline outside the
+    /// tool-call path. Default no-op (only `RoutingToolDispatcher` tracks a
+    /// deadline). The agent stage calls this on a timer — a node stuck in
+    /// one long agent turn never calls `dispatch`, so without a
+    /// timer-driven check its wall-clock budget would never trip (see
+    /// `crate::guard::LoopGuard::deadline`).
+    fn poll_wall_clock_deadline(&self) {}
 
     /// Resolve which MCP server (if any) serves `tool`. Returns `None`
     /// for engine-built-in tools — so engine-only dispatchers fall back

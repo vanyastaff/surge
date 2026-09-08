@@ -45,6 +45,22 @@ impl ToolDispatcher for RecordingDispatcher {
             content: serde_json::json!({"echo": call.tool}),
         }
     }
+
+    // `execute_agent_stage` always wraps `tool_dispatcher` in
+    // `RoutingToolDispatcher` now (every agent stage gets the loop guard +
+    // output spill, not only nodes with an `mcp_add` override), and routing
+    // only recognizes tools a dispatcher declares here — an undeclared tool
+    // name dispatches as `Unsupported` without ever reaching `dispatch`
+    // above. Declare "echo" (the only tool this fixture's scripted
+    // `BridgeEvent::ToolCall`s use) so the pre/post-hook wiring under test
+    // is still what's exercised, not routing-table absence.
+    fn declared_tools(&self) -> Vec<surge_orchestrator::engine::tools::DeclaredTool> {
+        vec![surge_orchestrator::engine::tools::DeclaredTool::new(
+            "echo".into(),
+            None,
+            serde_json::json!({}),
+        )]
+    }
 }
 
 fn agent_cfg_with_hooks(hooks: Vec<Hook>) -> AgentConfig {
@@ -134,6 +150,7 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
+        bound_skills: &[],
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
@@ -146,6 +163,8 @@ async fn pre_tool_use_reject_skips_dispatcher_and_replies_error() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
@@ -242,6 +261,7 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         steers: Vec::new(),
         node: &node,
         agent_config: &cfg,
+        bound_skills: &[],
         declared_outcomes: &[],
         bridge: &bridge,
         writer: &writer,
@@ -254,6 +274,8 @@ async fn post_tool_use_warn_does_not_block_dispatch() {
         human_input_timeout: Duration::from_secs(5),
         mcp_registry: None,
         mcp_servers: Vec::new(),
+        tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
+        output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),

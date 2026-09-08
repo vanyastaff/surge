@@ -230,6 +230,11 @@ target = "roadmap_artifact"
 source = { type = "node_output", node = "roadmap_planner", artifact = "roadmap" }
 
 [[nodes.flow_generator.config.bindings]]
+target = "profile_catalog"
+source = { type = "run_artifact", name = "profile_catalog" }
+optional = true
+
+[[nodes.flow_generator.config.bindings]]
 target = "edit_feedback"
 source = { type = "edit_feedback", from_node = "flow_generator" }
 

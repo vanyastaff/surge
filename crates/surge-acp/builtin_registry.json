@@ -74,5 +74,25 @@
     "models": [],
     "long_description": "",
     "runtime": "gemini"
+  },
+  {
+    "id": "dsh-acp",
+    "display_name": "DeepSeek Harness",
+    "description": "DeepSeek Harness's automation-only ACP server (developer preview)",
+    "version": "0.1.2-rc.1",
+    "authors": ["DeepSeek"],
+    "license": "MIT",
+    "command": "npx",
+    "default_args": ["-y", "@deepseek-ai/dsh", "--profile", "acp"],
+    "transport": "stdio",
+    "install_instructions": "npx -y @deepseek-ai/dsh --profile acp",
+    "cli_binary": null,
+    "website": "https://github.com/deepseek-ai/deepseek-harness",
+    "tags": ["deepseek", "open-source", "developer-preview"],
+    "capabilities": ["code", "chat"],
+    "models": [],
+    "long_description": "Developer preview. `dsh --profile acp` boots DeepSeek Harness's automation-only ACP server over JSON-RPC stdio — a documented zero-option command (packages/bundle/acp-app/src/index.ts in deepseek-ai/deepseek-harness). No separate `dsh` binary is expected on PATH; surge always launches it via npx, so discovery and version probing both go through npx, never a same-named binary. Version-pinned; see RuntimeVersionPolicy for `dsh` in versions.toml — surge fails loudly on protocol drift instead of degrading silently. authors/license confirmed from the repo LICENSE file (\"Copyright (c) 2026 DeepSeek\", MIT) and apps/cli/package.json's license field.",
+    "runtime": "dsh",
+    "version_probe_args": ["-y", "@deepseek-ai/dsh"]
   }
 ]

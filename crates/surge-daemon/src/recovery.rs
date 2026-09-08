@@ -56,6 +56,20 @@ pub enum RecoveryAction {
     /// The run is already active in this engine process — recovery is
     /// being re-run while the run is live. No-op (idempotency guard).
     SkipAlreadyActive,
+    /// The run is [`RunStatus::Parked`] (Task 12, R37/R37.1) and its
+    /// `wake_at` has not passed yet. Leave it parked — resuming it now
+    /// would wake it before the provider's rate-limit window (or the
+    /// configured blind backoff) has actually elapsed. Deliberately not
+    /// subject to the idle-stuck check (5): a parked run's silence is
+    /// intentional, not a sign of a wedged run.
+    SkipParked {
+        /// When the run is expected to wake on its own, if recorded.
+        /// `None` only if the registry row is `Parked` with no `wake_at`
+        /// at all — should not happen (`set_run_parked` always writes both
+        /// together), but a fact worth surfacing rather than a value worth
+        /// panicking over.
+        wake_at_ms: Option<i64>,
+    },
 }
 
 /// Facts about a single run, gathered by the planner and fed to the
@@ -83,6 +97,19 @@ pub struct RunRecoveryFacts {
     /// the recovery scan (only possible when recovery is re-invoked
     /// while runs are live).
     pub already_active: bool,
+    /// `true` when this run appears in [`registry::due_parked`]'s result at
+    /// scan time (Task 12 M3 review, BLOCKING #2). Meaningful only when
+    /// `registry_status` is [`RunStatus::Parked`]; always `false`
+    /// otherwise. Computed by the planner from that query's own output —
+    /// not from an inline `wake_at <= now` comparison here — so
+    /// `due_parked` is the single place "is a parked run due" is decided,
+    /// with a real caller instead of the zero it had before this fix.
+    pub parked_is_due: bool,
+    /// The parked run's recorded wake time, when `registry_status` is
+    /// [`RunStatus::Parked`]. Carried for [`RecoveryAction::SkipParked`]'s
+    /// display value; `None` only if the row is `Parked` with no
+    /// `wake_at` at all (should not happen).
+    pub parked_wake_at_ms: Option<i64>,
 }
 
 /// Decide what to do with a single run, given the gathered facts and the
@@ -94,12 +121,28 @@ pub struct RunRecoveryFacts {
 /// 2. registry status truly terminal → [`RecoveryAction::SkipTerminal`]
 /// 3. event log reached terminal → [`RecoveryAction::ReconcileTerminal`]
 /// 4. worktree missing → [`RecoveryAction::MarkFailedWorktreeLost`]
-/// 5. idle longer than threshold → [`RecoveryAction::FlagStuck`]
-/// 6. otherwise → [`RecoveryAction::Resume`]
+/// 5. registry status `Parked` and not yet due → [`RecoveryAction::SkipParked`]
+///    (Task 12 M3 review, BLOCKING #2); due → falls through to 7 like any
+///    other healthy run
+/// 6. idle longer than threshold → [`RecoveryAction::FlagStuck`]
+/// 7. otherwise → [`RecoveryAction::Resume`]
 ///
 /// The log-terminal check (3) deliberately precedes the worktree check
 /// (4): a run that genuinely completed has its worktree cleaned up, so an
 /// absent worktree on a finished run is expected, not a failure.
+///
+/// The parked check (5) deliberately precedes the idle-stuck check (6): a
+/// parked run's silence for however long the provider window (or the
+/// configured blind backoff) takes is *intentional*, not evidence of a
+/// wedged run — without this ordering, a run parked longer than
+/// `stuck_threshold` would be flagged stuck instead of quietly waiting out
+/// its own park (Task 12 M3 review, BLOCKING #2: "a run stuck longer than
+/// `stuck_threshold` would otherwise land in `FlagStuck`"). It also
+/// precedes the ordinary resume (7): a **due** parked run still resumes
+/// through the normal path (`Engine::resume_run` itself clears
+/// `Parked`/`wake_at` and arms the one-shot capacity-precheck bypass — see
+/// that function's own doc), so falling through here rather than
+/// special-casing "due" is deliberate, not an oversight.
 #[must_use]
 pub fn decide_action(
     facts: &RunRecoveryFacts,
@@ -138,7 +181,19 @@ pub fn decide_action(
         return RecoveryAction::MarkFailedWorktreeLost;
     }
 
-    // 5. Idle too long → do not blindly resume a possibly-wedged run.
+    // 5. Parked and not yet due: leave it parked. A due parked run falls
+    //    through (no special "due" action here) to the ordinary checks
+    //    below, then to Resume — see this function's own doc for why.
+    if facts.registry_status == RunStatus::Parked && !facts.parked_is_due {
+        return RecoveryAction::SkipParked {
+            wake_at_ms: facts.parked_wake_at_ms,
+        };
+    }
+
+    // 6. Idle too long → do not blindly resume a possibly-wedged run.
+    //    Never reached for a still-parked (not-yet-due) run — rule 5
+    //    already returned above — so a long, intentional park never
+    //    trips this.
     if let Some(last) = facts.last_event_ms {
         let idle_ms = now_ms.saturating_sub(last);
         let threshold_ms = i64::try_from(stuck_threshold.as_millis()).unwrap_or(i64::MAX);
@@ -147,7 +202,8 @@ pub fn decide_action(
         }
     }
 
-    // 6. Healthy non-terminal run with a live worktree: resume.
+    // 7. Healthy non-terminal run with a live worktree (or a parked run
+    //    whose wake_at has already passed): resume.
     RecoveryAction::Resume
 }
 
@@ -234,6 +290,18 @@ pub async fn plan_recovery(
     // exactly the population we want to recover.
     let runs = storage.list_runs(RunFilter::default()).await?;
 
+    // Task 12 M3 review, BLOCKING #2: the single source of "is a parked
+    // run due" — `registry::due_parked`'s own query (`status = 'parked'
+    // AND wake_at <= now`) — computed once per scan, not re-derived
+    // per-run from an inline timestamp comparison. `due_parked` had zero
+    // real callers before this; this is its first.
+    let due_parked_ids: std::collections::HashSet<surge_core::id::RunId> = storage
+        .due_parked(opts.now_ms)
+        .await?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+
     let mut decisions = Vec::new();
     for summary in runs {
         // Candidates are everything NOT genuinely terminal. `Crashed` is a
@@ -298,6 +366,8 @@ pub async fn plan_recovery(
             worktree_exists,
             last_event_ms,
             already_active: active_run_ids.contains(&run_id),
+            parked_is_due: summary.status == RunStatus::Parked && due_parked_ids.contains(&run_id),
+            parked_wake_at_ms: summary.wake_at_ms,
         };
         let action = decide_action(&facts, opts.now_ms, opts.stuck_threshold);
 
@@ -363,6 +433,11 @@ pub struct RecoveryOutcome {
     pub flagged_stuck: usize,
     /// Decisions that required no action (already terminal / already active).
     pub skipped: usize,
+    /// Runs left parked because their `wake_at` has not passed yet (Task
+    /// 12 M3 review, BLOCKING #2) — distinct from `skipped` so an operator
+    /// (or a test) can tell "nothing to do" apart from "intentionally
+    /// still waiting".
+    pub parked: usize,
     /// Per-run effect failures (logged; never fatal).
     pub errors: usize,
 }
@@ -495,6 +570,15 @@ pub async fn execute_recovery(
             RecoveryAction::SkipTerminal | RecoveryAction::SkipAlreadyActive => {
                 out.skipped += 1;
             },
+            RecoveryAction::SkipParked { wake_at_ms } => {
+                out.parked += 1;
+                tracing::info!(
+                    target: "surge.recovery",
+                    run_id = %d.run_id,
+                    ?wake_at_ms,
+                    "left parked; not yet due"
+                );
+            },
         }
     }
 
@@ -507,6 +591,7 @@ pub async fn execute_recovery(
         failed_worktree = out.failed_worktree,
         flagged_stuck = out.flagged_stuck,
         skipped = out.skipped,
+        parked = out.parked,
         errors = out.errors,
         "recovery pass complete"
     );
@@ -613,7 +698,7 @@ impl RecoveryEffects for DaemonRecoveryEffects {
 /// Default threshold after which a run with no new events is considered
 /// stuck rather than resumable: 24 hours (per the roadmap's stuck-run
 /// detection bullet).
-pub const DEFAULT_STUCK_THRESHOLD: Duration = Duration::from_secs(24 * 3600);
+pub const DEFAULT_STUCK_THRESHOLD: Duration = Duration::from_hours(24);
 
 /// Mark a run failed in BOTH the event log and the registry.
 ///
@@ -802,6 +887,7 @@ mod execute_recovery_tests {
                 failed_worktree: 1,
                 flagged_stuck: 1,
                 skipped: 2,
+                parked: 0,
                 errors: 0,
             }
         );
@@ -862,7 +948,7 @@ mod plan_recovery_tests {
 
     fn opts(worktrees_root: std::path::PathBuf) -> RecoveryOptions {
         RecoveryOptions {
-            stuck_threshold: Duration::from_secs(24 * 3600),
+            stuck_threshold: Duration::from_hours(24),
             worktrees_root,
             now_ms: NOW,
         }
@@ -876,25 +962,16 @@ mod plan_recovery_tests {
 
         // Run A — candidate with a present worktree → Resume.
         let run_a = RunId::new();
-        let _wa = storage
-            .create_run(run_a.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wa = storage.create_run(run_a, "/proj", None).await.unwrap();
         std::fs::create_dir_all(wt_root.join(run_a.to_string())).unwrap();
 
         // Run B — candidate with an absent worktree → MarkFailedWorktreeLost.
         let run_b = RunId::new();
-        let _wb = storage
-            .create_run(run_b.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wb = storage.create_run(run_b, "/proj", None).await.unwrap();
 
         // Run C — terminal (Completed) → not a candidate, no decision.
         let run_c = RunId::new();
-        let _wc = storage
-            .create_run(run_c.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _wc = storage.create_run(run_c, "/proj", None).await.unwrap();
         {
             let conn = storage.acquire_registry_conn().unwrap();
             conn.execute(
@@ -934,14 +1011,11 @@ mod plan_recovery_tests {
         let wt_root = tmp.path().join("worktrees");
 
         let run = RunId::new();
-        let _w = storage
-            .create_run(run.clone(), "/proj", None)
-            .await
-            .unwrap();
+        let _w = storage.create_run(run, "/proj", None).await.unwrap();
         std::fs::create_dir_all(wt_root.join(run.to_string())).unwrap();
 
         let mut active = HashSet::new();
-        active.insert(run.clone());
+        active.insert(run);
 
         let report = plan_recovery(&storage, &opts(wt_root), &active)
             .await
@@ -952,6 +1026,63 @@ mod plan_recovery_tests {
             RecoveryAction::SkipAlreadyActive
         );
     }
+
+    /// Task 12 M3 review, BLOCKING #2, end-to-end through `plan_recovery`
+    /// (not just `decide_action`'s pure logic in isolation): a parked run
+    /// not yet due must come back `SkipParked`, and a parked run past its
+    /// `wake_at` must come back `Resume` — proving `Storage::due_parked`
+    /// is actually consulted by the planner, not just present on `Storage`
+    /// with nothing calling it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_recovery_leaves_not_yet_due_parked_runs_parked_and_resumes_due_ones() {
+        let tmp = tempdir().unwrap();
+        let storage = Storage::open(tmp.path()).await.unwrap();
+        let wt_root = tmp.path().join("worktrees");
+
+        // Not yet due: wake_at in the future.
+        let run_waiting = RunId::new();
+        let _w1 = storage
+            .create_run(run_waiting, "/proj", None)
+            .await
+            .unwrap();
+        std::fs::create_dir_all(wt_root.join(run_waiting.to_string())).unwrap();
+        storage
+            .set_run_parked(&run_waiting, NOW + 3_600_000)
+            .await
+            .unwrap();
+
+        // Due: wake_at already passed.
+        let run_due = RunId::new();
+        let _w2 = storage.create_run(run_due, "/proj", None).await.unwrap();
+        std::fs::create_dir_all(wt_root.join(run_due.to_string())).unwrap();
+        storage
+            .set_run_parked(&run_due, NOW - 3_600_000)
+            .await
+            .unwrap();
+
+        let report = plan_recovery(&storage, &opts(wt_root), &HashSet::new())
+            .await
+            .unwrap();
+
+        let waiting = report
+            .decisions
+            .iter()
+            .find(|d| d.run_id == run_waiting)
+            .expect("waiting run present");
+        assert_eq!(
+            waiting.action,
+            RecoveryAction::SkipParked {
+                wake_at_ms: Some(NOW + 3_600_000)
+            }
+        );
+
+        let due = report
+            .decisions
+            .iter()
+            .find(|d| d.run_id == run_due)
+            .expect("due run present");
+        assert_eq!(due.action, RecoveryAction::Resume);
+    }
 }
 
 #[cfg(test)]
@@ -960,7 +1091,7 @@ mod decide_action_tests {
 
     const HOUR_MS: i64 = 3_600_000;
     const NOW: i64 = 1_700_000_000_000;
-    const STUCK: Duration = Duration::from_secs(24 * 3600);
+    const STUCK: Duration = Duration::from_hours(24);
 
     /// Baseline: a Crashed run, worktree present, fresh event, not active.
     fn healthy_crashed() -> RunRecoveryFacts {
@@ -971,6 +1102,8 @@ mod decide_action_tests {
             worktree_exists: true,
             last_event_ms: Some(NOW - HOUR_MS),
             already_active: false,
+            parked_is_due: false,
+            parked_wake_at_ms: None,
         }
     }
 
@@ -1053,6 +1186,66 @@ mod decide_action_tests {
             RecoveryAction::FlagStuck {
                 idle_ms: 25 * HOUR_MS
             }
+        );
+    }
+
+    #[test]
+    fn parked_and_not_yet_due_is_skipped_not_resumed() {
+        // Task 12 M3 review, BLOCKING #2: before this fix, a `Parked` run
+        // fell all the way through to `Resume` (nothing in `decide_action`
+        // recognized the status at all) — every daemon restart would wake
+        // every parked run immediately, regardless of `wake_at`.
+        let facts = RunRecoveryFacts {
+            registry_status: RunStatus::Parked,
+            parked_is_due: false,
+            parked_wake_at_ms: Some(NOW + HOUR_MS),
+            ..healthy_crashed()
+        };
+        assert_eq!(
+            decide_action(&facts, NOW, STUCK),
+            RecoveryAction::SkipParked {
+                wake_at_ms: Some(NOW + HOUR_MS)
+            }
+        );
+    }
+
+    #[test]
+    fn parked_and_due_falls_through_to_resume() {
+        // The other half: a parked run whose `wake_at` *has* passed
+        // resumes through the ordinary path — `Engine::resume_run` itself
+        // clears `Parked`/`wake_at` and arms the capacity-precheck bypass
+        // (see that function's own doc); `decide_action` does not need a
+        // separate "due" action.
+        let facts = RunRecoveryFacts {
+            registry_status: RunStatus::Parked,
+            parked_is_due: true,
+            parked_wake_at_ms: Some(NOW - HOUR_MS),
+            ..healthy_crashed()
+        };
+        assert_eq!(decide_action(&facts, NOW, STUCK), RecoveryAction::Resume);
+    }
+
+    /// Mutation test: swapping the priority of rules 5 (parked) and 6
+    /// (stuck) must fail. A run parked far longer than `stuck_threshold`
+    /// (its `wake_at` deliberately still in the future) must be skipped as
+    /// parked, never flagged stuck — if rule 6 were checked first, this
+    /// exact fixture would come back `FlagStuck`, not `SkipParked`.
+    #[test]
+    fn parked_run_idle_longer_than_stuck_threshold_is_still_skipped_not_flagged_stuck() {
+        let facts = RunRecoveryFacts {
+            registry_status: RunStatus::Parked,
+            parked_is_due: false,
+            parked_wake_at_ms: Some(NOW + HOUR_MS),
+            last_event_ms: Some(NOW - 100 * HOUR_MS), // far beyond STUCK (24h)
+            ..healthy_crashed()
+        };
+        let action = decide_action(&facts, NOW, STUCK);
+        assert_eq!(
+            action,
+            RecoveryAction::SkipParked {
+                wake_at_ms: Some(NOW + HOUR_MS)
+            },
+            "a parked run's intentional silence must never be read as stuck, got {action:?}"
         );
     }
 

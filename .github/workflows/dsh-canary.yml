@@ -1,0 +1,131 @@
+name: DSH Canary
+
+# DeepSeek Harness (`dsh`) is a developer-preview runtime fetched live from
+# npm on every run of this workflow — an external, no-warranty pre-release
+# package must never sit on the PR gate, so this stays a separate workflow
+# with no `pull_request:` trigger: `main` pushes and a daily schedule catch
+# upstream protocol drift against the pinned version within a day instead of
+# waiting for the next person to touch a DSH-adjacent file.
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    # Daily at 07:00 UTC.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  dsh-bundled-flow:
+    name: Bundled flow against DSH (pinned developer preview)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-dsh-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-dsh-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-dsh-
+            ${{ runner.os }}-target-
+
+      - name: Resolve npx path
+        id: npx
+        # `real_acp_smoke` requires SURGE_REAL_ACP_BIN to be an absolute,
+        # existing file — a bare `npx` fails that check before ever spawning.
+        run: echo "path=$(command -v npx)" >> "$GITHUB_OUTPUT"
+
+      # Hard gate: does NOT need DeepSeek model credentials. Verifies the
+      # exact pin (refusing loudly on drift or on "no data to compare" — see
+      # `is_exact_pin` in `crates/surge-cli/src/commands/doctor.rs`) and
+      # exercises spawn + the ACP `initialize`/`new_session` handshake via
+      # `--handshake-only`. This step is the one required to catch "DSH
+      # broke the wire protocol" per the brief's "fail loudly on protocol
+      # drift" requirement — it must NOT carry `continue-on-error`.
+      #
+      # A non-zero exit alone is not enough: `SURGE_DOCTOR_REAL` unset (lost
+      # in a future edit, a typo'd name, ...) makes the command print "real
+      # smoke session: skipped" and exit 0 — green, indistinguishable from a
+      # real pass, one level below what the job status shows. So this
+      # asserts the actual `PASS` line in the captured output; anything else
+      # (skipped, a stage failure, an unexpected crash) fails the step.
+      - name: Verify DSH pin + ACP handshake (no model credentials needed)
+        env:
+          SURGE_DOCTOR_REAL: "1"
+        run: |
+          set -euo pipefail
+          output=$(cargo run -p surge-cli --bin surge -- doctor agent dsh-acp --handshake-only 2>&1)
+          echo "$output"
+          if ! grep -q '^real smoke session: PASS' <<< "$output"; then
+            echo "::error::expected a 'real smoke session: PASS' line in the output above; got none (a lost SURGE_DOCTOR_REAL, an unrecognized flag, or any other silent skip must fail this step, not report green)"
+            exit 1
+          fi
+
+      # Soft gate: the full bundled flow additionally needs DSH to dispatch
+      # a real prompt to its configured model (`deepseek-official` /
+      # `deepseek-v4-flash` — see packages/bundle/acp-app upstream), which
+      # needs a DeepSeek API credential this workflow does not provision.
+      # `real_acp_smoke` (crates/surge-orchestrator/tests/real_acp_smoke.rs)
+      # is the existing opt-in harness (docs/agent-runtimes.md) that drives
+      # a real ACP agent through the graph engine end to end: spawn -> ACP
+      # handshake -> new_session -> prompt -> RunCompleted. DSH resolves to
+      # `SURGE_REAL_ACP_KIND=custom` — the same npx-verbatim-passthrough path
+      # every builtin registry agent uses (see `AgentKind::Custom` in
+      # `crates/surge-acp/src/bridge/worker.rs`).
+      #
+      # Deliberately unpinned (`@deepseek-ai/dsh`, no `@<version>` suffix),
+      # matching `builtin_registry.json`'s `dsh-acp.default_args` byte for
+      # byte — that is what a real engine run resolves, and it is what the
+      # hard step above just probed too (`RegistryEntry::version_probe_args`
+      # asks npx to resolve the exact same bare package spec). Pinning this
+      # step to `@<version>` instead would exercise a different artifact
+      # than production and than the hard step's own check; since the hard
+      # step already refuses (without `continue-on-error`) the moment npx
+      # resolves anything other than the declared pin, by the time this step
+      # runs the bare spec is already known to resolve to that pin.
+      #
+      # `continue-on-error` mirrors ci.yml's own external-dependency policy
+      # (see "Run engine integration tests" there) and is scoped to exactly
+      # the model-credential gap: wiring/handshake/protocol/version breaks
+      # are already caught by the hard step above, so this step degrading to
+      # soft does not hide those.
+      - name: Full bundled flow against DSH (needs DeepSeek model credentials)
+        continue-on-error: true
+        env:
+          SURGE_REAL_ACP_BIN: ${{ steps.npx.outputs.path }}
+          SURGE_REAL_ACP_KIND: custom
+          SURGE_REAL_ACP_PROFILE: implementer@1.0
+          SURGE_REAL_ACP_ARGS: "-y @deepseek-ai/dsh --profile acp"
+        run: cargo test -p surge-orchestrator --test real_acp_smoke -- --nocapture

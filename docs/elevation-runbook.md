@@ -1,6 +1,6 @@
 # Elevation Runbook
 
-When an ACP agent needs a capability the configured sandbox does not grant, it issues an ACP `request_permission` call mid-turn. Surge intercepts that call, surfaces it to the operator through the run's event log, awaits a decision (or times out), and replies back to the agent. This document covers the lifecycle, configuration, and audit trail.
+When an Agent Client Protocol (ACP) agent needs a capability the configured sandbox does not grant, it issues an ACP `request_permission` call mid-turn. Surge intercepts that call, surfaces it to the operator through the run's event log, awaits a decision (or times out), and replies back to the agent. This document covers the lifecycle, configuration, and audit trail.
 
 ## Lifecycle
 

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use surge_core::content_hash::ContentHash;
 use surge_core::graph::Graph;
 use surge_core::keys::{NodeKey, OutcomeKey};
-use surge_core::run_event::{BootstrapStage, EventPayload, VersionedEventPayload};
+use surge_core::run_event::{BootstrapStage, EscalationCause, EventPayload, VersionedEventPayload};
 use surge_core::run_state::RunMemory;
 use surge_persistence::runs::run_writer::RunWriter;
 
@@ -275,6 +275,7 @@ async fn route_validation_failure(
                 EventPayload::EscalationRequested {
                     stage: Some(BootstrapStage::Flow),
                     reason,
+                    cause: EscalationCause::BootstrapEditLoopExhausted,
                 },
             ))
             .await
@@ -329,11 +330,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use surge_core::LedgerEffect;
     use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
     use surge_core::graph::{GraphMetadata, SCHEMA_VERSION};
     use surge_core::id::RunId;
     use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
     use surge_core::run_event::EventPayload;
+    use surge_core::terminal_config::{TerminalConfig, TerminalKind};
     use surge_persistence::runs::{EventSeq, Storage};
     use tempfile::TempDir;
 
@@ -352,6 +355,14 @@ mod tests {
 
     /// Build a tiny but valid Graph in Rust, then serialize it to TOML so the
     /// fixture survives schema renames without manual maintenance.
+    ///
+    /// Three nodes — `agent_a` -> `agent_b` -> `end` (Terminal) — so the
+    /// graph satisfies `surge_core::validate`'s full rule set (a Terminal
+    /// node must be reachable, and every non-terminal declared outcome must
+    /// carry an edge), not just the M6-specific checks `validate_for_m6`
+    /// enforced before Ticket 18 wired the rest of `surge_core::validate`
+    /// into it. A two-agent, no-terminal version of this fixture used to
+    /// pass validation only because those broader rules never ran.
     fn valid_flow_toml() -> String {
         let mut nodes = std::collections::BTreeMap::new();
         let outcome_done = OutcomeKey::try_from("done").unwrap();
@@ -360,7 +371,7 @@ mod tests {
             description: "done".into(),
             edge_kind_hint: EdgeKind::Forward,
             is_terminal: false,
-            ledger_effect: Default::default(),
+            ledger_effect: LedgerEffect::default(),
         }];
         let agent_cfg = NodeConfig::Agent(surge_core::agent_config::AgentConfig {
             profile: surge_core::keys::ProfileKey::try_from("mock").unwrap(),
@@ -376,6 +387,7 @@ mod tests {
         });
         let key_a = NodeKey::try_from("agent_a").unwrap();
         let key_b = NodeKey::try_from("agent_b").unwrap();
+        let key_end = NodeKey::try_from("end").unwrap();
         nodes.insert(
             key_a.clone(),
             Node {
@@ -394,22 +406,46 @@ mod tests {
                 config: agent_cfg,
             },
         );
-        let edge = Edge {
-            id: surge_core::keys::EdgeKey::try_from("e1").unwrap(),
-            from: PortRef {
-                node: key_a.clone(),
-                outcome: outcome_done,
+        nodes.insert(
+            key_end.clone(),
+            Node {
+                id: key_end.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
             },
-            to: key_b,
-            kind: EdgeKind::Forward,
-            policy: EdgePolicy::default(),
-        };
+        );
+        let edges = vec![
+            Edge {
+                id: surge_core::keys::EdgeKey::try_from("e1").unwrap(),
+                from: PortRef {
+                    node: key_a.clone(),
+                    outcome: outcome_done.clone(),
+                },
+                to: key_b.clone(),
+                kind: EdgeKind::Forward,
+                policy: EdgePolicy::default(),
+            },
+            Edge {
+                id: surge_core::keys::EdgeKey::try_from("e2").unwrap(),
+                from: PortRef {
+                    node: key_b,
+                    outcome: outcome_done,
+                },
+                to: key_end,
+                kind: EdgeKind::Forward,
+                policy: EdgePolicy::default(),
+            },
+        ];
         let graph = surge_core::graph::Graph {
             schema_version: SCHEMA_VERSION,
             metadata: GraphMetadata::new("test", chrono::Utc::now()),
             start: key_a,
             nodes,
-            edges: vec![edge],
+            edges,
             subgraphs: std::collections::BTreeMap::new(),
         };
         toml::to_string(&graph).expect("serialize valid graph")

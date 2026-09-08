@@ -7,6 +7,7 @@ use std::sync::Arc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
+use surge_core::run_event::RunEvent;
 use surge_core::{ContentHash, RoadmapPatchId, RunId, VersionedEventPayload, migrate_payload};
 
 use crate::runs::error::StorageError;
@@ -160,6 +161,30 @@ impl RunReader {
         })
         .await
         .map_err(|e| StorageError::Pool(e.to_string()))?
+    }
+
+    /// Read this run's full event log as plain `surge_core::RunEvent`s — the
+    /// one place this crate's `ReadEvent`/`EventSeq`/`timestamp_ms` shape gets
+    /// turned into `surge-core`'s own event type, so every caller that needs
+    /// a `Vec<RunEvent>` (a pure `surge-core` compiler, e.g.
+    /// `RunReport::compile`, cannot depend on this crate's `ReadEvent` at
+    /// all) shares this one conversion instead of re-deriving it. Used by
+    /// `surge-cli` (`surge run report`, `surge inbox`, `surge resolve`) and
+    /// `surge-daemon` (the L3 merge gate's optional Run Report attachment,
+    /// spec §10/R31) alike.
+    pub async fn read_run_events(&self) -> Result<Vec<RunEvent>, StorageError> {
+        let run_id = self.run_id;
+        let events = self.read_events(EventSeq(0)..EventSeq(u64::MAX)).await?;
+        Ok(events
+            .into_iter()
+            .map(|read| RunEvent {
+                run_id,
+                seq: read.seq.0,
+                timestamp: chrono::DateTime::from_timestamp_millis(read.timestamp_ms)
+                    .unwrap_or_default(),
+                payload: read.payload.payload,
+            })
+            .collect())
     }
 
     /// Read all rows of the `stage_executions` materialized view.

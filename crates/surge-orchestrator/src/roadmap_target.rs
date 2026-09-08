@@ -344,7 +344,12 @@ fn latest_named_artifact<'a>(
 
 fn pickup_for_status(status: RunStatus) -> ActivePickupPolicy {
     match status {
-        RunStatus::Running => ActivePickupPolicy::Allowed,
+        // A parked run (Task 12, R37) is still the active pipeline run —
+        // paused waiting on provider capacity, not stopped — and resumes
+        // itself once its wake time passes. Treating it like a terminal
+        // status here would let a follow-up run start amending the same
+        // roadmap this one is about to resume against.
+        RunStatus::Running | RunStatus::Parked => ActivePickupPolicy::Allowed,
         RunStatus::Bootstrapping => ActivePickupPolicy::Disabled,
         RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted | RunStatus::Crashed => {
             ActivePickupPolicy::FollowUpOnly
@@ -354,7 +359,8 @@ fn pickup_for_status(status: RunStatus) -> ActivePickupPolicy {
 
 fn amendment_point_for_status(status: RunStatus) -> RoadmapAmendmentPoint {
     match status {
-        RunStatus::Running => RoadmapAmendmentPoint::ActiveRunBoundary,
+        // See `pickup_for_status`: a parked run is paused, not ended.
+        RunStatus::Running | RunStatus::Parked => RoadmapAmendmentPoint::ActiveRunBoundary,
         RunStatus::Bootstrapping => RoadmapAmendmentPoint::Deferred,
         RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted | RunStatus::Crashed => {
             RoadmapAmendmentPoint::FollowUpRun
@@ -370,5 +376,59 @@ fn candidate_summary(candidate: &RoadmapTargetCandidate) -> RoadmapTargetSummary
     RoadmapTargetSummary {
         selector: candidate.selector.clone(),
         label,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Task 12: `RunStatus::Parked` must be treated as an active run, the
+    /// same as `Running` — a parked run is paused waiting on provider
+    /// capacity, not ended, and it resumes itself against the same
+    /// roadmap. Reviewed as "correct in both functions, existing behavior
+    /// unchanged" but flagged as uncovered by a test; this closes that gap.
+    #[test]
+    fn parked_status_gets_the_same_pickup_policy_as_running() {
+        assert_eq!(
+            pickup_for_status(RunStatus::Parked),
+            pickup_for_status(RunStatus::Running)
+        );
+        assert_eq!(
+            pickup_for_status(RunStatus::Parked),
+            ActivePickupPolicy::Allowed
+        );
+    }
+
+    #[test]
+    fn parked_status_gets_the_same_amendment_point_as_running() {
+        assert_eq!(
+            amendment_point_for_status(RunStatus::Parked),
+            amendment_point_for_status(RunStatus::Running)
+        );
+        assert_eq!(
+            amendment_point_for_status(RunStatus::Parked),
+            RoadmapAmendmentPoint::ActiveRunBoundary
+        );
+    }
+
+    #[test]
+    fn terminal_statuses_are_follow_up_only_and_parked_is_not_among_them() {
+        for status in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Aborted,
+            RunStatus::Crashed,
+        ] {
+            assert_eq!(pickup_for_status(status), ActivePickupPolicy::FollowUpOnly);
+            assert_eq!(
+                amendment_point_for_status(status),
+                RoadmapAmendmentPoint::FollowUpRun
+            );
+        }
+        assert_ne!(
+            pickup_for_status(RunStatus::Parked),
+            ActivePickupPolicy::FollowUpOnly
+        );
     }
 }

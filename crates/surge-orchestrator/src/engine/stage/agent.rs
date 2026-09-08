@@ -21,7 +21,9 @@ use surge_core::content_hash::ContentHash;
 use surge_core::keys::{NodeKey, OutcomeKey};
 use surge_core::node::{LedgerEffect, OutcomeDecl};
 use surge_core::profile::registry::ResolvedProfile;
-use surge_core::run_event::{EventPayload, SessionDisposition, VersionedEventPayload};
+use surge_core::run_event::{
+    EscalationCause, EventPayload, SessionDisposition, VersionedEventPayload,
+};
 use surge_core::{ArtifactKind, ProfileArtifactDeclaration};
 use surge_persistence::artifacts::ArtifactStore;
 use surge_persistence::runs::run_writer::RunWriter;
@@ -35,6 +37,7 @@ use crate::engine::stage::{StageError, StageResult};
 use crate::engine::tools::{
     ToolCall, ToolDispatchContext, ToolResultPayload as EngineResultPayload,
 };
+use crate::guard::LoopGuardTrip;
 use crate::prompt::PromptRenderer;
 
 /// Parameters for executing a single agent stage.
@@ -47,6 +50,13 @@ pub struct AgentStageParams<'a> {
     pub steers: Vec<crate::engine::steer::QueuedSteer>,
     /// Agent node configuration from the spec graph.
     pub agent_config: &'a AgentConfig,
+    /// Skills already resolved and trust-gated for this node
+    /// (`engine::stage::skill_binding::bind_skills`, called by the caller
+    /// before this stage — R10: bound exactly like a context `Binding`,
+    /// never re-resolved here). Each entry's `instructions` is appended to
+    /// the system prompt below, once, before `SessionConfig` is built —
+    /// this is the only place a bound skill's content reaches the agent.
+    pub bound_skills: &'a [crate::engine::stage::skill_binding::BoundSkill],
     /// Declared outcomes from the node — used to populate `SessionConfig::declared_outcomes`.
     /// Must be non-empty; `SessionConfig::validate()` enforces this at session-open time.
     pub declared_outcomes: &'a [OutcomeDecl],
@@ -79,6 +89,17 @@ pub struct AgentStageParams<'a> {
     /// Run-level server list. Each entry maps a server name to its timeout
     /// and allowed-tools filter for this session's `RoutingToolDispatcher`.
     pub mcp_servers: Vec<surge_core::mcp_config::McpServerRef>,
+    /// Repeat-tool-call / node-wall-clock guard thresholds
+    /// (`.autopilot/competitive-waves/spec.md` §15), sourced from
+    /// `EngineRunConfig::tool_call_loop_guard` — itself seeded from
+    /// `SurgeConfig::tool_call_loop_guard` via
+    /// `crate::project_context::with_project_context_seed`. Applied to
+    /// every agent stage's `RoutingToolDispatcher`, not only nodes that
+    /// declare an `mcp_add` override.
+    pub tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig,
+    /// Output-spill cap (§16), sourced the same way as
+    /// `tool_call_loop_guard` above.
+    pub output_spill: surge_core::spill_config::OutputSpillConfig,
     /// Optional profile registry. When `Some`, the stage resolves
     /// `agent_config.profile` through it to derive `AgentKind` from the
     /// merged profile's `runtime.agent_id`. When `None`, the legacy M5
@@ -183,6 +204,66 @@ pub(crate) fn effective_system_prompt(
     }
 }
 
+/// Append each bound skill's instructions onto `prompt`, one `## Skill:
+/// <name>` section per entry, in binding order.
+///
+/// A no-op when `bound_skills` is empty (the common path — most nodes
+/// declare none), so this never adds a stray heading to a prompt that has
+/// nothing to bind.
+fn append_bound_skills(
+    prompt: String,
+    bound_skills: &[crate::engine::stage::skill_binding::BoundSkill],
+) -> String {
+    if bound_skills.is_empty() {
+        return prompt;
+    }
+    let mut out = prompt;
+    for skill in bound_skills {
+        out.push_str("\n\n## Skill: ");
+        out.push_str(&skill.name);
+        out.push_str("\n\n");
+        out.push_str(&skill.instructions);
+    }
+    out
+}
+
+/// Drain `dispatcher`'s pending loop-guard escalations and append each as an
+/// `EscalationRequested` event, typed by [`EscalationCause::LoopGuardRepeatedToolCall`]
+/// / [`EscalationCause::LoopGuardNodeDeadline`] per trip kind. Shared by the
+/// two call sites that can observe a trip: right after a tool dispatch, and
+/// the timer-driven wall-clock poll inside the stage's event loop — both need
+/// the same drain-then-append behavior, and a shared helper keeps them from
+/// drifting apart the way a second hand-rolled loop would risk.
+///
+/// Returns the drained trips (in append order) so a caller that must react
+/// to *which* trip fired — the wall-clock poll ends the stage on a
+/// `NodeDeadlineExceeded`, see its call site — does not have to re-derive
+/// that from the just-written event.
+async fn append_loop_escalations(
+    writer: &RunWriter,
+    dispatcher: &Arc<dyn crate::engine::tools::ToolDispatcher>,
+) -> Result<Vec<LoopGuardTrip>, StageError> {
+    let mut trips = Vec::new();
+    for esc in dispatcher.drain_loop_escalations() {
+        let cause = match &esc.trip {
+            LoopGuardTrip::RepeatedToolCall { .. } => EscalationCause::LoopGuardRepeatedToolCall,
+            LoopGuardTrip::NodeDeadlineExceeded { .. } => EscalationCause::LoopGuardNodeDeadline,
+        };
+        writer
+            .append_event(VersionedEventPayload::new(
+                EventPayload::EscalationRequested {
+                    stage: None,
+                    reason: esc.trip.operator_message(),
+                    cause,
+                },
+            ))
+            .await
+            .map_err(|e| StageError::Storage(e.to_string()))?;
+        trips.push(esc.trip);
+    }
+    Ok(trips)
+}
+
 /// Execute a single agent stage.
 ///
 /// Phase 6.2: opens a session, sends an empty placeholder message, then drives
@@ -255,6 +336,16 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         .render(&prompt_template, &resolved_bindings)
         .map_err(|e| StageError::Internal(format!("prompt render: {e}")))?;
 
+    // Append every bound skill's instructions *after* template rendering,
+    // not before: a pack's own Markdown body can legitimately contain
+    // `{{...}}`-shaped text (code samples, its own placeholder syntax) that
+    // must reach the agent verbatim, not be mistaken for one of this
+    // stage's template variables. This is the one place a resolved skill's
+    // content reaches the agent — bound "exactly like a context Binding"
+    // means baked into the system prompt at session-open time, the same
+    // rendering pass, never re-fetched mid-turn.
+    let prompt_text = append_bound_skills(prompt_text, p.bound_skills);
+
     // Derive AgentKind. With a resolved profile in hand, take the agent_id
     // from its runtime block; otherwise fall through to the legacy mock
     // fast path so callers without a registry keep working.
@@ -322,100 +413,130 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         })
         .unwrap_or_default();
 
-    // Build the session-scoped tool dispatcher. When an MCP registry is
-    // configured, wrap the engine dispatcher with RoutingToolDispatcher so the
-    // agent sees both engine built-ins and the per-stage MCP allowlist.
-    let session_dispatcher: Arc<dyn crate::engine::tools::ToolDispatcher> = if let Some(ref reg) =
-        p.mcp_registry
-    {
-        // Per-stage MCP server allowlist from ToolOverride::mcp_add.
-        let allowed_servers: std::collections::HashSet<&str> = p
-            .agent_config
-            .tool_overrides
-            .as_ref()
-            .map(|o| o.mcp_add.iter().map(String::as_str).collect())
-            .unwrap_or_default();
+    // Build the session-scoped tool dispatcher. `RoutingToolDispatcher`
+    // always wraps the engine dispatcher — not only when the node declares
+    // `mcp_add` — so the per-node loop guard and output-spill policy apply
+    // to every agent stage: R39/R40 are engine-level policy, not something
+    // that only exists on the MCP branch (first-review finding: a plain
+    // node repeating `read_file` used to get `p.tool_dispatcher` bare, with
+    // no guard and no spill at all).
+    //
+    // Per-stage MCP server allowlist from ToolOverride::mcp_add.
+    let allowed_servers: std::collections::HashSet<&str> = p
+        .agent_config
+        .tool_overrides
+        .as_ref()
+        .map(|o| o.mcp_add.iter().map(String::as_str).collect())
+        .unwrap_or_default();
 
-        // Short-circuit: stage doesn't expose any MCP servers, so skip
-        // the potentially expensive list_all_tools call entirely.
-        if allowed_servers.is_empty() {
-            p.tool_dispatcher.clone()
-        } else {
-            let all_mcp_tools = match reg.list_all_tools().await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        err = %e,
-                        "MCP list_all_tools failed; proceeding with engine tools only"
-                    );
-                    Vec::new()
-                },
-            };
+    // Short-circuit: stage doesn't expose any MCP servers, so skip the
+    // potentially expensive list_all_tools call entirely. Also covers the
+    // no-MCP-registry-configured case (`p.mcp_registry` is `None`) — there
+    // is nothing to list either way.
+    let (filtered_mcp_tools, mcp_timeouts): (
+        Vec<surge_mcp::McpToolEntry>,
+        std::collections::HashMap<String, std::time::Duration>,
+    ) = if allowed_servers.is_empty() {
+        (Vec::new(), std::collections::HashMap::new())
+    } else if let Some(ref reg) = p.mcp_registry {
+        let all_mcp_tools = match reg.list_all_tools().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    err = %e,
+                    "MCP list_all_tools failed; proceeding with engine tools only"
+                );
+                Vec::new()
+            },
+        };
 
-            // Build per-server `allowed_tools` lookup from the run-level
-            // registry. `None` means "expose all tools the server reports".
-            let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
-                .mcp_servers
-                .iter()
-                .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
-                .collect();
+        // Build per-server `allowed_tools` lookup from the run-level
+        // registry. `None` means "expose all tools the server reports".
+        let allowed_tools_per_server: std::collections::HashMap<&str, Option<&[String]>> = p
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.as_str(), s.allowed_tools.as_deref()))
+            .collect();
 
-            // Resolve the canonical MCP spawn policy once per server
-            // (not per tool): a `Denied` server is hidden entirely, and
-            // the unconstrained-intent operator WARN fires at most once
-            // per server rather than once per tool.
-            let mcp_denied_servers: std::collections::HashSet<&str> = p
-                .mcp_servers
-                .iter()
-                .filter(|s| allowed_servers.contains(s.name.as_str()))
-                .filter_map(|s| {
-                    let effective = s.sandbox.unwrap_or(sandbox_cfg.mode);
-                    warn_if_unconstrained_mcp(&s.name, effective);
-                    match mcp_spawn_policy(sandbox_cfg.mode, s.sandbox) {
-                        McpSpawnPolicy::Allowed => None,
-                        McpSpawnPolicy::Denied => Some(s.name.as_str()),
-                    }
-                })
-                .collect();
+        // Resolve the canonical MCP spawn policy once per server
+        // (not per tool): a `Denied` server is hidden entirely, and
+        // the unconstrained-intent operator WARN fires at most once
+        // per server rather than once per tool.
+        let mcp_denied_servers: std::collections::HashSet<&str> = p
+            .mcp_servers
+            .iter()
+            .filter(|s| allowed_servers.contains(s.name.as_str()))
+            .filter_map(|s| {
+                let effective = s.sandbox.unwrap_or(sandbox_cfg.mode);
+                warn_if_unconstrained_mcp(&s.name, effective);
+                match mcp_spawn_policy(sandbox_cfg.mode, s.sandbox) {
+                    McpSpawnPolicy::Allowed => None,
+                    McpSpawnPolicy::Denied => Some(s.name.as_str()),
+                }
+            })
+            .collect();
 
-            let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
-                .into_iter()
-                .filter(|t| {
-                    if !allowed_servers.contains(t.server.as_str()) {
-                        return false;
-                    }
-                    if mcp_denied_servers.contains(t.server.as_str()) {
-                        return false;
-                    }
-                    // Per-server allowed_tools whitelist: outer Some = entry
-                    // exists in the HashMap; inner Some = the field is set.
-                    // If allowed_tools is None, no filtering is applied.
-                    if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str()) {
-                        if !whitelist.iter().any(|w| w == &t.tool) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect();
+        let filtered: Vec<surge_mcp::McpToolEntry> = all_mcp_tools
+            .into_iter()
+            .filter(|t| {
+                if !allowed_servers.contains(t.server.as_str()) {
+                    return false;
+                }
+                if mcp_denied_servers.contains(t.server.as_str()) {
+                    return false;
+                }
+                // Per-server allowed_tools whitelist: outer Some = entry
+                // exists in the HashMap; inner Some = the field is set.
+                // If allowed_tools is None, no filtering is applied.
+                if let Some(Some(whitelist)) = allowed_tools_per_server.get(t.server.as_str())
+                    && !whitelist.iter().any(|w| w == &t.tool)
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
 
-            // Per-server timeout map from the run-level McpServerRef list.
-            let timeouts: std::collections::HashMap<String, std::time::Duration> = p
-                .mcp_servers
-                .iter()
-                .map(|s| (s.name.clone(), s.call_timeout))
-                .collect();
+        // Per-server timeout map from the run-level McpServerRef list.
+        let timeouts: std::collections::HashMap<String, std::time::Duration> = p
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.clone(), s.call_timeout))
+            .collect();
 
-            Arc::new(crate::engine::tools::RoutingToolDispatcher::new(
-                p.tool_dispatcher.clone(),
-                reg.clone(),
-                &filtered,
-                &timeouts,
-            )) as Arc<dyn crate::engine::tools::ToolDispatcher>
-        }
+        (filtered, timeouts)
     } else {
-        p.tool_dispatcher.clone()
+        // Node declares `mcp_add` but this run has no MCP registry
+        // configured at all — nothing to route to.
+        (Vec::new(), std::collections::HashMap::new())
     };
+
+    // Fall back to an empty in-process registry when the run has none
+    // configured: cheap (no servers, no spawn — a connection only spawns on
+    // first use) and lets `RoutingToolDispatcher` wrap every agent stage
+    // unconditionally instead of only when MCP is in play.
+    let mcp_registry_for_stage: Arc<surge_mcp::McpRegistry> = p
+        .mcp_registry
+        .clone()
+        .unwrap_or_else(|| Arc::new(surge_mcp::McpRegistry::from_config(&[], None)));
+
+    let session_dispatcher: Arc<dyn crate::engine::tools::ToolDispatcher> = Arc::new(
+        crate::engine::tools::RoutingToolDispatcher::new(
+            p.tool_dispatcher.clone(),
+            mcp_registry_for_stage,
+            &filtered_mcp_tools,
+            &mcp_timeouts,
+        )
+        .with_tool_call_loop_guard_config(p.tool_call_loop_guard)
+        .with_output_spill_config(p.output_spill)
+        // The stage already holds the run's own artifact store — spilled
+        // output must land there, not in a second store built from
+        // `ArtifactStore::from_default_path()` (`~/.surge/runs`), which
+        // would be unreachable to whatever reads the run's artifacts back
+        // (`.autopilot/competitive-waves/spec.md` §16).
+        .with_artifact_store(p.artifact_store.clone()),
+    )
+        as Arc<dyn crate::engine::tools::ToolDispatcher>;
 
     // Assemble the ACP tool list from the session dispatcher's declared catalog.
     // Use ToolCategory::Builtin for all caller-supplied tools (both engine
@@ -466,6 +587,52 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             node: p.node.clone(),
             session: session_id,
             agent: p.agent_config.profile.to_string(),
+            // The actual runtime identity, not the role/profile above —
+            // `None` **only** via the no-profile-registry legacy path (see
+            // `resolved_profile` above, which has no runtime block to read
+            // one from). When a profile *is* resolved, this is always
+            // `Some`: normalized through the registry when that succeeds,
+            // falling back to the **raw** `agent_id` when it does not
+            // (review finding #4) — the bundled `mock` profile
+            // (`bundled/profiles/mock-1.0.toml`, `agent_id = "mock"`) is a
+            // real, shipped case of the latter (`normalize_agent_id("mock")`
+            // is `None`: "mock" is neither a registry id nor an alias), and
+            // silently dropping to `None` there would have every run on it
+            // report `CapacityStatus::Unclassified` where the raw string
+            // would have read as `Known` — a real identity discarded for
+            // want of a registry entry, not the "nothing was ever known"
+            // `None` is reserved for elsewhere in this same field.
+            //
+            // **Normalized here, at the point of writing this fact — not
+            // left for each reader to normalize on its own (Task 12 M1,
+            // resolving the gap the M0 review found).** Before this, this
+            // field carried the raw, un-normalized `agent_id` unconditionally,
+            // while `StageError::RateLimited.runtime` two call sites below
+            // already went through `normalize_agent_id`: one fact (which
+            // runtime a session belongs to) had two different values
+            // depending on which event you read, and
+            // `claude`/`claude-code`/`claude-acp` could fragment across
+            // three keys on the one path (`surge-cli`'s inbox scan) that
+            // actually keys off this field instead of the registry-id path
+            // M2's persisted ledger will use. Normalizing at write, not at
+            // read, because: (a) this is the *only* place this fact is ever
+            // produced, while it already has at least one real reader
+            // (`surge-cli`'s inbox scan) and will gain another (M2's
+            // ledger, reading historical `SessionOpened` for keys already
+            // collapsed rather than raw); asking every future reader to
+            // remember to normalize is the "remember-to-call-me" shape this
+            // crate's own standards single out as the wrong contract. (b) A
+            // run's persisted event log is append-only — events written
+            // **before** this change keep their raw, un-normalized
+            // `agent_id` forever; this fix closes the gap for every session
+            // opened from here on, not retroactively. A reader spanning
+            // both eras still needs its own normalization pass over
+            // historical data if it must collapse aliases there too — a
+            // fact for that reader to state, not something this write-site
+            // can undo.
+            agent_id: resolved_profile
+                .as_ref()
+                .map(|rp| canonical_runtime_id_for(rp).into_string()),
         }))
         .await
         .map_err(|e| StageError::Storage(e.to_string()))?;
@@ -491,7 +658,49 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     p.bridge
         .send_message(session_id, prompt_msg)
         .await
-        .map_err(|e| StageError::Bridge(format!("send_message: {e}")))?;
+        .map_err(|e| match e {
+            surge_acp::bridge::error::SendMessageError::RateLimited {
+                retry_after,
+                details,
+            } => StageError::RateLimited {
+                // The resolved profile's runtime registry id, normalized
+                // through the same `surge_acp::Registry` the engine already
+                // used to derive `agent_kind` above — so "claude",
+                // "claude-code", and "claude-acp" (aliases for one entry,
+                // see `Registry::normalize_agent_id`) collapse to the same
+                // string instead of quietly fragmenting one runtime's
+                // observations across three keys. `None` **only** via the
+                // no-profile-registry legacy path (no runtime block to read
+                // an id from). When `agent_id` does not resolve through the
+                // registry at all despite `agent_kind` deriving successfully
+                // above — a **real**, shipped case, not an unreachable one:
+                // the bundled `mock` profile (`bundled/profiles/
+                // mock-1.0.toml`, `agent_id = "mock"`) is special-cased for
+                // `AgentKind` derivation (`derive_agent_kind_from_id`'s
+                // `agent_id == "mock"` arm) without ever touching the
+                // registry, so `normalize_agent_id` legitimately returns
+                // `None` for it — this falls back to the **raw** `agent_id`
+                // (mirroring `SessionOpened.agent_id`'s construction above)
+                // rather than discarding the identity: a mock-profile run's
+                // capacity signal must still key consistently, not vanish
+                // into `None` for want of a registry entry.
+                //
+                // This is NOT a distinct-login identifier — `RuntimeCfg::
+                // agent_id`'s own doc calls it "the agent runtime this
+                // profile targets", and every profile pointed at the same
+                // runtime (the common case: one CLI, one logged-in session)
+                // normalizes to the same string regardless of how many
+                // profiles reference it. Whether Surge can ever observe two
+                // distinct logins sharing one runtime is an open question
+                // for the capacity ledger's design (M2), not settled here.
+                runtime: resolved_profile
+                    .as_ref()
+                    .map(|rp| canonical_runtime_id_for(rp).into_string()),
+                retry_after,
+                details,
+            },
+            other => StageError::Bridge(format!("send_message: {other}")),
+        })?;
 
     // Record each steer delivery only after the prompt was actually sent, so a
     // failed `send_message` never leaves a `SteerDelivered` claiming otherwise.
@@ -506,16 +715,62 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
             .map_err(|e| StageError::Storage(e.to_string()))?;
     }
 
+    // Timer-driven poll of the loop guard's wall-clock deadline
+    // (`.autopilot/competitive-waves/spec.md` §15). `check_loop_guard`
+    // (inside `RoutingToolDispatcher::dispatch`) only sees the deadline when
+    // a tool call arrives — a node stuck in one long agent turn (streaming
+    // `AgentMessage`s, no tool calls at all) would otherwise never trip its
+    // budget. A 1s period bounds trip latency cheaply against a default
+    // one-hour budget; `tick()` fires immediately on the first poll, so a
+    // deadline that is already exceeded at session start (e.g. a `0`-second
+    // configured limit) is caught right away rather than a full period late.
+    let mut deadline_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    deadline_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // Drive the event loop until OutcomeReported (success) or SessionEnded
     // (failure / abnormal termination).
     let outcome = loop {
-        let event = match events.recv().await {
-            Ok(ev) => ev,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                return Err(StageError::Bridge(
-                    "event stream closed unexpectedly".into(),
-                ));
+        let event = tokio::select! {
+            biased;
+            recv = events.recv() => match recv {
+                Ok(ev) => ev,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(StageError::Bridge(
+                        "event stream closed unexpectedly".into(),
+                    ));
+                },
+            },
+            _ = deadline_poll.tick() => {
+                session_dispatcher.poll_wall_clock_deadline();
+                let trips = append_loop_escalations(p.writer, &session_dispatcher).await?;
+                // A repeated-tool-call trip only blocks the next dispatch —
+                // the turn itself may still be mid-stream and recovers once
+                // the agent stops repeating. A wall-clock trip has no such
+                // recovery: the node is already past its budget and a turn
+                // burning tokens with no tool calls at all would otherwise
+                // run to its own end (`.autopilot/competitive-waves/spec.md`
+                // §15 / ticket 17: "raising EscalationRequested rather than
+                // burning budget" — a mark that lets the burn continue is
+                // not that). So this trip ends the stage; the other does not.
+                if let Some(trip) = trips
+                    .into_iter()
+                    .find(|t| matches!(t, LoopGuardTrip::NodeDeadlineExceeded { .. }))
+                {
+                    p.bridge
+                        .close_session(session_id)
+                        .await
+                        .map_err(|e| StageError::Bridge(format!("close_session: {e}")))?;
+                    p.writer
+                        .append_event(VersionedEventPayload::new(EventPayload::SessionClosed {
+                            session: session_id,
+                            disposition: SessionDisposition::ForcedClose,
+                        }))
+                        .await
+                        .map_err(|e| StageError::Storage(e.to_string()))?;
+                    return Err(StageError::LoopGuardTripped(trip));
+                }
+                continue;
             },
         };
 
@@ -916,11 +1171,25 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
                                      calls to it fail until the run is restarted",
                                     esc.server, esc.attempts
                                 ),
+                                cause: EscalationCause::McpRestartsExhausted,
                             },
                         ))
                         .await
                         .map_err(|e| StageError::Storage(e.to_string()))?;
                 }
+
+                // Loop-guard trips (repeated tool call or wall-clock
+                // deadline) surface as `EscalationRequested` the same way —
+                // mirrors the MCP block above (R39: "raising
+                // EscalationRequested ... rather than burning budget").
+                // Emitted before the fallible `ToolResultReceived` append
+                // for the same reason: a storage failure must not silently
+                // drop the escalation. The drained trips are discarded here
+                // (unlike the timer-poll call site): a repeated-tool-call
+                // trip already stopped this exact dispatch by refusing to
+                // route the call (see `check_loop_guard` above); it does not
+                // need to also end the stage.
+                append_loop_escalations(p.writer, &session_dispatcher).await?;
 
                 let success = matches!(engine_result, EngineResultPayload::Ok { .. });
                 let result_hash = match &engine_result {
@@ -1881,6 +2150,127 @@ fn event_session_id(event: &BridgeEvent) -> Option<surge_core::id::SessionId> {
     }
 }
 
+/// The canonical agent-runtime id for an already-resolved profile —
+/// normalize `rp.profile.runtime.agent_id` through `surge_acp::Registry`,
+/// falling back to the raw id when normalization fails despite a profile
+/// resolving successfully. `normalize_agent_id` legitimately returns `None`
+/// for a real, shipped case: the bundled `mock` profile
+/// (`bundled/profiles/mock-1.0.toml`, `agent_id = "mock"`) is special-cased
+/// for `AgentKind` derivation without ever touching the registry, so
+/// falling back to the raw id here (rather than discarding the identity
+/// into `None`) keeps a mock-profile run's capacity signal keying
+/// consistently instead of vanishing for want of a registry entry.
+///
+/// The **one** place this normalize-or-raw-fallback computation happens —
+/// `SessionOpened.agent_id` and `StageError::RateLimited.runtime`
+/// (both below) and Task 12 M3's pre-dispatch capacity check
+/// ([`resolve_profile_runtime_id`]) all call this, so the three facts can
+/// never quietly diverge on what "the runtime" means for the same profile
+/// (Task 12 M3, acceptance criterion A).
+fn canonical_runtime_id_for(rp: &ResolvedProfile) -> crate::engine::capacity::CanonicalRuntimeId {
+    crate::engine::capacity::CanonicalRuntimeId::resolve(
+        &surge_acp::Registry::builtin(),
+        &rp.profile.runtime.agent_id,
+    )
+}
+
+/// Resolve the canonical agent-runtime id a node's `agent_config.profile`
+/// would use, **without** resolving the rest of the profile or opening a
+/// session — Task 12 M3's pre-dispatch capacity check
+/// (`engine::run_task`) needs only this, before `execute_agent_stage` does
+/// its own (separate, fuller) resolve for prompt/hooks/sandbox.
+///
+/// `None` when there is no profile registry wired (the legacy mock-only
+/// path — no runtime identity exists to check capacity for at all) *or*
+/// the profile reference itself does not resolve. A genuine profile
+/// resolution failure is reported exactly once, by `execute_agent_stage`'s
+/// own resolve moments later — this function must not duplicate that
+/// error, only silently decline to produce a capacity key when it cannot.
+#[must_use]
+pub(crate) fn resolve_profile_runtime_id(
+    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
+    profile_str: &str,
+) -> Option<crate::engine::capacity::CanonicalRuntimeId> {
+    let registry = profile_registry?;
+    let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).ok()?;
+    let resolved = registry.resolve(&key_ref).ok()?;
+    Some(canonical_runtime_id_for(&resolved))
+}
+
+/// Why a candidate rotation target was refused (Task 12 §1(1), revision 6).
+///
+/// R41 ("rotate across configured accounts of the same agent instead of
+/// parking") is **not deliverable** on today's account model: A1 (Task 12
+/// revision 5/6) keys capacity on the canonical agent-runtime registry id
+/// because that is the only identity the engine path can produce, and
+/// `builtin_registry.json` carries exactly one launch configuration per
+/// runtime — so two profiles naming the same runtime resolve to the same
+/// command, the same login, the same capacity key. "Rotating" between them
+/// would not change which account is exhausted; it would silently repeat
+/// the already-exhausted dispatch with extra steps, which is worse than
+/// refusing outright (see `docs/adr/0016-capacity-parking-and-wake.md`,
+/// A2, for the follow-up account model that would make rotation real).
+///
+/// [`verify_rotation_target`] always returns one of these — every arm is a
+/// refusal, none is "rotation approved" — kept as a named enum (not a bare
+/// `bool`/`Option`) so a caller's `match` states *which* structural reason
+/// applied, for the operator-visible log line, without re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationRefusal {
+    /// The current node's own `agent_id` does not resolve to a registry
+    /// entry with a known `runtime` — nothing to rotate *from*.
+    CurrentRuntimeUnresolved,
+    /// The candidate profile's `agent_id` does not resolve to a registry
+    /// entry with a known `runtime` — nothing to rotate *to*.
+    CandidateRuntimeUnresolved,
+    /// Both resolved, but to different runtimes — rotation, as specified,
+    /// is "the next profile of the **same** runtime" (a different account
+    /// on the same agent CLI), not a switch to a different agent entirely.
+    DifferentRuntimes {
+        /// Runtime the current node's profile targets.
+        current: surge_core::RuntimeKind,
+        /// Runtime the candidate profile targets.
+        candidate: surge_core::RuntimeKind,
+    },
+    /// Both resolved to the identical runtime — the case R41 originally
+    /// asked for. Refused anyway: one runtime has exactly one launch
+    /// configuration today, so this candidate is the same account, and
+    /// "rotating" to it is a no-op that would silently repeat the
+    /// already-exhausted dispatch.
+    SameRuntimeIsSameAccount {
+        /// The runtime both profiles resolve to.
+        runtime: surge_core::RuntimeKind,
+    },
+}
+
+/// Verify whether `candidate_agent_id` is a usable R41 rotation target for
+/// a node currently running `current_agent_id`. **Always refuses** — see
+/// [`RotationRefusal`]'s doc for why every structural case, including the
+/// one the original R41 design called "allowed", is not deliverable today.
+/// Kept as a real (not stubbed) verification against `registry` — proven
+/// by the four cases in this module's tests — so the shape is ready for
+/// R41's own follow-up ticket to consume once a genuine second-account
+/// model exists, rather than imagined.
+#[must_use]
+pub fn verify_rotation_target(
+    registry: &surge_acp::Registry,
+    current_agent_id: &str,
+    candidate_agent_id: &str,
+) -> RotationRefusal {
+    let runtime_of = |agent_id: &str| registry.find_normalized(agent_id).and_then(|e| e.runtime);
+
+    let Some(current) = runtime_of(current_agent_id) else {
+        return RotationRefusal::CurrentRuntimeUnresolved;
+    };
+    let Some(candidate) = runtime_of(candidate_agent_id) else {
+        return RotationRefusal::CandidateRuntimeUnresolved;
+    };
+    if current != candidate {
+        return RotationRefusal::DifferentRuntimes { current, candidate };
+    }
+    RotationRefusal::SameRuntimeIsSameAccount { runtime: current }
+}
+
 /// Resolve `profile_str` (the value of `AgentConfig::profile`) into an
 /// `AgentKind` using the profile registry, with the M5 mock fast path as
 /// the documented fallback when no registry is wired.
@@ -2015,7 +2405,7 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
 /// operator's explicit choice wins). No-op for non-Claude runtimes or when
 /// the agent id is unknown.
 ///
-/// Synchronous std::fs by design: `std::fs::File::write_all` writes through to
+/// Synchronous `std::fs` by design: `std::fs::File::write_all` writes through to
 /// the OS (no userspace buffering), so the bytes are durable and immediately
 /// visible to a subsequent read once it returns — unlike a `tokio::fs::File`,
 /// whose buffered writes can be lost on drop without an explicit flush. The
@@ -2023,6 +2413,8 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
 /// async agent-launch path wrap this in `spawn_blocking` so the executor is
 /// never blocked.
 fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
+    use std::io::Write as _;
+
     let registry = surge_acp::Registry::builtin();
     let is_claude = registry
         .normalize_agent_id(agent_id)
@@ -2058,7 +2450,6 @@ fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
     // concurrent creator (another stage in the same worktree, or the operator)
     // could be clobbered. An already-present file is the operator's explicit
     // choice and is left untouched — `AlreadyExists` is a benign no-op.
-    use std::io::Write as _;
     let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
     let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
         let mut file = std::fs::OpenOptions::new()
@@ -2145,6 +2536,7 @@ fn warn_if_unconstrained_mcp(server: &str, effective: surge_core::sandbox::Sandb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use surge_core::profile::VerificationCfg;
 
     #[test]
     fn seed_headless_settings_writes_default_mode_for_claude() {
@@ -2311,7 +2703,7 @@ mod tests {
                     system: "Implement".into(),
                 },
                 inspector_ui: InspectorUi::default(),
-                verification: Default::default(),
+                verification: VerificationCfg::default(),
             },
             provenance: Provenance::Bundled,
             chain: vec![profile_key],
@@ -2389,5 +2781,98 @@ mod tests {
 
         assert_eq!(effective.len(), 1);
         assert_eq!(effective[0].command, "node-cmd");
+    }
+
+    /// A registry whose one entry ("no-runtime") resolves but carries
+    /// `runtime: None` — `Registry::builtin()`'s five entries all populate
+    /// `runtime` (verified against `builtin_registry.json`), so this is
+    /// the only way to exercise `RotationRefusal::CandidateRuntimeUnresolved`
+    /// / `CurrentRuntimeUnresolved` against a *resolving* id rather than an
+    /// unknown one. `Registry::from_config` always sets `runtime: None` on
+    /// every entry it builds (the custom-agent path has no `RuntimeKind` to
+    /// supply), which is exactly the shape case (b) needs.
+    fn registry_with_one_runtimeless_entry() -> surge_acp::Registry {
+        surge_acp::Registry::from_config(std::collections::HashMap::from([(
+            "no-runtime".to_string(),
+            surge_core::config::AgentConfig {
+                command: "true".to_string(),
+                args: vec![],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+            },
+        )]))
+    }
+
+    #[test]
+    fn rotation_refused_when_current_agent_id_does_not_resolve() {
+        // Case (a): `agent_id` not present in the registry at all.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "totally-unknown-agent", "claude-acp");
+        assert_eq!(refusal, RotationRefusal::CurrentRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_current_entry_has_no_runtime() {
+        // Case (b), the current side: the entry exists (resolves) but
+        // carries `runtime: None`. Candidate is a real, runtime-populated
+        // id (`"claude-acp"`) to show the current-side check fires first,
+        // regardless of whether the candidate would otherwise resolve.
+        let registry = surge_acp::Registry::merged(
+            surge_acp::Registry::builtin(),
+            registry_with_one_runtimeless_entry(),
+        );
+        let refusal = verify_rotation_target(&registry, "no-runtime", "claude-acp");
+        assert_eq!(refusal, RotationRefusal::CurrentRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_candidate_entry_has_no_runtime() {
+        // Case (b), the candidate side: current resolves fine, candidate
+        // resolves but has no known runtime.
+        let mut registry = surge_acp::Registry::builtin();
+        registry = surge_acp::Registry::merged(registry, registry_with_one_runtimeless_entry());
+        let refusal = verify_rotation_target(&registry, "claude-acp", "no-runtime");
+        assert_eq!(refusal, RotationRefusal::CandidateRuntimeUnresolved);
+    }
+
+    #[test]
+    fn rotation_refused_when_runtimes_differ() {
+        // Case (c): both resolve, to different runtimes.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "claude-acp", "codex-acp");
+        assert_eq!(
+            refusal,
+            RotationRefusal::DifferentRuntimes {
+                current: surge_core::RuntimeKind::ClaudeCode,
+                candidate: surge_core::RuntimeKind::Codex,
+            }
+        );
+    }
+
+    #[test]
+    fn rotation_refused_when_runtimes_are_the_same_account() {
+        // Case (d) — the one the original R41 design called "allowed".
+        // `"claude"` and `"claude-code"` are both registry aliases that
+        // normalize to the identical `"claude-acp"` entry
+        // (`REGISTRY_ID_ALIASES`), so this also proves the refusal fires
+        // even when the two agent_id spellings differ but the underlying
+        // account does not.
+        let registry = surge_acp::Registry::builtin();
+        let refusal = verify_rotation_target(&registry, "claude", "claude-code");
+        assert_eq!(
+            refusal,
+            RotationRefusal::SameRuntimeIsSameAccount {
+                runtime: surge_core::RuntimeKind::ClaudeCode,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_profile_runtime_id_is_none_without_a_profile_registry() {
+        // The legacy no-registry path: no runtime identity exists to check
+        // capacity for, so the pre-dispatch capacity check must skip
+        // entirely rather than fabricate a key.
+        assert!(resolve_profile_runtime_id(None, "mock").is_none());
     }
 }

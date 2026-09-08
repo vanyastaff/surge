@@ -36,6 +36,17 @@ impl Storage {
     }
 
     /// Open with a caller-supplied clock (used by tests and snapshot fixtures).
+    // No `.await` in this body (it's plain sync I/O). Both clippy-clean
+    // alternatives change the moment of execution: `fn -> impl Future { ready(..) }`
+    // runs the body eagerly at call time instead of at `.await`;
+    // `fn -> impl Future { async move { .. } }` trips `manual_async_fn`.
+    // Async is part of the contract here (matches sibling constructors and
+    // keeps call sites lazy-until-awaited), so the lint's suggestion is
+    // declined deliberately rather than worked around.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn open_with(
         home: impl AsRef<Path>,
         clock: Arc<dyn Clock>,
@@ -227,6 +238,7 @@ impl Storage {
             started_at_ms: self.clock.now_ms(),
             ended_at_ms: None,
             daemon_pid: Some(std::process::id() as i32),
+            wake_at_ms: None,
         };
         registry::insert_run(&self.registry_pool, &summary)
             .map_err(|e| OpenError::MigrationFailed(format!("registry insert failed: {e}")))?;
@@ -237,6 +249,11 @@ impl Storage {
     }
 
     /// Open a read-only handle to an existing run.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn open_run_reader(self: &Arc<Self>, run_id: RunId) -> Result<RunReader, OpenError> {
         let events_path = self.events_db_path(&run_id);
         if !events_path.exists() {
@@ -294,25 +311,47 @@ impl Storage {
     }
 
     /// List runs matching the filter, with stale-pid detection.
+    ///
+    /// **`Parked` is deliberately never rewritten here** (Task 12 M2): the
+    /// stale-pid probe below is an allowlist (`Running | Bootstrapping`),
+    /// not a `!= Parked` blocklist, so a future status added to that
+    /// `matches!` is the only way to sweep `Parked` in — it does not
+    /// happen by construction. This matters because a parked run has *no*
+    /// owning daemon process by design (see
+    /// `surge_core::run_event::EventPayload::RunParked`'s doc: parking
+    /// happens precisely so the run stops needing one until `wake_at`
+    /// passes), so its `daemon_pid` is routinely stale. Rewriting `Parked`
+    /// to `Crashed` on a stale pid would misreport a run that is waiting on
+    /// purpose as one that failed, and — because [`RunStatus::Crashed`] is
+    /// excluded from `registry::due_parked`'s scan by design (that query's
+    /// own doc) — it would make the parked run's own wake-up scan stop
+    /// finding it, so it would never resume on its own again. Pinned by
+    /// `parked_run_with_dead_pid_stays_parked` below; see that test's doc
+    /// for why this is a "does not happen by construction" guarantee, not
+    /// a red→green fix.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn list_runs(
         &self,
         filter: RunFilter,
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
         let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
         for r in &mut runs {
-            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping) {
-                if let Some(pid) = r.daemon_pid {
-                    if !self.process_probe.is_alive(pid) {
-                        r.status = RunStatus::Crashed;
-                        r.ended_at_ms = Some(self.clock.now_ms());
-                        let _ = registry::update_status(
-                            &self.registry_pool,
-                            &r.id,
-                            RunStatus::Crashed,
-                            r.ended_at_ms,
-                        );
-                    }
-                }
+            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping)
+                && let Some(pid) = r.daemon_pid
+                && !self.process_probe.is_alive(pid)
+            {
+                r.status = RunStatus::Crashed;
+                r.ended_at_ms = Some(self.clock.now_ms());
+                let _ = registry::update_status(
+                    &self.registry_pool,
+                    &r.id,
+                    RunStatus::Crashed,
+                    r.ended_at_ms,
+                );
             }
         }
         Ok(runs)
@@ -327,6 +366,11 @@ impl Storage {
     /// `ticket_index` join would require resolving cross-table foreign
     /// keys not yet materialised in this code path. Layer 2's engine
     /// integration will populate it.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn snapshot_active_runs(
         &self,
         limit: usize,
@@ -360,6 +404,14 @@ impl Storage {
     }
 
     /// Get a single run summary, with stale-pid detection.
+    ///
+    /// Same allowlisted stale-pid probe as [`Self::list_runs`] — `Parked`
+    /// is never rewritten here either; see that method's doc.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn get_run(
         &self,
         run_id: &RunId,
@@ -370,19 +422,17 @@ impl Storage {
         if matches!(
             summary.status,
             RunStatus::Running | RunStatus::Bootstrapping
-        ) {
-            if let Some(pid) = summary.daemon_pid {
-                if !self.process_probe.is_alive(pid) {
-                    summary.status = RunStatus::Crashed;
-                    summary.ended_at_ms = Some(self.clock.now_ms());
-                    let _ = registry::update_status(
-                        &self.registry_pool,
-                        &summary.id,
-                        RunStatus::Crashed,
-                        summary.ended_at_ms,
-                    );
-                }
-            }
+        ) && let Some(pid) = summary.daemon_pid
+            && !self.process_probe.is_alive(pid)
+        {
+            summary.status = RunStatus::Crashed;
+            summary.ended_at_ms = Some(self.clock.now_ms());
+            let _ = registry::update_status(
+                &self.registry_pool,
+                &summary.id,
+                RunStatus::Crashed,
+                summary.ended_at_ms,
+            );
         }
         Ok(Some(summary))
     }
@@ -419,6 +469,11 @@ impl Storage {
     /// reconcile a run whose event log reached a terminal state that the
     /// registry never recorded. Thin wrapper over
     /// [`registry::update_status`].
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
     pub async fn set_run_status(
         &self,
         run_id: &RunId,
@@ -426,6 +481,113 @@ impl Storage {
         ended_at_ms: Option<i64>,
     ) -> Result<(), crate::runs::error::StorageError> {
         registry::update_status(&self.registry_pool, run_id, status, ended_at_ms)
+    }
+
+    /// Park a run: transition it to [`RunStatus::Parked`] and record when
+    /// it is expected to resume on its own (Task 12, R37/R37.1). Distinct
+    /// from [`Self::set_run_status`] the same way [`registry::set_run_parked`]
+    /// is distinct from [`registry::update_status`] — parking carries its
+    /// own payload (`wake_at`), not a bare status transition. Thin wrapper;
+    /// the engine's run task (Task 12 M3) is this method's first caller.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn set_run_parked(
+        &self,
+        run_id: &RunId,
+        wake_at_ms: i64,
+    ) -> Result<(), crate::runs::error::StorageError> {
+        registry::set_run_parked(&self.registry_pool, run_id, wake_at_ms)
+    }
+
+    /// Record (or replace) the durable rate-limit capacity observation for
+    /// one canonical agent-runtime id (Task 12, R34-R38.1). Thin wrapper
+    /// over [`crate::runs::capacity::observe`] — see that function's own
+    /// doc for the normalization contract the caller must already have
+    /// satisfied (this method does not normalize). Added in M3: M2 shipped
+    /// the free function but no `Storage`-level door onto it, deliberately
+    /// — M3's engine port (`surge_orchestrator::engine::capacity::
+    /// CapacityLedger`) is this method's first caller.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn observe_capacity(
+        &self,
+        window: &surge_core::capacity::CapacityWindow,
+    ) -> Result<(), crate::runs::error::StorageError> {
+        crate::runs::capacity::observe(&self.registry_pool, window)
+    }
+
+    /// Point-read the durable capacity status for one canonical
+    /// agent-runtime id. Never writes. Thin wrapper over
+    /// [`crate::runs::capacity::status`] — see [`Self::observe_capacity`]'s
+    /// doc for why this door did not exist before M3.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn capacity_status(
+        &self,
+        runtime: &str,
+    ) -> Result<surge_core::capacity::CapacityStatus, crate::runs::error::StorageError> {
+        crate::runs::capacity::status(&self.registry_pool, runtime)
+    }
+
+    /// Clear any durable exhaustion record for one canonical agent-runtime
+    /// id (Task 12 M3 review, BLOCKING #1). Thin wrapper over
+    /// [`crate::runs::capacity::clear`] — see that function's own doc for
+    /// why a `runtime_capacity` row must not persist forever.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn clear_capacity(
+        &self,
+        runtime: &str,
+    ) -> Result<(), crate::runs::error::StorageError> {
+        crate::runs::capacity::clear(&self.registry_pool, runtime)
+    }
+
+    /// Resume a parked run: transition its status away from
+    /// [`RunStatus::Parked`] and clear `wake_at`, atomically (Task 12 M3
+    /// review, BLOCKING #3). Thin wrapper over
+    /// [`registry::clear_parked`] — see that function's doc for why the
+    /// two writes must never observably happen apart.
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn clear_parked(
+        &self,
+        run_id: &RunId,
+        resumed_status: RunStatus,
+    ) -> Result<(), crate::runs::error::StorageError> {
+        registry::clear_parked(&self.registry_pool, run_id, resumed_status)
+    }
+
+    /// Parked runs whose `wake_at` has passed as of `now_ms` (Task 12 M3
+    /// review, BLOCKING #2). Thin wrapper over [`registry::due_parked`] —
+    /// see that function's own doc for the per-status eligibility
+    /// rationale. `surge-daemon::recovery`'s crash-recovery scan is this
+    /// method's first caller (a full periodic wake scheduler is Task 12
+    /// M4).
+    // No `.await` in this body — see `open_with` for why it stays `async fn`.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
+    )]
+    pub async fn due_parked(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
+        registry::due_parked(&self.registry_pool, now_ms)
     }
 }
 
@@ -457,6 +619,71 @@ mod set_run_status_tests {
         let after = storage.get_run(&run_id).await.unwrap().unwrap();
         assert_eq!(after.status, RunStatus::Failed);
         assert_eq!(after.ended_at_ms, Some(1_700_000_000_500));
+    }
+}
+
+#[cfg(test)]
+mod capacity_door_tests {
+    use super::*;
+    use surge_core::capacity::{CapacityStatus, CapacityWindow};
+    use tempfile::tempdir;
+
+    /// Task 12 M3: proves the `Storage`-level doors this milestone adds
+    /// (`observe_capacity`/`capacity_status`/`set_run_parked`) actually
+    /// delegate to the M2 registry-level functions — a real, non-test
+    /// caller for each (the engine's `CapacityLedger` port) is wired
+    /// separately in `surge-orchestrator`, but this proves the door itself
+    /// works in isolation, at the layer that owns it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn observe_capacity_then_capacity_status_round_trips_through_storage() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        assert_eq!(
+            storage.capacity_status("claude-acp").await.unwrap(),
+            CapacityStatus::NeverObserved
+        );
+
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let window = CapacityWindow::observed_429(
+            "claude-acp",
+            Some(std::time::Duration::from_secs(30)),
+            observed_at,
+        );
+        storage.observe_capacity(&window).await.unwrap();
+
+        let CapacityStatus::Known(got) = storage.capacity_status("claude-acp").await.unwrap()
+        else {
+            panic!("expected Known after observe_capacity");
+        };
+        assert_eq!(got.runtime(), "claude-acp");
+        assert_eq!(
+            got.resets_at(),
+            Some(observed_at + chrono::Duration::seconds(30))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_run_parked_transitions_status_and_records_wake_at_ms() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run_id = RunId::new();
+        let _writer = storage
+            .create_run(run_id.clone(), "/proj", None)
+            .await
+            .unwrap();
+
+        storage
+            .set_run_parked(&run_id, 1_700_000_100_000)
+            .await
+            .unwrap();
+
+        let after = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(after.status, RunStatus::Parked);
+        assert_eq!(after.wake_at_ms, Some(1_700_000_100_000));
     }
 }
 
@@ -497,5 +724,57 @@ mod snapshot_active_runs_tests {
             snap.iter()
                 .all(|r| matches!(r.status.as_str(), "Running" | "Bootstrapping"))
         );
+    }
+}
+
+#[cfg(test)]
+mod parked_survives_stale_pid_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Task 12 M2: pinned as intent, not a red→green fix — the stale-pid
+    /// probe in `list_runs`/`get_run` is already an allowlist
+    /// (`Running | Bootstrapping`), so `Parked` already falls through
+    /// untouched today, the same way `RunStatus::is_terminal()` already
+    /// excluded `Parked` before Task 12 M1 added a test for it. This test
+    /// exists so a future edit that widens that allowlist (or flips it to a
+    /// `!= Parked` blocklist, which a new status added later would slip
+    /// past) fails loudly instead of silently starting to reap runs that
+    /// are waiting on purpose.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parked_run_with_dead_pid_stays_parked() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::open(dir.path()).await.unwrap();
+
+        let run_id = RunId::new();
+        let writer = storage
+            .create_run(run_id.clone(), "/proj", None)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        // A parked run has no owning daemon by design; fake one with a pid
+        // that cannot possibly be alive (i32::MAX, same fixture as
+        // `stale_pid.rs`'s existing Running/Bootstrapping regression test).
+        registry::set_run_parked(&storage.registry_pool, &run_id, 1_700_000_100_000).unwrap();
+        {
+            let conn = storage.registry_pool.get().unwrap();
+            conn.execute(
+                "UPDATE runs SET daemon_pid = ? WHERE id = ?",
+                rusqlite::params![i32::MAX, run_id.to_string()],
+            )
+            .unwrap();
+        }
+
+        let listed = storage.list_runs(RunFilter::default()).await.unwrap();
+        let row = listed.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(
+            row.status,
+            RunStatus::Parked,
+            "a dead pid must not rewrite a parked run to Crashed"
+        );
+
+        let single = storage.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(single.status, RunStatus::Parked);
     }
 }

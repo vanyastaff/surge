@@ -9,7 +9,7 @@ which order*; the landscape page records *what everyone else is doing*.
 
 **Surge is the cross-runtime completion layer for AI coding agents.** It owns a
 structured task ledger, ungameable verification gates, and a replayable
-event log over any agent runtime that speaks ACP.
+event log over any agent runtime that speaks Agent Client Protocol (ACP).
 
 > Agents solve tasks. Surge finishes projects.
 

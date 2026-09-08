@@ -520,8 +520,10 @@ system = "team-local override"
         );
         let reg = registry_with_disk(tmp.path());
         let entries = reg.list();
-        // 19 bundled + 1 disk = 20 (no shadow collision)
-        assert_eq!(entries.len(), 20);
+        // Every bundled profile plus the one disk profile — no shadow
+        // collision. Derived from BUNDLED_COUNT so adding a bundled profile
+        // does not fail an unrelated test with a literal to hand-bump.
+        assert_eq!(entries.len(), surge_core::BUNDLED_COUNT + 1);
         assert!(entries.iter().any(
             |e| e.profile.role.id.as_str() == "team-impl" && e.provenance == Provenance::Latest
         ));
@@ -543,9 +545,9 @@ system = "team-local override"
         );
         let reg = registry_with_disk(tmp.path());
         let entries = reg.list();
-        // Bundled implementer at 1.0.0 is shadowed by the disk override;
-        // total count stays at the bundled count of 19.
-        assert_eq!(entries.len(), 19);
+        // Bundled implementer at 1.0.0 is shadowed by the disk override, so
+        // the total stays at the bundled count rather than growing.
+        assert_eq!(entries.len(), surge_core::BUNDLED_COUNT);
         let implementer = entries
             .iter()
             .find(|e| e.profile.role.id.as_str() == "implementer")
