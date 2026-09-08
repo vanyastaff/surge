@@ -201,6 +201,33 @@ pub enum ValidationErrorKind {
         verifier: NodeKey,
         runtime: String,
     },
+    /// The graph has two or more work-producing `Agent` nodes but exactly
+    /// **one** verification-authority node, so at most the final hand-off is
+    /// gated and every earlier one passes unchecked.
+    ///
+    /// This is a different fault from [`Self::UnverifiedSuccessPath`], which
+    /// fires when a success terminal is reachable with *no* verifier at all.
+    /// Here a verifier exists; the objection is where it stands.
+    ///
+    /// # Why one gate at the end is close to none
+    /// Instrumenting a four-agent pipeline with 346 injected hallucinations
+    /// (arXiv:2608.14588) measured survival at 60.7% with no verification and
+    /// **58.4% with end-of-pipeline checking** — a 2.3pp difference, against
+    /// **16.2%** for the same detectors placed at every hand-off boundary
+    /// (Cohen's *h* = −0.911, *p* < 0.000001). The mechanism is that errors
+    /// transform as they are passed on: per-boundary escape rises
+    /// 24.6% → 48.3% → 89.3%, so by the final gate the original checkable
+    /// claim has been absorbed into narrative and no longer exists in
+    /// verifiable form. The budget belongs at the *first* boundary, where
+    /// 75.4% is still catchable.
+    ///
+    /// Warning, not error: a single-gate graph is structurally valid and
+    /// may be deliberate for short flows. Counted across subgraph bodies,
+    /// since loop archetypes put their verifier inside the task body.
+    EndOfPipelineVerification {
+        gate: NodeKey,
+        work_nodes: usize,
+    },
     /// An `Agent` node's `custom_fields["skills"]` does not deserialize as a
     /// list of `surge_core::skill::SkillRef` — a graph-authoring mistake,
     /// caught here so it fails the run at load time, before a worktree is
@@ -234,7 +261,8 @@ impl ValidationErrorKind {
             | Self::OrphanSubgraph { .. }
             | Self::NotifyFailMissingUndeliverable { .. }
             | Self::UnverifiedSuccessPath { .. }
-            | Self::SameRuntimeVerification { .. } => Severity::Warning,
+            | Self::SameRuntimeVerification { .. }
+            | Self::EndOfPipelineVerification { .. } => Severity::Warning,
 
             // Errors — graph is structurally invalid or will misbehave at runtime.
             Self::StartNodeMissing
@@ -351,6 +379,7 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
     warning_w2_orphan_subgraphs(graph, &mut findings);
     warning_w3_notify_outcomes(graph, &mut findings);
     warning_w4_unverified_success(graph, &mut findings);
+    warning_w6_end_of_pipeline_verification(graph, &mut findings);
     validate_loop_static_cap(graph, &mut findings);
     validate_sandbox_custom_on_agents(graph, &mut findings);
     validate_declared_skills(graph, &mut findings);
@@ -1388,6 +1417,69 @@ fn warning_w5_same_runtime_verification(
             });
         }
     }
+}
+
+/// W6 — the graph verifies only at the end.
+///
+/// Counts `Agent` nodes, at the top level **and inside subgraph bodies**
+/// (loop archetypes put the verifier in the task body), splitting them into
+/// verification-authority nodes — those declaring an outcome with
+/// [`LedgerEffect::Verified`](crate::node::LedgerEffect) — and work nodes.
+/// One gate against two or more work nodes means at most the last hand-off
+/// is checked; see [`ValidationErrorKind::EndOfPipelineVerification`] for the
+/// measurement that makes this worth saying.
+///
+/// Zero gates is [`warning_w4_unverified_success`]'s finding, not this one,
+/// and a single work node has only one boundary to gate — both are silent
+/// here.
+fn warning_w6_end_of_pipeline_verification(graph: &Graph, out: &mut Vec<ValidationError>) {
+    use crate::node::{LedgerEffect, NodeKind};
+
+    let mut work = 0usize;
+    let mut gates: Vec<NodeKey> = Vec::new();
+
+    let mut tally = |nodes: &std::collections::BTreeMap<NodeKey, crate::node::Node>| {
+        for (key, node) in nodes {
+            if node.kind() != NodeKind::Agent {
+                continue;
+            }
+            if node
+                .declared_outcomes
+                .iter()
+                .any(|outcome| outcome.ledger_effect == LedgerEffect::Verified)
+            {
+                gates.push(key.clone());
+            } else {
+                work += 1;
+            }
+        }
+    };
+    tally(&graph.nodes);
+    for subgraph in graph.subgraphs.values() {
+        tally(&subgraph.nodes);
+    }
+
+    let [gate] = gates.as_slice() else {
+        return;
+    };
+    if work < 2 {
+        return;
+    }
+
+    out.push(ValidationError {
+        kind: ValidationErrorKind::EndOfPipelineVerification {
+            gate: gate.clone(),
+            work_nodes: work,
+        },
+        location: ErrorLocation::Node { id: gate.clone() },
+        message: format!(
+            "`{}` is the only verification-authority node across {work} work-producing \
+             agent nodes, so at most the final hand-off is checked; verification placed \
+             only at the end measured 58.4% hallucination survival against 60.7% for none \
+             (arXiv:2608.14588)",
+            gate.as_str()
+        ),
+    });
 }
 
 fn warning_w1_escalate_target(graph: &Graph, out: &mut Vec<ValidationError>) {
@@ -3106,7 +3198,7 @@ mod w5_tests {
         }
     }
 
-    fn agent_node(key: &str, profile: &str, effects: &[LedgerEffect]) -> Node {
+    pub(super) fn agent_node(key: &str, profile: &str, effects: &[LedgerEffect]) -> Node {
         Node {
             id: NodeKey::try_from(key).unwrap(),
             position: Position::default(),
@@ -3136,7 +3228,7 @@ mod w5_tests {
         }
     }
 
-    fn success_terminal(key: &str) -> Node {
+    pub(super) fn success_terminal(key: &str) -> Node {
         Node {
             id: NodeKey::try_from(key).unwrap(),
             position: Position::default(),
@@ -3148,7 +3240,7 @@ mod w5_tests {
         }
     }
 
-    fn edge(id: &str, from: &str, from_outcome: &str, to: &str) -> Edge {
+    pub(super) fn edge(id: &str, from: &str, from_outcome: &str, to: &str) -> Edge {
         Edge {
             id: EdgeKey::try_from(id).unwrap(),
             from: PortRef {
@@ -3161,7 +3253,7 @@ mod w5_tests {
         }
     }
 
-    fn graph(start: &str, nodes: Vec<Node>, edges: Vec<Edge>) -> Graph {
+    pub(super) fn graph(start: &str, nodes: Vec<Node>, edges: Vec<Edge>) -> Graph {
         let mut map = BTreeMap::new();
         for node in nodes {
             map.insert(node.id.clone(), node);
@@ -3377,5 +3469,140 @@ mod w5_tests {
             )),
             "expected SameRuntimeVerification via validate_with_resolver, got {warnings:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod w6_tests {
+    use super::w5_tests::{agent_node, edge, graph, success_terminal};
+    use super::{ValidationErrorKind, warning_w6_end_of_pipeline_verification};
+    use crate::keys::NodeKey;
+    use crate::node::LedgerEffect;
+
+    /// `(gate, work_nodes)` for every W6 finding the graph raises.
+    fn w6(graph: &crate::graph::Graph) -> Vec<(NodeKey, usize)> {
+        let mut out = Vec::new();
+        warning_w6_end_of_pipeline_verification(graph, &mut out);
+        out.into_iter()
+            .filter_map(|f| match f.kind {
+                ValidationErrorKind::EndOfPipelineVerification { gate, work_nodes } => {
+                    Some((gate, work_nodes))
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    const NONE: &[LedgerEffect] = &[LedgerEffect::None];
+    const VERIFIES: &[LedgerEffect] = &[LedgerEffect::Verified];
+
+    #[test]
+    fn b1_one_gate_after_two_work_nodes_warns() {
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", "implementer@1.0", NONE),
+                agent_node("impl_2", "implementer@1.0", NONE),
+                agent_node("verify_1", "verifier@2.0", VERIFIES),
+                success_terminal("done"),
+            ],
+            vec![
+                edge("e1", "impl_1", "o0", "impl_2"),
+                edge("e2", "impl_2", "o0", "verify_1"),
+                edge("e3", "verify_1", "o0", "done"),
+            ],
+        );
+        assert_eq!(w6(&g), vec![(NodeKey::try_from("verify_1").unwrap(), 2)]);
+    }
+
+    #[test]
+    fn b2_single_work_node_has_only_one_boundary_to_gate() {
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", "implementer@1.0", NONE),
+                agent_node("verify_1", "verifier@2.0", VERIFIES),
+                success_terminal("done"),
+            ],
+            vec![
+                edge("e1", "impl_1", "o0", "verify_1"),
+                edge("e2", "verify_1", "o0", "done"),
+            ],
+        );
+        assert_eq!(w6(&g), vec![]);
+    }
+
+    #[test]
+    fn b3_no_gate_at_all_is_w4s_finding_not_this_one() {
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", "implementer@1.0", NONE),
+                agent_node("impl_2", "implementer@1.0", NONE),
+                agent_node("impl_3", "implementer@1.0", NONE),
+                success_terminal("done"),
+            ],
+            vec![
+                edge("e1", "impl_1", "o0", "impl_2"),
+                edge("e2", "impl_2", "o0", "impl_3"),
+                edge("e3", "impl_3", "o0", "done"),
+            ],
+        );
+        assert_eq!(w6(&g), vec![]);
+    }
+
+    /// Pins W6's blast radius on the shipped set, and with it the fact this
+    /// rule exists to state: **no bundled flow gates more than one
+    /// boundary.** Five have exactly one verifier against two or more work
+    /// nodes; the other eight have none at all and are W4's finding.
+    ///
+    /// `multi-milestone` earns its place here twice over — its verifier
+    /// lives inside a task-body subgraph, so this also proves the tally
+    /// descends into `graph.subgraphs`.
+    #[test]
+    fn w6_names_exactly_the_five_bundled_flows_that_verify_only_at_the_end() {
+        let mut warned: Vec<String> = Vec::new();
+        for flow in crate::BundledFlows::all() {
+            let mut out = Vec::new();
+            warning_w6_end_of_pipeline_verification(&flow.graph, &mut out);
+            if !out.is_empty() {
+                warned.push(flow.name.clone());
+            }
+        }
+        warned.sort_unstable();
+        assert_eq!(
+            warned,
+            vec![
+                "bug-fix",
+                "linear-3",
+                "linear-with-review",
+                "multi-milestone",
+                "refactor",
+            ],
+            "W6's blast radius on the bundled set changed"
+        );
+    }
+
+    #[test]
+    fn b4_two_gates_is_boundary_verification_and_stays_silent() {
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node("impl_1", "implementer@1.0", NONE),
+                agent_node("check_1", "verifier@2.0", VERIFIES),
+                agent_node("impl_2", "implementer@1.0", NONE),
+                agent_node("check_2", "verifier@2.0", VERIFIES),
+                agent_node("impl_3", "implementer@1.0", NONE),
+                success_terminal("done"),
+            ],
+            vec![
+                edge("e1", "impl_1", "o0", "check_1"),
+                edge("e2", "check_1", "o0", "impl_2"),
+                edge("e3", "impl_2", "o0", "check_2"),
+                edge("e4", "check_2", "o0", "impl_3"),
+                edge("e5", "impl_3", "o0", "done"),
+            ],
+        );
+        assert_eq!(w6(&g), vec![]);
     }
 }
