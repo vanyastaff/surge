@@ -15,6 +15,14 @@ pub struct SurgeThemeColors {
     pub success: Hsla,
     pub warning: Hsla,
     pub error: Hsla,
+    // Fleet-ops surfaces — must flip with the mode alongside the text
+    // colors, or light mode renders near-black text on dark panels.
+    pub panel: Hsla,
+    pub panel_raised: Hsla,
+    pub panel_deep: Hsla,
+    pub hairline: Hsla,
+    pub hairline_strong: Hsla,
+    pub graph_line: Hsla,
 }
 
 impl SurgeThemeColors {
@@ -29,6 +37,12 @@ impl SurgeThemeColors {
             success: hsla(142.0, 0.71, 0.45),
             warning: hsla(38.0, 0.92, 0.50),
             error: hsla(0.0, 0.84, 0.60),
+            panel: hsla(235.0, 0.20, 0.065),
+            panel_raised: hsla(234.0, 0.17, 0.095),
+            panel_deep: hsla(240.0, 0.25, 0.05),
+            hairline: hsla(234.0, 0.14, 0.18),
+            hairline_strong: hsla(234.0, 0.14, 0.24),
+            graph_line: hsla(234.0, 0.14, 0.26),
         }
     }
 
@@ -43,6 +57,12 @@ impl SurgeThemeColors {
             success: hsla(142.0, 0.71, 0.35),
             warning: hsla(38.0, 0.92, 0.45),
             error: hsla(0.0, 0.84, 0.50),
+            panel: hsla(235.0, 0.20, 0.965),
+            panel_raised: hsla(234.0, 0.17, 0.925),
+            panel_deep: hsla(240.0, 0.25, 0.99),
+            hairline: hsla(234.0, 0.14, 0.86),
+            hairline_strong: hsla(234.0, 0.14, 0.79),
+            graph_line: hsla(234.0, 0.14, 0.76),
         }
     }
 }
@@ -186,6 +206,54 @@ pub fn warning() -> Hsla {
 }
 pub fn error() -> Hsla {
     get(|c| c.error)
+}
+
+// ── Fleet-ops surface tokens (concept: "Surge - Interactive") ──────
+// Fixed dark chrome surfaces for the rail / context bar / panels and
+// the constellation canvas. Neutral 234–240° hues so they read as one
+// family regardless of the active accent theme. Purely additive — the
+// accessors above are untouched, so existing screens are unaffected.
+
+/// Accent = the active theme's primary (amber by default). Alias so
+/// fleet-ops code can read intent ("accent") instead of "primary".
+pub fn accent() -> Hsla {
+    primary()
+}
+
+/// Ink drawn ON the accent (button labels, badges). One token so a
+/// future dark-accent theme flips every accent surface at once.
+pub fn on_accent() -> Hsla {
+    hsla(0.0, 0.0, 0.08)
+}
+
+/// Rail / context bar / panel background.
+pub fn panel() -> Hsla {
+    get(|c| c.panel)
+}
+
+/// Raised card surface (mission cards, inspectors).
+pub fn panel_raised() -> Hsla {
+    get(|c| c.panel_raised)
+}
+
+/// Deep canvas background (the constellation field).
+pub fn panel_deep() -> Hsla {
+    get(|c| c.panel_deep)
+}
+
+/// Hairline divider / border.
+pub fn hairline() -> Hsla {
+    get(|c| c.hairline)
+}
+
+/// Stronger hairline (keycaps, hover borders).
+pub fn hairline_strong() -> Hsla {
+    get(|c| c.hairline_strong)
+}
+
+/// Idle graph edge / trunk line.
+pub fn graph_line() -> Hsla {
+    get(|c| c.graph_line)
 }
 
 // ── Backwards compat aliases (will be removed) ────────────────────

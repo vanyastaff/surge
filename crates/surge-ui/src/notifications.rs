@@ -31,6 +31,20 @@ impl SurgeNotification {
             .autohide(false)
     }
 
+    pub fn gate_decision_recorded(task_id: &str, approved: bool) -> Notification {
+        let verdict = if approved { "approved" } else { "rejected" };
+        Notification::success(SharedString::from(format!("{task_id} {verdict}")))
+            .title("Gate Decision Recorded")
+    }
+
+    pub fn gate_decision_failed(task_id: &str, reason: &str) -> Notification {
+        Notification::error(SharedString::from(format!(
+            "{task_id}: decision NOT saved — {reason}"
+        )))
+        .title("Gate Decision Failed")
+        .autohide(false)
+    }
+
     pub fn review_needed(task_name: &str) -> Notification {
         Notification::warning(SharedString::from(format!("{task_name} needs your review")))
             .title("Review Required")
