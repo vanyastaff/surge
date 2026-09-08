@@ -11,13 +11,35 @@ mod fixtures;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use surge_acp::bridge::event::{BridgeEvent, SessionEndReason};
 use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::{AgentConfig, NodeLimits};
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+
+/// How long the `on_error` hook is allowed to run.
+///
+/// Widened from 5s to 30s in #80 (`d986f06`) so a slow process cold-start on a
+/// loaded Windows runner could not blow it and flake the suppression.
+const HOOK_TIMEOUT_SECS: u32 = 30;
+
+/// How long a test waits for the whole run.
+///
+/// Must exceed [`HOOK_TIMEOUT_SECS`], and derives from it so the two cannot
+/// drift apart again. They had: the hook was granted 30s while the wait stayed
+/// at 10s, so a hook taking any time in between — exactly the range #80
+/// widened the grant for — failed the test while running well inside its
+/// budget. This wait is a liveness guard against a hang, not a latency
+/// assertion, so a generous multiple costs nothing.
+const RUN_WAIT: std::time::Duration =
+    std::time::Duration::from_secs((HOOK_TIMEOUT_SECS as u64) * 2);
+
+const _: () = assert!(
+    RUN_WAIT.as_secs() > HOOK_TIMEOUT_SECS as u64,
+    "the run wait must outlast the budget the hook is granted, or a hook \
+     finishing legitimately inside its budget fails the test"
+);
 use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
 use surge_core::id::{RunId, SessionId};
 use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
@@ -51,9 +73,7 @@ fn on_error_suppress_hook(id: &str, command: String) -> Hook {
         matcher: MatcherSpec::default(),
         command,
         on_failure: HookFailureMode::Warn,
-        // Generous so a slow process cold-start under heavy parallel CI load
-        // (esp. Windows) can't blow the timeout and flake the suppression.
-        timeout_seconds: Some(30),
+        timeout_seconds: Some(HOOK_TIMEOUT_SECS),
         inherit: HookInheritance::Extend,
     }
 }
@@ -181,7 +201,7 @@ async fn run_crashing_agent(
         mock_for_pump.pump_after_subscribe(1).await;
     });
 
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.await_completion())
+    let outcome = tokio::time::timeout(RUN_WAIT, handle.await_completion())
         .await
         .expect("run timed out")
         .expect("run handle join");
