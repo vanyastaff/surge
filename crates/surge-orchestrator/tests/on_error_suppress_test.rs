@@ -17,6 +17,19 @@ use surge_acp::bridge::facade::BridgeFacade;
 use surge_core::agent_config::{AgentConfig, NodeLimits};
 use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
 use surge_core::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
+use surge_core::id::{RunId, SessionId};
+use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
+use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
+use surge_core::run_event::EventPayload;
+use surge_core::terminal_config::{TerminalConfig, TerminalKind};
+use surge_orchestrator::engine::tools::ToolDispatcher;
+use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
+use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
+use surge_persistence::runs::Storage;
+use surge_persistence::runs::seq::EventSeq;
+
+use fixtures::mock_bridge::MockBridge;
 
 /// How long the `on_error` hook is allowed to run.
 ///
@@ -40,19 +53,6 @@ const _: () = assert!(
     "the run wait must outlast the budget the hook is granted, or a hook \
      finishing legitimately inside its budget fails the test"
 );
-use surge_core::hooks::{Hook, HookFailureMode, HookInheritance, HookTrigger, MatcherSpec};
-use surge_core::id::{RunId, SessionId};
-use surge_core::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
-use surge_core::node::{Node, NodeConfig, OutcomeDecl, Position};
-use surge_core::run_event::EventPayload;
-use surge_core::terminal_config::{TerminalConfig, TerminalKind};
-use surge_orchestrator::engine::tools::ToolDispatcher;
-use surge_orchestrator::engine::tools::worktree::WorktreeToolDispatcher;
-use surge_orchestrator::engine::{Engine, EngineConfig, EngineRunConfig, RunOutcome};
-use surge_persistence::runs::Storage;
-use surge_persistence::runs::seq::EventSeq;
-
-use fixtures::mock_bridge::MockBridge;
 
 fn suppress_command(dir: &Path, outcome: &str) -> String {
     let json = format!(r#"{{"action":"suppress","outcome":"{outcome}"}}"#);
