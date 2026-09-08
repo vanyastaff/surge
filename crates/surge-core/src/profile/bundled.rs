@@ -255,6 +255,37 @@ mod tests {
         );
     }
 
+    /// `flow-generator@1.0` used to name profiles from prose in its own
+    /// prompt (`implementer@2.0`, `verifier@2.0` hardcoded in the text)
+    /// with no catalogue of what actually exists in the registry — a
+    /// bundled-profile drift (`implementer@2.0` was never referenced by
+    /// any bundled flow) and a hard block on community profiles ever
+    /// being chosen. This asserts the fix: the profile declares a
+    /// `profile_catalog` expected binding sourced from a run artifact, so
+    /// generation composes from `ProfileRegistry::list()` instead of
+    /// memory.
+    #[test]
+    fn flow_generator_declares_profile_catalog_binding() {
+        use crate::profile::ExpectedBindingSource;
+
+        let p = BundledRegistry::by_name_latest("flow-generator").expect("flow-generator bundled");
+        let binding = p
+            .bindings
+            .expected
+            .iter()
+            .find(|b| b.name == "profile_catalog")
+            .expect("flow-generator@1.0 must declare a profile_catalog expected binding");
+        assert_eq!(
+            binding.source,
+            ExpectedBindingSource::RunArtifact,
+            "profile_catalog is seeded as a run artifact by Engine::start_run"
+        );
+        assert!(
+            p.prompt.system.contains("{{profile_catalog}}"),
+            "the prompt must actually reference the bound catalogue, not just declare it"
+        );
+    }
+
     #[test]
     fn mock_resolves_by_name() {
         let p = BundledRegistry::by_name_latest("mock").expect("mock@1.0 must be bundled");

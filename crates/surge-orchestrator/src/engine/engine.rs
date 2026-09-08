@@ -2,7 +2,7 @@
 //! implemented incrementally in Phase 5 (lifecycle), Phase 9 (resolve),
 //! Phase 11 (stop).
 
-use crate::engine::config::{EngineConfig, EngineRunConfig};
+use crate::engine::config::{EngineConfig, EngineRunConfig, RunSeedArtifact};
 use crate::engine::error::EngineError;
 use crate::engine::event_tap::{RunEventTap, TAP_BUFFER_SIZE};
 use crate::engine::handle::RunHandle;
@@ -346,6 +346,10 @@ impl Engine {
         run_config.memory_store_path =
             self.resolve_memory_store_path(run_config.memory_store_path.take());
 
+        // No registry wired keeps today's behavior unchanged — see
+        // `seed_profile_catalog`'s doc for what this seeds and why.
+        self.seed_profile_catalog(&mut run_config)?;
+
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
         }
@@ -466,6 +470,28 @@ impl Engine {
     /// spelled out twice.
     fn resolve_memory_store_path(&self, per_run: Option<PathBuf>) -> Option<PathBuf> {
         per_run.or_else(|| self.config.memory_store_path.clone())
+    }
+
+    /// Seed the resolved profile registry as the `profile_catalog` run
+    /// artifact so bootstrap profiles (`flow-generator@1.0` above all) can
+    /// bind Agent nodes to profiles that actually exist
+    /// (`profile_loader::render_profile_catalog`) instead of naming them
+    /// from prompt text. A no-op when no registry is wired — `start_run`'s
+    /// resolver-free default behavior is unchanged in that case.
+    fn seed_profile_catalog(&self, run_config: &mut EngineRunConfig) -> Result<(), EngineError> {
+        let Some(registry) = self.config.profile_registry.as_ref() else {
+            return Ok(());
+        };
+        let catalog = crate::profile_loader::render_profile_catalog(registry);
+        let seed = RunSeedArtifact::new(
+            PROFILE_CATALOG_ARTIFACT_NAME,
+            PROFILE_CATALOG_ARTIFACT_RELPATH,
+            catalog,
+            PROFILE_CATALOG_PRODUCER_NODE,
+        )
+        .map_err(|e| EngineError::Internal(format!("profile catalog producer key: {e}")))?;
+        run_config.seed_artifacts.push(seed);
+        Ok(())
     }
 
     async fn build_startup_events(
@@ -1266,8 +1292,23 @@ pub(crate) const PROJECT_CONTEXT_ARTIFACT_NAME: &str = "project_context";
 /// run start (`.surge/memory/`).
 pub(crate) const PROJECT_MEMORY_ARTIFACT_NAME: &str = "project_memory";
 
+/// Canonical artifact name for the resolved profile-registry catalogue
+/// (`profile_loader::render_profile_catalog`) seeded at run start.
+/// `flow-generator@1.0` binds this to pick profiles by what the registry
+/// actually holds instead of from names memorized in its own prompt.
+pub(crate) const PROFILE_CATALOG_ARTIFACT_NAME: &str = "profile_catalog";
+
 /// Synthetic producer node for the run-level project context seed.
 const PROJECT_CONTEXT_PRODUCER_NODE: &str = "project_context_seed";
+
+/// Relative path within the worktree where the seeded profile catalogue is
+/// stored.
+const PROFILE_CATALOG_ARTIFACT_RELPATH: &str = ".surge/profile_catalog.md";
+
+/// Synthetic producer node id recorded on the seeded profile-catalogue
+/// `ArtifactProduced` event. No real node produces it — same reasoning as
+/// `PROJECT_CONTEXT_PRODUCER_NODE` above.
+const PROFILE_CATALOG_PRODUCER_NODE: &str = "profile_catalog_seed";
 
 /// Relative path within the worktree where the seeded prompt body is stored.
 const INITIAL_PROMPT_ARTIFACT_RELPATH: &str = ".surge/user_prompt.txt";
