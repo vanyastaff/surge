@@ -1289,17 +1289,22 @@ fn agent_runtime(
 /// Only reachable via [`validate_with_resolver`] — needs a real
 /// [`ReferenceResolver`] to answer runtime questions at all.
 ///
-/// # Inert until flows declare an implementer outcome
-/// As of this writing, no flow in the tree — none of the bundled profiles'
-/// flows, none the generator writes — declares an outcome with
-/// `ledger_effect = "ready_for_verification"` (only `verified` and
-/// `failed_verification` appear anywhere), so `implementers` below is always
-/// empty and this rule never fires on a real graph today. That is an open
-/// product decision (whether and how a flow should mark an implementer
-/// outcome), not something to paper over with a fallback implementer here:
-/// once flows do mark one, every bundled profile resolves to a single agent
-/// runtime today, so the rule will start firing broadly the moment it can
-/// see any.
+/// # Why the implementer comes from graph shape, not a ledger effect
+/// Keying the implementer side on `LedgerEffect::ReadyForVerification` — the
+/// obvious reading of "the node whose work this verifies" — makes the rule
+/// fire on nothing. Verified across the tree: no flow declares that effect
+/// (only `verified` and `failed_verification` appear anywhere), none carries
+/// an outcome *named* `ready_for_verification`, and none binds the
+/// `implementer@2.0` profile that `flow-generator-1.0.toml` names when it
+/// describes that convention. The prompt and the shipped flows had drifted.
+///
+/// A verifier's direct incoming `EdgeKind::Forward` edge is what every flow
+/// actually carries, and it is what "hands work to the verifier" means. On
+/// the bundled set that makes the rule fire on four of thirteen flows —
+/// `linear-3`, `linear-with-review`, `bug-fix`, `refactor` — because every
+/// bundled profile bar one resolves to a single agent runtime. The exact
+/// four are pinned by a test so a change that silently returns the rule to
+/// silence fails.
 fn warning_w5_same_runtime_verification(
     graph: &Graph,
     resolver: &dyn ReferenceResolver,

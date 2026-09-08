@@ -725,12 +725,29 @@ mod tests {
     /// checked exactly like a plain path — proven here via content drift,
     /// the same signal `stale_claims_flags_content_that_changed_since_capture`
     /// proves for a plain path.
+    /// Build the RFC 8089 empty-authority `file:` URI for an absolute path,
+    /// on either platform.
+    fn file_uri_for(path: &std::path::Path) -> String {
+        let text = path.display().to_string();
+        if cfg!(windows) {
+            format!("file:///{}", text.replace('\\', "/"))
+        } else {
+            format!("file://{text}")
+        }
+    }
+
     #[test]
     fn file_uri_source_is_expanded_to_a_path_and_checked_for_content_drift() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.txt");
         std::fs::write(&path, b"original content").unwrap();
-        let uri = format!("file://{}", path.display());
+        // RFC 8089: the empty-authority form is `file:///abs/path`, and on
+        // Windows the drive path is `file:///C:/Users/...` with forward
+        // slashes. `format!("file://{}", path.display())` produces that on
+        // Unix by accident (the path already starts with `/`) and produces
+        // the malformed `file://C:\\Users\\...` on Windows, which the
+        // expander then correctly refuses as a non-empty authority.
+        let uri = file_uri_for(&path);
         let claim = MemoryClaim::new(
             MemoryClaimId::new(),
             "some claim text",

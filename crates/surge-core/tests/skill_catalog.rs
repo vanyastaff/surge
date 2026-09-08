@@ -711,6 +711,7 @@ fn real_corpus_packs_resolve_without_rejection() {
 /// the loop the same way `scan.rs` used to. `find(1)`'s own symlink-loop
 /// detection is a separate, decades-old implementation with no shared code
 /// path, so it cannot agree with a `scan.rs` regression by construction.
+#[cfg(unix)]
 fn count_real_pack_dirs(root: &Path) -> usize {
     let output = std::process::Command::new("find")
         .arg("-L") // follow symlinks — real `~/.claude/skills/*` entries are.

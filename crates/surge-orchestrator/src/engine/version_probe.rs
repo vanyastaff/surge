@@ -156,9 +156,23 @@ pub async fn probe_version_with_args(
     //   "claude 2.0.1"
     //   "v2.0.1"
     // Scanning past leading non-semver tokens handles all of them.
+    //
+    // A second pass then accepts vendor-suffixed forms that are not semver
+    // at all — Git for Windows reports `git version 2.55.0.windows.5`, a
+    // fourth dot-component semver rejects outright. Strict parsing runs over
+    // every token first, so a line carrying both a real semver and a
+    // suffixed one still prefers the real one.
     for token in first_line.split_whitespace() {
         let stripped = token.strip_prefix('v').unwrap_or(token);
         if let Ok(version) = Version::parse(stripped) {
+            return Ok(version);
+        }
+    }
+    for token in first_line.split_whitespace() {
+        let stripped = token.strip_prefix('v').unwrap_or(token);
+        if let Some(core) = semver_core_prefix(stripped)
+            && let Ok(version) = Version::parse(core)
+        {
             return Ok(version);
         }
     }
@@ -167,6 +181,33 @@ pub async fn probe_version_with_args(
         binary: binary_str,
         raw: first_line.to_string(),
     })
+}
+
+/// The leading `MAJOR.MINOR.PATCH` of a token, when that prefix is followed
+/// by a further `.` — i.e. a vendor-suffixed build string semver cannot
+/// parse, such as Git for Windows' `2.55.0.windows.5`.
+///
+/// Returns `None` for anything else, including a well-formed semver: this is
+/// only ever consulted after strict parsing has already failed on every
+/// token, so it must never widen what counts as a version, only recover the
+/// core of a form that is otherwise unreadable.
+fn semver_core_prefix(token: &str) -> Option<&str> {
+    let mut parts = token.splitn(4, '.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    // A fourth component must exist — without one, strict parsing already
+    // had its chance and this token is simply not a version.
+    parts.next()?;
+    if [major, minor, patch]
+        .iter()
+        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        let core_len = major.len() + 1 + minor.len() + 1 + patch.len();
+        Some(&token[..core_len])
+    } else {
+        None
+    }
 }
 
 /// Compare a detected version against a declared policy.
@@ -259,6 +300,26 @@ mod tests {
     fn policy(min: &str) -> RuntimeVersionPolicy {
         RuntimeVersionPolicy::new(RuntimeKind::ClaudeCode, VersionReq::parse(min).unwrap())
             .with_note("test policy")
+    }
+
+    #[test]
+    fn semver_core_prefix_recovers_a_vendor_suffixed_build_string() {
+        // Git for Windows: `git version 2.55.0.windows.5`. Semver rejects it
+        // outright, which failed the probe on every Windows machine.
+        assert_eq!(semver_core_prefix("2.55.0.windows.5"), Some("2.55.0"));
+        assert_eq!(semver_core_prefix("1.2.3.4"), Some("1.2.3"));
+    }
+
+    #[test]
+    fn semver_core_prefix_declines_everything_that_is_not_a_suffixed_version() {
+        // No fourth component: strict parsing already had its chance.
+        assert_eq!(semver_core_prefix("2.55.0"), None);
+        assert_eq!(semver_core_prefix("2.55"), None);
+        // Non-numeric core: not a version at all.
+        assert_eq!(semver_core_prefix("a.b.c.d"), None);
+        assert_eq!(semver_core_prefix("2.x.0.1"), None);
+        assert_eq!(semver_core_prefix("..1.2"), None);
+        assert_eq!(semver_core_prefix("git"), None);
     }
 
     #[test]

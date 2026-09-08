@@ -725,23 +725,32 @@ impl Engine {
         // precheck once (see `RunTaskParams::capacity_precheck_bypass_once`'s
         // doc) — a resumed *non*-parked run (e.g. crash recovery of a
         // `Crashed` row) gets no such bypass.
-        let was_parked = matches!(
-            self.storage.get_run(&run_id).await,
-            Ok(Some(summary)) if summary.status == surge_core::RunStatus::Parked
-        );
-        if was_parked
-            && let Err(error) = self
-                .storage
+        // Neither of these two may be best-effort. If the row still reads
+        // `parked` with its old `wake_at` while the run proceeds, the
+        // `RunWokeFromPark` written below sets `parked_worktree = None` in
+        // the event-log fold (`runs/query.rs`), so the next `due_parked`
+        // scan selects this same — now *running* — run, finds no recorded
+        // worktree, and `wake_scheduler`'s `fail_honestly` kills it. A
+        // transient storage error would fail a healthy run, which is worse
+        // than refusing to resume. Both the read and the clear therefore
+        // propagate.
+        let summary = self
+            .storage
+            .get_run(&run_id)
+            .await
+            .map_err(|e| EngineError::Storage(e.to_string()))?;
+        let was_parked = matches!(&summary, Some(s) if s.status == surge_core::RunStatus::Parked);
+        if was_parked {
+            self.storage
                 .clear_parked(&run_id, surge_core::RunStatus::Running)
                 .await
-        {
-            tracing::warn!(
-                target: "engine::capacity",
-                %run_id,
-                %error,
-                "failed to clear Parked status on resume; the registry row may still show \
-                 Parked with a stale wake_at"
-            );
+                .map_err(|e| {
+                    EngineError::Storage(format!(
+                        "resume refused: could not clear the Parked registry row for \
+                         {run_id} ({e}); resuming would leave it due for the wake scan, \
+                         which would then fail this run for an unrecorded worktree"
+                    ))
+                })?;
         }
 
         let writer = self
