@@ -29,9 +29,15 @@ use app::SurgeApp;
 use app_state::AppState;
 
 fn main() {
-    // Initialize tracing for debug logs
+    // `from_default_env()` with no `RUST_LOG` set builds an *empty* filter:
+    // the app then logs nothing at all, errors included, and a user whose
+    // run misbehaves has not one line to look at. Fall back to the same
+    // default `surge-cli` uses so the desktop app is not the silent one.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "surge=info".into()),
+        )
         .with_writer(std::io::stderr)
         .init();
 

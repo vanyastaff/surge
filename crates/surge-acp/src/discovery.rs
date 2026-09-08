@@ -356,7 +356,13 @@ impl AgentDiscovery {
                     detected_version: version,
                 });
             } else {
-                warn!("Agent {} not found", entry.id);
+                // A miss is the normal case here: this loop surveys *every*
+                // registry entry, so on any machine most of them are absent.
+                // `warn!` made a clean first run print scary lines about
+                // agents the user never asked for. The signal that matters —
+                // no agent found at all — is reported by the caller
+                // (`surge init` prints its installable-fallback notice).
+                debug!("Agent {} not found", entry.id);
             }
         }
 
