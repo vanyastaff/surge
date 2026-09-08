@@ -1473,6 +1473,88 @@ mod tests {
         }
     }
 
+    /// The remedy exists and works. Same graph twice through the **real**
+    /// `ProfileRegistry`: pointed at `verifier@2.0` it raises W5, pointed at
+    /// `cross-verifier@1.0` it does not — because that profile resolves to
+    /// Codex while the implementer resolves to Claude Code.
+    ///
+    /// Without this pairing W5 is a rule that can only nag: before
+    /// `cross-verifier@1.0` shipped, every bundled profile resolved to one
+    /// runtime, so no flow assembled from the bundled set could answer the
+    /// finding.
+    #[test]
+    fn cross_verifier_profile_answers_the_same_runtime_finding() {
+        fn graph_verified_by(profile: &str) -> Graph {
+            let impl_key = NodeKey::try_from("impl_1").unwrap();
+            let mut nodes = BTreeMap::new();
+            nodes.insert(
+                impl_key.clone(),
+                agent_node_with_profile(
+                    "impl_1",
+                    "implementer@1.0",
+                    surge_core::LedgerEffect::None,
+                ),
+            );
+            nodes.insert(
+                NodeKey::try_from("verify_1").unwrap(),
+                agent_node_with_profile("verify_1", profile, surge_core::LedgerEffect::Verified),
+            );
+            nodes.insert(NodeKey::try_from("end").unwrap(), terminal_node("end"));
+            Graph {
+                schema_version: SCHEMA_VERSION,
+                metadata: GraphMetadata {
+                    name: "cross-verifier-fixture".into(),
+                    description: None,
+                    template_origin: None,
+                    created_at: chrono::Utc::now(),
+                    author: None,
+                    archetype: None,
+                },
+                start: impl_key,
+                nodes,
+                edges: vec![
+                    forward_edge("e1", "impl_1", "done", "verify_1"),
+                    forward_edge("e2", "verify_1", "done", "end"),
+                ],
+                subgraphs: BTreeMap::new(),
+            }
+        }
+
+        fn same_runtime_findings(
+            graph: &Graph,
+            registry: &crate::profile_loader::ProfileRegistry,
+        ) -> usize {
+            let findings = match surge_core::validate_with_resolver(graph, registry) {
+                Ok(f) | Err(f) => f,
+            };
+            findings
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.kind,
+                        surge_core::ValidationErrorKind::SameRuntimeVerification { .. }
+                    )
+                })
+                .count()
+        }
+
+        let registry = crate::profile_loader::ProfileRegistry::new(
+            crate::profile_loader::DiskProfileSet::empty(),
+        );
+
+        assert_eq!(
+            same_runtime_findings(&graph_verified_by("verifier@2.0"), &registry),
+            1,
+            "verifier@2.0 shares the implementer's runtime, so W5 must fire"
+        );
+        assert_eq!(
+            same_runtime_findings(&graph_verified_by("cross-verifier@1.0"), &registry),
+            0,
+            "cross-verifier@1.0 runs Codex against a Claude Code implementer — \
+             the finding must go away, and for that reason"
+        );
+    }
+
     #[test]
     fn same_runtime_verification_warning_is_logged_via_resolver_path() {
         let impl_key = NodeKey::try_from("impl_1").unwrap();
