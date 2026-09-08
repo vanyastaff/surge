@@ -21,6 +21,5 @@ actions!(
         SwitchProject,
         // Tasks
         NewTask,
-        ApproveGate,
     ]
 );

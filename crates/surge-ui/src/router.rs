@@ -25,7 +25,6 @@ pub enum Screen {
     ContextMemory,
     Settings,
     // ── Secondary screens (palette / contextual) ──
-    GateApproval,
     SpecExplorer,
     SpecWizard,
     AgentHub,
@@ -46,7 +45,6 @@ impl Screen {
             Self::Agents => "Agents",
             Self::ContextMemory => "Memory",
             Self::Settings => "Settings",
-            Self::GateApproval => "Gate Approval",
             Self::SpecExplorer => "Specs",
             Self::SpecWizard => "New Spec",
             Self::AgentHub => "Agent Hub",
@@ -67,7 +65,6 @@ impl Screen {
             Self::Agents => IconName::Bot,
             Self::ContextMemory => IconName::BookOpen,
             Self::Settings => IconName::Settings,
-            Self::GateApproval => IconName::Check,
             Self::SpecExplorer => IconName::Search,
             Self::SpecWizard => IconName::Plus,
             Self::AgentHub => IconName::Bot,

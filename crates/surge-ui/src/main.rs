@@ -78,12 +78,22 @@ fn main() {
                 ..Default::default()
             };
 
-            cx.open_window(options, |window, cx| {
+            if let Err(err) = cx.open_window(options, |window, cx| {
                 let state = cx.new(|_| AppState::new());
                 let view = cx.new(|cx| SurgeApp::new(state, cx));
                 cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("Failed to open window");
+            }) {
+                // Reproducible on a compositor whose renderer gpui can't
+                // use (observed: "Failed to create surface:
+                // PlatformNotSupported"). No retry, no fallback renderer —
+                // just tell the user what happened and exit instead of a
+                // raw panic + backtrace.
+                tracing::error!("failed to open window: {err:#}");
+                eprintln!(
+                    "surge: could not open a window ({err}) — likely no usable GPU/compositor surface; try a different compositor or update your GPU driver"
+                );
+                std::process::exit(1);
+            }
         })
         .detach();
     });

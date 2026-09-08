@@ -177,47 +177,6 @@ fn test_ui_gate_decision_file_format() {
 }
 
 #[test]
-fn test_ui_rejection_feedback_file() {
-    let temp_dir = unique_test_dir("feedback");
-
-    // Simulate writing HUMAN_INPUT.md (as done by gate_approval.rs)
-    let task_id = "test-task-004";
-    let feedback = "Please fix the error handling in the main function.";
-    let human_input_path = temp_dir.join("HUMAN_INPUT.md");
-
-    let content = format!(
-        "# Gate Rejection Feedback\n\n\
-         **Task ID:** {}\n\
-         **Timestamp:** {}\n\n\
-         ## Feedback\n\n\
-         {}\n\n\
-         ## Instructions\n\n\
-         Please address the feedback above and re-run this phase of the pipeline.\n",
-        task_id,
-        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
-        feedback
-    );
-
-    fs::write(&human_input_path, content).expect("Failed to write HUMAN_INPUT.md");
-
-    // Verify file exists and contains feedback
-    assert!(human_input_path.exists(), "HUMAN_INPUT.md should exist");
-    let read_content =
-        fs::read_to_string(&human_input_path).expect("Failed to read HUMAN_INPUT.md");
-    assert!(
-        read_content.contains(task_id),
-        "HUMAN_INPUT.md should contain task_id"
-    );
-    assert!(
-        read_content.contains(feedback),
-        "HUMAN_INPUT.md should contain feedback"
-    );
-
-    // Clean up
-    fs::remove_dir_all(&temp_dir).ok();
-}
-
-#[test]
 fn test_ui_gate_decision_directory_creation() {
     let temp_dir = unique_test_dir("directory-creation");
     fs::remove_dir_all(&temp_dir).expect("Failed to remove temp dir before directory test");

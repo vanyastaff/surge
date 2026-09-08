@@ -74,7 +74,6 @@ use super::agents::AgentsScreen;
 use super::backlog::BacklogScreen;
 use super::fleet::FleetScreen;
 use super::flow::FlowScreen;
-use super::gate_approval::GateApprovalScreen;
 use super::inbox::InboxScreen;
 use super::memory::MemoryScreen;
 use super::roadmap::RoadmapScreen;
@@ -366,15 +365,4 @@ fn welcome_screen_renders() {
     let mut cx = TestAppContext::single();
     init_components(&mut cx);
     render_screen(&mut cx, |_, cx| WelcomeScreen::new(cx));
-}
-
-// ── `(task_id: &str, cx)` ─────────────────────────────────────────────────
-
-#[test]
-fn gate_approval_screen_renders() {
-    let mut cx = TestAppContext::single();
-    init_components(&mut cx);
-    render_screen(&mut cx, |_, cx| {
-        GateApprovalScreen::new("task-smoke-001", cx)
-    });
 }

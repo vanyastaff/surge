@@ -17,7 +17,6 @@ use crate::screens::agents::{AgentsAction, AgentsScreen};
 use crate::screens::backlog::{BacklogAction, BacklogScreen};
 use crate::screens::fleet::{FleetAction, FleetScreen};
 use crate::screens::flow::FlowScreen;
-use crate::screens::gate_approval::{GateApprovalScreen, GateDecision};
 use crate::screens::inbox::{InboxAction, InboxScreen};
 use crate::screens::memory::MemoryScreen;
 use crate::screens::roadmap::RoadmapScreen;
@@ -66,7 +65,6 @@ pub struct SurgeApp {
     agent_terminal: Option<Entity<AgentTerminalScreen>>,
     worktrees: Option<Entity<WorktreesScreen>>,
     settings: Option<Entity<SettingsScreen>>,
-    gate_approval: Option<Entity<GateApprovalScreen>>,
     /// Queued notifications to flush on next render (needs Window access).
     pending_notifications: Vec<gpui_component::notification::Notification>,
     /// Runs we already attached a per-run event subscription for.
@@ -162,7 +160,6 @@ impl SurgeApp {
             spec_wizard: None,
             worktrees: None,
             settings: None,
-            gate_approval: None,
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
             pending_run_selection: None,
@@ -586,7 +583,6 @@ impl SurgeApp {
         self.spec_wizard = None;
         self.worktrees = None;
         self.settings = None;
-        self.gate_approval = None;
 
         self.mode = AppMode::Project {
             _path: path.to_path_buf(),
@@ -934,20 +930,12 @@ impl SurgeApp {
         cx.notify();
     }
 
-    fn handle_gate_decision(&mut self, decision: GateDecision, cx: &mut Context<Self>) {
-        let task_id = decision.task_id.clone();
-        let approved = decision.approved;
-        self.write_gate_decision(task_id, approved, cx);
-        // Back to the constellation after a decision.
-        self.navigate(Screen::Fleet, cx);
-    }
-
     /// Persist an operator gate decision to `.surge/gates/<task>.json`
-    /// where the engine's gate poller picks it up. Shared by the Gate
-    /// Approval screen and the Inbox. Synchronous on purpose: it is a
-    /// tiny local write, and the operator must SEE a failure — a
-    /// fire-and-forget task that only logs would silently lose the
-    /// decision. Does not navigate; callers decide what happens next.
+    /// where the engine's gate poller picks it up. Called by the Inbox.
+    /// Synchronous on purpose: it is a tiny local write, and the operator
+    /// must SEE a failure — a fire-and-forget task that only logs would
+    /// silently lose the decision. Does not navigate; callers decide what
+    /// happens next.
     fn write_gate_decision(&mut self, task_id: String, approved: bool, cx: &mut Context<Self>) {
         let project_path = match &self.mode {
             AppMode::Project { _path, .. } => _path.clone(),
@@ -1000,7 +988,6 @@ impl SurgeApp {
             KeyBinding::new("ctrl-shift-p", SwitchProject, None),
             // Tasks
             KeyBinding::new("ctrl-n", NewTask, None),
-            KeyBinding::new("ctrl-enter", ApproveGate, None),
         ]);
     }
 
@@ -1204,19 +1191,6 @@ impl SurgeApp {
                     .settings
                     .get_or_insert_with(|| cx.new(|cx| SettingsScreen::new(state, cx)));
                 s.clone().into_any_element()
-            },
-            Screen::GateApproval => {
-                // Use task_detail_id or default demo task
-                let task_id = self.task_detail_id.as_deref().unwrap_or("task-001");
-                let gate_approval = self.gate_approval.get_or_insert_with(|| {
-                    let ga = cx.new(|cx| GateApprovalScreen::new(task_id, cx));
-                    cx.subscribe(&ga, |this: &mut Self, _ga, event: &GateDecision, cx| {
-                        this.handle_gate_decision(event.clone(), cx);
-                    })
-                    .detach();
-                    ga
-                });
-                gate_approval.clone().into_any_element()
             },
         }
     }
@@ -1586,21 +1560,6 @@ impl Render for SurgeApp {
                         }))
                         .on_action(cx.listener(|this, _: &NewTask, _w, cx| {
                             this.navigate(Screen::SpecWizard, cx)
-                        }))
-                        .on_action(cx.listener(|this, _: &ApproveGate, _w, cx| {
-                            // If on gate approval screen, approve the current gate
-                            if this.active_screen == Screen::GateApproval {
-                                if let Some(gate_approval) = &this.gate_approval {
-                                    gate_approval.update(cx, |ga, cx| {
-                                        // Trigger approve button click programmatically
-                                        cx.emit(GateDecision {
-                                            task_id: ga.task_id.clone(),
-                                            approved: true,
-                                        });
-                                        cx.notify();
-                                    });
-                                }
-                            }
                         }))
                         .child(
                             div()
