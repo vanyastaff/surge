@@ -155,10 +155,23 @@ fn select_default_registry_id(detected: &[surge_acp::DetectedAgent]) -> Option<S
             return Some((*preferred).to_string());
         }
     }
-    detected.first().map(|agent| {
-        debug!(agent_id = %agent.entry.id, "selected first detected agent");
-        agent.entry.id.clone()
-    })
+    // Fall through to whatever else was detected — but never to a runtime
+    // that was "detected" only because its launcher is on PATH. An npx- or
+    // uvx-only entry carries no `cli_binary`, so discovery resolves
+    // `npx`/`uvx` itself; on any machine with Node installed that reports
+    // the runtime as present when nothing of it is installed at all. Letting
+    // that win would make a developer-preview runtime the default agent on a
+    // clean machine, ahead of the installable `claude-acp` fallback the
+    // caller applies when this returns `None`.
+    detected
+        .iter()
+        .find(|agent| {
+            !(agent.entry.cli_binary.is_none() && (agent.entry.is_npx() || agent.entry.is_uvx()))
+        })
+        .map(|agent| {
+            debug!(agent_id = %agent.entry.id, "selected first detected agent");
+            agent.entry.id.clone()
+        })
 }
 
 fn emit_prerequisite_diagnostics(cwd: &Path, config: &SurgeConfig) {
@@ -521,5 +534,61 @@ fn approval_policy_value(policy: ApprovalPolicy) -> &'static str {
         ApprovalPolicy::Untrusted => "untrusted",
         ApprovalPolicy::OnRequest => "on-request",
         ApprovalPolicy::Never => "never",
+    }
+}
+
+#[cfg(test)]
+mod default_agent_selection_tests {
+    use super::select_default_registry_id;
+    use surge_acp::{DetectedAgent, Registry};
+
+    fn detected(id: &str) -> DetectedAgent {
+        let entry = Registry::builtin()
+            .find(id)
+            .unwrap_or_else(|| panic!("`{id}` must be a builtin registry entry"))
+            .clone();
+        DetectedAgent {
+            entry,
+            command_path: Some(format!("/usr/bin/{id}")),
+            detected_version: None,
+        }
+    }
+
+    #[test]
+    fn a_preferred_agent_wins_even_when_listed_later() {
+        let picked = select_default_registry_id(&[detected("gemini"), detected("claude-acp")]);
+        assert_eq!(picked.as_deref(), Some("claude-acp"));
+    }
+
+    /// `dsh-acp` carries no `cli_binary` and launches through `npx`, so
+    /// discovery "finds" it whenever Node is installed — which says nothing
+    /// about whether the runtime itself is present. Selecting it would make a
+    /// developer-preview runtime the default agent on a clean machine, ahead
+    /// of the installable `claude-acp` fallback the caller applies on `None`.
+    #[test]
+    fn a_launcher_only_runtime_never_becomes_the_default() {
+        let dsh = detected("dsh-acp");
+        assert!(
+            dsh.entry.cli_binary.is_none() && dsh.entry.is_npx(),
+            "fixture must be the launcher-only shape this rule is about"
+        );
+        assert_eq!(select_default_registry_id(&[dsh]), None);
+    }
+
+    /// The fall-through still works for a runtime that is genuinely installed
+    /// and simply not in `PREFERENCE` — the rule skips launcher-only
+    /// detections, not unfamiliar ones.
+    ///
+    /// The fixture has to be synthesised: every builtin entry carrying a
+    /// `cli_binary` today *is* the preference list, so this arm is otherwise
+    /// reachable only through a remote or custom registry entry.
+    #[test]
+    fn an_installed_runtime_outside_the_preference_list_still_wins() {
+        let mut installed = detected("dsh-acp");
+        installed.entry.id = "some-remote-agent".to_owned();
+        installed.entry.cli_binary = Some("some-remote-agent".to_owned());
+
+        let picked = select_default_registry_id(&[detected("dsh-acp"), installed]);
+        assert_eq!(picked.as_deref(), Some("some-remote-agent"));
     }
 }

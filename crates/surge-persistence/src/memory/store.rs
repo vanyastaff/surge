@@ -50,6 +50,13 @@ impl MemoryStore {
         }
 
         let conn = Connection::open(path)?;
+        // Same hardening the run and registry databases get. Without it this
+        // store runs on the default rollback journal with no busy timeout,
+        // and the several independent openers (memory writeback, project
+        // context, `surge memory audit`) serialise through an exclusive file
+        // lock — which on Windows, where locking is mandatory, can stall a
+        // run outright.
+        crate::runs::pragmas::apply(&conn, crate::runs::pragmas::MEMORY_STORE_PRAGMAS)?;
         let mut store = Self {
             conn,
             path: path.to_path_buf(),
