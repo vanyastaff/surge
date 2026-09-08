@@ -143,6 +143,64 @@ pub enum ValidationErrorKind {
     UnverifiedSuccessPath {
         terminal: NodeKey,
     },
+    /// A verification-authority node (declares an outcome with
+    /// [`LedgerEffect::Verified`](crate::node::LedgerEffect)) resolves to the
+    /// **same** agent runtime as an implementer node it verifies — a node
+    /// that declares [`LedgerEffect::ReadyForVerification`](crate::node::LedgerEffect)
+    /// and from which the verifier is reachable over [`EdgeKind::Forward`].
+    /// Warning, not error — the graph is structurally valid, but a
+    /// same-vendor verifier cannot catch that vendor's own blind spots,
+    /// which is exactly the failure mode cross-vendor verification exists to
+    /// close (spec item 58: `runtime` ноды-верификатора ≠ `runtime`
+    /// проверяемой ноды). The compared `runtime` is whatever
+    /// `Profile.runtime.agent_id` resolves to — declared explicitly by the
+    /// profile author or left at its serde default — either way it is what
+    /// the engine actually dispatches on, so the finding is true regardless
+    /// of which one produced it.
+    ///
+    /// Only [`validate_with_resolver`] can raise this — deciding "same
+    /// runtime" needs [`ReferenceResolver::profile_runtime`], which the
+    /// syntactic [`validate`] entry point has no resolver to call.
+    /// `profile_runtime` returning `None` (profile does not resolve, or the
+    /// resolver cannot answer runtime questions at all) never counts as a
+    /// match — unknown is not "same".
+    ///
+    /// # What counts as the implementer, and the one caveat
+    /// The implementer is the verifier's direct `EdgeKind::Forward`
+    /// predecessor — graph shape, which every flow carries. Keying it on a
+    /// declared `ready_for_verification` outcome instead would make the rule
+    /// inert: no flow in this repository declares that ledger effect, names
+    /// an outcome that way, or binds the `implementer@2.0` profile the
+    /// flow-generator prompt describes. A node declaring *both*
+    /// `ReadyForVerification` and `Verified` is additionally reported
+    /// against itself — it verifies its own work, and needs no edge to say so.
+    ///
+    /// Caveat: top-level only. `agent_runtime` answers `None` for any
+    /// non-`Agent` node, so a verifier reached only through
+    /// `node_is_verification_gate`'s transitive Loop/Subgraph descent never
+    /// pairs. W4 still uses that descent correctly.
+    ///
+    /// Measured against the bundled set on 2026-09-07: **4 of 13** flows
+    /// raise this — `linear-3`, `linear-with-review`, `bug-fix`, `refactor`
+    /// — because every bundled profile resolves to one runtime. It is a
+    /// finding about what we ship, not noise.
+    ///
+    /// # Why the verifier gets artifacts, never the transcript
+    /// A cross-vendor verifier's input is meant to be the diff, the
+    /// originating spec with its constraints intact, and the evidence
+    /// bundle — never the implementer's transcript (spec item 74). Per-
+    /// boundary hallucination escape was measured at 24.6% → 48.3% → 89.3%
+    /// as the same claim crosses one, two, then three narrative hand-offs
+    /// (arXiv:2608.14588); the first boundary is still 75.4% catchable, the
+    /// last has effectively erased the original checkable claim. That is the
+    /// argument for a structured-artifact contract enforced at flow-load
+    /// time, not for widening this rule into a transcript audit — the
+    /// artifact shape itself is a separate, later deliverable.
+    SameRuntimeVerification {
+        implementer: NodeKey,
+        verifier: NodeKey,
+        runtime: String,
+    },
     /// An `Agent` node's `custom_fields["skills"]` does not deserialize as a
     /// list of `surge_core::skill::SkillRef` — a graph-authoring mistake,
     /// caught here so it fails the run at load time, before a worktree is
@@ -175,7 +233,8 @@ impl ValidationErrorKind {
             Self::EscalateTargetNotHumanOrNotify
             | Self::OrphanSubgraph { .. }
             | Self::NotifyFailMissingUndeliverable { .. }
-            | Self::UnverifiedSuccessPath { .. } => Severity::Warning,
+            | Self::UnverifiedSuccessPath { .. }
+            | Self::SameRuntimeVerification { .. } => Severity::Warning,
 
             // Errors — graph is structurally invalid or will misbehave at runtime.
             Self::StartNodeMissing
@@ -229,6 +288,27 @@ pub trait ReferenceResolver {
     fn template_exists(&self, name: &str) -> bool;
     /// Returns true when the named-agent registry contains this id.
     fn named_agent_exists(&self, id: &str) -> bool;
+
+    /// Returns the resolved profile's **canonical** agent runtime id — e.g.
+    /// `"claude-acp"`, `"codex-acp"` — the identity
+    /// [`ValidationErrorKind::SameRuntimeVerification`] compares between an
+    /// implementer and its verifier. Implementors MUST normalize through the
+    /// same alias table the engine dispatches through (`surge_acp::Registry`
+    /// in production), not return `Profile.runtime.agent_id` verbatim: the
+    /// registry maps several spellings to one runtime (`"claude"` and
+    /// `"claude-code"` both → `"claude-acp"`; `"codex"` and `"codex-cli"`
+    /// both → `"codex-acp"`), and two profiles naming the same runtime under
+    /// different aliases must compare equal here or this rule stays silent
+    /// on exactly the case it exists to catch. `None` means *unknown*: the
+    /// profile does not resolve, or this resolver cannot answer runtime
+    /// questions at all. Callers must never treat `None` as equal to
+    /// anything — unknown is not "same".
+    ///
+    /// Defaulted so every existing implementor keeps compiling unchanged;
+    /// only a resolver backed by a real profile registry should override it.
+    fn profile_runtime(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Permissive resolver that accepts every reference. Useful for tests and
@@ -289,7 +369,10 @@ pub fn validate(graph: &Graph) -> Result<Vec<ValidationError>, Vec<ValidationErr
 /// templates, named agents) through the supplied [`ReferenceResolver`]. The
 /// orchestrator wires a real resolver backed by the project profile registry;
 /// the syntactic [`validate`] entry point is left untouched for callers that
-/// have no registry available.
+/// have no registry available. Also runs
+/// [`ValidationErrorKind::SameRuntimeVerification`] (W5), the only rule that
+/// needs [`ReferenceResolver::profile_runtime`] rather than just
+/// `profile_exists`.
 ///
 /// # Errors
 /// Same shape as [`validate`]: returns `Err(findings)` when at least one
@@ -304,6 +387,7 @@ pub fn validate_with_resolver(
         Err(errs) => errs,
     };
     apply_reference_checks(graph, resolver, &mut findings);
+    warning_w5_same_runtime_verification(graph, resolver, &mut findings);
 
     let has_error = findings
         .iter()
@@ -941,13 +1025,91 @@ fn rule_17_node_key_uniqueness(graph: &Graph, out: &mut Vec<ValidationError>) {
     }
 }
 
+/// Outcome of visiting one node during [`walk_forward_reachable`].
+enum ForwardStep {
+    /// Keep expanding this node's `EdgeKind::Forward` successors.
+    Continue,
+    /// Do not expand past this node — it absorbs the path (W4's
+    /// verification-gate semantics) — but keep processing the rest of the
+    /// frontier.
+    Absorb,
+    /// Stop the entire walk immediately (W4's "one warning per graph,
+    /// anchored at the first match" semantics).
+    Halt,
+}
+
+/// Build the outer graph's forward-adjacency map once: each node to its
+/// `EdgeKind::Forward` successors. [`walk_forward_reachable`] takes this by
+/// reference so a caller that walks from several start nodes in one pass
+/// (W5, once per implementer) builds it once instead of rescanning
+/// `graph.edges` — O(E) — on every visited node.
+fn forward_adjacency(graph: &Graph) -> std::collections::HashMap<NodeKey, Vec<NodeKey>> {
+    let mut adjacency: std::collections::HashMap<NodeKey, Vec<NodeKey>> =
+        std::collections::HashMap::new();
+    for edge in &graph.edges {
+        if edge.kind == EdgeKind::Forward {
+            adjacency
+                .entry(edge.from.node.clone())
+                .or_default()
+                .push(edge.to.clone());
+        }
+    }
+    adjacency
+}
+
+/// Stack-based depth-first walk of nodes forward-reachable from `start`
+/// (inclusive), over `adjacency`'s `EdgeKind::Forward` edges — the one
+/// traversal shared by [`warning_w4_unverified_success`] and
+/// [`warning_w5_same_runtime_verification`], which differ only in what they
+/// do at a verification gate (W4 absorbs the path there; W5 keeps
+/// expanding, since every downstream verifier is a candidate pairing) and
+/// whether they stop at the first match (W4 does; W5 does not) —
+/// `on_visit`'s [`ForwardStep`] result expresses both per visited node.
+/// Nodes named by an edge but missing from `graph.nodes` are silently
+/// skipped (this walk runs *during* validation, before such dangling
+/// references are themselves reported).
+///
+/// Complexity: O(V + E) per call given a reused `adjacency` — each node is
+/// expanded at most once and each adjacency entry consumed at most once,
+/// where V/E are the **outer** graph's node/edge counts; subgraph bodies are
+/// never visited (see the "top-level only" note on
+/// [`warning_w5_same_runtime_verification`]).
+fn walk_forward_reachable(
+    graph: &Graph,
+    start: &NodeKey,
+    adjacency: &std::collections::HashMap<NodeKey, Vec<NodeKey>>,
+    mut on_visit: impl FnMut(&NodeKey, &crate::node::Node) -> ForwardStep,
+) {
+    let mut visited: std::collections::HashSet<NodeKey> = std::collections::HashSet::new();
+    let mut stack = vec![start.clone()];
+    while let Some(key) = stack.pop() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        let Some(node) = graph.nodes.get(&key) else {
+            continue;
+        };
+        match on_visit(&key, node) {
+            ForwardStep::Halt => return,
+            ForwardStep::Absorb => continue,
+            ForwardStep::Continue => {
+                if let Some(successors) = adjacency.get(&key) {
+                    stack.extend(successors.iter().cloned());
+                }
+            },
+        }
+    }
+}
+
 /// W4 — warn when a `Terminal { Success }` is reachable from `start` without
 /// passing a verification-authority node.
 ///
-/// Forward BFS from `start`; a verification gate absorbs the path (its
-/// downstream is considered verified, so we do not expand past it). If a
-/// success terminal is still reached, some run path can declare "done" without
-/// a verifier — one warning per graph, anchored at the first such terminal.
+/// Forward DFS from `start` via [`walk_forward_reachable`]; a verification
+/// gate absorbs the path (its downstream is considered verified, so
+/// expansion does not continue past it). If a success terminal is still
+/// reached, some run path can declare "done" without a verifier — one
+/// warning per graph, anchored at the first such terminal (the walk halts
+/// there, by design).
 fn warning_w4_unverified_success(graph: &Graph, out: &mut Vec<ValidationError>) {
     use crate::node::NodeKind;
     use std::collections::HashSet;
@@ -955,18 +1117,11 @@ fn warning_w4_unverified_success(graph: &Graph, out: &mut Vec<ValidationError>) 
     if !graph.nodes.contains_key(&graph.start) {
         return;
     }
-    let mut visited: HashSet<NodeKey> = HashSet::new();
-    let mut frontier = vec![graph.start.clone()];
-    while let Some(key) = frontier.pop() {
-        if !visited.insert(key.clone()) {
-            continue;
-        }
-        let Some(node) = graph.nodes.get(&key) else {
-            continue;
-        };
+    let adjacency = forward_adjacency(graph);
+    walk_forward_reachable(graph, &graph.start, &adjacency, |key, node| {
         // A verification gate absorbs the path — stop expanding here.
         if node_is_verification_gate(graph, node, &mut HashSet::new()) {
-            continue;
+            return ForwardStep::Absorb;
         }
         if node.kind() == NodeKind::Terminal && is_success_terminal(node) {
             out.push(ValidationError {
@@ -980,14 +1135,10 @@ fn warning_w4_unverified_success(graph: &Graph, out: &mut Vec<ValidationError>) 
                     key.as_str()
                 ),
             });
-            return;
+            return ForwardStep::Halt;
         }
-        for edge in &graph.edges {
-            if edge.from.node == key && edge.kind == EdgeKind::Forward {
-                frontier.push(edge.to.clone());
-            }
-        }
-    }
+        ForwardStep::Continue
+    });
 }
 
 fn is_success_terminal(node: &crate::node::Node) -> bool {
@@ -1036,6 +1187,207 @@ fn subgraph_has_verification_gate(
         .nodes
         .values()
         .any(|node| node_is_verification_gate(graph, node, seen))
+}
+
+/// Returns `node`'s resolved agent runtime through `resolver`, or `None`
+/// when `node` is not an `Agent` node (no profile to resolve) or its
+/// profile does not resolve. `None` is *unknown* —
+/// [`warning_w5_same_runtime_verification`] must never treat it as equal to
+/// anything. A `Loop`/`Subgraph` container node returns `None` here even
+/// when [`node_is_verification_gate`] reports it `true` (because its body
+/// contains a verifier) — a container is not a `NodeConfig::Agent` and has
+/// no single profile to resolve; see
+/// [`warning_w5_same_runtime_verification`]'s "top-level only" doc for what
+/// that means for the rule.
+///
+/// `cache` memoizes by profile string for the lifetime of one
+/// [`warning_w5_same_runtime_verification`] pass: in production
+/// `resolver.profile_runtime` is backed by `ProfileRegistry::resolve`, a
+/// full extends-chain walk plus merge plus clone per call, and the same
+/// profile is otherwise looked up once as an implementer and again every
+/// time it is visited as a candidate verifier.
+fn agent_runtime(
+    node: &crate::node::Node,
+    resolver: &dyn ReferenceResolver,
+    cache: &mut std::collections::HashMap<String, Option<String>>,
+) -> Option<String> {
+    let NodeConfig::Agent(cfg) = &node.config else {
+        return None;
+    };
+    let profile_str = cfg.profile.as_str();
+    if let Some(cached) = cache.get(profile_str) {
+        return cached.clone();
+    }
+    let runtime = resolver.profile_runtime(profile_str);
+    cache.insert(profile_str.to_owned(), runtime.clone());
+    runtime
+}
+
+/// W5 — warn when a verification-authority node resolves to the same agent
+/// runtime as an implementer node it verifies (spec item 58).
+///
+/// For each node declaring a `LedgerEffect::ReadyForVerification` outcome,
+/// forward-DFS from it via [`walk_forward_reachable`] — inclusive of the
+/// node itself, so a node that is both implementer and verifier
+/// (self-verification) is compared against itself — and flag every
+/// [`node_is_verification_gate`] reached whose resolved runtime matches the
+/// implementer's. Continues past a matched (or unmatched) gate rather than
+/// absorbing the path, unlike [`warning_w4_unverified_success`]: every
+/// verifier downstream of an implementer is a candidate pairing, not just
+/// the first one reached. A profile that does not resolve on either side
+/// (`resolver.profile_runtime` → `None`) is skipped, never treated as a
+/// match.
+///
+/// # Top-level only
+/// Both halves of this rule stop at the outer graph. The implementer set
+/// below is collected from `graph.nodes` only — a `Subgraph`/`Loop` body's
+/// own `nodes` map (`Subgraph::nodes`) is never inspected, so an implementer
+/// living inside a body can never be found. The walk itself follows
+/// `graph.edges` only — a body's `edges` are a disjoint list on
+/// [`Subgraph`](crate::graph::Subgraph), never merged into the outer edge
+/// set — so even a top-level implementer's walk cannot cross into a body.
+/// And when a Loop/Subgraph *container* node standing in for that body's
+/// execution is visited, [`node_is_verification_gate`] correctly reports it
+/// as a gate (it resolves transitively into the body for that check alone —
+/// see its own doc), but [`agent_runtime`] on that same container always
+/// answers `None`, so the transitive gate result can never contribute a
+/// runtime match here. That is left deliberately unexploited rather than
+/// guessing which of a body's — possibly several, possibly
+/// differently-runtimed — `Agent` nodes should stand in for the container's
+/// runtime; answering that is a design decision that would extend the rule,
+/// not a bug fix within it.
+///
+/// Only reachable via [`validate_with_resolver`] — needs a real
+/// [`ReferenceResolver`] to answer runtime questions at all.
+///
+/// # Inert until flows declare an implementer outcome
+/// As of this writing, no flow in the tree — none of the bundled profiles'
+/// flows, none the generator writes — declares an outcome with
+/// `ledger_effect = "ready_for_verification"` (only `verified` and
+/// `failed_verification` appear anywhere), so `implementers` below is always
+/// empty and this rule never fires on a real graph today. That is an open
+/// product decision (whether and how a flow should mark an implementer
+/// outcome), not something to paper over with a fallback implementer here:
+/// once flows do mark one, every bundled profile resolves to a single agent
+/// runtime today, so the rule will start firing broadly the moment it can
+/// see any.
+fn warning_w5_same_runtime_verification(
+    graph: &Graph,
+    resolver: &dyn ReferenceResolver,
+    out: &mut Vec<ValidationError>,
+) {
+    use std::collections::{HashMap, HashSet};
+
+    // The implementer is the node that hands work to the verifier: its
+    // direct `EdgeKind::Forward` predecessor.
+    //
+    // Keying the implementer side on `LedgerEffect::ReadyForVerification`
+    // instead would make this rule inert. Verified 2026-09-07 across the
+    // whole tree: no flow declares that effect (only `verified` and
+    // `failed_verification` appear anywhere), no flow carries an outcome
+    // *named* `ready_for_verification`, and no flow binds `implementer@2.0`
+    // — the profile `flow-generator-1.0.toml` names when it describes that
+    // convention. Graph shape is the one signal every flow actually
+    // carries, and "the node whose work this verifies" is what an incoming
+    // forward edge means.
+    let mut predecessors: HashMap<&NodeKey, Vec<&NodeKey>> = HashMap::new();
+    for edge in &graph.edges {
+        if edge.kind == EdgeKind::Forward {
+            predecessors
+                .entry(&edge.to)
+                .or_default()
+                .push(&edge.from.node);
+        }
+    }
+
+    let mut runtime_cache: HashMap<String, Option<String>> = HashMap::new();
+    let mut reported: HashSet<(NodeKey, NodeKey)> = HashSet::new();
+
+    for (verifier_key, verifier_node) in &graph.nodes {
+        if !node_is_verification_gate(graph, verifier_node, &mut HashSet::new()) {
+            continue;
+        }
+        // Top-level only: `agent_runtime` answers `None` for any
+        // non-`Agent` node, so a gate detected through
+        // `node_is_verification_gate`'s transitive Loop/Subgraph descent
+        // contributes nothing here. W4 still uses that descent correctly.
+        let Some(verifier_runtime) = agent_runtime(verifier_node, resolver, &mut runtime_cache)
+        else {
+            continue;
+        };
+        // A node that declares both `ReadyForVerification` and `Verified`
+        // verifies its own work — the same runtime by construction, and no
+        // edge is needed to say so. Rare (nothing in the tree authors it),
+        // but when someone does, it is an explicit authored statement and
+        // the worst shape this rule exists to catch.
+        if verifier_node
+            .declared_outcomes
+            .iter()
+            .any(|o| o.ledger_effect == crate::node::LedgerEffect::ReadyForVerification)
+            && reported.insert((verifier_key.clone(), verifier_key.clone()))
+        {
+            out.push(ValidationError {
+                kind: ValidationErrorKind::SameRuntimeVerification {
+                    implementer: verifier_key.clone(),
+                    verifier: verifier_key.clone(),
+                    runtime: verifier_runtime.clone(),
+                },
+                location: ErrorLocation::Node {
+                    id: verifier_key.clone(),
+                },
+                message: format!(
+                    "node `{}` both implements and verifies its own work on agent \
+                     runtime `{}` (declared or defaulted) — a verifier cannot be \
+                     its own check",
+                    verifier_key.as_str(),
+                    verifier_runtime
+                ),
+            });
+        }
+
+        let Some(incoming) = predecessors.get(verifier_key) else {
+            continue;
+        };
+        for implementer_key in incoming {
+            if *implementer_key == verifier_key {
+                continue;
+            }
+            let Some(implementer_node) = graph.nodes.get(*implementer_key) else {
+                continue;
+            };
+            let Some(implementer_runtime) =
+                agent_runtime(implementer_node, resolver, &mut runtime_cache)
+            else {
+                continue;
+            };
+            if implementer_runtime != verifier_runtime {
+                continue;
+            }
+            // Two outcomes of one node can both route into the verifier;
+            // that is one finding about one pair, not two.
+            if !reported.insert(((*implementer_key).clone(), verifier_key.clone())) {
+                continue;
+            }
+            out.push(ValidationError {
+                kind: ValidationErrorKind::SameRuntimeVerification {
+                    implementer: (*implementer_key).clone(),
+                    verifier: verifier_key.clone(),
+                    runtime: verifier_runtime.clone(),
+                },
+                location: ErrorLocation::Node {
+                    id: verifier_key.clone(),
+                },
+                message: format!(
+                    "verifier `{}` and implementer `{}` both resolve to agent \
+                     runtime `{}` (declared or defaulted) — same-vendor \
+                     verification cannot catch that vendor's own blind spots",
+                    verifier_key.as_str(),
+                    implementer_key.as_str(),
+                    verifier_runtime
+                ),
+            });
+        }
+    }
 }
 
 fn warning_w1_escalate_target(graph: &Graph, out: &mut Vec<ValidationError>) {
@@ -2714,6 +3066,316 @@ mod w4_tests {
         assert!(
             w4_warnings(&g).is_empty(),
             "a loop whose body verifies should gate the outer success terminal"
+        );
+    }
+}
+
+// ── W5: same-runtime verification ────────────────────────────────
+
+#[cfg(test)]
+mod w5_tests {
+    use super::*;
+    use crate::agent_config::AgentConfig;
+    use crate::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
+    use crate::graph::{Graph, GraphMetadata, SCHEMA_VERSION};
+    use crate::keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey};
+    use crate::node::{LedgerEffect, Node, NodeConfig, OutcomeDecl, Position};
+    use crate::terminal_config::{TerminalConfig, TerminalKind};
+    use std::collections::{BTreeMap, HashMap};
+
+    /// Resolver double: profiles always exist, but runtime is only known
+    /// for names present in `runtimes` — everything else is *unknown*
+    /// (`None`), matching a real resolver's behavior for an unresolved
+    /// profile.
+    struct RuntimeResolver {
+        runtimes: HashMap<&'static str, &'static str>,
+    }
+
+    impl ReferenceResolver for RuntimeResolver {
+        fn profile_exists(&self, _: &str) -> bool {
+            true
+        }
+        fn template_exists(&self, _: &str) -> bool {
+            true
+        }
+        fn named_agent_exists(&self, _: &str) -> bool {
+            true
+        }
+        fn profile_runtime(&self, name: &str) -> Option<String> {
+            self.runtimes.get(name).map(|runtime| (*runtime).to_owned())
+        }
+    }
+
+    fn agent_node(key: &str, profile: &str, effects: &[LedgerEffect]) -> Node {
+        Node {
+            id: NodeKey::try_from(key).unwrap(),
+            position: Position::default(),
+            declared_outcomes: effects
+                .iter()
+                .enumerate()
+                .map(|(i, effect)| OutcomeDecl {
+                    id: OutcomeKey::try_from(format!("o{i}")).unwrap(),
+                    description: "ok".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: *effect,
+                })
+                .collect(),
+            config: NodeConfig::Agent(AgentConfig {
+                profile: ProfileKey::try_from(profile).unwrap(),
+                prompt_overrides: None,
+                tool_overrides: None,
+                sandbox_override: None,
+                approvals_override: None,
+                bindings: vec![],
+                rules_overrides: None,
+                limits: Default::default(),
+                hooks: vec![],
+                custom_fields: Default::default(),
+            }),
+        }
+    }
+
+    fn success_terminal(key: &str) -> Node {
+        Node {
+            id: NodeKey::try_from(key).unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![],
+            config: NodeConfig::Terminal(TerminalConfig {
+                kind: TerminalKind::Success,
+                message: None,
+            }),
+        }
+    }
+
+    fn edge(id: &str, from: &str, from_outcome: &str, to: &str) -> Edge {
+        Edge {
+            id: EdgeKey::try_from(id).unwrap(),
+            from: PortRef {
+                node: NodeKey::try_from(from).unwrap(),
+                outcome: OutcomeKey::try_from(from_outcome).unwrap(),
+            },
+            to: NodeKey::try_from(to).unwrap(),
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        }
+    }
+
+    fn graph(start: &str, nodes: Vec<Node>, edges: Vec<Edge>) -> Graph {
+        let mut map = BTreeMap::new();
+        for node in nodes {
+            map.insert(node.id.clone(), node);
+        }
+        Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "w5".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: NodeKey::try_from(start).unwrap(),
+            nodes: map,
+            edges,
+            subgraphs: BTreeMap::new(),
+        }
+    }
+
+    fn w5_warnings(
+        graph: &Graph,
+        resolver: &dyn ReferenceResolver,
+    ) -> Vec<(NodeKey, NodeKey, String)> {
+        let mut out = Vec::new();
+        warning_w5_same_runtime_verification(graph, resolver, &mut out);
+        out.into_iter()
+            .filter_map(|f| match f.kind {
+                ValidationErrorKind::SameRuntimeVerification {
+                    implementer,
+                    verifier,
+                    runtime,
+                } => Some((implementer, verifier, runtime)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a1_different_runtimes_no_warning() {
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "codex"),
+            ]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+            ],
+            vec![edge("e", "impl_1", "o0", "verify_1")],
+        );
+        assert!(w5_warnings(&g, &resolver).is_empty());
+    }
+
+    #[test]
+    fn a2_same_runtime_warns_naming_both_nodes_and_runtime() {
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "claude-code"),
+            ]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+            ],
+            vec![edge("e", "impl_1", "o0", "verify_1")],
+        );
+        assert_eq!(
+            w5_warnings(&g, &resolver),
+            vec![(
+                NodeKey::try_from("impl_1").unwrap(),
+                NodeKey::try_from("verify_1").unwrap(),
+                "claude-code".to_owned(),
+            )]
+        );
+    }
+
+    #[test]
+    fn a3_unresolved_verifier_profile_does_not_warn() {
+        // implementer resolves; verifier is unknown to the resolver — must
+        // not be treated as "same runtime as anything".
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([("implementer@1.0", "claude-code")]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+            ],
+            vec![edge("e", "impl_1", "o0", "verify_1")],
+        );
+        assert!(w5_warnings(&g, &resolver).is_empty());
+    }
+
+    #[test]
+    fn a4_unresolved_implementer_profile_does_not_warn() {
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([("verifier@1.0", "claude-code")]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+            ],
+            vec![edge("e", "impl_1", "o0", "verify_1")],
+        );
+        assert!(w5_warnings(&g, &resolver).is_empty());
+    }
+
+    #[test]
+    fn a5_no_op_resolver_never_warns() {
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+            ],
+            vec![edge("e", "impl_1", "o0", "verify_1")],
+        );
+        assert!(
+            w5_warnings(&g, &NoOpResolver).is_empty(),
+            "NoOpResolver's default profile_runtime is None; unknown must never warn"
+        );
+    }
+
+    #[test]
+    fn a6_self_verifying_node_warns_against_itself() {
+        // One node declares both ready_for_verification and verified —
+        // authorable today, no rule forbids it. It is the same runtime by
+        // construction, so it must warn even with no downstream edge at all.
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([("implementer@1.0", "claude-code")]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![agent_node(
+                "impl_1",
+                "implementer@1.0",
+                &[LedgerEffect::ReadyForVerification, LedgerEffect::Verified],
+            )],
+            vec![],
+        );
+        assert_eq!(
+            w5_warnings(&g, &resolver),
+            vec![(
+                NodeKey::try_from("impl_1").unwrap(),
+                NodeKey::try_from("impl_1").unwrap(),
+                "claude-code".to_owned(),
+            )]
+        );
+    }
+
+    #[test]
+    fn fires_through_public_validate_with_resolver_entry_point() {
+        let resolver = RuntimeResolver {
+            runtimes: HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "claude-code"),
+            ]),
+        };
+        let g = graph(
+            "impl_1",
+            vec![
+                agent_node(
+                    "impl_1",
+                    "implementer@1.0",
+                    &[LedgerEffect::ReadyForVerification],
+                ),
+                agent_node("verify_1", "verifier@1.0", &[LedgerEffect::Verified]),
+                success_terminal("end"),
+            ],
+            vec![
+                edge("e1", "impl_1", "o0", "verify_1"),
+                edge("e2", "verify_1", "o0", "end"),
+            ],
+        );
+        let warnings = validate_with_resolver(&g, &resolver)
+            .expect("a Warning-severity finding must not turn this into Err");
+        assert!(
+            warnings.iter().any(|f| matches!(
+                &f.kind,
+                ValidationErrorKind::SameRuntimeVerification { runtime, .. }
+                    if runtime == "claude-code"
+            )),
+            "expected SameRuntimeVerification via validate_with_resolver, got {warnings:?}"
         );
     }
 }

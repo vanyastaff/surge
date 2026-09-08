@@ -323,7 +323,7 @@ impl Engine {
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
-        use crate::engine::validate::validate_for_m6;
+        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
         use tokio::sync::broadcast;
 
         tracing::info!(
@@ -334,7 +334,14 @@ impl Engine {
             "entered engine path",
         );
 
-        validate_for_m6(&graph)?;
+        // A profile registry lets validation resolve profile references and
+        // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
+        // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
+        // impl. No registry keeps today's resolver-free behavior unchanged.
+        match self.config.profile_registry.as_ref() {
+            Some(registry) => validate_for_m6_with_resolver(&graph, registry.as_ref())?,
+            None => validate_for_m6(&graph)?,
+        }
 
         run_config.memory_store_path =
             self.resolve_memory_store_path(run_config.memory_store_path.take());

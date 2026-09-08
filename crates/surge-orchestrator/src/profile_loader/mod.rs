@@ -10,6 +10,9 @@
 //!   `resolve`, `list`. Resolution order is **versioned → latest →
 //!   bundled**, with version match canonical against
 //!   `Profile.role.version` (filename is just a hint).
+//! - `resolver` implements `surge_core::ReferenceResolver` for
+//!   [`registry::ProfileRegistry`] — the production seam graph validation
+//!   uses to resolve profile references and agent-runtime identity.
 //!
 //! Plumbed into the engine via `EngineConfig::profile_registry` and
 //! consumed by the agent stage to derive `AgentKind` from
@@ -18,6 +21,7 @@
 pub mod disk;
 pub mod paths;
 pub mod registry;
+mod resolver;
 
 pub use disk::DiskProfileSet;
 pub use paths::{profiles_dir, surge_home};

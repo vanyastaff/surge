@@ -158,7 +158,15 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 
 /// Run [`surge_core::validate`] and surface every `Severity::Error` finding
 /// as a single [`EngineError::GraphInvalid`]. `Severity::Warning` findings
-/// (e.g. `UnverifiedSuccessPath`) do not block the run.
+/// (e.g. `UnverifiedSuccessPath`) do not block the run, but — unlike before
+/// this function logged them — they are no longer silently dropped: each is
+/// emitted as a `tracing::warn!` event under the `engine::validate` target,
+/// so an operator watching the run's logs sees the same findings
+/// `surge_core::validate` produced instead of losing them at this one call
+/// site. `surge_core::validate` itself returns `Ok(warnings)` when there are
+/// no errors — a bug here previously matched only the `Err` arm, so the
+/// entire `Ok` branch (a graph with warnings but no errors — the common
+/// case) never even inspected its findings.
 ///
 /// `UnverifiedSuccessPath` specifically is a *design-time* lint — could this
 /// graph's shape let some run declare success without a verifier, considered
@@ -177,20 +185,28 @@ pub fn validate_for_m6(graph: &Graph) -> Result<(), EngineError> {
 /// still makes its own (second, cheap) call into `surge_core::validate_with_resolver`
 /// for the reference-specific findings `validate_for_m6` cannot see.
 fn apply_surge_core_validation(graph: &Graph) -> Result<(), EngineError> {
-    let Err(findings) = surge_core::validate(graph) else {
-        return Ok(());
-    };
-    let messages: Vec<String> = findings
-        .into_iter()
-        .filter(|f| f.kind.severity() == surge_core::Severity::Error)
-        .map(|f| format!("[structural] {}", f.message))
-        .collect();
-    if messages.is_empty() {
+    let (Ok(findings) | Err(findings)) = surge_core::validate(graph);
+
+    let mut error_messages: Vec<String> = Vec::new();
+    for finding in findings {
+        if finding.kind.severity() == surge_core::Severity::Error {
+            error_messages.push(format!("[structural] {}", finding.message));
+            continue;
+        }
+        tracing::warn!(
+            target: "engine::validate",
+            kind = ?finding.kind,
+            location = ?finding.location,
+            "{}",
+            finding.message,
+        );
+    }
+    if error_messages.is_empty() {
         return Ok(());
     }
     Err(EngineError::GraphInvalid(format!(
         "surge_core::validate failed: {}",
-        messages.join("; ")
+        error_messages.join("; ")
     )))
 }
 
@@ -353,31 +369,21 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 }
 
 /// `validate_for_m6` plus the `surge_core::ReferenceResolver` lookups for
-/// profiles, templates, and named agents.
+/// profiles, templates, named agents, and same-runtime verification.
 ///
 /// As of Ticket 18, `validate_for_m6` itself already runs the full
 /// `surge_core::validate` structural rule set (see that function's docs),
 /// so the *additional* value this wrapper adds is narrower than its name
-/// suggests: only the three resolver-backed reference checks below.
+/// suggests: only the resolver-backed checks below.
 ///
-/// # ⚠️ These three rules are inert in production today
-/// `ProfileNotFound`, `TemplateNotFound`, and `NamedAgentNotFound` only ever
-/// fire when called with a `ReferenceResolver` that actually knows the
-/// registry contents. Every `impl ReferenceResolver` in this workspace is
-/// test-only (`surge-core`'s own test module, `surge-cli/tests/`,
-/// `surge-orchestrator/tests/`) — there is no `ProfileRegistry`-backed
-/// production implementation, and nothing in the engine's production start
-/// path (`Engine::start_run`, `commands/engine.rs::run_command`) calls this
-/// function at all; they call the resolver-free `validate_for_m6`. Building
-/// that adapter (wrapping `crate::profile_loader::ProfileRegistry` — plus
-/// whatever registries would answer `template_exists`/`named_agent_exists`,
-/// neither of which exists yet either) and wiring it into `Engine::start_run`
-/// is a separate, larger task: it is out of Ticket 18's declared zone
-/// (`engine/validate.rs`, `engine/bootstrap.rs`, `commands/engine.rs` — a
-/// resolver adapter is a new production type, not a call-site wiring) and
-/// deserves its own measurement pass the same way this ticket demanded one,
-/// since flipping it on can start rejecting graphs whose profile references
-/// have never been checked before.
+/// `Engine::start_run` calls this instead of the resolver-free
+/// `validate_for_m6` whenever `self.config.profile_registry` is `Some`;
+/// `ProfileRegistry`'s `ReferenceResolver` impl (`profile_loader::resolver`)
+/// is the production adapter passed in. That adapter actually answers two
+/// of the four resolver-backed rules — `ProfileNotFound` and
+/// `SameRuntimeVerification` (Warning) — while `TemplateNotFound` /
+/// `NamedAgentNotFound` stay permissively silent: `ProfileRegistry` has no
+/// template or named-agent registry to check against (ticket 22).
 ///
 /// # Errors
 /// - All `validate_for_m6` errors (M6-specific checks plus the full
@@ -387,9 +393,18 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 ///   `validate_for_m6` above already ran the structural rules and returned
 ///   early on any failure, only the resolver-specific diagnostics
 ///   (`ProfileNotFound`, `TemplateNotFound`, `NamedAgentNotFound`) can still
-///   surface here. Tagged with a `[ref]` prefix (`[structural]` for the
-///   defensive fallback arm, which today cannot be reached for the reason
-///   above) so callers can distinguish them at a glance.
+///   surface here as errors. Tagged with a `[ref]` prefix (`[structural]`
+///   for the defensive fallback arm, which today cannot be reached for the
+///   reason above) so callers can distinguish them at a glance.
+/// - `Severity::Warning` findings the resolver pass adds beyond what
+///   `validate_for_m6` already saw (currently only `SameRuntimeVerification`)
+///   never turn into an `Err` here — each is logged via `tracing::warn!`
+///   under the `engine::validate` target rather than silently dropped, the
+///   same way the private helper `validate_for_m6` calls for the structural
+///   pass does. See this function's body comment for why only the
+///   *resolver-added* findings are re-examined here at all: logging every
+///   finding `surge_core::validate_with_resolver` returns would re-log the
+///   structural (W1–W4) findings `validate_for_m6` already logged once.
 pub fn validate_for_m6_with_resolver(
     graph: &Graph,
     resolver: &dyn surge_core::ReferenceResolver,
@@ -397,30 +412,60 @@ pub fn validate_for_m6_with_resolver(
     validate_for_m6(graph)?;
 
     // `validate_for_m6` above already ran `surge_core::validate`'s
-    // structural rules via `apply_surge_core_validation` and returned early
-    // on any Severity::Error finding, so `validate_with_resolver`'s own
-    // (redundant, cheap) structural pass below cannot contribute a new
-    // error — only the resolver-specific reference checks can.
-    if let Err(findings) = surge_core::validate_with_resolver(graph, resolver) {
-        let mut messages: Vec<String> = Vec::new();
-        for finding in findings {
-            if finding.kind.severity() != surge_core::Severity::Error {
-                continue;
-            }
-            let label = match finding.kind {
-                surge_core::ValidationErrorKind::ProfileNotFound { .. }
+    // structural rules once (via its private `apply_surge_core_validation`
+    // helper) and logged every non-Error finding under `engine::validate`.
+    // `surge_core::validate_with_resolver` below re-runs that same
+    // structural pass internally (it calls `validate(graph)` as its first
+    // step) purely to fold the resolver-specific findings into one Vec —
+    // so `findings` here is a superset: the identical structural findings
+    // already logged above, plus whatever the resolver-backed rules
+    // (`ProfileNotFound`/`TemplateNotFound`/`NamedAgentNotFound`/
+    // `SameRuntimeVerification`) newly contribute. Only that added subset
+    // is inspected below; the rest is skipped so nothing is logged twice
+    // under the same target.
+    let (Ok(findings) | Err(findings)) = surge_core::validate_with_resolver(graph, resolver);
+    let mut error_messages: Vec<String> = Vec::new();
+    for finding in findings {
+        let resolver_added = matches!(
+            finding.kind,
+            surge_core::ValidationErrorKind::ProfileNotFound { .. }
                 | surge_core::ValidationErrorKind::TemplateNotFound { .. }
-                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => "ref",
-                _ => "structural",
-            };
-            messages.push(format!("[{label}] {}", finding.message));
+                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. }
+                | surge_core::ValidationErrorKind::SameRuntimeVerification { .. }
+        );
+        if !resolver_added {
+            // Already logged (Warning) or already turned this call into an
+            // `Err` before reaching here (Error), by `validate_for_m6`'s
+            // call into `apply_surge_core_validation` above.
+            continue;
         }
-        if !messages.is_empty() {
-            return Err(EngineError::GraphInvalid(format!(
-                "validate_with_resolver failed: {}",
-                messages.join("; ")
-            )));
+        let label = match finding.kind {
+            surge_core::ValidationErrorKind::ProfileNotFound { .. }
+            | surge_core::ValidationErrorKind::TemplateNotFound { .. }
+            | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => "ref",
+            // SameRuntimeVerification (W5) — resolver-backed but
+            // Warning-only, so it never reaches `error_messages` below;
+            // this label only ever surfaces in the `tracing::warn!` call.
+            _ => "structural",
+        };
+        if finding.kind.severity() != surge_core::Severity::Error {
+            tracing::warn!(
+                target: "engine::validate",
+                kind = ?finding.kind,
+                location = ?finding.location,
+                label,
+                "{}",
+                finding.message,
+            );
+            continue;
         }
+        error_messages.push(format!("[{label}] {}", finding.message));
+    }
+    if !error_messages.is_empty() {
+        return Err(EngineError::GraphInvalid(format!(
+            "validate_with_resolver failed: {}",
+            error_messages.join("; ")
+        )));
     }
     Ok(())
 }
@@ -1211,5 +1256,292 @@ mod tests {
             .expect("golden flow declares archetype metadata");
         assert_eq!(archetype.name, ArchetypeName::MultiMilestone);
         assert_eq!(archetype.milestones, Some(3));
+    }
+
+    // ── Warning-severity findings are logged, not dropped (A8) ──────────
+    //
+    // Captures via a `tracing_subscriber::fmt` subscriber piped into an
+    // in-memory buffer — the same `CaptureWriter` shape
+    // `surge-persistence/tests/runs_inner/drop_warn.rs` uses for its own
+    // tracing-capture test — installed per test with
+    // `tracing::subscriber::with_default` (thread-local). Unlike
+    // `drop_warn.rs`'s async, multi-threaded case, `validate_for_m6` and
+    // `validate_for_m6_with_resolver` are synchronous, so there is no
+    // thread-hop hazard motivating that file's process-global
+    // `set_global_default` instead — scoped `with_default` is both simpler
+    // and safer here (no risk of one test's subscriber leaking into
+    // another's).
+
+    #[derive(Clone)]
+    struct CaptureWriter {
+        buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for CaptureWriter {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` under a scoped `tracing_subscriber::fmt` subscriber and
+    /// return `f`'s result alongside every captured line whose target is
+    /// `engine::validate`. The default (non-pretty) formatter writes one
+    /// line per event, so counting lines counts events — the assertion T2
+    /// needs (`.any(..)` alone cannot distinguish "logged once" from
+    /// "logged twice", which is exactly how the F2 double-logging defect
+    /// went unnoticed).
+    fn capture_engine_validate_lines<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = CaptureWriter { buf: buf.clone() };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(writer)
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let result = tracing::subscriber::with_default(subscriber, f);
+        let raw = String::from_utf8(buf.lock().unwrap().clone()).expect("log output is utf8");
+        let lines = raw
+            .lines()
+            .filter(|line| line.contains("engine::validate"))
+            .map(str::to_owned)
+            .collect();
+        (result, lines)
+    }
+
+    #[test]
+    fn warning_finding_is_logged_not_dropped_and_run_still_starts() {
+        // A single Terminal{Success} node as `start` is reachable from
+        // itself without passing a verification gate — trips exactly one
+        // Warning (`UnverifiedSuccessPath`) and no Error.
+        let g = graph_with_one_terminal("end");
+        let (result, lines) = capture_engine_validate_lines(|| validate_for_m6(&g));
+        assert!(
+            result.is_ok(),
+            "a Warning-only graph must not block the run"
+        );
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly one engine::validate log line (UnverifiedSuccessPath), got {lines:?}"
+        );
+        assert!(
+            lines[0].contains("without a verification node"),
+            "expected the UnverifiedSuccessPath warning under engine::validate: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn resolver_path_does_not_double_log_structural_warnings() {
+        // F2 regression: `validate_for_m6_with_resolver` used to log every
+        // Warning-severity *structural* (W1–W4) finding TWICE — once from
+        // `validate_for_m6`'s call into the private `apply_surge_core_validation`,
+        // and again from `validate_with_resolver`'s own internal (redundant)
+        // structural pass, which re-ran and re-logged the identical finding
+        // under the same `engine::validate` target. `graph_with_one_terminal`
+        // trips exactly one `UnverifiedSuccessPath` warning; the
+        // resolver-backed entry point must still log it exactly once, not
+        // once per validation pass.
+        let g = graph_with_one_terminal("end");
+        let (result, lines) = capture_engine_validate_lines(|| {
+            validate_for_m6_with_resolver(&g, &surge_core::NoOpResolver)
+        });
+        assert!(
+            result.is_ok(),
+            "a Warning-only graph must not block the run"
+        );
+        assert_eq!(
+            lines.len(),
+            1,
+            "UnverifiedSuccessPath must be logged exactly once, not once per validation pass: {lines:?}"
+        );
+    }
+
+    /// T3 (second case) — `ValidationErrorKind::ProfileNotFound` just became
+    /// a run-blocking Error on `Engine::start_run` for the first time (see
+    /// `validate_for_m6_with_resolver`'s doc). This exercises the exact
+    /// function that gates it: every one of the
+    /// [`surge_core::BUNDLED_FLOW_COUNT`] bundled flows must still resolve
+    /// under the real `ProfileRegistry` (bundled profiles only, no disk
+    /// overlay) — otherwise shipping this rule would reject every bundled
+    /// flow at `start_run` on day one.
+    #[test]
+    fn every_bundled_flow_resolves_under_the_real_profile_registry() {
+        let registry = crate::profile_loader::ProfileRegistry::new(
+            crate::profile_loader::DiskProfileSet::empty(),
+        );
+        for flow in surge_core::BundledFlows::all() {
+            validate_for_m6_with_resolver(&flow.graph, &registry).unwrap_or_else(|e| {
+                panic!(
+                    "bundled flow `{}` ({}) failed to resolve under the real profile \
+                     registry: {e:?}",
+                    flow.name, flow.version
+                )
+            });
+        }
+    }
+
+    /// Pins W5's blast radius on the shipped set. Four bundled flows pair a
+    /// verifier with an agent predecessor on the same runtime; the other
+    /// nine either have no top-level verification gate or no agent feeding
+    /// one. Every bundled profile carries `agent_id = "claude-code"`, so
+    /// these four are a true statement about what we ship, not a defect in
+    /// the rule.
+    ///
+    /// The assertion is exact on purpose: a change that silently drops the
+    /// rule to zero (the state it was in when first written) fails here,
+    /// and so does one that widens it to every flow.
+    #[test]
+    fn w5_warns_on_exactly_the_four_bundled_flows_that_verify_in_one_vendor() {
+        let registry = crate::profile_loader::ProfileRegistry::new(
+            crate::profile_loader::DiskProfileSet::empty(),
+        );
+        let mut warned: Vec<String> = Vec::new();
+        for flow in surge_core::BundledFlows::all() {
+            let findings = match surge_core::validate_with_resolver(&flow.graph, &registry) {
+                Ok(f) | Err(f) => f,
+            };
+            if findings.iter().any(|f| {
+                matches!(
+                    f.kind,
+                    surge_core::ValidationErrorKind::SameRuntimeVerification { .. }
+                )
+            }) {
+                warned.push(flow.name.clone());
+            }
+        }
+        warned.sort_unstable();
+        assert_eq!(
+            warned,
+            vec!["bug-fix", "linear-3", "linear-with-review", "refactor"],
+            "W5's blast radius on the bundled set changed"
+        );
+    }
+
+    struct StubRuntimeResolver {
+        runtimes: std::collections::HashMap<&'static str, &'static str>,
+    }
+
+    impl surge_core::ReferenceResolver for StubRuntimeResolver {
+        fn profile_exists(&self, _name: &str) -> bool {
+            true
+        }
+        fn template_exists(&self, _name: &str) -> bool {
+            true
+        }
+        fn named_agent_exists(&self, _id: &str) -> bool {
+            true
+        }
+        fn profile_runtime(&self, name: &str) -> Option<String> {
+            self.runtimes.get(name).map(|runtime| (*runtime).to_owned())
+        }
+    }
+
+    fn agent_node_with_profile(key: &str, profile: &str, effect: surge_core::LedgerEffect) -> Node {
+        Node {
+            id: NodeKey::try_from(key).unwrap(),
+            position: Position::default(),
+            declared_outcomes: vec![surge_core::node::OutcomeDecl {
+                id: OutcomeKey::try_from("done").unwrap(),
+                description: "ok".into(),
+                edge_kind_hint: EdgeKind::Forward,
+                is_terminal: false,
+                ledger_effect: effect,
+            }],
+            config: NodeConfig::Agent(surge_core::agent_config::AgentConfig {
+                profile: surge_core::keys::ProfileKey::try_from(profile).unwrap(),
+                prompt_overrides: None,
+                tool_overrides: None,
+                sandbox_override: None,
+                approvals_override: None,
+                bindings: vec![],
+                rules_overrides: None,
+                limits: surge_core::agent_config::NodeLimits::default(),
+                hooks: vec![],
+                custom_fields: std::collections::BTreeMap::default(),
+            }),
+        }
+    }
+
+    #[test]
+    fn same_runtime_verification_warning_is_logged_via_resolver_path() {
+        let impl_key = NodeKey::try_from("impl_1").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            impl_key.clone(),
+            agent_node_with_profile(
+                "impl_1",
+                "implementer@1.0",
+                surge_core::LedgerEffect::ReadyForVerification,
+            ),
+        );
+        nodes.insert(
+            NodeKey::try_from("verify_1").unwrap(),
+            agent_node_with_profile(
+                "verify_1",
+                "verifier@1.0",
+                surge_core::LedgerEffect::Verified,
+            ),
+        );
+        nodes.insert(NodeKey::try_from("end").unwrap(), terminal_node("end"));
+
+        let g = Graph {
+            schema_version: SCHEMA_VERSION,
+            metadata: GraphMetadata {
+                name: "w5-orchestrator".into(),
+                description: None,
+                template_origin: None,
+                created_at: chrono::Utc::now(),
+                author: None,
+                archetype: None,
+            },
+            start: impl_key,
+            nodes,
+            edges: vec![
+                forward_edge("e1", "impl_1", "done", "verify_1"),
+                forward_edge("e2", "verify_1", "done", "end"),
+            ],
+            subgraphs: BTreeMap::new(),
+        };
+
+        let resolver = StubRuntimeResolver {
+            runtimes: std::collections::HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "claude-code"),
+            ]),
+        };
+
+        let (result, lines) =
+            capture_engine_validate_lines(|| validate_for_m6_with_resolver(&g, &resolver));
+        assert!(
+            result.is_ok(),
+            "a Warning-only resolver finding must not block the run"
+        );
+
+        // Exactly one line: this graph's only structural (W1–W4) finding
+        // would be `UnverifiedSuccessPath`, but `verify_1`'s `Verified`
+        // outcome absorbs the path before `end` is reached, so the only
+        // finding at all is the resolver-added `SameRuntimeVerification` —
+        // asserting the count (not `.any(..)`) is what would have caught F2
+        // on a fixture that also had a structural warning to double-log.
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly one engine::validate log line (SameRuntimeVerification), got {lines:?}"
+        );
+        assert!(
+            lines[0].contains("claude-code"),
+            "expected SameRuntimeVerification under engine::validate: {lines:?}"
+        );
     }
 }
