@@ -5,13 +5,18 @@
 //! — Discovery, Pattern, Gotcha, FileContext — carrying tags and run /
 //! spec provenance, indexed by FTS5.
 //!
-//! LIVE SEARCH: the search bar queries the real `MemoryStore`
-//! (`~/.surge/memory.db`, SQLite + FTS5) via `search_all` — results
-//! replace the graph with actual memories including run/spec
-//! provenance. The store exposes FTS search but no "list all", so with
-//! an empty query the screen shows a clearly-labelled **preview**
-//! dataset in the real category vocabulary. Relations are derived from
-//! shared tags (a real signal), not faked wiki-links.
+//! LIVE DATA: on open, the screen browses the real `MemoryStore`
+//! (`~/.surge/memory.db`, SQLite + FTS5) via `list_recent` — the most
+//! recent memories across all four categories, newest first, no query
+//! required. The search bar then re-queries the same store via
+//! `search_all`. Both paths feed the same `SearchResults` ->
+//! `MemNode` conversion (`nodes_from_results`), so a search result and
+//! a browsed one render identically. Only when the store is
+//! unavailable or genuinely has nothing in it does the screen fall
+//! back to a clearly-labelled **preview** dataset in the real category
+//! vocabulary — the same convention `fleet.rs`/`runs.rs` use for their
+//! own sample fallbacks. Relations are derived from shared tags (a
+//! real signal), not faked wiki-links.
 
 use std::collections::BTreeMap;
 use std::f32::consts::{PI, TAU};
@@ -106,12 +111,29 @@ impl MemoryScreen {
             .and_then(|p| MemoryStore::open(&p))
             .map_err(|e| tracing::info!("memory store unavailable: {e}"))
             .ok();
+
+        // Browse the real store for its most recent memories — no query
+        // needed. Fall back to the labelled preview set only when the store
+        // is unavailable or genuinely holds nothing yet, same as fleet.rs /
+        // runs.rs fall back to their own sample data.
+        let (nodes, live) = match &store {
+            Some(store) => match store.list_recent(Some(6)) {
+                Ok(results) if !results.is_empty() => (nodes_from_results(results), true),
+                Ok(_empty) => (sample_nodes(), false),
+                Err(e) => {
+                    tracing::warn!("memory browse failed: {e}");
+                    (sample_nodes(), false)
+                },
+            },
+            None => (sample_nodes(), false),
+        };
+
         Self {
-            nodes: sample_nodes(),
+            nodes,
             selected: 0,
             store,
             search_input: None,
-            live: false,
+            live,
             query: String::new(),
             search_error: None,
         }
@@ -142,62 +164,9 @@ impl MemoryScreen {
             return;
         }
 
-        let prov = |task: &Option<surge_core::TaskId>, spec: &Option<surge_core::SpecId>| {
-            let mut v = Vec::new();
-            if let Some(t) = task {
-                v.push(format!("task {}", t.short().to_lowercase()));
-            }
-            if let Some(s) = spec {
-                v.push(format!("spec {}", s.short().to_lowercase()));
-            }
-            v
-        };
-
         match store.search_all(&query, Some(6)) {
             Ok(results) => {
-                let mut nodes = Vec::new();
-                for d in results.discoveries {
-                    nodes.push(MemNode {
-                        kind: MemKind::Discovery,
-                        title: d.title,
-                        desc: d.content,
-                        tags: d.tags,
-                        seeded: prov(&d.task_id, &d.spec_id),
-                    });
-                }
-                for p in results.patterns {
-                    nodes.push(MemNode {
-                        kind: MemKind::Pattern,
-                        title: p.name,
-                        desc: p.description,
-                        tags: p.tags,
-                        seeded: prov(&p.task_id, &p.spec_id),
-                    });
-                }
-                for g in results.gotchas {
-                    let desc = match &g.symptom {
-                        Some(sym) => format!("{sym} → {}", g.solution),
-                        None => format!("{} → {}", g.description, g.solution),
-                    };
-                    nodes.push(MemNode {
-                        kind: MemKind::Gotcha,
-                        title: g.title,
-                        desc,
-                        tags: g.tags,
-                        seeded: prov(&g.task_id, &g.spec_id),
-                    });
-                }
-                for f in results.file_contexts {
-                    nodes.push(MemNode {
-                        kind: MemKind::FileContext,
-                        title: f.file_path,
-                        desc: f.summary,
-                        // FileContext carries key APIs, not tags — real signal.
-                        tags: f.key_apis.into_iter().take(4).collect(),
-                        seeded: prov(&f.task_id, &f.spec_id),
-                    });
-                }
-                self.nodes = nodes;
+                self.nodes = nodes_from_results(results);
                 self.live = true;
             },
             Err(e) => {
@@ -829,6 +798,73 @@ impl Render for MemoryScreen {
 
         div().size_full().v_flex().child(search_bar).child(body)
     }
+}
+
+/// Provenance chips for a memory's originating task/spec, shared by every
+/// `nodes_from_results` conversion below.
+fn provenance_chips(
+    task: &Option<surge_core::TaskId>,
+    spec: &Option<surge_core::SpecId>,
+) -> Vec<String> {
+    let mut chips = Vec::new();
+    if let Some(t) = task {
+        chips.push(format!("task {}", t.short().to_lowercase()));
+    }
+    if let Some(s) = spec {
+        chips.push(format!("spec {}", s.short().to_lowercase()));
+    }
+    chips
+}
+
+/// Convert a store's [`SearchResults`](surge_persistence::memory::SearchResults)
+/// — from either a live FTS5 search (`search_all`) or a plain browse
+/// (`list_recent`) — into display nodes. Both callers in [`MemoryScreen`]
+/// (`new`'s initial browse, `run_search`'s query) share this single
+/// conversion so a browsed memory and a searched-for one render identically.
+fn nodes_from_results(results: surge_persistence::memory::SearchResults) -> Vec<MemNode> {
+    let mut nodes = Vec::new();
+    for d in results.discoveries {
+        nodes.push(MemNode {
+            kind: MemKind::Discovery,
+            title: d.title,
+            desc: d.content,
+            tags: d.tags,
+            seeded: provenance_chips(&d.task_id, &d.spec_id),
+        });
+    }
+    for p in results.patterns {
+        nodes.push(MemNode {
+            kind: MemKind::Pattern,
+            title: p.name,
+            desc: p.description,
+            tags: p.tags,
+            seeded: provenance_chips(&p.task_id, &p.spec_id),
+        });
+    }
+    for g in results.gotchas {
+        let desc = match &g.symptom {
+            Some(sym) => format!("{sym} → {}", g.solution),
+            None => format!("{} → {}", g.description, g.solution),
+        };
+        nodes.push(MemNode {
+            kind: MemKind::Gotcha,
+            title: g.title,
+            desc,
+            tags: g.tags,
+            seeded: provenance_chips(&g.task_id, &g.spec_id),
+        });
+    }
+    for f in results.file_contexts {
+        nodes.push(MemNode {
+            kind: MemKind::FileContext,
+            title: f.file_path,
+            desc: f.summary,
+            // FileContext carries key APIs, not tags — real signal.
+            tags: f.key_apis.into_iter().take(4).collect(),
+            seeded: provenance_chips(&f.task_id, &f.spec_id),
+        });
+    }
+    nodes
 }
 
 /// Clearly-labelled preview memories using the real category vocabulary

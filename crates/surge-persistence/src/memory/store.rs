@@ -495,6 +495,212 @@ impl MemoryStore {
         }
     }
 
+    // ── Browse Operations ────────────────────────────────────────────────
+
+    /// List the most recent memories across every category, without a
+    /// search query.
+    ///
+    /// `search_all`/`search_by_category` only ever run an FTS5 `MATCH`, so
+    /// a caller wanting "what's in here" with nothing typed had no method to
+    /// call — the four category tables offered `add_*` writers and FTS
+    /// readers, nothing in between. Returns up to `limit` rows per category
+    /// (default: 10), newest-first by `created_at`; rows sharing the same
+    /// `created_at` (a bulk seed, or two writes in the same millisecond)
+    /// order by `rowid` descending as a stable tiebreak, so a repeated call
+    /// against unchanged data always returns the same order.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use surge_persistence::memory::MemoryStore;
+    /// # let store = MemoryStore::in_memory()?;
+    /// let recent = store.list_recent(Some(20))?;
+    /// println!("{} memories on hand", recent.total_count());
+    /// # Ok::<(), surge_persistence::PersistenceError>(())
+    /// ```
+    pub fn list_recent(&self, limit: Option<usize>) -> Result<crate::memory::fts::SearchResults> {
+        use crate::memory::fts::SearchResults;
+
+        let limit = limit.unwrap_or(10) as i64;
+
+        Ok(SearchResults {
+            discoveries: self.list_recent_discoveries(limit)?,
+            patterns: self.list_recent_patterns(limit)?,
+            gotchas: self.list_recent_gotchas(limit)?,
+            file_contexts: self.list_recent_file_contexts(limit)?,
+        })
+    }
+
+    /// Most recent discoveries, newest first — no FTS5 involved.
+    fn list_recent_discoveries(&self, limit: i64) -> Result<Vec<Discovery>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, title, content, task_id, spec_id, category, tags,
+                   created_at, updated_at
+            FROM discoveries
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let discoveries = stmt
+            .query_map([limit], |row| {
+                let tags_json: String = row.get(6)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+                Ok(Discovery {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    content: row.get(2)?,
+                    task_id: row
+                        .get::<_, Option<String>>(3)?
+                        .and_then(|s| s.parse().ok()),
+                    spec_id: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| s.parse().ok()),
+                    category: row.get(5)?,
+                    tags,
+                    created_at: row.get::<_, i64>(7)? as u64,
+                    updated_at: row.get::<_, i64>(8)? as u64,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(discoveries)
+    }
+
+    /// Most recent patterns, newest first — no FTS5 involved.
+    fn list_recent_patterns(&self, limit: i64) -> Result<Vec<Pattern>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, name, description, example, task_id, spec_id,
+                   language, category, tags, created_at, updated_at
+            FROM patterns
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let patterns = stmt
+            .query_map([limit], |row| {
+                let tags_json: String = row.get(8)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+                Ok(Pattern {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    example: row.get(3)?,
+                    task_id: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| s.parse().ok()),
+                    spec_id: row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|s| s.parse().ok()),
+                    language: row.get(6)?,
+                    category: row.get(7)?,
+                    tags,
+                    created_at: row.get::<_, i64>(9)? as u64,
+                    updated_at: row.get::<_, i64>(10)? as u64,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(patterns)
+    }
+
+    /// Most recent gotchas, newest first — no FTS5 involved.
+    fn list_recent_gotchas(&self, limit: i64) -> Result<Vec<Gotcha>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, title, description, symptom, solution, task_id,
+                   spec_id, severity, category, tags, created_at, updated_at
+            FROM gotchas
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let gotchas = stmt
+            .query_map([limit], |row| {
+                let tags_json: String = row.get(9)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+                Ok(Gotcha {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    symptom: row.get(3)?,
+                    solution: row.get(4)?,
+                    task_id: row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|s| s.parse().ok()),
+                    spec_id: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| s.parse().ok()),
+                    severity: row.get(7)?,
+                    category: row.get(8)?,
+                    tags,
+                    created_at: row.get::<_, i64>(10)? as u64,
+                    updated_at: row.get::<_, i64>(11)? as u64,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(gotchas)
+    }
+
+    /// Most recent file contexts, newest first — no FTS5 involved.
+    fn list_recent_file_contexts(&self, limit: i64) -> Result<Vec<FileContext>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, file_path, summary, key_apis, description,
+                   dependencies, task_id, spec_id, language,
+                   module_category, tags, created_at, updated_at
+            FROM file_contexts
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let contexts = stmt
+            .query_map([limit], |row| {
+                let key_apis_json: String = row.get(3)?;
+                let key_apis: Vec<String> =
+                    serde_json::from_str(&key_apis_json).unwrap_or_default();
+
+                let dependencies_json: String = row.get(5)?;
+                let dependencies: Vec<String> =
+                    serde_json::from_str(&dependencies_json).unwrap_or_default();
+
+                let tags_json: String = row.get(10)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+                Ok(FileContext {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    summary: row.get(2)?,
+                    key_apis,
+                    description: row.get(4)?,
+                    dependencies,
+                    task_id: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| s.parse().ok()),
+                    spec_id: row
+                        .get::<_, Option<String>>(7)?
+                        .and_then(|s| s.parse().ok()),
+                    language: row.get(8)?,
+                    module_category: row.get(9)?,
+                    tags,
+                    created_at: row.get::<_, i64>(11)? as u64,
+                    updated_at: row.get::<_, i64>(12)? as u64,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(contexts)
+    }
+
     // ── FTS5 Helper Methods ─────────────────────────────────────────────
 
     /// Search discoveries using FTS5.
@@ -1407,6 +1613,138 @@ mod tests {
         assert_eq!(results.patterns.len(), 1);
         assert_eq!(results.gotchas.len(), 1);
         assert_eq!(results.total_count(), 3);
+    }
+
+    // ── Browse (list_recent) Tests ────────────────────────────────────
+
+    #[test]
+    fn list_recent_returns_empty_for_empty_store() {
+        let store = MemoryStore::in_memory().unwrap();
+
+        let results = store.list_recent(None).unwrap();
+        assert!(results.is_empty());
+        assert_eq!(results.total_count(), 0);
+    }
+
+    #[test]
+    fn list_recent_returns_rows_of_every_kind_without_a_query() {
+        let store = MemoryStore::in_memory().unwrap();
+
+        store
+            .add_discovery(&Discovery::new(
+                "Discovery".into(),
+                "content".into(),
+                test_timestamp(),
+            ))
+            .unwrap();
+        store
+            .add_pattern(&Pattern::new(
+                "Pattern".into(),
+                "description".into(),
+                test_timestamp(),
+            ))
+            .unwrap();
+        store
+            .add_gotcha(&Gotcha::new(
+                "Gotcha".into(),
+                "description".into(),
+                "solution".into(),
+                test_timestamp(),
+            ))
+            .unwrap();
+        store
+            .add_file_context(&FileContext::new(
+                "src/lib.rs".into(),
+                "summary".into(),
+                test_timestamp(),
+            ))
+            .unwrap();
+
+        // No query at all — this is the gap search_all/search_by_category
+        // leave: both require an FTS5 match string, so a caller wanting
+        // "what's here" with nothing typed had no method to call.
+        let results = store.list_recent(None).unwrap();
+        assert_eq!(results.discoveries.len(), 1);
+        assert_eq!(results.discoveries[0].title, "Discovery");
+        assert_eq!(results.patterns.len(), 1);
+        assert_eq!(results.patterns[0].name, "Pattern");
+        assert_eq!(results.gotchas.len(), 1);
+        assert_eq!(results.gotchas[0].title, "Gotcha");
+        assert_eq!(results.file_contexts.len(), 1);
+        assert_eq!(results.file_contexts[0].file_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn list_recent_orders_newest_created_at_first() {
+        let store = MemoryStore::in_memory().unwrap();
+
+        for i in 0..3 {
+            store
+                .add_discovery(&Discovery::new(
+                    format!("Discovery {i}"),
+                    "content".into(),
+                    test_timestamp() + i,
+                ))
+                .unwrap();
+        }
+
+        let results = store.list_recent(None).unwrap();
+        let titles: Vec<&str> = results
+            .discoveries
+            .iter()
+            .map(|d| d.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Discovery 2", "Discovery 1", "Discovery 0"]);
+    }
+
+    #[test]
+    fn list_recent_breaks_created_at_ties_by_insertion_order() {
+        let store = MemoryStore::in_memory().unwrap();
+
+        // Same millisecond timestamp for all three — a bulk seed, or two
+        // rows written inside the same tick. The ordering column alone
+        // can't disambiguate them; rowid (insertion order) must.
+        for i in 0..3 {
+            store
+                .add_discovery(&Discovery::new(
+                    format!("Discovery {i}"),
+                    "content".into(),
+                    test_timestamp(),
+                ))
+                .unwrap();
+        }
+
+        let results = store.list_recent(None).unwrap();
+        let titles: Vec<&str> = results
+            .discoveries
+            .iter()
+            .map(|d| d.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Discovery 2", "Discovery 1", "Discovery 0"]);
+    }
+
+    #[test]
+    fn list_recent_honors_limit_per_category() {
+        let store = MemoryStore::in_memory().unwrap();
+
+        for i in 0..15 {
+            store
+                .add_discovery(&Discovery::new(
+                    format!("Discovery {i}"),
+                    "content".into(),
+                    test_timestamp() + i,
+                ))
+                .unwrap();
+        }
+
+        let results = store.list_recent(Some(5)).unwrap();
+        assert_eq!(results.discoveries.len(), 5);
+        // Newest 5 (highest created_at), still newest-first.
+        assert_eq!(results.discoveries[0].title, "Discovery 14");
+        assert_eq!(results.discoveries[4].title, "Discovery 10");
+
+        let results = store.list_recent(None).unwrap();
+        assert_eq!(results.discoveries.len(), 10, "default limit is 10");
     }
 
     // ── Memory Claim Tests (v2) ──────────────────────────────────────
