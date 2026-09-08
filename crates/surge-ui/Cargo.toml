@@ -29,3 +29,9 @@ tracing-subscriber.workspace = true
 pulldown-cmark = "0.12"
 chrono = { workspace = true }
 notify-rust = { workspace = true }
+
+[dev-dependencies]
+# `test-support` unlocks `TestAppContext`/`add_window_view` for the screen
+# smoke tests (src/screens/smoke_test.rs). Dev-only: it is never active for
+# `cargo build`/`cargo run`, only for `cargo test`/nextest.
+gpui = { version = "0.2", features = ["test-support"] }

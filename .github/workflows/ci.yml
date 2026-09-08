@@ -58,15 +58,38 @@ jobs:
             ${{ runner.os }}-target-test-
             ${{ runner.os }}-target-
 
+      # surge-ui (GPUI desktop shell) links libxcb/libxkbcommon at build time.
+      # Ubuntu-only: macOS and Windows have their own native windowing libs
+      # and are not addressed here, so surge-ui stays excluded for them below
+      # — deliberately, not by omission.
+      - name: Install surge-ui system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev
+
       # `cargo nextest` is ~1.5-2x faster than `cargo test` and runs each test
       # in its own process by default, which avoids parallel SQLite/WAL races
       # we hit on Windows under the old harness.
+      #
+      # surge-ui runs in the workspace suite on ubuntu-latest only (system
+      # libs installed above); macOS/Windows keep the exclude.
+      - name: Run tests (nextest, incl. surge-ui)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run --workspace --no-fail-fast
+
       - name: Run tests (nextest)
+        if: matrix.os != 'ubuntu-latest'
         run: cargo nextest run --workspace --exclude surge-ui --no-fail-fast
 
       # nextest does not run doctests; the canonical workaround is a single
       # extra `cargo test --doc` invocation. Cheap because no recompilation.
+      - name: Run doctests (incl. surge-ui)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --workspace --doc
+
       - name: Run doctests
+        if: matrix.os != 'ubuntu-latest'
         run: cargo test --workspace --exclude surge-ui --doc
 
       - name: Build mock_acp_agent for engine integration tests
@@ -161,9 +184,14 @@ jobs:
       # the hard lower bound from deps + surge-acp's `round_char_boundary` is
       # ~1.91). This job pins that toolchain and type-checks the whole
       # workspace so an accidental use of a newer-than-MSRV std/language
-      # feature is caught at the gate. surge-ui is excluded (GPUI pulls
-      # bleeding-edge toolchain features and is not part of the MSRV
-      # contract), matching the test job.
+      # feature is caught at the gate. surge-ui stays excluded here on its
+      # own, independent rationale (GPUI pulls bleeding-edge toolchain
+      # features and is not part of the MSRV contract) — unlike the `test`
+      # job's exclusion, this one was never about missing system libraries,
+      # so installing them there (see the `test` job above) does not lift
+      # it here too. Not reverified against 1.96: flipping it risks failing
+      # this gate for a toolchain-feature reason that change did not scope
+      # in, so it was left alone rather than guessed at.
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@1.96.0
 
