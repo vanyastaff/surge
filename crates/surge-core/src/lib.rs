@@ -46,6 +46,7 @@ pub mod doctor;
 pub mod edge;
 pub mod evidence;
 pub mod graph;
+pub mod home;
 pub mod hooks;
 pub mod human_gate_config;
 pub mod keys;

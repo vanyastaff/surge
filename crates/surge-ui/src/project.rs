@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use surge_core::home::surge_home_dir;
 
-/// A recently-opened project entry stored in ~/.surge/recent.toml.
+/// A recently-opened project entry stored in `$SURGE_HOME/recent.toml`
+/// (or `~/.surge/recent.toml` when `SURGE_HOME` is unset/empty).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentProject {
     pub name: String,
@@ -21,9 +23,28 @@ pub struct RecentProjects {
 }
 
 impl RecentProjects {
-    /// Path to the recent.toml file.
+    /// Path to the recent.toml file: `$SURGE_HOME/recent.toml` when
+    /// `SURGE_HOME` is set and non-empty, else `~/.surge/recent.toml`.
+    ///
+    /// Delegates to [`surge_core::home::surge_home_dir`] — the canonical
+    /// resolver the CLI, daemon, and persistence layer already share — so
+    /// a `SURGE_HOME`-isolated `surge-ui` process (commit #79) reads and
+    /// writes recent-projects state from that same sandbox instead of
+    /// always falling back to the operator's real `~/.surge`.
     fn file_path() -> PathBuf {
-        dirs_home().join(".surge").join("recent.toml")
+        Self::file_path_under(surge_home_dir())
+    }
+
+    /// `recent.toml` under `surge_home`, or under `./.surge` when
+    /// `surge_home` is `None` (the extreme case where `SURGE_HOME` is
+    /// unset and the OS/user home directory itself cannot be determined
+    /// either). Split out from [`Self::file_path`] so the SURGE_HOME-vs-
+    /// fallback branch is unit-testable without reading or mutating
+    /// process-wide environment.
+    fn file_path_under(surge_home: Option<PathBuf>) -> PathBuf {
+        surge_home
+            .unwrap_or_else(|| PathBuf::from(".").join(".surge"))
+            .join("recent.toml")
     }
 
     /// Load recent projects from disk. Returns empty if file doesn't exist.
@@ -102,10 +123,6 @@ impl RecentProjects {
     }
 }
 
-fn dirs_home() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
-}
-
 fn chrono_now() -> String {
     // Simple ISO 8601 timestamp without chrono dependency.
     let now = std::time::SystemTime::now()
@@ -113,4 +130,45 @@ fn chrono_now() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{now}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduces the reported defect: before this fix, [`RecentProjects`]
+    /// resolved `recent.toml` from the real `~/.surge` no matter what
+    /// `SURGE_HOME` said, silently defeating `SURGE_HOME` isolation
+    /// (commit #79) for the one piece of state this screen owns.
+    /// [`RecentProjects::file_path`] now delegates to
+    /// [`surge_core::home::surge_home_dir`] via
+    /// [`RecentProjects::file_path_under`], proven here without mutating
+    /// process-wide environment: this binary links vendored C (`libgit2`
+    /// via `surge-orchestrator`, bundled `sqlite3` via `surge-persistence`)
+    /// whose `getenv` reads `environ` outside std's own lock, so a
+    /// `set_var`/`remove_var` race in this test binary is not provably
+    /// sound under `cargo test`'s single-process run — see the project
+    /// memory note `surge-env-mutation-unsound` and the same
+    /// env-mutation-avoiding fix already applied for the same reason in
+    /// `surge_orchestrator::project_context` (thread the value through
+    /// explicitly instead of reading env inside the function under test).
+    #[test]
+    fn file_path_honors_a_given_surge_home() {
+        let surge_home = PathBuf::from("/tmp/surge-ui-test-custom-home");
+        assert_eq!(
+            RecentProjects::file_path_under(Some(surge_home.clone())),
+            surge_home.join("recent.toml")
+        );
+    }
+
+    #[test]
+    fn file_path_falls_back_to_dot_surge_when_home_is_unknown() {
+        // Mirrors `surge_core::home::surge_home_dir`'s own contract: `None`
+        // only when neither `SURGE_HOME` nor the OS/user home directory can
+        // be determined at all.
+        assert_eq!(
+            RecentProjects::file_path_under(None),
+            PathBuf::from(".").join(".surge").join("recent.toml")
+        );
+    }
 }

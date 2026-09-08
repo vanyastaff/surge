@@ -10,18 +10,13 @@ use surge_core::memory::{ClaimStatus, Confidence, MemoryClaim, Provenance};
 use surge_core::{ContentHash, MemoryClaimId};
 
 /// Resolve the surge home directory: `$SURGE_HOME` when set and non-empty,
-/// else `~/.surge`. Mirrors the CLI's `surge_home_dir`
+/// else `~/.surge`. Delegates to [`surge_core::home::surge_home_dir`], the
+/// canonical resolver the CLI's `surge_home_dir`
 /// (`crates/surge-cli/src/commands/common.rs`) and the daemon's
-/// `surge_runs_dir`/`pidfile::daemon_dir` exactly, so this store lands in
+/// `surge_runs_dir`/`pidfile::daemon_dir` share, so this store lands in
 /// the same sandbox as the rest of a `SURGE_HOME`-isolated process.
 fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    dirs::home_dir()
-        .map(|h| h.join(".surge"))
+    surge_core::home::surge_home_dir()
         .ok_or_else(|| PersistenceError::Storage("Cannot determine home directory".into()))
 }
 

@@ -20,15 +20,12 @@ const MIN_SUFFIX_LEN: usize = 6;
 /// possibly-truncated rather than silently wrong.
 const SUFFIX_SCAN_LIMIT: usize = 5000;
 
-/// Resolve `~/.surge` (honoring `SURGE_HOME`).
+/// Resolve `~/.surge` (honoring `SURGE_HOME`). Delegates to
+/// [`surge_core::home::surge_home_dir`], the canonical resolver shared
+/// with the daemon's `pidfile::daemon_dir` and the persistence layer's
+/// memory store.
 pub(crate) fn surge_home_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("SURGE_HOME")
-        && !custom.is_empty()
-    {
-        return Ok(PathBuf::from(custom));
-    }
-    let base = dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))?;
-    Ok(base.join(".surge"))
+    surge_core::home::surge_home_dir().ok_or_else(|| anyhow!("could not resolve home directory"))
 }
 
 /// Resolve the project root: the enclosing git repository's root if `cwd` is

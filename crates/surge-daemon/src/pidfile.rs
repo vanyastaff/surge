@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum PidfileError {
-    /// `dirs::home_dir()` returned `None`.
+    /// `SURGE_HOME` was unset (or empty) and `dirs::home_dir()` also
+    /// returned `None` — see [`surge_core::home::surge_home_dir`].
     #[error("home directory not found")]
     NoHome,
     /// Underlying I/O error reading or writing the daemon directory.
@@ -31,17 +32,17 @@ pub enum PidfileError {
 /// Returns the daemon directory path: `${SURGE_HOME}/daemon/`, or
 /// `~/.surge/daemon/` when `SURGE_HOME` is unset/empty.
 ///
-/// Honouring `SURGE_HOME` (matching the CLI's `surge_runs_dir` and
-/// `profile_loader::paths::surge_home`) lets a test or operator isolate the
-/// daemon's pid/socket/version files into a sandbox instead of racing the
+/// Delegates to [`surge_core::home::surge_home_dir`], the canonical
+/// resolver shared with the CLI's `surge_home_dir` and the persistence
+/// layer's memory store, so a test or operator isolating the daemon's
+/// pid/socket/version files into a sandbox lands in the same place the
+/// rest of a `SURGE_HOME`-isolated process does, instead of racing the
 /// real `~/.surge/daemon/`.
 #[must_use = "the resolved daemon directory should be used"]
 pub fn daemon_dir() -> Result<PathBuf, PidfileError> {
-    let home = match std::env::var("SURGE_HOME") {
-        Ok(custom) if !custom.is_empty() => PathBuf::from(custom),
-        _ => dirs::home_dir().ok_or(PidfileError::NoHome)?.join(".surge"),
-    };
-    Ok(home.join("daemon"))
+    surge_core::home::surge_home_dir()
+        .map(|home| home.join("daemon"))
+        .ok_or(PidfileError::NoHome)
 }
 
 /// Returns the PID file path.
