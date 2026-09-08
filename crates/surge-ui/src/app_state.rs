@@ -29,8 +29,16 @@ pub struct AppState {
     pub registry: Registry,
     /// Agents detected on system PATH.
     pub installed_agents: Vec<DetectedAgent>,
-    /// Health metrics per agent.
-    pub health: HealthTracker,
+    /// Registration-only fallback tracker, used **only** when there is no
+    /// `agent_pool` yet (agents detected on PATH but no `surge.toml`/pool
+    /// created for this project). Nothing ever calls `record_success`/
+    /// `record_failure` on this tracker — `AgentPool` owns the live one,
+    /// updated by its workers with real request outcomes. Do not read this
+    /// field directly; go through [`AppState::agent_health`], which picks
+    /// the pool's tracker over this one whenever a pool exists. Do not
+    /// sync the two by copying between them — this one is a fallback, not
+    /// a cache.
+    pub fallback_health: HealthTracker,
 
     // ── Tasks ──
     pub tasks: Vec<TaskEntry>,
@@ -137,10 +145,10 @@ impl AppState {
         let registry = Registry::builtin();
         let installed_agents = registry.detect_installed_with_paths();
 
-        // Register installed agents in health monitor.
-        let mut health = HealthTracker::new();
+        // Register installed agents in the no-pool fallback tracker.
+        let mut fallback_health = HealthTracker::new();
         for agent in &installed_agents {
-            health.register(&agent.entry.id);
+            fallback_health.register(&agent.entry.id);
         }
 
         Self {
@@ -150,7 +158,7 @@ impl AppState {
             current_branch: "main".to_string(),
             registry,
             installed_agents,
-            health,
+            fallback_health,
             tasks: Vec::new(),
             specs: Vec::new(),
             worktrees: Vec::new(),
@@ -363,7 +371,11 @@ impl AppState {
                 }
             },
             SurgeEvent::AgentConnected { agent_name } => {
-                self.health.register(agent_name);
+                // Registration only — the fallback tracker is never the
+                // one recording outcomes (see the field's doc). Harmless
+                // to keep registering here even once a pool exists: reads
+                // never consult this tracker while `agent_pool` is set.
+                self.fallback_health.register(agent_name);
             },
             _ => {},
         }
@@ -392,9 +404,27 @@ impl AppState {
             .collect()
     }
 
-    /// Get health for a specific agent.
-    pub fn agent_health(&self, name: &str) -> Option<&AgentHealth> {
-        self.health.get_health(name)
+    /// Health for a specific agent — the single way UI code should read
+    /// agent health; screens must not touch `agent_pool`'s tracker or
+    /// `fallback_health` directly.
+    ///
+    /// Reads from `AgentPool`'s live tracker (the one its workers actually
+    /// call `record_success`/`record_failure` against) whenever a pool
+    /// exists; falls back to this `AppState`'s own registration-only
+    /// tracker only when it does not (agents detected but no
+    /// `surge.toml`/pool created yet — that path must keep working). A
+    /// pool that exists but whose tracker lock cannot be taken right now
+    /// (contended — never actually poisoned, `tokio::sync::Mutex` doesn't
+    /// poison, but treated the same way regardless) degrades to `None`
+    /// ("unknown" health) rather than falling back to the fallback
+    /// tracker, which would silently show stale/fabricated zeros, or
+    /// blocking a synchronous render frame on an async lock.
+    #[must_use]
+    pub fn agent_health(&self, name: &str) -> Option<AgentHealth> {
+        match &self.agent_pool {
+            Some(pool) => pool.try_health(name),
+            None => self.fallback_health.get_health(name).cloned(),
+        }
     }
 
     /// Count tasks by state.
@@ -433,4 +463,86 @@ fn detect_branch(path: &std::path::Path) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use surge_core::config::{AgentConfig, ResilienceConfig, Transport};
+
+    use super::*;
+
+    fn test_agent_config() -> AgentConfig {
+        AgentConfig {
+            command: "echo".to_string(),
+            args: vec!["test".to_string()],
+            transport: Transport::Stdio,
+            mcp_servers: vec![],
+            capabilities: vec![],
+        }
+    }
+
+    /// The defect this fix targets: `AppState` used to own a second,
+    /// never-written-to `HealthTracker` and read that one unconditionally,
+    /// so the Agents screen showed permanent zero requests / zero errors
+    /// no matter what the agent actually did. `agent_health` must read
+    /// the pool's live tracker — the one `AgentPool`'s workers actually
+    /// call `record_success`/`record_failure` against — whenever a pool
+    /// exists.
+    #[test]
+    fn agent_health_reads_the_pool_tracker_when_a_pool_exists() {
+        let mut state = AppState::new();
+
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .expect("valid default agent");
+
+        pool.health()
+            .try_lock()
+            .expect("uncontended in a single-threaded test")
+            .record_success("test-agent", Duration::from_millis(75));
+
+        state.agent_pool = Some(Arc::new(pool));
+
+        // The fallback tracker never saw this agent at all — proves the
+        // read below is not coming from it.
+        assert!(state.fallback_health.get_health("test-agent").is_none());
+
+        let health = state
+            .agent_health("test-agent")
+            .expect("pool recorded a request for this agent");
+        assert_eq!(health.total_requests, 1);
+    }
+
+    /// The no-pool path (agents detected, but no `surge.toml`/pool created
+    /// yet) must keep working, reading the registration-only fallback
+    /// tracker instead of panicking or fabricating data.
+    #[test]
+    fn agent_health_falls_back_to_the_local_tracker_without_a_pool() {
+        let mut state = AppState::new();
+        assert!(state.agent_pool.is_none());
+        state.fallback_health.register("claude");
+
+        let health = state
+            .agent_health("claude")
+            .expect("registered in the fallback tracker");
+        assert_eq!(health.total_requests, 0);
+        assert_eq!(health.status(), surge_acp::HealthStatus::Healthy);
+    }
+
+    /// Neither path fabricates health for an agent nobody registered
+    /// anywhere.
+    #[test]
+    fn agent_health_is_none_for_an_unregistered_agent_without_a_pool() {
+        let state = AppState::new();
+        assert!(state.agent_health("never-heard-of-it").is_none());
+    }
 }

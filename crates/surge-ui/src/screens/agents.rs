@@ -93,12 +93,13 @@ impl AgentsScreen {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let state = self.state.read(cx);
-        let health = state.health.get_health(&agent.entry.id);
+        let health = state.agent_health(&agent.entry.id);
         let (status_label, status_color) = health
+            .as_ref()
             .map(|h| status_parts(h.status()))
             .unwrap_or(("unknown", theme::text_muted()));
-        let requests = health.map(|h| h.total_requests).unwrap_or(0);
-        let err_rate = health.map(|h| h.error_rate()).unwrap_or(0.0);
+        let requests = health.as_ref().map(|h| h.total_requests).unwrap_or(0);
+        let err_rate = health.as_ref().map(|h| h.error_rate()).unwrap_or(0.0);
 
         let id = agent.entry.id.clone();
         let version = agent
@@ -189,8 +190,7 @@ impl AgentsScreen {
     fn render_detail_header(&self, agent: &DetectedAgent, cx: &mut Context<Self>) -> Div {
         let state = self.state.read(cx);
         let (status_label, status_color) = state
-            .health
-            .get_health(&agent.entry.id)
+            .agent_health(&agent.entry.id)
             .map(|h| status_parts(h.status()))
             .unwrap_or(("unknown", theme::text_muted()));
 
@@ -303,7 +303,7 @@ impl AgentsScreen {
 
     fn render_metrics(&self, agent: &DetectedAgent, cx: &Context<Self>) -> Div {
         let state = self.state.read(cx);
-        let health = state.health.get_health(&agent.entry.id);
+        let health = state.agent_health(&agent.entry.id);
 
         let (requests, failures, err_rate, p50, p99, uptime, rate_limited) = health
             .map(|h| {

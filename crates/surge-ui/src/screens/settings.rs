@@ -966,7 +966,7 @@ impl SettingsScreen {
                     .cloned()
                     .unwrap_or_else(|| "-".to_string());
                 let path = a.command_path.clone().unwrap_or_else(|| "(unknown)".into());
-                let dot = match state.health.get_health(&a.entry.id).map(|h| h.status()) {
+                let dot = match state.agent_health(&a.entry.id).map(|h| h.status()) {
                     Some(surge_acp::HealthStatus::Healthy) => theme::success(),
                     Some(surge_acp::HealthStatus::Degraded) => theme::warning(),
                     Some(surge_acp::HealthStatus::Offline) => theme::error(),

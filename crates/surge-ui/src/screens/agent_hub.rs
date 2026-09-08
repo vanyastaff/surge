@@ -79,8 +79,8 @@ impl AgentHubScreen {
             .installed_agents
             .iter()
             .map(|detected| {
-                let health = state.health.get_health(&detected.entry.id);
-                AgentDetail::from_detected(detected, health)
+                let health = state.agent_health(&detected.entry.id);
+                AgentDetail::from_detected(detected, health.as_ref())
             })
             .collect();
 

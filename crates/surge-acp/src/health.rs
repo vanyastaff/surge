@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use surge_core::capacity::{CapacityStatus, CapacityWindow};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Health status of an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +87,15 @@ fn is_rate_limited_for_routing(error: &str) -> bool {
 }
 
 /// Health statistics for a single agent.
-#[derive(Debug)]
+///
+/// `Clone` is derived so a caller holding this tracker's lock only as long
+/// as it takes to snapshot one agent's numbers (see
+/// [`HealthTracker::get_health`] plus [`AgentPool::try_health`][crate::pool::AgentPool::try_health])
+/// can take an owned copy and release the lock immediately — load-bearing
+/// for a synchronous caller like a UI render frame, which cannot hold a
+/// borrow across `.await` and must not block on a contended lock. The
+/// bounded `latency_samples` deque (capped at 100) keeps the clone cheap.
+#[derive(Debug, Clone)]
 pub struct AgentHealth {
     /// Agent name.
     pub name: String,
@@ -237,11 +245,22 @@ impl HealthTracker {
     }
 
     /// Registers an agent for health monitoring.
+    ///
+    /// Registering an agent that is already tracked is a no-op and is not
+    /// news: callers re-register on every `AgentConnected` event, so an
+    /// unconditional `info!` here printed three lines every few seconds in
+    /// the desktop app — about two thousand an hour, all of them saying
+    /// nothing changed.
     pub fn register(&mut self, name: &str) {
-        info!(agent = name, "registering agent for health monitoring");
-        self.agents
-            .entry(name.to_string())
-            .or_insert_with(|| AgentHealth::new(name.to_string()));
+        match self.agents.entry(name.to_string()) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                info!(agent = name, "registering agent for health monitoring");
+                slot.insert(AgentHealth::new(name.to_string()));
+            },
+            std::collections::hash_map::Entry::Occupied(_) => {
+                debug!(agent = name, "agent already registered; nothing to do");
+            },
+        }
     }
 
     /// Configures a fallback agent for a primary agent.

@@ -29,7 +29,7 @@ use tracing::{debug, info, warn};
 
 use crate::client::PermissionPolicy;
 use crate::connection::AgentConnection;
-use crate::health::HealthTracker;
+use crate::health::{AgentHealth, HealthTracker};
 use crate::process_tracker::ProcessTracker;
 
 /// Handle to an active agent session.
@@ -283,6 +283,23 @@ impl AgentPool {
     #[must_use]
     pub fn health(&self) -> &Arc<Mutex<HealthTracker>> {
         &self.health
+    }
+
+    /// Point-in-time snapshot of `name`'s health, without blocking.
+    ///
+    /// This tracker lives behind a `tokio::sync::Mutex` shared with the
+    /// worker thread that actually records request outcomes
+    /// (`record_success`/`record_failure`) — a synchronous caller (a UI
+    /// render frame, in particular) cannot `.await` [`Self::health`]'s
+    /// guard. `try_lock` never blocks: a lock currently held by another
+    /// task (contended, or — were the holder to have panicked mid-update —
+    /// simply never released; `tokio::sync::Mutex` does not poison, unlike
+    /// `std::sync::Mutex`) and `name` never having been registered both
+    /// read the same way here, as `None` — "unknown health", not a panic
+    /// or a stall. The next call (e.g. the next render frame) tries again.
+    #[must_use]
+    pub fn try_health(&self, name: &str) -> Option<AgentHealth> {
+        self.health.try_lock().ok()?.get_health(name).cloned()
     }
 
     /// Subscribe to agent events (message chunks, file ops, terminal events, etc.).
@@ -1570,6 +1587,83 @@ mod tests {
             .expect("observed 429 must be reflected through the pool's public API");
         assert_eq!(window.runtime(), "test-agent");
         assert!(window.is_exhausted());
+    }
+
+    /// The bug this whole method exists to fix: a consumer calling
+    /// `try_health` must see the real numbers `record_success` wrote,
+    /// not a permanently-empty second tracker (surge-ui's `AppState` used
+    /// to keep its own, never-written-to `HealthTracker` and read that
+    /// one instead of the pool's — see `AppState::agent_health`).
+    #[test]
+    fn test_try_health_reflects_recorded_success() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        // Registered at pool creation, but no traffic yet.
+        let health = pool
+            .try_health("test-agent")
+            .expect("registered at pool creation");
+        assert_eq!(health.total_requests, 0);
+
+        pool.health()
+            .try_lock()
+            .expect("uncontended in a single-threaded test")
+            .record_success("test-agent", Duration::from_millis(42));
+
+        let health = pool.try_health("test-agent").expect("still registered");
+        assert_eq!(health.total_requests, 1);
+    }
+
+    #[test]
+    fn test_try_health_unknown_agent_is_none() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        assert!(pool.try_health("never-registered").is_none());
+    }
+
+    /// Pins the "must not block or panic" contract: a lock already held
+    /// (contended — or, in principle, abandoned by a panicked holder;
+    /// `tokio::sync::Mutex` never poisons) degrades to `None`, the same
+    /// "unknown health" a synchronous UI render frame must get instead of
+    /// stalling on `.await` or crashing.
+    #[test]
+    fn test_try_health_degrades_to_none_when_lock_is_held() {
+        let mut configs = HashMap::new();
+        configs.insert("test-agent".to_string(), test_agent_config());
+
+        let pool = AgentPool::new(
+            configs,
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+            PermissionPolicy::default(),
+            ResilienceConfig::default(),
+        )
+        .unwrap();
+
+        let _guard = pool
+            .health()
+            .try_lock()
+            .expect("uncontended in a single-threaded test");
+        assert!(pool.try_health("test-agent").is_none());
     }
 
     /// `warm_up` must not panic or block — it fires and forgets.
