@@ -8,8 +8,8 @@ Sign-off before start: T1, T9, T10, T13 → chief-architect; T2, T3, T8, T12 →
 
 | # | Task (outcome) | Acceptance slice | Owner lead | Blocked by | Size | Status |
 |---|---|---|---|---|---|---|
-| T1 | `.surge/` layer: `ProjectLayer`, `Layer`, `Provenance::Project`; `ProfileRegistry` per run via `EngineRunConfig.project_layer`, lookup project → home → bundled | "Given a `.surge/profiles/x-1.0.toml` in repo and none in home…" | api-design-lead | — | L | ☐ |
-| T2 | Event schema 8→9: `EventPayload::ComposedArtifactInstalled{kind,path,hash,gate_node}`, `ArtifactKind::{Profile,Flow}`, migration + proptest + variant-bump test | "Event schema migration 8→9 has the round-trip proptest…" | api-design-lead | — | M | ☐ |
+| T1 | `.surge/` layer: `ProjectLayer`, `Layer`, `Provenance::Project`; `ProfileRegistry` per run via `EngineRunConfig.project_layer`, lookup project → home → bundled | "Given a `.surge/profiles/x-1.0.toml` in repo and none in home…" | api-design-lead | — | L | ☑ `5af71c0` |
+| T2 | Event schema 8→9: `EventPayload::ComposedArtifactInstalled{kind,path,hash,gate_node}`, `ArtifactKind::{Profile,Flow}`, migration + proptest + variant-bump test | "Event schema migration 8→9 has the round-trip proptest…" | api-design-lead | — | M | ☑ `0836b2a` |
 | T3 | Queue vocabulary: `RoadmapTask.priority`/`.flow`, `FlowRef`, `RunOrigin::Task{project_root,task_id,attempt,roadmap_hash}`, `[queue] aging_threshold`, `QueueEntry` + pure `QueuePolicy::next` with proptest laws | "Given a Low task skipped `aging_threshold` times…" | api-design-lead (types), qa-lead (laws) | — | M | ☐ |
 | T4 | Registry migration 0017 `task_queue` + `project_queue.paused`; `TaskQueueStore` (hash-keyed mirror, CAS dispatch, `attempt`), `list_runs_readonly` | "Given a dependency in `Failed`…" (store); "Daemon restart with a row in `Dispatched`…" (store) | async-systems-lead | T3 | M | ☐ |
 | T5 | `TickLoop` extracted (wake + snooze on it) + `TaskScheduler` tick: mirror → policy → dispatch via `TicketRunLauncher` with `RunOrigin::Task`, single-flight, injected clock, startup reconcile, re-queue once; task run on bundled `single-task` template (**named stub, replaced by T10**) | "Given the queue, when the tick runs, then `t1` dispatches first…"; "Daemon restart with a row in `Dispatched`…" | async-systems-lead | T3, T4 | L | ☐ |
@@ -54,6 +54,7 @@ Parallel lanes: {T1, T2, T3} together at the start; T7 beside T5/T6; T8, T9 besi
 - T5's bundled `single-task` template is a named stub; nothing but T10 may depend on it.
 - Local test runner for env-touching crates is `cargo test`, not nextest (memory `surge-env-mutation-unsound`) — T13 brief carries this.
 - Project gate: `just ci`.
+- `acceptance.md` (authored during the T1/T2 wave): G4's filter `test(ready)` matches pre-existing `surge ready` tests and reports a false pass — T7 must sharpen it to the exact new test name; every task sharpens its own gates' filters when the tests land.
 
 ## Shared contracts
 | Producer | Consumer | Contract + source | Compatible |
@@ -69,4 +70,18 @@ Parallel lanes: {T1, T2, T3} together at the start; T7 beside T5/T6; T8, T9 besi
 | T5 | wake/snooze refactor | `TickLoop{poll_interval, shutdown}.run(|now| …)`, injected `now_ms`, cancellation-safe. | yes |
 
 ## Execution entries
-*(filled as tasks land)*
+
+### T1
+- **Source/Destination:** commit `5af71c0` (on `0836b2a`), T1 paths only.
+- **Acceptance evidence:** `profile_loader::registry::tests::{project_profile_resolves_with_project_provenance_when_home_has_none, project_profile_wins_over_home_with_the_same_name, two_runs_from_one_home_registry_never_see_each_others_project_profiles}` (RED: E0599 on the three-lane API, GREEN 46/46); engine-level `tests/engine_project_layer_scoping.rs` (two repos, one engine; typed `EngineError::ProjectLayer`; resume re-derives layer — mutation-checked). fmt/clippy clean workspace-wide (surge-ui excluded, compiles); nextest 2756 pass, same 1 env failure as T2.
+- **Review/repair:** api-design-lead BLOCKED (transient on-disk spec drift + design items) and harsh-critic RESHAPE → folded: private `ProjectLayer` fields with root-only serde (IPC cannot point a lane elsewhere), `Arc` home lane, chain-level shadow record on `ProfileResolved`, `shadows` in list/CLI/catalog, CLI skill roots aligned, git-toplevel walk; rust-reviewer NEEDS WORK (1 blocker on resume derivation) → resolved with evidence that daemon IPC/CLI/bootstrap seed from `worktree_path`; 1 repair dispatch.
+- **Discoveries for dependants:** `ProjectLayer` accessors `root()/profiles_dir()/flows_dir()/skills_dir()`, serde `{root}` — **T8** uses `flows_dir()`. `DiskProfileSet::scan` is flat — **T12**'s `_generated/` subdir needs recursion or a second lane. `resume_run` re-derives the layer from the worktree; exact for daemon IPC/CLI/bootstrap-start, empty for ticket-launched runs — **T5/recovery** must pass `RunOrigin::Task.project_root` through once T3 lands. Same-provider skill collisions are `SkillError::Ambiguous`, not a project win — real precedence belongs to `SkillCatalog::resolve` (T8 era). **T13** must gate chain-level shadowing (parents), not only the leaf.
+- **Integration:** landed.
+
+### T2
+- **Source/Destination:** commit `0836b2a` on feat/ui-consumer-readiness (same checkout, T2 paths only).
+- **Acceptance evidence:** variant-set snapshot guard `run_event::tests::event_payload_variant_set_is_pinned_to_schema_version` (RED on variant-without-bump, GREEN at v9); proptest `v9_composed_artifact_installed_round_trips_for_any_fields`; `v8_bytes_of_pre_v9_variants_still_migrate_unchanged`. fmt/clippy(-D warnings, --exclude surge-ui) clean; workspace `cargo test` 2760 pass, 1 pre-existing env failure (`skill_catalog::real_corpus_packs_resolve_without_rejection`, host corpus).
+- **Review/repair:** api-design-lead RESHAPE (folded: `RelPath` newtype, growth-policy doc); harsh-critic BLOCKED on a transient on-disk spec drift, verified false at build; 5a steward OK; 5b rust-reviewer NEEDS WORK → all fixed in-task (1 repair dispatch).
+- **Discoveries for dependants:** `RelPath` at `surge_core::artifact_contract::RelPath` (not re-exported from lib.rs — T1/T13 may add); `ContentHash` already exists at `surge-core/src/content_hash.rs` (T13: not new); `ArtifactKind::Flow` pre-existed; **T10:** `surge-persistence/src/runs/views.rs::maintain` catch-all is `debug_assert!(false)` — add `ComposedArtifactInstalled` to the import (:34) and the view-neutral arm (~:477) or the first append panics in debug; run-report neutral arm needs a renderer (T10/T12); **T12:** profile contract path is `profiles/<name>.toml` — validate generator output by contract, use the install location as the event `path`; **T13:** key the trust store on `RelPath` canonical string.
+- **Integration:** landed; T3 rebases on it (same file `run_event.rs`).
+
