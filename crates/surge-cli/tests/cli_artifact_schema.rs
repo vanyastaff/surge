@@ -100,6 +100,21 @@ fn schema_plan_reports_markdown_only_error() {
 }
 
 #[test]
+fn schema_profile_reports_pending_message_not_markdown_sections() {
+    // Same status as flow: a TOML kind typed in Rust, no JSON schema and no
+    // markdown outline — must not be described as markdown-only.
+    Command::cargo_bin("surge")
+        .unwrap()
+        .args(["artifact", "schema", "profile"])
+        .assert()
+        .failure()
+        .stderr(contains("no JSON schema for profile"))
+        .stderr(contains("pending"))
+        .stderr(contains("surge_core::profile::Profile"))
+        .stderr(predicates::str::contains("## ").not());
+}
+
+#[test]
 fn schema_flow_reports_pending_message_not_markdown_sections() {
     // flow.toml has no JSON schema today and no markdown outline either.
     // The CLI must surface that explicitly as a pending-schema message

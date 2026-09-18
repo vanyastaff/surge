@@ -45,6 +45,7 @@ sections are surfaced explicitly instead.
 | `story`          | markdown       | no — required sections only             |
 | `plan`           | markdown       | no — required sections only             |
 | `flow`           | flow-toml      | pending — described by `surge_core::Graph` in Rust |
+| `profile`        | TOML           | pending — described by `surge_core::profile::Profile` in Rust |
 
 Each generated schema carries:
 

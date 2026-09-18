@@ -625,7 +625,11 @@ impl RunReport {
                 // (`HookExecuted` — only its *rejection* is reported, via
                 // `OutcomeRejectedByHook` above), run-forking
                 // (`ForkCreated`), and subgraph/notify bookkeeping
-                // (`SubgraphEntered`, `SubgraphExited`, `NotifyDelivered`).
+                // (`SubgraphEntered`, `SubgraphExited`, `NotifyDelivered`),
+                // and the composed-artefact install record
+                // (`ComposedArtifactInstalled` — schema v9; no section
+                // renders it yet, which is a gap the task-run producers
+                // close when they start emitting it, not a design choice).
                 EventPayload::BootstrapStageStarted { .. }
                 | EventPayload::BootstrapEditRequested { .. }
                 | EventPayload::BootstrapTelemetry { .. }
@@ -648,7 +652,8 @@ impl RunReport {
                 | EventPayload::ForkCreated { .. }
                 | EventPayload::SubgraphEntered { .. }
                 | EventPayload::SubgraphExited { .. }
-                | EventPayload::NotifyDelivered { .. } => {},
+                | EventPayload::NotifyDelivered { .. }
+                | EventPayload::ComposedArtifactInstalled { .. } => {},
             }
         }
 

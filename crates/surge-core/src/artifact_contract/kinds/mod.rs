@@ -5,6 +5,7 @@ pub(super) mod description;
 pub(super) mod discovered_tasks;
 pub(super) mod flow;
 pub(super) mod plan;
+pub(super) mod profile;
 pub(super) mod requirements;
 pub(super) mod roadmap;
 pub(super) mod roadmap_patch;

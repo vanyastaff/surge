@@ -23,6 +23,8 @@ use super::contract::{
 /// - `flow`: there is currently no exported JSON Schema; the contract is
 ///   enforced by [`crate::graph::Graph`] in Rust plus engine-level
 ///   validation. Schema export for flow is tracked separately.
+/// - `profile`: TOML, typed by [`crate::profile::Profile`] in Rust; no
+///   exported JSON Schema yet (same status as `flow`).
 #[must_use]
 pub const fn markdown_outline(kind: ArtifactKind) -> Option<&'static [&'static str]> {
     match kind {
@@ -55,7 +57,8 @@ pub const fn markdown_outline(kind: ArtifactKind) -> Option<&'static [&'static s
         | ArtifactKind::DiscoveredTasks
         | ArtifactKind::VerificationReport
         | ArtifactKind::Spec
-        | ArtifactKind::Flow => None,
+        | ArtifactKind::Flow
+        | ArtifactKind::Profile => None,
     }
 }
 
@@ -68,8 +71,9 @@ const SCHEMA_ID_PREFIX: &str = "https://surge.dev/schema/v1";
 /// Surge owns as a typed artifact contract (`spec`, `roadmap`, `roadmap-patch`),
 /// plus an inline schema for the ADR TOML frontmatter. Returns `None` for
 /// markdown-only kinds (`description`, `requirements`, `story`, `plan`) and
-/// for `flow` — the latter is currently described by [`crate::graph::Graph`]
-/// in Rust and tracked separately for schema export.
+/// for `flow` and `profile` — those are currently described by
+/// [`crate::graph::Graph`] / [`crate::profile::Profile`] in Rust and tracked
+/// separately for schema export.
 #[must_use]
 pub fn json_schema_for(kind: ArtifactKind) -> Option<serde_json::Value> {
     match kind {
@@ -84,6 +88,7 @@ pub fn json_schema_for(kind: ArtifactKind) -> Option<serde_json::Value> {
         >("verification-report.json")),
         ArtifactKind::Adr => Some(adr_frontmatter_schema()),
         ArtifactKind::Flow
+        | ArtifactKind::Profile
         | ArtifactKind::Description
         | ArtifactKind::Requirements
         | ArtifactKind::Story

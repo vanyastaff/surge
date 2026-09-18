@@ -86,7 +86,21 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// existing named causes are untouched) — only a payload that actually
 /// carries the new tag needs the bump, exactly like v6/v7's own "old
 /// payloads decode cleanly, they simply never contain the new thing."
-pub const MAX_SUPPORTED_VERSION: u32 = 8;
+///
+/// **v9 (introduced 2026-09):** adds [`EventPayload::ComposedArtifactInstalled`]
+/// (autonomous task orchestration — a composed flow or profile installed
+/// into the project's `.surge/` layer after the gate accepted it), carrying
+/// `kind`, `path`, `hash`, and `gate_node`. A new top-level variant,
+/// bumped for the same reason as v2/v4/v5/v6/v7: a v8-max reader has no
+/// representation to decode it into and must fail closed with
+/// [`SurgeError::SchemaTooNew`]. Two things are new *about* this bump:
+/// the variant is the first to embed
+/// [`crate::artifact_contract::ArtifactKind`] in a persisted payload, so
+/// from v9 on growing that enum is a v8-style nested-enum bump (its doc
+/// says so); and `run_event.rs` now pins the variant-tag set to this
+/// constant in a snapshot test, so the next variant added without touching
+/// this line fails a test instead of a review.
+pub const MAX_SUPPORTED_VERSION: u32 = 9;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -262,6 +276,27 @@ impl Migration for IdentityV8 {
     }
 }
 
+/// Identity migration for v9 — the schema bump that introduced the
+/// `ComposedArtifactInstalled` variant (composed flow/profile installed
+/// behind the gate). The wire shape is unchanged (same JSON-encoded
+/// [`VersionedEventPayload`] wrapper); old payloads decode cleanly because
+/// they never carry the new variant. The `schema_version` field is the
+/// only signal that distinguishes v1..v8 from v9 payloads.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV9;
+
+impl Migration for IdentityV9 {
+    fn version(&self) -> u32 {
+        9
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v9 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -270,7 +305,7 @@ pub struct MigrationChain {
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
-    /// [`IdentityV7`], and [`IdentityV8`].
+    /// [`IdentityV7`], [`IdentityV8`], and [`IdentityV9`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -283,6 +318,7 @@ impl MigrationChain {
                 Box::new(IdentityV6),
                 Box::new(IdentityV7),
                 Box::new(IdentityV8),
+                Box::new(IdentityV9),
             ],
         }
     }
@@ -391,7 +427,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 8);
+        assert_eq!(wrapper.schema_version, 9);
     }
 
     #[test]
@@ -399,7 +435,7 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 8 }
+            SurgeError::SchemaTooNew { found: 99, max: 9 }
         ));
     }
 
@@ -456,6 +492,123 @@ mod tests {
         let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn v9_composed_artifact_installed_round_trips() {
+        use crate::artifact_contract::{ArtifactKind, RelPath};
+        use crate::content_hash::ContentHash;
+
+        let payload = EventPayload::ComposedArtifactInstalled {
+            kind: ArtifactKind::Flow,
+            path: RelPath::new(".surge/flows/bug-fix-1.0.toml").unwrap(),
+            hash: ContentHash::compute(b"schema_version = 1\n"),
+            gate_node: NodeKey::try_from("flow_generator").unwrap(),
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+
+        // Wire shape other crates (and the trust store) will see.
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["schema_version"], 9);
+        assert_eq!(json["payload"]["type"], "composed_artifact_installed");
+        assert_eq!(json["payload"]["kind"], "flow");
+        assert_eq!(json["payload"]["path"], ".surge/flows/bug-fix-1.0.toml");
+        assert_eq!(json["payload"]["gate_node"], "flow_generator");
+        assert!(
+            json["payload"]["hash"]
+                .as_str()
+                .is_some_and(|h| h.starts_with("sha256:"))
+        );
+    }
+
+    #[test]
+    fn v9_rejects_a_path_that_escapes_the_project_root() {
+        // The invariant lives in the type, so it also holds on the read
+        // side: a hand-edited or hostile log line cannot smuggle an
+        // absolute or `..` path into a trust-store key.
+        for bad in ["/etc/passwd", "../outside.toml", ""] {
+            let json = serde_json::json!({
+                "schema_version": 9,
+                "payload": {
+                    "type": "composed_artifact_installed",
+                    "kind": "profile",
+                    "path": bad,
+                    "hash": sample_hash_json(),
+                    "gate_node": "gen",
+                }
+            });
+            let bytes = serde_json::to_vec(&json).unwrap();
+            let err = migrate_payload(9, &bytes).unwrap_err();
+            assert!(
+                matches!(err, SurgeError::Spec(ref m) if m.contains("v9 payload decode failed")),
+                "{bad:?} must be refused, got {err:?}"
+            );
+        }
+    }
+
+    /// A well-formed `sha256:…` string for hand-built JSON payloads.
+    fn sample_hash_json() -> String {
+        crate::content_hash::ContentHash::compute(b"x").to_string()
+    }
+
+    #[test]
+    fn v8_bytes_of_pre_v9_variants_still_migrate_unchanged() {
+        // A log written by a v8 daemon contains no `ComposedArtifactInstalled`
+        // line; every line it does contain must come through the v8 entry of
+        // the chain byte-for-byte equal to what a v9 writer would produce for
+        // the same payload — the bump added a variant, it did not reshape any.
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: Some(crate::run_event::BootstrapStage::Flow),
+            reason: "written under v8".into(),
+            cause: EscalationCause::CapacityBlindParkLimitExceeded,
+        };
+        let v8_wrapper = serde_json::json!({ "schema_version": 8, "payload": payload });
+        let bytes = serde_json::to_vec(&v8_wrapper).unwrap();
+        assert_eq!(migrate_payload(8, &bytes).unwrap(), payload);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 256,
+            ..Default::default()
+        })]
+
+        /// Round-trip law for the v9 variant over its whole value space:
+        /// any `kind`, any *valid* relative path (the `RelPath` strategy is
+        /// the type's own acceptance law — see `artifact_contract::path`),
+        /// any 32-byte hash, any well-formed node key. What this exercises
+        /// beyond the derive is the three hand-written serde impls the
+        /// variant composes (`RelPath`, `ContentHash`, `NodeKey`) agreeing
+        /// with their `PartialEq` after a trip through the migration chain.
+        #[test]
+        fn v9_composed_artifact_installed_round_trips_for_any_fields(
+            is_profile in proptest::bool::ANY,
+            // Segments that are always normal components: a `.`-only
+            // segment (`.`/`..`) is a `RelPath` *rejection* case, covered
+            // by that type's own law tests, not a round-trip input.
+            parts in proptest::collection::vec("[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,11}", 1..6),
+            hash_bytes in proptest::array::uniform32(proptest::num::u8::ANY),
+            gate in "[A-Za-z][A-Za-z0-9_]{0,31}",
+        ) {
+            use crate::artifact_contract::{ArtifactKind, RelPath};
+            use crate::content_hash::ContentHash;
+
+            let kind = if is_profile { ArtifactKind::Profile } else { ArtifactKind::Flow };
+            let path = RelPath::new(parts.join("/")).unwrap();
+            let payload = EventPayload::ComposedArtifactInstalled {
+                kind,
+                path,
+                hash: ContentHash::from_bytes(hash_bytes),
+                gate_node: NodeKey::try_from(gate.as_str()).unwrap(),
+            };
+            let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+            let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+            proptest::prop_assert_eq!(decoded, payload);
+        }
     }
 
     #[test]

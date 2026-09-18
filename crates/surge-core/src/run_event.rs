@@ -2,6 +2,7 @@
 
 use crate::approvals::{ApprovalChannel, ApprovalChannelKind, ApprovalPolicy};
 use crate::archetype::ArchetypeMetadata;
+use crate::artifact_contract::{ArtifactKind, RelPath};
 use crate::capacity::WakeBasis;
 use crate::content_hash::ContentHash;
 use crate::edge::EdgeKind;
@@ -581,6 +582,43 @@ pub enum EventPayload {
         /// pin/hash check.
         gate_enabled: bool,
     },
+
+    /// A composed artefact (a flow the generator wrote for a task run, or a
+    /// profile it composed alongside it) was installed into the project's
+    /// `.surge/` layer. Emitted **only after the human gate resolved
+    /// accept** — never on draft, edit, or reject — so the presence of this
+    /// event is the durable fact "this file is now a catalog entry the
+    /// project trusts", and its absence means the artefact never left the
+    /// run worktree. Schema v9.
+    ///
+    /// Producers: the task-run graph builder (`kind: Flow`) and the
+    /// composed-profile install step (`kind: Profile`). Consumer: the trust
+    /// store, which pins `(repo, path) → hash` from this event so the
+    /// system's own output is never re-prompted as an untrusted project
+    /// file.
+    ComposedArtifactInstalled {
+        /// Which artefact family was installed. Only `Flow` and `Profile`
+        /// are composed today; the type is the full enum so the event needs
+        /// no parallel one — and that makes `ArtifactKind` a persisted enum
+        /// (see its growth-policy doc).
+        kind: ArtifactKind,
+        /// Where it now lives, **relative to the project root** (e.g.
+        /// `.surge/flows/bug-fix-1.0.toml`), in [`RelPath`]'s canonical
+        /// `/`-joined spelling — the same string the trust store keys on.
+        /// Not the run-worktree path the generator wrote to.
+        path: RelPath,
+        /// [`ContentHash::compute`] over the installed file's bytes **as
+        /// written to disk** (read back after the write, not the in-memory
+        /// artefact or a re-serialization of it). This is the value the
+        /// trust store pins; a load-time hash of the same file must equal
+        /// it or the artefact reads as tampered.
+        hash: ContentHash,
+        /// The `node` of the `HumanInputResolved` event that accepted this
+        /// install — the ADR-0015 gate runs on the producing node, not on a
+        /// separate `human_gate` node, so this is the join key back to that
+        /// resolution, not a node kind.
+        gate_node: NodeKey,
+    },
 }
 
 impl EventPayload {
@@ -664,6 +702,7 @@ impl EventPayload {
             Self::NotifyDelivered { .. } => "NotifyDelivered",
             Self::EscalationRequested { .. } => "EscalationRequested",
             Self::SkillBound { .. } => "SkillBound",
+            Self::ComposedArtifactInstalled { .. } => "ComposedArtifactInstalled",
         }
     }
 }
@@ -1442,6 +1481,83 @@ mod tests {
         }
     }
 
+    /// The "adding a variant bumps the schema" guard, as a test rather than a
+    /// review rule. `EventPayload`'s tag set is snapshotted under a name that
+    /// carries `MAX_SUPPORTED_VERSION`: a variant added *without* a bump
+    /// changes the tag set under the same snapshot name and fails here; a
+    /// variant added *with* a bump lands in a new snapshot that has to be
+    /// reviewed and accepted.
+    ///
+    /// The tag set is read from this file's source rather than by
+    /// constructing one value per variant. Two independent scans keep the
+    /// scrape honest: the variant names are taken from the `pub enum
+    /// EventPayload` block, and `discriminant_str`'s arms are scanned
+    /// separately and required to name exactly the same set — so an arm
+    /// rustfmt wrapped onto two lines, or a tag that stopped echoing its
+    /// variant, fails the test instead of silently shrinking the snapshot.
+    #[test]
+    fn event_payload_variant_set_is_pinned_to_schema_version() {
+        const SOURCE: &str = include_str!("run_event.rs");
+
+        fn block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+            let from = source.find(start).expect("block start present");
+            let rest = &source[from..];
+            let to = rest.find(end).expect("block end present");
+            &rest[..to]
+        }
+
+        // Scan 1: the enum's own variant list (top-level `    Name {` / `    Name,`).
+        let enum_block = block(SOURCE, "pub enum EventPayload {", "\n}\n");
+        let mut variants: Vec<&str> = enum_block
+            .lines()
+            .filter(|line| line.starts_with("    ") && !line.starts_with("     "))
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.starts_with("///") || line.starts_with("//") || line.starts_with('#') {
+                    return None;
+                }
+                let name = line.split(|c: char| !c.is_ascii_alphanumeric()).next()?;
+                name.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_uppercase())
+                    .then_some(name)
+            })
+            .collect();
+        variants.sort_unstable();
+        variants.dedup();
+
+        // Scan 2: `discriminant_str`'s arms, joined across rustfmt wrapping.
+        let arms_block = block(SOURCE, "pub fn discriminant_str(&self)", "\n    }\n");
+        let flat = arms_block.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut tags: Vec<&str> = flat
+            .split("Self::")
+            .skip(1)
+            .filter_map(|arm| {
+                let (name, tail) = arm.split_once(" { .. } => \"")?;
+                let (tag, _) = tail.split_once('"')?;
+                (tag == name).then_some(name)
+            })
+            .collect();
+        tags.sort_unstable();
+        tags.dedup();
+
+        assert_eq!(
+            tags, variants,
+            "discriminant_str's arms must name exactly the enum's variants"
+        );
+        assert!(
+            variants.len() > 50,
+            "expected to find EventPayload's variants in this file, got {variants:?}"
+        );
+        insta::assert_snapshot!(
+            format!(
+                "event_payload_variants_v{}",
+                crate::migrations::MAX_SUPPORTED_VERSION
+            ),
+            variants.join("\n")
+        );
+    }
+
     #[test]
     fn discriminant_str_covers_new_variants() {
         let p1 = EventPayload::SubgraphEntered {
@@ -1472,6 +1588,29 @@ mod tests {
             total_tokens: 5_000,
         };
         assert_eq!(p4.discriminant_str(), "BudgetExceeded");
+
+        let p5 = EventPayload::ComposedArtifactInstalled {
+            kind: ArtifactKind::Profile,
+            path: RelPath::new(".surge/profiles/_generated/reviewer-1.0.toml").unwrap(),
+            hash: ContentHash::compute(b"profile"),
+            gate_node: NodeKey::try_from("compose").unwrap(),
+        };
+        assert_eq!(p5.discriminant_str(), "ComposedArtifactInstalled");
+    }
+
+    #[test]
+    fn composed_artifact_installed_roundtrips_through_bincode_interface() {
+        let payload = EventPayload::ComposedArtifactInstalled {
+            kind: ArtifactKind::Profile,
+            path: RelPath::new(".surge/profiles/_generated/reviewer-1.0.toml").unwrap(),
+            hash: ContentHash::compute(b"profile bytes as written"),
+            gate_node: NodeKey::try_from("compose").unwrap(),
+        };
+        let bytes = payload.to_bincode().unwrap();
+        assert_eq!(EventPayload::from_bincode(&bytes).unwrap(), payload);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["type"], "composed_artifact_installed");
+        assert_eq!(json["kind"], "profile");
     }
 
     #[test]

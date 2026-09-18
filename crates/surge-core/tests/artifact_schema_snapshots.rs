@@ -64,6 +64,14 @@ fn flow_currently_has_no_exported_schema() {
 }
 
 #[test]
+fn profile_currently_has_no_exported_schema() {
+    // Profile is described by [`surge_core::profile::Profile`] in Rust, the
+    // same status as flow: no JSON schema export and no markdown body.
+    assert!(json_schema_for(ArtifactKind::Profile).is_none());
+    assert!(markdown_outline(ArtifactKind::Profile).is_none());
+}
+
+#[test]
 fn contract_summary_combines_schema_and_outline() {
     let spec = contract_summary(ArtifactKind::Spec);
     assert_eq!(spec.kind, ArtifactKind::Spec);

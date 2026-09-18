@@ -12,6 +12,15 @@ pub mod bundled;
 pub mod keyref;
 pub mod registry;
 
+/// Current version of the profile TOML format — the value
+/// [`Profile::schema_version`] is expected to carry, and what the `profile`
+/// artifact contract validates against. Owned here, beside the type it
+/// versions (as [`crate::graph::SCHEMA_VERSION`] is), not by the shared
+/// artifact-contract constant: the profile format's lifecycle is the
+/// registry's, and sharing a constant would fail every profile the day an
+/// unrelated contract bumps.
+pub const SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     pub schema_version: u32,

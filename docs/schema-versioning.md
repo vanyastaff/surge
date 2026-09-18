@@ -8,7 +8,7 @@ memory database versions independently (see below).
 |--------|-------|------------------|------|
 | `surge.toml` config | project root | `surge_core::config::CONFIG_SCHEMA_VERSION` | **1** |
 | `flow.toml` graph | run definition | `surge_core::graph::SCHEMA_VERSION` | **1** |
-| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **8** (see below) |
+| Event payloads | per-run SQLite log | `VersionedEventPayload.schema_version` + `surge_core::migrations` | **9** (see below) |
 | Memory DB | `~/.surge/memory.db` | `surge_persistence::memory::schema::SCHEMA_VERSION` | **2** (see below) |
 
 ## `surge.toml` (config)
@@ -79,6 +79,25 @@ merely-absent one does not"), applied to an enum living inside a variant
 rather than to a top-level variant of `EventPayload` — the "Principles"
 section below is about `EventPayload`'s own variants, but the same logic
 governs any nested closed enum reachable from a persisted payload.
+
+**v9 is a top-level variant again, and it makes a second nested enum
+persisted.** `EventPayload::ComposedArtifactInstalled { kind, path, hash,
+gate_node }` (autonomous task orchestration: a composed flow or profile
+installed into the project's `.surge/` layer after the gate accepted it) is
+a new variant of `EventPayload` itself — the v2/v4/v5/v6/v7 case, bumped
+for the same reason. Its `kind` field is `ArtifactKind`
+(`#[serde(rename_all = "kebab-case")]`, no `#[serde(other)]`), which until
+v9 only ever lived in memory; from v9 on it is reachable from a persisted
+payload, so **adding an `ArtifactKind` variant is a v8-style nested-enum
+bump** — the enum's own doc says so. Its `path` field is
+`surge_core::artifact_contract::RelPath`, whose constructor (and therefore
+deserializer) refuses absolute and `..` paths and stores one `/`-joined
+spelling; a v9 line carrying such a path is refused on read, not
+tolerated. v9 also adds the guard the rule above kept asking reviewers to
+apply by hand: `run_event.rs` snapshots the `EventPayload` tag set under a
+name that carries `MAX_SUPPORTED_VERSION`
+(`src/snapshots/…event_payload_variants_v9.snap`), so a variant added
+without a bump fails a test, and a bump produces a new snapshot to review.
 
 **The additive-field exception itself is not a general rule — it is tied to
 one property of the durable encoding, and stops holding the moment that

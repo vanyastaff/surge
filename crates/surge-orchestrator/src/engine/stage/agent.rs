@@ -1757,7 +1757,7 @@ fn missing_declared_artifact_reason(
 ) -> String {
     let kind = declaration.contract.kind;
     match kind {
-        ArtifactKind::Adr | ArtifactKind::Story => {
+        ArtifactKind::Adr | ArtifactKind::Story | ArtifactKind::Profile => {
             let contract = kind.contract();
             format!(
                 "outcome '{outcome}' must produce a {kind} artifact matching declared path '{}' (contract pattern '{}')",
@@ -1814,7 +1814,7 @@ fn artifact_declaration_matches_path(
     }
 
     match declaration.contract.kind {
-        ArtifactKind::Adr | ArtifactKind::Story => {
+        ArtifactKind::Adr | ArtifactKind::Story | ArtifactKind::Profile => {
             declared == declaration.contract.kind.contract().canonical_path
                 && declaration
                     .contract

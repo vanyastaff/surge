@@ -107,9 +107,9 @@ fn single_schema_value(kind: ArtifactKind) -> Result<serde_json::Value> {
         return Ok(schema);
     }
 
-    if kind == ArtifactKind::Flow {
+    if let Some((rust_type, extra)) = pending_schema_owner(kind) {
         bail!(
-            "no JSON schema for {kind}: flow.toml schema export is pending — the contract is currently enforced by `surge_core::Graph` and engine-level validation. Use `surge artifact validate --kind flow <path>` to check a flow artifact."
+            "no JSON schema for {kind}: schema export is pending — the contract is currently enforced by `{rust_type}`{extra}. Use `surge artifact validate --kind {kind} <path>` to check a {kind} artifact."
         );
     }
 
@@ -133,14 +133,27 @@ fn all_schemas_value() -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
+/// TOML kinds whose contract is a Rust type rather than an exported JSON
+/// Schema or a markdown outline: the type that owns it, and any extra
+/// enforcement worth naming. `None` for every other kind.
+fn pending_schema_owner(kind: ArtifactKind) -> Option<(&'static str, &'static str)> {
+    match kind {
+        ArtifactKind::Flow => Some(("surge_core::Graph", " and engine-level validation")),
+        ArtifactKind::Profile => {
+            Some(("surge_core::profile::Profile", " and the profile registry"))
+        },
+        _ => None,
+    }
+}
+
 fn no_schema_placeholder(kind: ArtifactKind) -> serde_json::Value {
     let primary_format = describe_primary_format(kind);
-    if kind == ArtifactKind::Flow {
+    if let Some((rust_type, extra)) = pending_schema_owner(kind) {
         return serde_json::json!({
             "x-surge-no-json-schema": true,
             "primary_format": primary_format,
             "x-surge-schema-status": "pending",
-            "x-surge-schema-note": "flow.toml schema export is pending; the contract is currently enforced by surge_core::Graph and engine-level validation.",
+            "x-surge-schema-note": format!("{kind} schema export is pending; the contract is currently enforced by {rust_type}{extra}."),
         });
     }
     serde_json::json!({

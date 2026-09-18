@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
-use super::path::{is_adr_path, is_story_path, normalize_path};
+use super::path::{is_adr_path, is_profile_path, is_story_path, normalize_path};
 
 /// Current schema version used by Surge-owned artifact contracts.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -19,6 +19,18 @@ pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const ROADMAP_SCHEMA_VERSION: u32 = 2;
 
 /// Role artifact families that Surge validates.
+///
+/// **Growth policy — this enum is persisted.** Since event schema v9 a
+/// value of this type rides inside
+/// [`crate::run_event::EventPayload::ComposedArtifactInstalled`], which is
+/// written to the per-run event log and read back through
+/// [`crate::migrations`]. `#[serde(rename_all = "kebab-case")]` with no
+/// `#[serde(other)]` fallback means an old reader meeting a tag it has never
+/// heard of fails to decode — the same failure mode as a new `EventPayload`
+/// variant, one level down (the rule `crate::run_event::EscalationCause`
+/// earned at v8). **Adding a variant here bumps
+/// [`crate::migrations::MAX_SUPPORTED_VERSION`]**; see
+/// `docs/schema-versioning.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -45,6 +57,10 @@ pub enum ArtifactKind {
     Plan,
     /// Executable `flow.toml` graph artifact.
     Flow,
+    /// Role profile TOML (a [`crate::profile::Profile`]) — composed by the
+    /// flow generator for a task run and installed under
+    /// `.surge/profiles/_generated/` behind the human gate.
+    Profile,
 }
 
 impl ArtifactKind {
@@ -63,6 +79,7 @@ impl ArtifactKind {
             Self::Story => "story",
             Self::Plan => "plan",
             Self::Flow => "flow",
+            Self::Profile => "profile",
         }
     }
 
@@ -106,6 +123,7 @@ impl FromStr for ArtifactKind {
             "story" | "story-file" => Ok(Self::Story),
             "plan" | "implementation-plan" => Ok(Self::Plan),
             "flow" | "flow-toml" => Ok(Self::Flow),
+            "profile" | "profile-toml" => Ok(Self::Profile),
             _ => Err(ParseArtifactKindError {
                 input: input.to_owned(),
             }),
@@ -137,6 +155,8 @@ pub enum SchemaVersionOwner {
     Graph,
     /// No machine-readable schema-version field is required.
     HumanReadable,
+    /// The profile format's own version, [`crate::profile::SCHEMA_VERSION`].
+    Profile,
 }
 
 /// Stable reference embedded in profiles and diagnostics.
@@ -202,6 +222,7 @@ impl ArtifactContract {
         match self.kind {
             ArtifactKind::Adr => is_adr_path(normalized),
             ArtifactKind::Story => is_story_path(normalized),
+            ArtifactKind::Profile => is_profile_path(normalized),
             _ => false,
         }
     }
@@ -228,6 +249,7 @@ pub const fn contract_for(kind: ArtifactKind) -> ArtifactContract {
         ArtifactKind::Story => STORY_CONTRACT,
         ArtifactKind::Plan => PLAN_CONTRACT,
         ArtifactKind::Flow => FLOW_CONTRACT,
+        ArtifactKind::Profile => PROFILE_CONTRACT,
     }
 }
 
@@ -239,6 +261,7 @@ pub(super) const fn schema_version_for_kind(kind: ArtifactKind) -> u32 {
     }
     match contract_for(kind).schema_version_owner {
         SchemaVersionOwner::Graph => crate::graph::SCHEMA_VERSION,
+        SchemaVersionOwner::Profile => crate::profile::SCHEMA_VERSION,
         SchemaVersionOwner::ArtifactContract | SchemaVersionOwner::HumanReadable => {
             ARTIFACT_SCHEMA_VERSION
         },
@@ -256,6 +279,7 @@ const ADR_ALIASES: &[&str] = &["adr.md"];
 const STORY_ALIASES: &[&str] = &[];
 const PLAN_ALIASES: &[&str] = &["plan.md"];
 const FLOW_ALIASES: &[&str] = &[];
+const PROFILE_ALIASES: &[&str] = &[];
 
 const DESCRIPTION_CONTRACT: ArtifactContract = ArtifactContract {
     kind: ArtifactKind::Description,
@@ -367,7 +391,20 @@ const FLOW_CONTRACT: ArtifactContract = ArtifactContract {
     aliases: FLOW_ALIASES,
 };
 
-const CONTRACTS: [ArtifactContract; 11] = [
+/// One profile per file under `profiles/`, so a single composition stage
+/// may emit several (the generator "may compose new profiles", plural);
+/// the pattern is matched by [`is_profile_path`], like `story`/`adr`.
+const PROFILE_CONTRACT: ArtifactContract = ArtifactContract {
+    kind: ArtifactKind::Profile,
+    canonical_path: "profiles/<name>.toml",
+    primary_format: ArtifactFormat::Toml,
+    markdown_compatibility: None,
+    schema_version_owner: SchemaVersionOwner::Profile,
+    validator_kind: "profile",
+    aliases: PROFILE_ALIASES,
+};
+
+const CONTRACTS: [ArtifactContract; 12] = [
     DESCRIPTION_CONTRACT,
     REQUIREMENTS_CONTRACT,
     ROADMAP_CONTRACT,
@@ -379,4 +416,5 @@ const CONTRACTS: [ArtifactContract; 11] = [
     STORY_CONTRACT,
     PLAN_CONTRACT,
     FLOW_CONTRACT,
+    PROFILE_CONTRACT,
 ];

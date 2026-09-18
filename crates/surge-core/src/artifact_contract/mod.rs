@@ -25,6 +25,7 @@ pub use diagnostic::{
     ArtifactDiagnosticCode, ArtifactDiagnosticSeverity, ArtifactValidationDiagnostic,
     ArtifactValidationError, ArtifactValidationReport,
 };
+pub use path::{RelPath, RelPathError};
 pub use schema::{ContractSummary, contract_summary, json_schema_for, markdown_outline};
 
 use path::normalize_path;
@@ -119,6 +120,7 @@ fn validate_artifact_text_into(
         ArtifactKind::Story => kinds::story::validate_story_markdown(report, content),
         ArtifactKind::Plan => kinds::plan::validate_plan_markdown(report, content),
         ArtifactKind::Flow => kinds::flow::validate_flow_toml(report, content),
+        ArtifactKind::Profile => kinds::profile::validate_profile_toml(report, content),
     }
 }
 
@@ -148,6 +150,7 @@ mod tests {
                 ArtifactKind::Story,
                 ArtifactKind::Plan,
                 ArtifactKind::Flow,
+                ArtifactKind::Profile,
             ]
         );
     }
@@ -186,6 +189,10 @@ mod tests {
         assert_eq!(
             ArtifactContractRef::current(ArtifactKind::RoadmapPatch).schema_version,
             ARTIFACT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            ArtifactContractRef::current(ArtifactKind::Profile).schema_version,
+            crate::profile::SCHEMA_VERSION
         );
     }
 
