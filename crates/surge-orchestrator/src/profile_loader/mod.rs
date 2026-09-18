@@ -7,9 +7,12 @@
 //! - [`disk::DiskProfileSet::scan`] walks `*.toml` under `profiles_dir()`
 //!   and warns on per-file parse failures.
 //! - [`registry::ProfileRegistry`] is the public accessor: `load`,
-//!   `resolve`, `list`. Resolution order is **versioned → latest →
-//!   bundled**, with version match canonical against
-//!   `Profile.role.version` (filename is just a hint).
+//!   `for_run`, `resolve`, `list`. Lanes in precedence order are
+//!   **project (`<repo>/.surge/profiles`) → home → bundled**; within a
+//!   disk lane, **versioned → latest**, with version match canonical
+//!   against `Profile.role.version` (filename is just a hint). The
+//!   project lane is bound per run (`for_run` with the run's
+//!   `surge_core::ProjectLayer`), never process-wide.
 //! - `resolver` implements `surge_core::ReferenceResolver` for
 //!   [`registry::ProfileRegistry`] — the production seam graph validation
 //!   uses to resolve profile references and agent-runtime identity.
@@ -18,9 +21,11 @@
 //!   artifact so `flow-generator@1.0` can pick profiles from what exists
 //!   instead of from its own prompt text.
 //!
-//! Plumbed into the engine via `EngineConfig::profile_registry` and
-//! consumed by the agent stage to derive `AgentKind` from
-//! `runtime.agent_id` instead of the M5 mock fast-path.
+//! Plumbed into the engine via `EngineConfig::profile_registry` (the
+//! process-wide home + bundled lanes), scoped per run by
+//! `EngineRunConfig::project_layer`, and consumed by the agent stage to
+//! derive `AgentKind` from `runtime.agent_id` instead of the M5 mock
+//! fast-path.
 
 pub mod catalog;
 pub mod disk;

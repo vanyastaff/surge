@@ -48,6 +48,7 @@ use crate::profile::{
     ExpectedBinding, InspectorUi, Profile, ProfileBindings, ProfileHooks, ProfileOutcome,
     PromptTemplate, RuntimeCfg, ToolsCfg, VerificationCfg, default_agent_id,
 };
+use crate::project_layer::Layer;
 use crate::sandbox::SandboxConfig;
 
 /// Maximum supported depth of an `extends` chain.
@@ -60,16 +61,52 @@ pub const MAX_EXTENDS_DEPTH: usize = 8;
 /// Where a resolved profile was found.
 ///
 /// Set by `surge-orchestrator::profile_loader::ProfileRegistry::resolve` after
-/// matching a `ProfileKeyRef` against the disk and bundled stores.
+/// matching a `ProfileKeyRef` against the project, home and bundled stores.
+/// Lookup precedence is project → home → bundled ([`Layer`]); the value is
+/// recorded on every `ProfileResolved` log line so a project file that
+/// shadows a home or bundled profile is never preferred silently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
-    /// Matched a versioned file (`name-MAJOR.MINOR.toml`) on disk.
+    /// Matched a file under the run's project layer
+    /// (`<repo>/.surge/profiles/`, see [`crate::ProjectLayer`]).
+    Project,
+    /// Matched a versioned file (`name-MAJOR.MINOR.toml`) under `SURGE_HOME`.
     Versioned,
-    /// Matched a latest file (`name.toml`) on disk.
+    /// Matched a latest file (`name.toml`) under `SURGE_HOME`.
     Latest,
     /// Matched a bundled fallback compiled into the binary.
     Bundled,
+}
+
+impl Provenance {
+    /// The [`Layer`] the profile came from: `Project` → project,
+    /// `Versioned`/`Latest` → home, `Bundled` → bundled.
+    #[must_use]
+    pub fn layer(self) -> Layer {
+        match self {
+            Provenance::Project => Layer::Project,
+            Provenance::Versioned | Provenance::Latest => Layer::Home,
+            Provenance::Bundled => Layer::Bundled,
+        }
+    }
+
+    /// Stable lower-case name, the same spelling serde uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provenance::Project => "project",
+            Provenance::Versioned => "versioned",
+            Provenance::Latest => "latest",
+            Provenance::Bundled => "bundled",
+        }
+    }
+}
+
+impl std::fmt::Display for Provenance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// A profile after `extends` resolution and chain merging.
@@ -761,6 +798,24 @@ mod tests {
             serde_json::to_string(&Provenance::Bundled).unwrap(),
             "\"bundled\""
         );
+        assert_eq!(
+            serde_json::to_string(&Provenance::Project).unwrap(),
+            "\"project\""
+        );
+    }
+
+    #[test]
+    fn provenance_display_matches_serde_and_maps_to_its_layer() {
+        for (provenance, layer) in [
+            (Provenance::Project, Layer::Project),
+            (Provenance::Versioned, Layer::Home),
+            (Provenance::Latest, Layer::Home),
+            (Provenance::Bundled, Layer::Bundled),
+        ] {
+            assert_eq!(provenance.layer(), layer);
+            let json = serde_json::to_string(&provenance).unwrap();
+            assert_eq!(json, format!("\"{provenance}\""));
+        }
     }
 
     // ── collect_chain tests ────────────────────────────────────────

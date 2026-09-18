@@ -303,8 +303,10 @@ async fn build_local_engine(
     );
     let notifier = build_default_notifier();
     let profile_registry = Arc::new(
-        surge_orchestrator::profile_loader::ProfileRegistry::load()
-            .context("load profile registry")?,
+        surge_orchestrator::profile_loader::ProfileRegistry::load(Some(
+            &surge_core::ProjectLayer::for_project(worktree),
+        ))
+        .context("load profile registry")?,
     );
     let engine = Arc::new(Engine::new_full(
         bridge,

@@ -18,7 +18,7 @@ use surge_core::sandbox::SandboxMode;
 use super::ProfileRegistry;
 
 /// Render every profile [`ProfileRegistry::list`] returns into a markdown
-/// table: `id@MAJOR.MINOR`, display name, canonical runtime, sandbox mode,
+/// table: `id@MAJOR.MINOR`, source lane, display name, canonical runtime, sandbox mode,
 /// verification authority, declared outcome ids, and `when_to_use`.
 ///
 /// **Format: markdown table, not TOML.** This text is spliced into an
@@ -43,8 +43,8 @@ use super::ProfileRegistry;
 #[must_use]
 pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
     let mut out = String::from(
-        "| profile | display name | runtime | sandbox | verifier | outcomes | when to use |\n\
-         |---|---|---|---|---|---|---|\n",
+        "| profile | source | display name | runtime | sandbox | verifier | outcomes | when to use |\n\
+         |---|---|---|---|---|---|---|---|\n",
     );
     for entry in registry.list() {
         let profile = &entry.profile;
@@ -71,8 +71,15 @@ pub fn render_profile_catalog(registry: &ProfileRegistry) -> String {
             .map(|o| o.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        // `source` names the lane so the generator can tell a repo-authored
+        // profile from a bundled one; a project entry that hides a home or
+        // bundled name says so (`project (shadows bundled)`).
+        let source = match entry.shadows {
+            Some(shadowed) => format!("{} (shadows {shadowed})", entry.provenance.layer()),
+            None => entry.provenance.layer().to_string(),
+        };
         out.push_str(&format!(
-            "| `{display_key}` | {} | {runtime} | {sandbox} | {verifier} | {outcomes} | {} |\n",
+            "| `{display_key}` | {source} | {} | {runtime} | {sandbox} | {verifier} | {outcomes} | {} |\n",
             md_cell(&profile.role.display_name),
             md_cell(&profile.role.when_to_use),
         ));
@@ -211,6 +218,39 @@ system = "test fixture prompt"
     /// profiles directory (not bundled) appears in the catalogue for
     /// free, because rendering goes through `ProfileRegistry::list()`
     /// rather than the bundled set directly.
+    #[test]
+    fn catalog_names_the_lane_and_what_a_project_profile_shadows() {
+        let home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let layer = surge_core::ProjectLayer::for_project(repo.path());
+        std::fs::create_dir_all(layer.profiles_dir()).unwrap();
+        std::fs::write(
+            layer.profiles_dir().join("implementer-1.0.toml"),
+            minimal_toml("implementer", "1.0.0", "repo-authored implementer", "mock"),
+        )
+        .unwrap();
+        std::fs::write(
+            layer.profiles_dir().join("repo-only-1.0.toml"),
+            minimal_toml("repo-only", "1.0.0", "only in this repo", "mock"),
+        )
+        .unwrap();
+        let registry = registry_with_disk(home.path()).for_run(&layer).unwrap();
+        let catalog = render_profile_catalog(&registry);
+        assert!(catalog.contains("| profile | source |"), "{catalog}");
+        assert!(
+            catalog.contains("| `implementer@1.0` | project (shadows bundled) |"),
+            "{catalog}"
+        );
+        assert!(
+            catalog.contains("| `repo-only@1.0` | project |"),
+            "{catalog}"
+        );
+        assert!(
+            catalog.contains("| `reviewer@1.0` | bundled |"),
+            "{catalog}"
+        );
+    }
+
     #[test]
     fn catalog_includes_a_disk_only_profile() {
         let tmp = TempDir::new().unwrap();

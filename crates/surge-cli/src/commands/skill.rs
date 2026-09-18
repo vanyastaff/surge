@@ -129,6 +129,7 @@ pub fn run(command: SkillCommands) -> Result<()> {
 }
 
 /// Where Surge looks for skill packs by default: the project's own
+/// `.surge/skills/` (the `surge_core::ProjectLayer` lane) and
 /// `.claude/skills/` (the Agent Skills convention `surge_core::skill`'s own
 /// module doc uses as its example root) plus the user-level
 /// `~/.claude/skills/` and `~/.claude/plugins/` directories Claude Code,
@@ -139,6 +140,12 @@ pub fn run(command: SkillCommands) -> Result<()> {
 /// task does not invent one.
 fn default_skill_roots(project_root: &Path, home_dir: &Path) -> Vec<surge_core::skill::SkillRoot> {
     vec![
+        surge_core::skill::SkillRoot {
+            provider: SkillProvider::ProjectDir,
+            path: surge_core::ProjectLayer::for_project(project_root)
+                .skills_dir()
+                .to_path_buf(),
+        },
         surge_core::skill::SkillRoot {
             provider: SkillProvider::ProjectDir,
             path: project_root.join(".claude").join("skills"),

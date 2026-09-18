@@ -27,6 +27,19 @@ pub enum EngineError {
     #[error("worktree path does not exist: {0}")]
     WorktreeMissing(PathBuf),
 
+    /// The run's project profile lane (`<root>/.surge/profiles`) could not
+    /// be bound: the directory exists but cannot be read, or one of its
+    /// profiles carries a broken prompt template. Operator-fixable — the
+    /// path names the repository whose files need attention.
+    #[error("project profile lane {profiles_dir} failed to load: {source}")]
+    ProjectLayer {
+        /// The lane that failed to load.
+        profiles_dir: PathBuf,
+        /// The registry's own error.
+        #[source]
+        source: surge_core::error::SurgeError,
+    },
+
     /// A persistence-layer operation failed.
     #[error("storage error: {0}")]
     Storage(String),

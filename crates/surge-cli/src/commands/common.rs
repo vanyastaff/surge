@@ -43,6 +43,17 @@ pub(crate) fn project_root(cwd: &Path) -> PathBuf {
         .unwrap_or_else(|_| cwd.to_path_buf())
 }
 
+/// The project's `.surge/` layer for a command run from the current
+/// directory: [`project_root`] of `cwd`, so `surge profile list` from
+/// `src/` sees the same `.surge/profiles/` a run started at the root does.
+///
+/// # Errors
+/// Fails only when the current directory cannot be determined.
+pub(crate) fn project_layer_from_cwd() -> Result<surge_core::ProjectLayer> {
+    let cwd = std::env::current_dir().context("determine current directory")?;
+    Ok(surge_core::ProjectLayer::for_project(project_root(&cwd)))
+}
+
 /// Resolve a run id, accepting the full ULID or a unique short suffix (as shown
 /// by `surge inbox`).
 ///

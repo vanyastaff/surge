@@ -103,6 +103,71 @@ fn registry_resolves_disk_override_with_latest_provenance() {
     assert_eq!(resolved.profile.runtime.agent_id, "mock");
 }
 
+/// Acceptance: a `.surge/profiles/x-1.0.toml` in the repo and none in home
+/// resolves `x@1` with `Provenance::Project`; with the same name in home,
+/// the project copy wins — through the public `load`-equivalent path
+/// (`new` + `for_run`) rather than the unit tests' internals.
+#[test]
+fn project_layer_profile_resolves_with_project_provenance_and_wins_over_home() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let layer = surge_core::ProjectLayer::for_project(repo.path());
+    std::fs::create_dir_all(layer.profiles_dir()).unwrap();
+    let body = |prompt: &str| {
+        format!(
+            r#"
+schema_version = 1
+
+[role]
+id = "x"
+version = "1.0.0"
+display_name = "X"
+category = "agents"
+description = "test"
+when_to_use = "test"
+
+[runtime]
+agent_id = "mock"
+recommended_model = "test-model"
+
+[[outcomes]]
+id = "done"
+description = "Success"
+edge_kind_hint = "forward"
+
+[prompt]
+system = "{prompt}"
+"#
+        )
+    };
+    std::fs::write(layer.profiles_dir().join("x-1.0.toml"), body("PROJECT")).unwrap();
+
+    // None in home.
+    let registry = ProfileRegistry::new(DiskProfileSet::scan(home.path()).unwrap())
+        .for_run(&layer)
+        .unwrap();
+    let resolved = registry.resolve(&parse_key_ref("x@1").unwrap()).unwrap();
+    assert_eq!(resolved.provenance, Provenance::Project);
+    assert_eq!(resolved.profile.prompt.system, "PROJECT");
+
+    // Same name in home: project still wins.
+    std::fs::write(home.path().join("x-1.0.toml"), body("HOME")).unwrap();
+    let registry = ProfileRegistry::new(DiskProfileSet::scan(home.path()).unwrap())
+        .for_run(&layer)
+        .unwrap();
+    let resolved = registry.resolve(&parse_key_ref("x@1").unwrap()).unwrap();
+    assert_eq!(resolved.provenance, Provenance::Project);
+    assert_eq!(resolved.profile.prompt.system, "PROJECT");
+    assert_eq!(
+        registry
+            .list()
+            .iter()
+            .find(|entry| entry.profile.role.id.as_str() == "x")
+            .map(|entry| entry.shadows),
+        Some(Some(surge_core::Layer::Home))
+    );
+}
+
 #[test]
 fn project_context_author_runtime_id_normalizes_against_acp_registry() {
     let registry = ProfileRegistry::new(DiskProfileSet::empty());

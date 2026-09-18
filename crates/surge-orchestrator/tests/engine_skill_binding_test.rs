@@ -252,6 +252,91 @@ async fn unpinned_skill_unanswered_rejects_before_any_session_opens() {
     );
 }
 
+/// Writes a pack under `<repo>/.surge/skills/<dir_name>/SKILL.md` — the
+/// project layer's own skill lane (`surge_core::ProjectLayer::skills_dir`).
+fn write_dot_surge_skill(repo: &std::path::Path, dir_name: &str, name: &str, body: &str) {
+    let pack_dir = surge_core::ProjectLayer::for_project(repo)
+        .skills_dir()
+        .join(dir_name);
+    std::fs::create_dir_all(&pack_dir).unwrap();
+    std::fs::write(
+        pack_dir.join("SKILL.md"),
+        format!("---\nname: {name}\n---\n\n{body}\n"),
+    )
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dot_surge_skills_lane_of_the_run_layer_binds_end_to_end() {
+    // The pack lives in the *repository's* `.surge/skills`, which is not
+    // the worktree the run executes in — the root must reach discovery via
+    // `EngineRunConfig::project_layer`, not via the worktree path.
+    let repo = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    write_dot_surge_skill(
+        repo.path(),
+        "reviewer",
+        "code-reviewer",
+        "Instructions from the repository's .surge/skills lane.",
+    );
+
+    let storage = Storage::open(worktree.path()).await.unwrap();
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher = Arc::new(WorktreeToolDispatcher::new(worktree.path().to_path_buf()))
+        as Arc<dyn ToolDispatcher>;
+
+    let session_id = SessionId::new();
+    mock.pin_next_session_id(session_id).await;
+    mock.enqueue_event(BridgeEvent::OutcomeReported {
+        session: session_id,
+        outcome: OutcomeKey::try_from("done").unwrap(),
+        summary: "ok".into(),
+        artifacts_produced: vec![],
+    })
+    .await;
+    let mock_for_pump = mock.clone();
+    let pump = tokio::spawn(async move {
+        mock_for_pump.pump_after_subscribe(1).await;
+    });
+
+    let engine = Engine::new(bridge, storage.clone(), dispatcher, EngineConfig::default());
+    let declared = vec![SkillRef {
+        name: "code-reviewer".into(),
+        provider: SkillProvider::ProjectDir,
+        version: None,
+        hash: None,
+    }];
+    let run_id = RunId::new();
+    let handle = engine
+        .start_run(
+            run_id,
+            graph_with_declared_skill_and_approval(declared, false),
+            worktree.path().to_path_buf(),
+            EngineRunConfig {
+                project_layer: Some(surge_core::ProjectLayer::for_project(repo.path())),
+                ..EngineRunConfig::default()
+            },
+        )
+        .await
+        .expect("start_run");
+
+    let outcome = handle.await_completion().await.unwrap();
+    pump.await.unwrap();
+    match outcome {
+        RunOutcome::Completed { terminal } => assert_eq!(terminal.as_ref(), "end"),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    let prompt = mock
+        .last_prompt()
+        .await
+        .expect("agent stage must have sent a prompt");
+    assert!(
+        prompt.contains("Instructions from the repository's .surge/skills lane."),
+        "the .surge/skills pack must bind and reach the prompt, got: {prompt}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pinned_skill_binds_and_instructions_reach_the_agent_prompt() {
     let dir = tempfile::tempdir().unwrap();

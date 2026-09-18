@@ -334,11 +334,17 @@ impl Engine {
             "entered engine path",
         );
 
+        // The registry this run resolves against: the engine-wide home +
+        // bundled lanes plus the run's own project lane. Built once here
+        // and handed to validation, the catalog seed and the run task
+        // alike, so all three see the same project profiles.
+        let profile_registry = self.registry_for_run(run_config.project_layer.as_ref())?;
+
         // A profile registry lets validation resolve profile references and
         // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
         // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
         // impl. No registry keeps today's resolver-free behavior unchanged.
-        match self.config.profile_registry.as_ref() {
+        match profile_registry.as_ref() {
             Some(registry) => validate_for_m6_with_resolver(&graph, registry.as_ref())?,
             None => validate_for_m6(&graph)?,
         }
@@ -348,7 +354,7 @@ impl Engine {
 
         // No registry wired keeps today's behavior unchanged — see
         // `seed_profile_catalog`'s doc for what this seeds and why.
-        self.seed_profile_catalog(&mut run_config)?;
+        Self::seed_profile_catalog(profile_registry.as_deref(), &mut run_config)?;
 
         if self.runs.read().await.contains_key(&run_id) {
             return Err(EngineError::RunAlreadyActive(run_id));
@@ -411,7 +417,7 @@ impl Engine {
             pending_steers: registration.pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
-            profile_registry: self.config.profile_registry.clone(),
+            profile_registry,
             agent_registry: self.config.agent_registry.clone(),
             capacity_ledger,
             capacity_estimator,
@@ -473,14 +479,59 @@ impl Engine {
         per_run.or_else(|| self.config.memory_store_path.clone())
     }
 
+    /// The registry one run resolves against.
+    ///
+    /// - No engine-wide registry: `None`, whatever the layer says — the
+    ///   legacy mock-only path is a property of the engine, and a layer on
+    ///   the run config must not silently turn it into a real-registry
+    ///   run (or a resumed run into a different kind of run than it was
+    ///   started as). Logged at debug, not warn: every launcher seeds a
+    ///   layer, so on a registry-less engine this is the normal case.
+    /// - Registry, no layer: the engine-wide registry as-is (home +
+    ///   bundled).
+    /// - Registry and layer: a run-scoped copy whose project lane is a
+    ///   fresh scan of `layer.profiles_dir()` ([`ProfileRegistry::for_run`]).
+    ///
+    /// # Errors
+    /// [`EngineError::ProjectLayer`] when the project lane cannot be read or
+    /// carries a broken prompt template.
+    fn registry_for_run(
+        &self,
+        layer: Option<&surge_core::ProjectLayer>,
+    ) -> Result<Option<Arc<ProfileRegistry>>, EngineError> {
+        let Some(base) = self.config.profile_registry.as_ref() else {
+            if let Some(layer) = layer {
+                tracing::debug!(
+                    target: "engine::profile_registry",
+                    project_root = %layer.root().display(),
+                    "project layer given but no profile registry is wired; lane not bound"
+                );
+            }
+            return Ok(None);
+        };
+        let Some(layer) = layer else {
+            return Ok(Some(Arc::clone(base)));
+        };
+        let scoped = base
+            .for_run(layer)
+            .map_err(|source| EngineError::ProjectLayer {
+                profiles_dir: layer.profiles_dir().to_path_buf(),
+                source,
+            })?;
+        Ok(Some(Arc::new(scoped)))
+    }
+
     /// Seed the resolved profile registry as the `profile_catalog` run
     /// artifact so bootstrap profiles (`flow-generator@1.0` above all) can
     /// bind Agent nodes to profiles that actually exist
     /// (`profile_loader::render_profile_catalog`) instead of naming them
     /// from prompt text. A no-op when no registry is wired — `start_run`'s
     /// resolver-free default behavior is unchanged in that case.
-    fn seed_profile_catalog(&self, run_config: &mut EngineRunConfig) -> Result<(), EngineError> {
-        let Some(registry) = self.config.profile_registry.as_ref() else {
+    fn seed_profile_catalog(
+        registry: Option<&ProfileRegistry>,
+        run_config: &mut EngineRunConfig,
+    ) -> Result<(), EngineError> {
+        let Some(registry) = registry else {
             return Ok(());
         };
         let catalog = crate::profile_loader::render_profile_catalog(registry);
@@ -687,6 +738,17 @@ impl Engine {
     /// reconstruct the last known cursor and memory, then resumes execution
     /// from that point. Returns immediately if the run is already active in
     /// this process.
+    ///
+    /// The run's project layer ([`EngineRunConfig::project_layer`]) is not
+    /// in the log today — the persisted `RunConfig` carries no project
+    /// root — so it is re-derived as `ProjectLayer::for_project(worktree)`,
+    /// which round-trips exactly what the daemon IPC server and the CLI
+    /// seeded at start (both seed from the worktree path). Launchers whose
+    /// project root differs from the worktree (the inbox ticket launcher,
+    /// the bootstrap follow-up run) resume with an **empty** project lane:
+    /// a run that needs a project-only profile then fails at the stage
+    /// that resolves it rather than resolving a different one. Persisting
+    /// the project root on `RunConfig` is what closes that gap.
     #[allow(clippy::too_many_lines)]
     pub async fn resume_run(
         &self,
@@ -835,6 +897,11 @@ impl Engine {
         // this resumed run's only source for it is the engine-level
         // fallback, the same one `start_run` consults.
         resume_run_config.memory_store_path = self.resolve_memory_store_path(None);
+        // Re-derived from the worktree (see the method doc): the project
+        // root is not in the log.
+        resume_run_config.project_layer =
+            Some(surge_core::ProjectLayer::for_project(&worktree_path));
+        let profile_registry = self.registry_for_run(resume_run_config.project_layer.as_ref())?;
 
         // Build a per-run McpRegistry exactly like start_run does.
         let per_run_mcp_registry = if resume_run_config.mcp_servers.is_empty() {
@@ -877,7 +944,7 @@ impl Engine {
             pending_steers: registration.pending_steers,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
-            profile_registry: self.config.profile_registry.clone(),
+            profile_registry,
             agent_registry: self.config.agent_registry.clone(),
             capacity_ledger,
             capacity_estimator,

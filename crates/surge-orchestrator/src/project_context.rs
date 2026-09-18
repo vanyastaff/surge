@@ -410,10 +410,14 @@ fn author_artifact_path(root: &Path, reported: &str) -> Result<PathBuf, ProjectC
 
 /// Seed every config-derived field on an [`EngineRunConfig`].
 ///
-/// Currently covers four seeds, all unconditionally needed on every run
+/// Currently covers five seeds, all unconditionally needed on every run
 /// regardless of entry point (CLI in-process, daemon IPC server,
 /// daemon-side ticket launcher):
 ///
+/// - **`project_layer`** — `ProjectLayer::for_project(project_root)` when
+///   the run config does not already carry one: the repository's own
+///   `.surge/` lane the engine scopes the run's profile registry to.
+///   Paths only; the engine does the scan at run start.
 /// - **`project_context`** — read from the configured `project.md` when
 ///   `init.project_context_auto_seed` is enabled and the run config
 ///   does not already carry one.
@@ -446,6 +450,9 @@ pub fn with_project_context_seed(
     project_root: &Path,
     config: &surge_core::SurgeConfig,
 ) -> EngineRunConfig {
+    if run_config.project_layer.is_none() {
+        run_config.project_layer = Some(surge_core::ProjectLayer::for_project(project_root));
+    }
     if run_config.project_context.is_none() && config.init.project_context_auto_seed {
         run_config.project_context = load_project_context_seed(project_root, config);
     }
@@ -889,8 +896,8 @@ fn project_context_invocation(
     root: &Path,
     scan: &ProjectScan,
 ) -> Result<ProjectContextInvocation, ProjectContextError> {
-    let registry =
-        ProfileRegistry::load().map_err(|e| ProjectContextError::Profile(e.to_string()))?;
+    let registry = ProfileRegistry::load(Some(&surge_core::ProjectLayer::for_project(root)))
+        .map_err(|e| ProjectContextError::Profile(e.to_string()))?;
     let key_ref = parse_key_ref(PROJECT_CONTEXT_PROFILE)
         .map_err(|e| ProjectContextError::Profile(e.to_string()))?;
     let resolved = registry

@@ -20,7 +20,12 @@ pub struct EngineConfig {
     ///
     /// `None` keeps the legacy M5 mock-only fast path active for tests
     /// and pre-registry callers; production wiring (CLI / daemon) should
-    /// always populate this with `ProfileRegistry::load()`.
+    /// always populate this with `ProfileRegistry::load(..)`.
+    ///
+    /// This is the process-wide home + bundled registry. Each run derives
+    /// its own from it — [`ProfileRegistry::for_run`] with the run's
+    /// [`EngineRunConfig::project_layer`] — so the project lane is never
+    /// shared across runs.
     pub profile_registry: Option<Arc<ProfileRegistry>>,
     /// Capacity-aware dispatch policy every run's pre-dispatch check and
     /// post-429 park decision runs against (Task 12 M3, R37/R37.1;
@@ -199,6 +204,28 @@ pub struct EngineRunConfig {
     /// including a resumed one, resolves the same store.
     #[serde(default)]
     pub memory_store_path: Option<std::path::PathBuf>,
+    /// The repository's own `.surge/` layer this run resolves profiles
+    /// (and, later, flows and skills) against — project → home → bundled.
+    /// Resolved at run start by [`crate::engine::engine::Engine::start_run`]
+    /// into a run-scoped [`crate::profile_loader::ProfileRegistry`]
+    /// (`for_run`), so two repositories served by one daemon never see each
+    /// other's project profiles. `None` binds no project lane: the run
+    /// resolves home + bundled only.
+    ///
+    /// Every launcher that goes through
+    /// `crate::project_context::with_project_context_seed` gets
+    /// `ProjectLayer::for_project(project_root)` here. The layer only
+    /// enriches a wired [`EngineConfig::profile_registry`]; with no
+    /// registry the legacy mock-only path stays exactly that.
+    ///
+    /// Not copied into the persisted `surge_core::run_event::RunConfig`
+    /// today, so a resumed run cannot recover it from the event log:
+    /// [`crate::engine::engine::Engine::resume_run`] re-derives it from
+    /// the worktree path, which is what the daemon IPC server and the CLI
+    /// seeded from. Persisting the project root on `RunConfig` is what
+    /// makes that exact for every launcher.
+    #[serde(default)]
+    pub project_layer: Option<surge_core::ProjectLayer>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -304,6 +331,7 @@ impl Default for EngineRunConfig {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            project_layer: None,
         }
     }
 }
@@ -376,6 +404,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            project_layer: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -411,6 +440,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            project_layer: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -460,6 +490,7 @@ mod tests {
             tool_call_loop_guard: None,
             output_spill: None,
             memory_store_path: None,
+            project_layer: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

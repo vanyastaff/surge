@@ -118,12 +118,15 @@ fn main() -> std::process::ExitCode {
                 .with_webhook(Arc::new(surge_notify::WebhookDeliverer::new())),
         );
 
-        // Load the profile registry once at daemon startup so every run
-        // resolves agent_config.profile through it. A failure here is a
-        // hard error: a daemon without a registry would silently drop
-        // back to mocking every agent stage.
+        // Load the home + bundled profile registry once at daemon startup so
+        // every run resolves agent_config.profile through it. No project
+        // lane here: the daemon serves whichever repository a run names,
+        // and the engine binds that run's `.surge/profiles/` per run from
+        // `EngineRunConfig::project_layer`. A failure here is a hard
+        // error: a daemon without a registry would silently drop back to
+        // mocking every agent stage.
         let profile_registry = Arc::new(
-            surge_orchestrator::profile_loader::ProfileRegistry::load().unwrap_or_else(|e| {
+            surge_orchestrator::profile_loader::ProfileRegistry::load(None).unwrap_or_else(|e| {
                 tracing::error!(error = %e, "profile registry failed to load; daemon shutting down");
                 std::process::exit(2);
             }),

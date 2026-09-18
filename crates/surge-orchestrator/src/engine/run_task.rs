@@ -1062,7 +1062,10 @@ async fn cached_skill_catalog(
         return Ok(cached.clone());
     }
 
-    let roots = default_skill_roots(&params.worktree_path);
+    let roots = default_skill_roots(
+        &params.worktree_path,
+        params.run_config.project_layer.as_ref(),
+    );
     let catalog =
         tokio::task::spawn_blocking(move || surge_core::skill::SkillCatalog::discover(&roots))
             .await
@@ -1105,10 +1108,16 @@ fn skill_approval_enabled(
     }
 }
 
-/// Skill roots scanned for a node's declared skills: the worktree's and the
-/// user's `.claude/skills` (Agent Skills packs) **and** `.claude/plugins`
-/// (Agent Plugins packages — `marketplace/plugins/name`-style nesting,
-/// recognized by `SkillCatalog` at any depth under the root). Measured
+/// Skill roots scanned for a node's declared skills: the project's own
+/// `.surge/skills` (the [`surge_core::ProjectLayer`] lane — the run's
+/// layer when one is bound, else derived from the worktree), the
+/// worktree's and the user's `.claude/skills` (Agent Skills packs) **and**
+/// `.claude/plugins` (Agent Plugins packages — `marketplace/plugins/name`-
+/// style nesting, recognized by `SkillCatalog` at any depth under the
+/// root). All three project roots share `SkillProvider::ProjectDir`: a
+/// pack present under two of them with *different* content resolves to
+/// `SkillError::Ambiguous`, not to a precedence win — precedence between
+/// project roots is `SkillCatalog::resolve`'s to add. Measured
 /// against a real machine's installs, **all 352 `SKILL.md` files and all 47
 /// `.claude-plugin/plugin.json` manifests live under `~/.claude/plugins`** —
 /// `~/.claude/skills` is empty (see `.autopilot/competitive-waves/interfaces.md`,
@@ -1121,8 +1130,23 @@ fn skill_approval_enabled(
 /// of this delivery); a node referencing it resolves to
 /// `SkillError::NotFound` rather than silently matching a different
 /// provider.
-fn default_skill_roots(worktree_path: &std::path::Path) -> Vec<surge_core::skill::SkillRoot> {
+fn default_skill_roots(
+    worktree_path: &std::path::Path,
+    project_layer: Option<&surge_core::ProjectLayer>,
+) -> Vec<surge_core::skill::SkillRoot> {
+    let project_skills = project_layer.map_or_else(
+        || {
+            surge_core::ProjectLayer::for_project(worktree_path)
+                .skills_dir()
+                .to_path_buf()
+        },
+        |layer| layer.skills_dir().to_path_buf(),
+    );
     let mut roots = vec![
+        surge_core::skill::SkillRoot {
+            provider: surge_core::skill::SkillProvider::ProjectDir,
+            path: project_skills,
+        },
         surge_core::skill::SkillRoot {
             provider: surge_core::skill::SkillProvider::ProjectDir,
             path: worktree_path.join(".claude/skills"),
@@ -2156,7 +2180,36 @@ mod tests {
     }
 
     #[test]
-    fn default_skill_roots_declares_two_project_roots_and_two_user_roots() {
+    fn default_skill_roots_uses_the_bound_project_layer_for_dot_surge_skills() {
+        use surge_core::skill::SkillProvider;
+
+        let worktree = std::path::Path::new("/tmp/some-worktree");
+        let layer = surge_core::ProjectLayer::for_project("/repo");
+        let roots = default_skill_roots(worktree, Some(&layer));
+        assert!(
+            roots.iter().any(|r| r.provider == SkillProvider::ProjectDir
+                && r.path == std::path::Path::new("/repo/.surge/skills")),
+            "the run's project layer, not the worktree, must supply .surge/skills: {roots:?}"
+        );
+        assert!(
+            !roots
+                .iter()
+                .any(|r| r.path == std::path::Path::new("/tmp/some-worktree/.surge/skills")),
+            "a bound layer replaces the worktree-derived .surge/skills root: {roots:?}"
+        );
+
+        // Without a layer the worktree stands in.
+        let roots = default_skill_roots(worktree, None);
+        assert!(
+            roots
+                .iter()
+                .any(|r| r.path == std::path::Path::new("/tmp/some-worktree/.surge/skills")),
+            "{roots:?}"
+        );
+    }
+
+    #[test]
+    fn default_skill_roots_declares_three_project_roots_and_two_user_roots() {
         // Structural shape only — count and provider kind, not the literal
         // path strings `default_skill_roots` builds internally (that would
         // just restate the function's own expression back at it). Whether
@@ -2167,16 +2220,16 @@ mod tests {
         use surge_core::skill::SkillProvider;
 
         let worktree = std::path::Path::new("/tmp/some-worktree");
-        let roots = default_skill_roots(worktree);
+        let roots = default_skill_roots(worktree, None);
 
         let project_count = roots
             .iter()
             .filter(|r| r.provider == SkillProvider::ProjectDir)
             .count();
         assert_eq!(
-            project_count, 2,
-            "expected one worktree root per layout (Agent Skills + Agent \
-             Plugins), got {roots:?}"
+            project_count, 3,
+            "expected one project root per layout (.surge/skills + Agent \
+             Skills + Agent Plugins), got {roots:?}"
         );
 
         let user_count = roots
@@ -2220,7 +2273,7 @@ mod tests {
         )
         .unwrap();
 
-        let catalog = SkillCatalog::discover(&default_skill_roots(worktree.path()));
+        let catalog = SkillCatalog::discover(&default_skill_roots(worktree.path(), None));
         let resolved = catalog.resolve(&SkillRef {
             name: "code-reviewer".into(),
             provider: SkillProvider::ProjectDir,

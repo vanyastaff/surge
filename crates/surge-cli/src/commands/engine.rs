@@ -240,8 +240,10 @@ async fn run_command(
         // error here: production CLI runs should never silently fall
         // back to mocking.
         let profile_registry = Arc::new(
-            surge_orchestrator::profile_loader::ProfileRegistry::load()
-                .context("load profile registry")?,
+            surge_orchestrator::profile_loader::ProfileRegistry::load(Some(
+                &surge_core::ProjectLayer::for_project(&worktree_path),
+            ))
+            .context("load profile registry")?,
         );
 
         let engine = Arc::new(Engine::new_full(

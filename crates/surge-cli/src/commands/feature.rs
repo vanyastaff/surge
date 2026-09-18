@@ -415,8 +415,10 @@ async fn run_describe_flow(flow: DescribeFlow<'_>) -> Result<()> {
     let tool_dispatcher: Arc<dyn ToolDispatcher> =
         Arc::new(WorktreeToolDispatcher::new(flow.worktree.clone()));
     let profile_registry = Arc::new(
-        surge_orchestrator::profile_loader::ProfileRegistry::load()
-            .context("load profile registry")?,
+        surge_orchestrator::profile_loader::ProfileRegistry::load(Some(
+            &surge_core::ProjectLayer::for_project(&flow.worktree),
+        ))
+        .context("load profile registry")?,
     );
     let hook_executor = HookExecutor::new();
     let tool_resolutions: ToolResolutionMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));

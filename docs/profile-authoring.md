@@ -1,6 +1,6 @@
 # Profile Authoring Guide
 
-Profiles are the reusable configuration that an `Agent` node in a `flow.toml` resolves against. A profile carries a system prompt (Handlebars template), a launch agent reference, sandbox intent, allowed tools, declared outcomes, hooks, and approval policy. The same profile schema covers the bundled first-party set and any local profile a user drops into `${SURGE_HOME}/profiles/`.
+Profiles are the reusable configuration that an `Agent` node in a `flow.toml` resolves against. A profile carries a system prompt (Handlebars template), a launch agent reference, sandbox intent, allowed tools, declared outcomes, hooks, and approval policy. The same profile schema covers the bundled first-party set, any local profile a user drops into `${SURGE_HOME}/profiles/`, and a repository's own profiles under `.surge/profiles/` (see [Project-local profiles](#project-local-profiles-surgeprofiles)).
 
 This guide covers the schema, inheritance, prompt templating, the outcome contract, sandbox / approvals / hooks, versioning rules, and the `surge profile` workflow. It supersedes ad-hoc notes in `docs/ARCHITECTURE.md` § 6 — that section now points here.
 
@@ -144,10 +144,28 @@ Profiles use full semver in the TOML body (`role.version = "1.0.0"`). The lookup
 
 Version conflicts on disk: when two files produce the same `(role.id, role.version)`, the first one the directory walker sees wins; the duplicate is logged at WARN.
 
+## Project-local profiles (`.surge/profiles/`)
+
+A repository can carry its own profiles under `<root>/.surge/profiles/`, flat `*.toml` in the same schema, so the agents a project composes travel with the code instead of living in one operator's home directory (ADR-0020). Lookup order is
+
+```
+project  <root>/.surge/profiles/      Provenance::Project
+home     ${SURGE_HOME}/profiles/      Provenance::Versioned | Provenance::Latest
+bundled  compiled into the binary     Provenance::Bundled
+```
+
+The first lane that knows the name wins — an exact version match when the reference carries one, else that lane's highest version. A project `implementer-1.0.toml` therefore takes over `implementer@1.0` from the bundled set for every run of that repository, and, because `extends` resolves through the same lookup, from every bundled profile that inherits from it.
+
+**The lane is scoped per run, not per process.** The engine keeps one home + bundled registry and derives a run-scoped registry from it when the run starts (`ProfileRegistry::for_run` with `EngineRunConfig::project_layer`, a `ProjectLayer` built from the project root). Two repositories served by one daemon never see each other's `.surge/profiles/`; the CLI's in-process engine binds the layer of the directory it runs in. A resumed run binds no project lane today — the project root is not persisted in the event log — and logs a warning; a resumed run that needs a project profile fails at the stage that resolves it rather than resolving a different one.
+
+**Shadowing is recorded, never silent.** Every resolution logs a `ProfileResolved` line (target `profile::registry`) with `provenance`, `layer`, the file `path`, and `project_members` — each project profile in the `extends` chain together with what it shadows (`implementer shadows bundled`). A chain that shadows anything is also logged at INFO. `surge profile list` shows the lane in the `WHERE` column (`project>bundled` for a shadowing entry; `"shadows"` in `--format json`), and the `profile_catalog` artifact a bootstrap run seeds carries a `source` column with the same information.
+
+Trust for project files is not yet enforced: a checkout's `.surge/profiles/` is loaded on the same footing as `${SURGE_HOME}/profiles/`. Pinning project files by content hash, with a prompt on first use and on change, is a separate step (see [Trust and signature](#trust-and-signature)); until it lands, treat a repository's `.surge/` like any other code you run from it.
+
 ## CLI workflow
 
 ```sh
-# List every visible profile (disk + bundled)
+# List every visible profile (project + home + bundled; project root = the enclosing git repo)
 surge profile list
 surge profile list --format json
 
@@ -168,7 +186,7 @@ surge profile new my-impl --base implementer@1.0
 
 ## Trust and signature
 
-There is no signature verification in v0.1. The registry resolves profiles only from the bundled set (compiled into the binary) and the local `${SURGE_HOME}/profiles/` directory; there is no remote fetch and no publisher allowlist. See [ADR 0002](adr/0002-profile-trust-deferred.md) for the rationale and the conditions under which this should be revisited.
+There is no signature verification in v0.1. The registry resolves profiles only from the bundled set (compiled into the binary), the local `${SURGE_HOME}/profiles/` directory and the run's repository `.surge/profiles/`; there is no remote fetch and no publisher allowlist, and project files are not yet pinned by hash. See [ADR 0002](adr/0002-profile-trust-deferred.md) for the rationale and the conditions under which this should be revisited.
 
 ## Where the code lives
 
@@ -178,9 +196,10 @@ There is no signature verification in v0.1. The registry resolves profiles only 
 | Inheritance + merge | `surge-core` | `profile::registry` |
 | Bundled assets | `surge-core` | `profile::bundled` |
 | `name@version` parser | `surge-core` | `profile::keyref` |
+| `.surge/` layer paths (`ProjectLayer`, `Layer`) | `surge-core` | `project_layer` |
 | Disk loader | `surge-orchestrator` | `profile_loader::disk` |
 | `${SURGE_HOME}` resolution | `surge-orchestrator` | `profile_loader::paths` |
-| 3-way `ProfileRegistry` | `surge-orchestrator` | `profile_loader::registry` |
+| Project → home → bundled `ProfileRegistry` | `surge-orchestrator` | `profile_loader::registry` |
 | Handlebars renderer | `surge-orchestrator` | `prompt` |
 | `surge profile` CLI | `surge-cli` | `commands::profile` |
 

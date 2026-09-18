@@ -58,6 +58,7 @@ pub mod node;
 pub mod notify_config;
 pub mod predicate;
 pub mod profile;
+pub mod project_layer;
 pub mod run_event;
 pub mod run_report;
 pub mod run_state;
@@ -135,6 +136,7 @@ pub use profile::registry::{
 pub use profile::{
     Profile, ProfileArtifactDeclaration, ProfileOutcome, Role, RoleCategory, RuntimeCfg,
 };
+pub use project_layer::{Layer, PROJECT_LAYER_DIR, ProjectLayer};
 pub use run_event::{
     BootstrapDecision, BootstrapStage, ElevationDecision, EscalationCause, EventPayload, RunConfig,
     RunEvent, SessionDisposition, VersionedEventPayload,

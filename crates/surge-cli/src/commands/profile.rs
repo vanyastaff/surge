@@ -96,7 +96,8 @@ pub async fn run(command: ProfileCommands) -> Result<()> {
 }
 
 fn run_list(args: ListArgs) -> Result<()> {
-    let registry = ProfileRegistry::load().context("load profile registry")?;
+    let layer = super::common::project_layer_from_cwd()?;
+    let registry = ProfileRegistry::load(Some(&layer)).context("load profile registry")?;
     let entries = registry.list();
 
     match args.format {
@@ -113,6 +114,9 @@ struct ProfileJson<'a> {
     display_name: &'a str,
     category: String,
     provenance: &'static str,
+    /// For a project profile, the layer it hides (`home` / `bundled`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shadows: Option<&'static str>,
     agent_id: &'a str,
 }
 
@@ -122,15 +126,15 @@ fn print_table(entries: &[surge_orchestrator::profile_loader::registry::ProfileL
         return;
     }
     println!(
-        "NAME                         VERSION    WHERE      AGENT                    DISPLAY NAME"
+        "NAME                         VERSION    WHERE            AGENT                    DISPLAY NAME"
     );
     for e in entries {
         let id = e.profile.role.id.as_str();
         let version = e.profile.role.version.to_string();
-        let where_label = provenance_label(e.provenance);
+        let where_label = where_label(e);
         let agent = &e.profile.runtime.agent_id;
         let display = &e.profile.role.display_name;
-        println!("{id:<28} {version:<10} {where_label:<10} {agent:<24} {display}");
+        println!("{id:<28} {version:<10} {where_label:<16} {agent:<24} {display}");
     }
 }
 
@@ -151,6 +155,7 @@ fn print_json(
                     .as_ref()
                     .map_or(e.provenance, |_| e.provenance),
             ),
+            shadows: e.shadows.map(surge_core::Layer::as_str),
             agent_id: &e.profile.runtime.agent_id,
         })
         .collect();
@@ -161,14 +166,26 @@ fn print_json(
 
 fn provenance_label(p: Provenance) -> &'static str {
     match p {
+        Provenance::Project => "project",
         Provenance::Versioned => "disk@ver",
         Provenance::Latest => "disk",
         Provenance::Bundled => "bundled",
     }
 }
 
+/// `WHERE` cell for the table: the provenance label, plus what a project
+/// entry hides (`project>bundled`) so a repository file taking over a
+/// bundled name is visible in the one inventory an operator has.
+fn where_label(e: &surge_orchestrator::profile_loader::registry::ProfileListEntry) -> String {
+    match e.shadows {
+        Some(shadowed) => format!("{}>{shadowed}", provenance_label(e.provenance)),
+        None => provenance_label(e.provenance).to_string(),
+    }
+}
+
 fn run_show(args: ShowArgs) -> Result<()> {
-    let registry = ProfileRegistry::load().context("load profile registry")?;
+    let layer = super::common::project_layer_from_cwd()?;
+    let registry = ProfileRegistry::load(Some(&layer)).context("load profile registry")?;
 
     let key_input = match &args.version {
         Some(v) => format!("{}@{}", args.name, v),
@@ -181,8 +198,9 @@ fn run_show(args: ShowArgs) -> Result<()> {
         // For --raw we want the un-merged profile from its original source.
         let profile = if let Some(ref version) = key_ref.version {
             registry
-                .disk()
+                .project()
                 .by_name_version(args.name.as_str(), version)
+                .or_else(|| registry.home().by_name_version(args.name.as_str(), version))
                 .map(|e| e.profile.clone())
                 .or_else(|| {
                     surge_core::profile::bundled::BundledRegistry::by_name_version(
@@ -192,8 +210,9 @@ fn run_show(args: ShowArgs) -> Result<()> {
                 })
         } else {
             registry
-                .disk()
+                .project()
                 .by_name_latest(args.name.as_str())
+                .or_else(|| registry.home().by_name_latest(args.name.as_str()))
                 .map(|e| e.profile.clone())
                 .or_else(|| {
                     surge_core::profile::bundled::BundledRegistry::by_name_latest(
@@ -250,7 +269,8 @@ fn run_validate(args: ValidateArgs) -> Result<()> {
     // we cannot, skip — the profile is still considered valid in
     // isolation).
     if let Some(parent) = &profile.role.extends {
-        match ProfileRegistry::load() {
+        let layer = super::common::project_layer_from_cwd()?;
+        match ProfileRegistry::load(Some(&layer)) {
             Ok(registry) => {
                 let parent_ref = parse_key_ref(parent.as_str())
                     .with_context(|| format!("parse extends parent {parent:?}"))?;
