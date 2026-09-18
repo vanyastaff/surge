@@ -24,15 +24,15 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: failed at=2026-09-18T23:22:28.559Z exit=94 expect=unmatched
 
-- [x] G4: a dependency in Failed is listed by `surge ready` as blocked_by_failed and is not dispatched; `surge task requeue` unblocks it
-  CHECK: cargo nextest run -p surge-cli -E 'test(ready)'
+- [ ] G4: a dependency in Failed is listed by `surge ready` as blocked_by_failed and is not dispatched; `surge task requeue` unblocks it
+  CHECK: cargo nextest run -p surge-cli -E 'test(blocked_by_failed)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: rs-acceptance/v1 def=02e4eefb624d1f5c exit=0 expect=matched out=2f07f8f401b610b4:1831 cwd=. shell=sh at=2026-09-18T23:22:57.556Z
+  EVIDENCE: pending
 
-- [x] G5: a Low task skipped aging_threshold times rises one effective priority level; order is total, deterministic, deps dominate (property tests on QueuePolicy)
-  CHECK: cargo nextest run -p surge-orchestrator -E 'test(policy)'
+- [ ] G5: a Low task skipped aging_threshold times rises one effective priority level; order is total, deterministic, deps dominate (property tests on QueuePolicy)
+  CHECK: cargo nextest run -p surge-orchestrator -E 'test(queue_policy)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: rs-acceptance/v1 def=951358e1c56b26b8 exit=0 expect=matched out=3399850189629c4b:1109 cwd=. shell=sh at=2026-09-18T23:25:03.068Z
+  EVIDENCE: pending
 
 - [ ] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(classif)'
@@ -59,10 +59,10 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: failed at=2026-09-18T23:33:19.880Z exit=94 expect=unmatched
 
-- [x] G11: a patch conflicting with the running milestone is deferred to the next milestone without operator input
-  CHECK: cargo nextest run -E 'test(defer)'
+- [ ] G11: a patch conflicting with the running milestone is deferred to the next milestone without operator input
+  CHECK: cargo nextest run -E 'test(defer_to_next_milestone)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: rs-acceptance/v1 def=9839f34ae908b0e8 exit=0 expect=matched out=e86a7628d9d64071:895 cwd=. shell=sh at=2026-09-18T23:33:50.113Z
+  EVIDENCE: pending
 
 - [ ] G12: `surge task pause` stops new dispatch and halts the running run at its next stage boundary; resume continues
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(pause)'
@@ -79,10 +79,10 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: failed at=2026-09-18T23:33:51.511Z exit=94 expect=unmatched
 
-- [x] G15: a fresh clone with an unpinned `.surge/` profile does not start the run, logs EscalationRequested{UntrustedProjectFile}, and `surge trust accept` pins it
-  CHECK: cargo nextest run -E 'test(trust)'
+- [ ] G15: a fresh clone with an unpinned `.surge/` profile does not start the run, logs EscalationRequested{UntrustedProjectFile}, and `surge trust accept` pins it
+  CHECK: cargo nextest run -E 'test(untrusted_project_file)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: rs-acceptance/v1 def=1bf1ee479809ca5c exit=0 expect=matched out=aca990399d2cf430:709 cwd=. shell=sh at=2026-09-18T23:33:52.905Z
+  EVIDENCE: pending
 
 - [x] G16: event schema migration 8→9 round-trips every supported version
   CHECK: cargo nextest run -p surge-core -E 'binary(migrations_v1_roundtrip)'
