@@ -185,7 +185,8 @@ critic reports of 2026-09-18 (conversation record); the chosen approach's are in
 ## Public surface & semver impact
 
 Pre-1.0, active development. Additive: `RoadmapTask.priority`/`flow`, `RunConfig.origin`,
-`Provenance::Project`, `ArtifactKind::{Profile, Flow}`, `FlowRef`/`FlowCatalog`,
+`Provenance::Project`, `ArtifactKind::Profile` (`ArtifactKind::Flow` pre-existed), `RelPath`,
+`FlowRef`/`FlowCatalog`,
 `ProjectLayer`, `EventPayload::ComposedArtifactInstalled` (**event schema 8 → 9**, migration
 + proptest per `run_event.rs:683`). Breaking (accepted): `ProfileRegistry::load` takes a
 `ProjectLayer`; `EngineRunConfig` gains fields (constructed with `..Default::default()`

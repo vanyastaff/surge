@@ -54,7 +54,7 @@ Parallel lanes: {T1, T2, T3} together at the start; T7 beside T5/T6; T8, T9 besi
 - T5's bundled `single-task` template is a named stub; nothing but T10 may depend on it.
 - Local test runner for env-touching crates is `cargo test`, not nextest (memory `surge-env-mutation-unsound`) — T13 brief carries this.
 - Project gate: `just ci`.
-- `acceptance.md` (authored during the T1/T2 wave): G4's filter `test(ready)` matches pre-existing `surge ready` tests and reports a false pass — T7 must sharpen it to the exact new test name; every task sharpens its own gates' filters when the tests land.
+- `acceptance.md` (authored during the T1/T2 wave; filters sharpened in `faf083c`): G4, G5, G11 and G15 all initially matched pre-existing tests through loose filters (`test(ready)`, `test(policy)`, `test(defer)`, `test(trust)`) and reported false passes; they now carry the names the ATO tests will bear (`blocked_by_failed`, `queue_policy`, `defer_to_next_milestone`, `untrusted_project_file`). Every task still sharpens its own gates to the exact landed test name — and the name in the ledger must be the one the test actually has, not the one planned.
 
 ## Shared contracts
 | Producer | Consumer | Contract + source | Compatible |
