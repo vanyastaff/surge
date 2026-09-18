@@ -2,15 +2,19 @@
 
 [![CI](https://github.com/vanyastaff/surge/workflows/CI/badge.svg)](https://github.com/vanyastaff/surge/actions)
 
-> **Local-first orchestration for AFK AI coding workflows.**
+> **An autonomous coding orchestrator: describe the project, approve the plan, supervise the rest.**
 
-Surge is a Rust workspace for running long AI coding work as explicit, event-sourced workflow graphs. A run is not one giant prompt and not a swarm of agents negotiating with each other. A run is a `flow.toml`: typed nodes, declared outcomes, and edges. Agents do the work inside bounded stages; the graph decides where execution goes next.
+Surge composes the agents, skills and MCP servers a project needs, plans its roadmap, and then runs the task queue on its own — a generated flow per task, executed by the best available model for each role, verified by a sealed verifier, merged. Tasks arrive from the roadmap, the user, GitHub or MCP into one dependency-ordered queue; you pause, reprioritise, or edit a flow or an agent whenever you want to. What Surge composes lives in your repo under `.surge/`, git-diffable. Any agent runtime that speaks ACP, any model provider.
+
+Under the hood a run is not one giant prompt and not a swarm of agents negotiating with each other. A run is a `flow.toml`: typed nodes, declared outcomes, and edges, executed as an event-sourced graph. Agents do the work inside bounded stages; the graph decides where execution goes next.
 
 The target experience:
 
 ```text
-initialize project → describe work → approve roadmap/flow → walk away → return to a PR
+describe project → approve agents + roadmap → walk away → steer when asked → return to verified, merged work
 ```
+
+Where this stands today is tracked in [`docs/product-strategy.md`](docs/product-strategy.md); the design for the autonomous queue is in `.rust-studio/specs/autonomous-task-orchestration/`.
 
 ## Status
 

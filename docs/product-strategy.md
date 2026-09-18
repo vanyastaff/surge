@@ -13,6 +13,49 @@ event log over any agent runtime that speaks Agent Client Protocol (ACP).
 
 > Agents solve tasks. Surge finishes projects.
 
+### Revision 2026-09-18 — autonomy is the product
+
+The July positioning names the moat (ledger, verification, event log). This
+revision names the *experience* those mechanisms exist for, and it becomes the
+goal every wave is ordered against:
+
+**A developer describes a project once, approves the agents and roadmap Surge
+composes for it, and then supervises instead of drives.** Concretely:
+
+1. **Surge composes the team.** From the description it selects or writes the
+   agent profiles, binds the skills and MCP servers each needs (from the local
+   catalog first, public registries behind an approval gate), and commits all
+   of it to the repo under `.surge/` — git-diffable, travels with the code.
+2. **One queue, ordered by the system.** Tasks from the roadmap, the user,
+   GitHub or MCP land in a single ledger ordered by dependencies, then manual
+   priority, then size/age. External work enters through the feature-planner
+   into the roadmap; nothing bypasses it.
+3. **A flow per task, not per run.** Each task gets its own generated flow,
+   scaffolded from an archetype and built from the project's agents with
+   per-node prompt / skill / MCP overrides. Human gates are `human_gate`
+   nodes placed by the chosen autonomy level; the sealed-verifier rule is
+   enforced on every generated flow.
+4. **The model is chosen per role by benchmark rating** among the providers
+   the user actually has, price as tie-breaker, automatic fallback on
+   rate-limit with the switch recorded in the event log.
+5. **Memory is read as a per-task selection and written back at run
+   boundaries** — project memory in the repo, personal memory in the user's
+   home; agents write only to the former.
+6. **The user steers, never restarts.** Pause and priority changes take
+   effect immediately; flow and agent edits apply from the next task.
+
+Target experience:
+
+```text
+describe project → approve agents + roadmap → walk away → steer when asked → return to verified, merged work
+```
+
+Ordering: (a) queue + per-task flow + `.surge/` agent catalog
+(`.rust-studio/specs/autonomous-task-orchestration/`), then (b) benchmark
+model router + capacity fallback, then (c) memory v2
+(`competitive-plan-2026-09.md` Wave 2), then (d) per-task token budget with
+auto-splitting. `surge-ui` follows the engine; no wave is gated on a screen.
+
 Two user pains anchor everything below:
 
 1. **Fleet interaction** — working with several live agents at once today means

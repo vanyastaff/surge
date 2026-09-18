@@ -4,7 +4,9 @@
 
 ## Project Overview
 
-Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A run is a `flow.toml` workflow graph executed by a long-running daemon, with ACP-based agent integration (see [ADR-0006](docs/adr/0006-acp-only-transport.md)), event sourcing, and Telegram-first approvals. See `.ai-factory/DESCRIPTION.md` for the full summary and `docs/ARCHITECTURE.md` for the canonical architecture.
+Surge is an autonomous coding orchestrator for AI-native ("vibe") developers, written in Rust. Its goal: a developer describes a project once, approves the agents and roadmap Surge composes for it, and then supervises rather than drives — Surge runs the task queue on its own, builds a flow per task from the project's own agents, skills and MCP servers, verifies every task with a sealed verifier, and merges. Tasks come from the roadmap, the user, GitHub or MCP into one dependency-ordered queue; the user can pause, reprioritise, or edit a flow or agent at any time. Everything Surge composes lives in the repo under `.surge/` and is git-diffable. Any agent runtime that speaks ACP (see [ADR-0006](docs/adr/0006-acp-only-transport.md)); any model provider, chosen per role by benchmark rating.
+
+Mechanically, a run is a `flow.toml` workflow graph executed by a long-running daemon with event sourcing and Telegram-first approvals. The product goal and its ordering are recorded in `docs/product-strategy.md`; the current design step is `.rust-studio/specs/autonomous-task-orchestration/`. See `docs/ARCHITECTURE.md` for the canonical architecture.
 
 ## Tech Stack
 
@@ -34,7 +36,6 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │
 ├── crates/                          # Workspace members (dependencies flow downward)
 │   ├── surge-core/                  # Leaf: graph, profile, event, sandbox, validation types. No I/O.
-│   ├── surge-spec/                  # Legacy structured-spec format and validation
 │   ├── surge-acp/                   # ACP bridge, agent pool, registry, discovery, mock agent
 │   ├── surge-orchestrator/          # Engine: legacy spec pipeline + graph executor
 │   ├── surge-persistence/           # SQLite stores, event log, materialized views, memory
@@ -63,9 +64,8 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 │       └── base.md
 │
 ├── .claude/                         # Claude Code: skills + agent definitions
-├── .codex/                          # Codex: skills (mirror of aif skill set)
 ├── .github/                         # CI workflows
-├── .worktrees/                      # Local convention for in-progress branches (gitignored)
+├── .rust-studio/specs/              # Intent + spec per feature (spec-driven flow)
 └── target/                          # cargo build output (gitignored)
 ```
 
@@ -131,7 +131,7 @@ Surge is a local-first meta-orchestrator for AFK AI coding workflows in Rust. A 
 - **Use `tracing::*` macros for logging.** No `println!` / `eprintln!` outside the CLI's user-facing surface and tests.
 - **`anyhow` only in binary crates** (`surge-cli`, `surge-daemon`). Library crates use `thiserror`-derived enums.
 - **Workspace-managed dependencies.** Add new dependencies to the root `Cargo.toml` `[workspace.dependencies]`, then reference them in member crates with `{ workspace = true }`.
-- **One git worktree per run.** Use `git2`; respect the `.worktrees/` local convention for in-progress branches.
+- **One git worktree per run.** Use `git2`; worktrees live under `.surge-worktrees/` (sibling) or `~/.surge/runs/` (central) per `surge.toml`.
 - **Tests live next to code** in `#[cfg(test)] mod tests { ... }`. Snapshots use `insta`; properties use `proptest`; benches use `criterion` with `harness = false` under `crates/<crate>/benches/`.
 
 <!-- autopilot:start -->

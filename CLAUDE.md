@@ -2,7 +2,7 @@
 
 ## Project
 
-Surge — agent-agnostic autonomous coding orchestrator. Pure Rust. Uses ACP (Agent Client Protocol) to connect to any coding agent (Claude Code, Copilot CLI, Zed Agent).
+Surge — autonomous coding orchestrator for AI-native developers. Pure Rust. Goal: describe a project once, approve the agents and roadmap Surge composes, then supervise while Surge runs a dependency-ordered task queue with a generated flow per task, a benchmark-chosen model per role, a sealed verifier per task, and everything it composed committed under `.surge/`. Uses ACP (Agent Client Protocol) to connect to any coding agent (Claude Code, Copilot CLI, Zed Agent, Codex, Gemini, …). Goal ordering: `docs/product-strategy.md`.
 
 ## Commands
 

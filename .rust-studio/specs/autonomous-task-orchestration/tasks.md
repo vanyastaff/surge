@@ -1,0 +1,72 @@
+# Tasks: Autonomous task orchestration v1
+
+- **Spec:** [`spec.md`](spec.md)   ·   **ADR:** `docs/adr/0020-project-queue-in-registry-tasks-are-runs.md`   ·   **Updated:** `2026-09-18`
+
+## Task list
+*Ordered. Each task is one `/dev-task`. Status: ☐ todo · ◐ in-progress · ☑ done · ⊘ blocked.
+Sign-off before start: T1, T9, T10, T13 → chief-architect; T2, T3, T8, T12 → api-design-lead; T13 also security-auditor.*
+
+| # | Task (outcome) | Acceptance slice | Owner lead | Blocked by | Size | Status |
+|---|---|---|---|---|---|---|
+| T1 | `.surge/` layer: `ProjectLayer`, `Layer`, `Provenance::Project`; `ProfileRegistry` per run via `EngineRunConfig.project_layer`, lookup project → home → bundled | "Given a `.surge/profiles/x-1.0.toml` in repo and none in home…" | api-design-lead | — | L | ☐ |
+| T2 | Event schema 8→9: `EventPayload::ComposedArtifactInstalled{kind,path,hash,gate_node}`, `ArtifactKind::{Profile,Flow}`, migration + proptest + variant-bump test | "Event schema migration 8→9 has the round-trip proptest…" | api-design-lead | — | M | ☐ |
+| T3 | Queue vocabulary: `RoadmapTask.priority`/`.flow`, `FlowRef`, `RunOrigin::Task{project_root,task_id,attempt,roadmap_hash}`, `[queue] aging_threshold`, `QueueEntry` + pure `QueuePolicy::next` with proptest laws | "Given a Low task skipped `aging_threshold` times…" | api-design-lead (types), qa-lead (laws) | — | M | ☐ |
+| T4 | Registry migration 0017 `task_queue` + `project_queue.paused`; `TaskQueueStore` (hash-keyed mirror, CAS dispatch, `attempt`), `list_runs_readonly` | "Given a dependency in `Failed`…" (store); "Daemon restart with a row in `Dispatched`…" (store) | async-systems-lead | T3 | M | ☐ |
+| T5 | `TickLoop` extracted (wake + snooze on it) + `TaskScheduler` tick: mirror → policy → dispatch via `TicketRunLauncher` with `RunOrigin::Task`, single-flight, injected clock, startup reconcile, re-queue once; task run on bundled `single-task` template (**named stub, replaced by T10**) | "Given the queue, when the tick runs, then `t1` dispatches first…"; "Daemon restart with a row in `Dispatched`…" | async-systems-lead | T3, T4 | L | ☐ |
+| T6 | Merge-after-verify: on ledger `verified` call `merge_run_worktree` into project branch before next dispatch; next worktree from updated branch; conflict → `Failed{merge_conflict}` + `EscalationRequested` | "Given `t1` verified, when the next tick runs…"; "Given a merge conflict…" | async-systems-lead | T5 | M | ☐ |
+| T7 | CLI `surge task {list,priority,pause,resume,requeue,skip}` (file write + re-mirror), `surge ready` dependency-aware with `blocked_by_failed(id)` and real project path | "Given a dependency in `Failed`, then `surge ready` lists…"; "`surge ready` no longer reports the worktree…"; "Given `surge task priority t3 critical`…" (CLI half); "Given `surge task pause`…" (flag half) | cli-ux-lead | T4 (T5 for "dispatches next") | M | ☐ |
+| T8 | `FlowCatalog` (project → home → bundled), `GraphMetadata.{when_to_use,autonomy}`, bundled archetypes gain `when_to_use`, `surge flow {list,show}` | precondition of "Given a task whose classifier answer is `use: bug-fix@1`…" | api-design-lead | T1, T3 | M | ☐ |
+| T9 | `FlowPurpose::Task` on `validate_for_m6`: `UnverifiedSuccessPath`/`SameRuntimeVerification` → Error (Warning + card note when registry has one runtime), `human_gate` at `autonomy` level, resolver pass before the gate, findings rendered on the gate card | "Given `compose`… rejected and retried" (unit, negative cases first) | qa-lead | T8 | M | ☐ |
+| T10 | Task-run graph builder: pinned → classifier stage (`use:`/`compose`) → generator with `{{flow_catalog}}`+`{{profile_catalog}}` → T9 validation + bootstrap retry → ADR-0015 gate → write `.surge/flows/<name>-1.0.toml` → `ComposedArtifactInstalled{kind: Flow}`; replaces T5 stub. Unresolvable `FlowRef` = named error, no fallback | "Given a task whose classifier answer is `use: bug-fix@1`…"; "Given `compose`… the file exists in `.surge/flows/`…" | async-systems-lead | T2, T5, T8, T9 | L | ☐ |
+| T11 | Intake planning run: `IntakePolicy::PlanIntoRoadmap` (default when `.surge/roadmap.toml` exists): feature-planner → `human_gate` → `RoadmapPatchApprovalLoop{ProjectRoadmap}`, automatic `RunningMilestone → DeferToNextMilestone`, patch → file → mirror → row; `surge task add` as the user source | "Given a GitHub issue candidate, when intake launches…"; "Given the patch conflicts with the running milestone…" | async-systems-lead | T4, T5 | L | ☐ |
+| T12 | Composed profiles: generator may emit `ArtifactKind::Profile` with `category="_generated"`; strict load, reject `authority = true` and bundled/home shadowing by named error, install to `.surge/profiles/_generated/` behind the gate with `ComposedArtifactInstalled{kind: Profile}` | "Given a composed profile with `authority = true` or a bundled name…" | api-design-lead | T1, T2, T10 | M | ☐ |
+| T13 | `TrustStore` (`SURGE_HOME/trust/<repo-id>.toml`, hashes for profile/flow/skill/`[[mcp_servers]]`), pre-launch check → `EscalationRequested{UntrustedProjectFile}` with diff, `surge trust accept <path>`, gate pins composed artefacts, shadowing rule logged with `Provenance::Project` | "Given a fresh clone with an unpinned `.surge/` profile…"; "Given an edit to `.surge/flows/bug-fix-1.0.toml` mid-run…" | async-systems-lead (+ security-auditor review) | T1, T5, T10 | L | ☐ |
+| T14 | Steering: pause halts the running task run at its next stage boundary (reuse `engine/steer.rs`), resume continues; `surge task regenerate-flow`; `RunOrigin.roadmap_hash` visibly stale after a raced priority edit | "Given `surge task pause`… halts"; "Given `surge task priority t3 critical` while `t1` runs…" (engine half) | async-systems-lead + cli-ux-lead | T7, T10 | M | ☐ |
+| T15 | Outer test `crates/surge-daemon/tests/ato_outer_test.rs` (3-task roadmap, one template, mock ACP, injected clock) + final docs sweep | every "(outer)" criterion end to end | qa-lead | T6, T11, T13, T14 | L | ☐ |
+
+### Expected files / size (for parallelism decisions)
+- **T1** `surge-core/src/project_layer.rs` (new), `surge-core/src/profile/registry.rs`, `surge-core/src/lib.rs`, `surge-orchestrator/src/profile_loader/{registry,paths,disk,catalog}.rs`, `surge-orchestrator/src/engine/{config,engine,run_task}.rs`, `ProfileRegistry::load()` callers in `surge-cli/src/commands/*.rs` + `surge-daemon/src/main.rs`, `surge-orchestrator/tests/profile_registry_e2e.rs`, `docs/profile-authoring.md`.
+- **T2** `surge-core/src/run_event.rs`, `surge-core/src/migrations/mod.rs` (v9), `surge-core/src/artifact_contract/contract.rs`, `docs/schema-versioning.md`.
+- **T3** `surge-core/src/roadmap.rs`, `surge-core/src/flow_ref.rs` (new), `surge-core/src/run_event.rs` (`RunOrigin`), `surge-core/src/config.rs` (`QueueConfig`), `surge-orchestrator/src/scheduler/{mod,policy}.rs` (new), `surge.example.toml`, `docs/artifact-schemas.md`.
+- **T4** `surge-persistence/src/runs/migrations/registry/0017_task_queue.sql` (new), `surge-persistence/src/runs/migrations.rs`, `surge-persistence/src/task_queue.rs` (new), `lib.rs`, `surge-persistence/src/runs/{storage,registry}.rs`.
+- **T5** `surge-daemon/src/tick_loop.rs` (new), `wake_scheduler.rs`, `inbox/snooze_scheduler.rs`, `surge-daemon/src/task_scheduler.rs` (new), `lib.rs`, `main.rs`, `inbox/ticket_run_launcher.rs`, `recovery.rs`, `surge-orchestrator/src/task_run/mod.rs` (new), `surge-daemon/tests/daemon_task_scheduler.rs` (new), `docs/crash-recovery.md`.
+- **T6** `surge-daemon/src/task_scheduler.rs`, `surge-daemon/src/task_completion.rs` (new), `surge-git/src/worktree.rs`, `surge-daemon/tests/daemon_task_merge.rs` (new).
+- **T7** `surge-cli/src/commands/task.rs` (new), `ready.rs`, `mod.rs`, `main.rs`, `docs/cli.md`.
+- **T8** `surge-core/src/flow_catalog.rs` (new), `surge-core/src/graph.rs`, `surge-core/bundled/flows/*-1.0.toml`, `surge-core/src/bundled_flows.rs`, `surge-cli/src/commands/flow.rs` (new), `docs/conventions/flow.md`, `docs/archetypes.md`.
+- **T9** `surge-orchestrator/src/engine/validate.rs`, `surge-core/src/validation.rs`, `engine/bootstrap.rs`, `engine/stage/human_gate.rs`, all `validate_for_m6` call sites, `surge-orchestrator/tests/validate_with_resolver.rs`.
+- **T10** `surge-orchestrator/src/task_run/{select,compose}.rs` (new), `engine/bootstrap.rs`, `engine/stage/bindings.rs`, bundled classifier profile, `surge-daemon/src/task_scheduler.rs`, `surge-orchestrator/tests/task_run_select_test.rs` (new), `docs/workflow.md`.
+- **T11** `surge-daemon/src/inbox/ticket_run_launcher.rs`, `surge-orchestrator/src/{feature_driver,roadmap_amendment}.rs`, `surge-core/src/roadmap_patch.rs`, `surge-cli/src/commands/task.rs`, `surge-daemon/tests/daemon_intake_planning_run.rs` (new), `docs/workflow.md`.
+- **T12** `engine/bootstrap.rs`, `task_run/compose.rs`, `profile_loader/registry.rs`, `surge-core/src/artifact_contract/contract.rs`.
+- **T13** `surge-persistence/src/trust_store.rs` (new), `surge-core/src/content_hash.rs` (new), `surge-daemon/src/{task_scheduler,error}.rs`, `profile_loader/registry.rs`, `surge-cli/src/commands/trust.rs` (new), `docs/cli.md`, `docs/project-layer.md` (new).
+- **T14** `surge-orchestrator/src/engine/{steer,run_task}.rs`, `surge-daemon/src/task_scheduler.rs`, `surge-cli/src/commands/task.rs`.
+- **T15** `surge-daemon/tests/ato_outer_test.rs` (new), `docs/workflow.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`.
+
+## Critical path
+T3 → T4 → T5 → T6 → T10 → T13 → T14 → T15 (T10 also waits on T2 and T8 → T9).
+Parallel lanes: {T1, T2, T3} together at the start; T7 beside T5/T6; T8, T9 beside T5/T6 once T1 lands; T11 beside T10; T12 beside T13. Files overlap between T5/T6/T10/T13/T14 on `task_scheduler.rs` — those serialize.
+
+## Cross-crate ripples
+- `docs/schema-versioning.md` — T2. `surge.example.toml` — T3, T8. `docs/conventions/flow.md` — T8, T9. `docs/cli.md` — T7, T8, T11, T13. `docs/workflow.md` — T10, T11, T15. `docs/crash-recovery.md` — T5. `AGENTS.md` §Key Entry Points — T15. `docs/profile-authoring.md` — T1, T12. New `docs/project-layer.md` — T13.
+- Breaking signatures with fan-out: `ProfileRegistry::load(ProjectLayer)` (T1), `validate_for_m6(graph, FlowPurpose)` (T9), `EngineRunConfig` new fields (T1), migration 0017 (T4).
+
+## Notes
+- **F1 — MCP as a task source:** `rmcp` is client-only in this workspace (`Cargo.toml:155`); no MCP server surface exists. **Decision (user, 2026-09-18): option (c)** — T11 adds a daemon IPC verb `SubmitTask` used by `surge task add`; an MCP shim over it is deferred to the memory/MCP spec. Options were: (a) out of v1, GitHub/Linear/`surge task add` cover the criteria; (b) T11b: `rmcp` server feature + `surge mcp serve` exposing `surge_task_submit`; (c) daemon IPC verb `SubmitTask`, an external MCP shim calls it.
+- T5's bundled `single-task` template is a named stub; nothing but T10 may depend on it.
+- Local test runner for env-touching crates is `cargo test`, not nextest (memory `surge-env-mutation-unsound`) — T13 brief carries this.
+- Project gate: `just ci`.
+
+## Shared contracts
+| Producer | Consumer | Contract + source | Compatible |
+|---|---|---|---|
+| T3 | T4, T5 | `QueueEntry{task_id,priority,depends_on,size,enqueued_at,skipped_dispatches,dep_states}`; `QueuePolicy::next(&[QueueEntry], now) -> Vec<TaskId>`. Ready = Pending ∧ deps Completed/verified; dep Failed/Skipped → `blocked_by_failed(id)`, never promoted. Order `(effective_priority desc, size asc, enqueued_at asc)`, `effective = priority + floor(skipped/aging_threshold)` capped Critical. Empty Vec = nothing ready. v1 consumer takes `.first()`. | yes; T4 derives `dep_states` by join, no copy |
+| T4 | T5, T6, T7, T11, T14 | `task_queue(project_root, task_id, roadmap_hash, priority, depends_on_json, size, enqueued_at, skipped_dispatches, dispatch_state ∈ {queued,dispatched,failed,done}, run_id, attempt)`; `project_queue(project_root, paused)`. Planning columns re-mirrored on hash change; execution columns never overwritten by mirror. Dispatch = `UPDATE … WHERE dispatch_state='queued'`; 0 rows = lost race, harmless. | yes; `attempt` added (was missing from spec table) |
+| T3 | T5 (writer), T6/T7/T14 (readers) | `RunOrigin::Task{project_root,task_id,attempt,roadmap_hash}` on `RunConfig.origin`, `#[serde(default)]`; absent = pre-ATO or intake work run; `roadmap_hash` never updated. | yes |
+| T3 | T8, T10, T7/T14 | `FlowRef` = `name@MAJOR[.MINOR]`, Display/FromStr round-trip, missing MINOR = latest major. Unresolvable at dispatch = `FlowCatalogError::NotFound`, no fallback. | yes |
+| T8 | T10, T13, CLI | `FlowCatalog::scan(&ProjectLayer)`; entry `{FlowRef, layer, when_to_use, archetype, autonomy, path, hash}`; precedence project > home > bundled, shadowed listed with `shadowed_by`; bundled without `when_to_use` fails the bundled-flows test. | yes |
+| T9 | T10, T12, existing callers | `FlowPurpose::{Bootstrap, Task}`; Task: `UnverifiedSuccessPath`/`SameRuntimeVerification` Error unless one runtime in per-run registry (then Warning + card note); missing `human_gate` at `autonomy` level Error; findings returned as `Vec<ValidationError>` to the card. | yes |
+| T2 | T10, T12, T13 | `ComposedArtifactInstalled{kind: ArtifactKind, path: RelPath, hash: ContentHash, gate_node: NodeKey}`; logged only after gate accept; path relative to project root; hash = the value T13 pins. | yes |
+| T13 | T5, T10/T12, CLI | `TrustStore` key `(repo_id, rel_path) → ContentHash` in `SURGE_HOME/trust/<repo-id>.toml`; `repo_id` = hash of canonical origin URL, fallback root path (chief-architect sign-off). Absent or changed = untrusted → no launch + escalation. | yes |
+| T5 | wake/snooze refactor | `TickLoop{poll_interval, shutdown}.run(|now| …)`, injected `now_ms`, cancellation-safe. | yes |
+
+## Execution entries
+*(filled as tasks land)*
