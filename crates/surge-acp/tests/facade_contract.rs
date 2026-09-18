@@ -69,6 +69,7 @@ fn minimal_session_config() -> SessionConfig {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: Default::default(),
+        env: Default::default(),
     }
 }
 

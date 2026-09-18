@@ -1497,6 +1497,8 @@ mod tests {
             args: vec!["test".to_string()],
             transport: Transport::Stdio,
             mcp_servers: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
             capabilities: vec![],
         }
     }

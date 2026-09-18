@@ -31,6 +31,11 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
         ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
         // OpenAI API keys
         ("openai-key", r"sk-[A-Za-z0-9]{48}"),
+        // Ollama API keys: <32 hex chars>.<base64url-ish secret>. The second
+        // segment is long enough (20+) that a `file.rs:12:34`-style path
+        // cannot match, and the hex-prefix anchor keeps ordinary dotted text
+        // out. See docs/agent-runtimes.md (Ollama).
+        ("ollama-key", r"\b[0-9a-f]{32}\.[A-Za-z0-9_-]{20,}\b"),
         // GitHub personal access tokens (new ghp_ format)
         ("github-pat", r"ghp_[A-Za-z0-9]{36}"),
         // PEM private key headers (RSA, EC, OPENSSH, etc.)
@@ -203,5 +208,32 @@ mod tests {
         assert!(redacted);
         assert!(!out.contains("sk-ant-api03"));
         assert!(!out.contains("hunter2"));
+    }
+
+    #[test]
+    fn test_ollama_key_redacted_whole() {
+        // The `generic-api-key` pattern only catches `key=value` shapes and
+        // would leave the tail of a bare bearer token in place; this pins the
+        // dedicated pattern. Synthetic value — never a real credential.
+        let input =
+            "Authorization: Bearer 0123456789abcdef0123456789abcdef.FAKE_FAKE_FAKE_FAKE_FAKE";
+        let (out, redacted) = redact_secrets(input);
+        assert!(redacted);
+        assert!(out.contains("[REDACTED:ollama-key]"));
+        assert!(!out.contains("0123456789abcdef0123456789abcdef"));
+        assert!(!out.contains("FAKE_FAKE_FAKE"));
+    }
+
+    #[test]
+    fn test_ollama_key_pattern_leaves_ordinary_dotted_text_alone() {
+        for input in [
+            "src/main.rs:12:34",
+            "version 1.2.3",
+            "deadbeefdeadbeefdeadbeefdeadbeef.short",
+        ] {
+            let (out, redacted) = redact_secrets(input);
+            assert!(!redacted, "must not redact ordinary text: {input:?}");
+            assert_eq!(out, input);
+        }
     }
 }

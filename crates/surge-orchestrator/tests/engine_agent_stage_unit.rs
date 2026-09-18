@@ -97,6 +97,7 @@ async fn agent_stage_loops_until_outcome_reported() {
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: None,
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,

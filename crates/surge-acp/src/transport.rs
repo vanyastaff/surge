@@ -124,6 +124,18 @@ impl AgentTransport for StdioTransport {
             .env_remove("GIT_OBJECT_DIRECTORY")
             .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
 
+        // Per-agent environment (e.g. Ollama's ANTHROPIC_* routing for the
+        // claude-agent-acp adapter). Resolved here — not in `surge.toml` —
+        // so a `from = "OLLAMA_API_KEY"` spec never carries the credential
+        // value through config, the event log, or this file. The typed
+        // error names the missing variable and the agent, never a value.
+        let resolved_env = crate::agent_env::resolve(name, &config.env).map_err(|e| {
+            SurgeError::AgentConnection(format!("failed to resolve agent env: {e}"))
+        })?;
+        for (key, value) in &resolved_env {
+            cmd.env(key, value);
+        }
+
         // MCP server pass-through: write config to a temp file and set the
         // agent-specific env var before spawning.
         if !config.mcp_servers.is_empty() {
@@ -296,6 +308,8 @@ mod tests {
                 port,
             },
             mcp_servers: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
             capabilities: vec![],
         }
     }

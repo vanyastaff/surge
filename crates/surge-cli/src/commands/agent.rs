@@ -155,13 +155,22 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
-            if !config.agents.contains_key(&name) {
-                anyhow::bail!("Agent '{}' not found in configuration", name);
+            // Unified catalog: a builtin provider is testable without first
+            // being copied into surge.toml.
+            let registry = surge_acp::Registry::for_run(&config);
+            let agents = registry.agent_configs();
+            let name = registry.normalize_agent_id(&name).unwrap_or(name);
+
+            if !agents.contains_key(&name) {
+                anyhow::bail!(
+                    "Agent '{}' not found in configuration or the builtin catalog",
+                    name
+                );
             }
 
             println!("⚡ Testing agent '{name}'...");
 
-            let agent_config = &config.agents[&name];
+            let agent_config = &agents[&name];
             println!("   Command: {}", agent_config.command);
             if !agent_config.args.is_empty() {
                 println!("   Args: {:?}", agent_config.args);
@@ -169,8 +178,8 @@ pub async fn run(command: AgentCommands) -> Result<()> {
 
             let cwd = std::env::current_dir()?;
             let pool = surge_acp::AgentPool::new(
-                config.agents.clone(),
-                config.default_agent.clone(),
+                agents,
+                name.clone(),
                 cwd,
                 surge_acp::PermissionPolicy::default(),
                 config.resilience.clone(),
@@ -193,17 +202,25 @@ pub async fn run(command: AgentCommands) -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
-            if config.agents.is_empty() {
+            // Show the unified catalog (builtins + user entries), not only
+            // what surge.toml happens to declare.
+            let registry = surge_acp::Registry::for_run(&config);
+            let agents = registry.agent_configs();
+            if agents.is_empty() {
                 println!("No agents configured. Run 'surge init' to get started.");
                 return Ok(());
             }
 
             println!("⚡ Agent Health Dashboard\n");
 
+            let default_agent = registry
+                .normalize_agent_id(&config.default_agent)
+                .unwrap_or_else(|| config.default_agent.clone());
+
             let cwd = std::env::current_dir()?;
             let pool = surge_acp::AgentPool::new(
-                config.agents.clone(),
-                config.default_agent.clone(),
+                agents.clone(),
+                default_agent.clone(),
                 cwd,
                 surge_acp::PermissionPolicy::default(),
                 config.resilience.clone(),
@@ -211,9 +228,9 @@ pub async fn run(command: AgentCommands) -> Result<()> {
 
             let mut any_offline = false;
             // Collect names first to avoid borrow issues
-            let agent_names: Vec<String> = config.agents.keys().cloned().collect();
+            let agent_names: Vec<String> = agents.keys().cloned().collect();
             for name in &agent_names {
-                let marker = if name == &config.default_agent {
+                let marker = if name == &default_agent {
                     " (default)"
                 } else {
                     ""

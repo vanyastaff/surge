@@ -13,10 +13,12 @@ use agent_client_protocol::{
     Agent, ClientCapabilities, ClientSideConnection, Implementation, InitializeRequest,
     NewSessionRequest, ProtocolVersion,
 };
+use std::collections::BTreeMap;
 use surge_core::SessionId;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc};
+
 use tracing::{debug, info, warn};
 
 use super::command::BridgeCommand;
@@ -451,7 +453,16 @@ fn resolve_program(binary: &Path) -> PathBuf {
 /// `Mock` short-circuits to `CARGO_BIN_EXE_mock_acp_agent` (set by Cargo
 /// during `cargo test`); falls back to `<CARGO_TARGET_DIR>/debug/mock_acp_agent`
 /// for non-test invocations.
-fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, std::io::Error> {
+///
+/// `env` is the caller-resolved per-agent environment (see
+/// [`crate::agent_env`]) — already concrete values, applied after the
+/// inherited environment so they override it. Never logged: the `Command`'s
+/// `Debug` prints only the program and argv.
+fn build_agent_command(
+    kind: &AgentKind,
+    working_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Command, std::io::Error> {
     let mut cmd = match kind {
         AgentKind::ClaudeCode { binary, extra_args } => {
             let mut c = Command::new(resolve_program(binary));
@@ -504,6 +515,9 @@ fn build_agent_command(kind: &AgentKind, working_dir: &Path) -> Result<Command, 
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
     Ok(cmd)
 }
 
@@ -547,18 +561,19 @@ pub(crate) async fn open_session_impl(
     let (visible, hidden_names) = filter_visible_tools(combined, config.sandbox.as_ref());
 
     // Step 3: spawn agent subprocess.
-    let mut cmd = build_agent_command(&config.agent_kind, &config.working_dir).map_err(|e| {
-        warn!(
-            kind = config.agent_kind.label(),
-            working_dir = %config.working_dir.display(),
-            error = %e,
-            "build_agent_command failed before spawn"
-        );
-        OpenSessionError::AgentSpawnFailed {
-            kind: config.agent_kind.label().into(),
-            source: e,
-        }
-    })?;
+    let mut cmd = build_agent_command(&config.agent_kind, &config.working_dir, &config.env)
+        .map_err(|e| {
+            warn!(
+                kind = config.agent_kind.label(),
+                working_dir = %config.working_dir.display(),
+                error = %e,
+                "build_agent_command failed before spawn"
+            );
+            OpenSessionError::AgentSpawnFailed {
+                kind: config.agent_kind.label().into(),
+                source: e,
+            }
+        })?;
     let mut child: Child = cmd.spawn().map_err(|e| {
         warn!(
             kind = config.agent_kind.label(),
@@ -1485,11 +1500,44 @@ mod tests {
     /// The program path is resolution-dependent; the *args* are the
     /// per-runtime contract that decides whether a launch actually works.
     fn launch_args(kind: &AgentKind) -> Vec<String> {
-        let cmd = build_agent_command(kind, Path::new(".")).expect("build command");
+        let cmd =
+            build_agent_command(kind, Path::new("."), &BTreeMap::new()).expect("build command");
         cmd.as_std()
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn build_agent_command_sets_resolved_env_on_the_child() {
+        let kind = AgentKind::Custom {
+            binary: PathBuf::from("__surge_custom_test__"),
+            args: vec![],
+        };
+        let mut env = BTreeMap::new();
+        env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://ollama.com".to_string(),
+        );
+        env.insert("ANTHROPIC_API_KEY".to_string(), String::new());
+        let cmd = build_agent_command(&kind, Path::new("."), &env).expect("build command");
+        let seen: BTreeMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            seen.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("https://ollama.com")
+        );
+        assert_eq!(seen.get("ANTHROPIC_API_KEY").map(String::as_str), Some(""));
     }
 
     #[test]

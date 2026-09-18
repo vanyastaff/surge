@@ -97,8 +97,20 @@ async fn run_real_smoke(
         binary: PathBuf::from(&entry.command),
         args: entry.default_args.clone(),
     };
+    // Resolve the entry's env spec exactly as the engine does, so the smoke
+    // exercises the real provider routing (e.g. Ollama's ANTHROPIC_* vars)
+    // rather than a bare adapter launch that would fail on the wrong
+    // endpoint. The failure is reported as a spawn-stage error naming the
+    // missing variable.
+    let env = surge_acp::agent_env::resolve(&entry.id, &entry.env)
+        .map_err(|e| (SmokeStage::Spawn, format!("agent env: {e}")))?;
     let workdir = std::env::temp_dir().join(format!("surge-doctor-smoke-{}", entry.id));
     let _ = std::fs::create_dir_all(&workdir);
+    // Materialise whatever settings files the entry declares — the same
+    // data-driven seed a run performs. Without it the smoke fails at the
+    // handshake on any machine whose agent-global configuration carries a
+    // value the agent's own settings cascade rejects.
+    surge_acp::settings_seed::seed_settings_files(&entry.settings_files, &workdir);
     let outcome = OutcomeKey::try_from("done").expect("static outcome key");
     let config = SessionConfig {
         agent_kind,
@@ -110,6 +122,7 @@ async fn run_real_smoke(
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: surge_acp::client::PermissionPolicy::default(),
         bindings: Default::default(),
+        env,
     };
 
     let bridge = AcpBridge::with_defaults().map_err(|e| (SmokeStage::Spawn, e.to_string()))?;

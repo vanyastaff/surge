@@ -1,0 +1,131 @@
+# Ollama Verifier — sealed verifier on a local or cloud Ollama model (v1.0).
+#
+# Same role as `verifier@2.0` — sealed sandbox, verification authority,
+# produces `verification-report.toml` — with one deliberate difference: it
+# resolves to the `ollama-acp` catalog entry (the claude-agent adapter
+# pointed at Ollama's Anthropic-compatible endpoint) instead of Claude Code.
+#
+# Two independent reasons this profile exists:
+#
+# 1. Cross-vendor verification. A verifier sharing the implementer's runtime
+#    cannot catch that runtime's systematic blind spots. With the implementer
+#    on Claude Code, this profile is a second vendor for the price of the
+#    operator's own Ollama endpoint — no extra credential beyond
+#    `OLLAMA_HOST` / `OLLAMA_MODEL` (and `OLLAMA_API_KEY` when pointing at
+#    Ollama Cloud).
+# 2. The `SameRuntimeVerification` validation rule (W5) warns when a flow's
+#    verifier resolves to the implementer's runtime. `cross-verifier@1.0`
+#    answers it with Codex; this answers it with the `ollama-acp` catalog
+#    entry.
+#
+# Honest limits, stated so a flow author does not over-read the seal:
+#
+# - **Sandbox flags are not enforced.** Surge does not yet deliver
+#   sandbox-tier flags to any runtime's production spawn, so `read-only`
+#   here is intent, not enforcement: the verifier is told not to edit, and
+#   the engine rejects a `verified` ledger transition from a non-read-only
+#   node, but nothing stops the model from writing.
+# - **The endpoint is the operator's.** This profile pins no model; the
+#   model comes from `OLLAMA_MODEL` at launch. A flow that needs a specific
+#   verifier model should set `OLLAMA_MODEL` for the run or author its own
+#   disk profile.
+# - **The injected `report_stage_outcome` tool is not yet transported to
+#   real agents** (the same pre-existing gap that affects every real
+#   runtime). A live run on this profile therefore reaches the prompt and
+#   the model's reply, but cannot terminate a stage through the injected
+#   tool until that transport lands.
+
+schema_version = 1
+
+[role]
+id = "ollama-verifier"
+version = "1.0.0"
+display_name = "Ollama Verifier"
+category = "agents"
+description = "Sealed read-only verifier on an Ollama model (local server or Ollama Cloud): runs build/test/lint, checks acceptance criteria, certifies a task verified."
+when_to_use = "Wherever verifier@2.0 would be used when the implementer runs on Claude Code or Codex — choosing this over verifier@2.0 makes the flow's verification cross-vendor at the cost of the operator's local/cloud Ollama endpoint."
+
+[runtime]
+# Advisory (read only by profile-merge); the adapter selects its own model.
+# Left empty on purpose: the model is an operator fact (`OLLAMA_MODEL`), not
+# a property of this profile — inventing one would be worse than saying
+# nothing.
+recommended_model = ""
+default_temperature = 0.0
+default_max_tokens = 64000
+# Resolves through the registry alias table to the builtin `ollama-acp`
+# catalog entry. This line is what makes W5 see a different runtime from a
+# Claude/Codex implementer. "ollama" is an alias, not a code branch: any
+# user-declared provider can be referenced the same way.
+agent_id = "ollama"
+
+# Sealed by declaration. See the honest-limits note above: surge does not yet
+# enforce sandbox tiers at the spawn for this runtime (or any other), so this
+# mode gates the ledger transition, not the model's filesystem access.
+[sandbox]
+mode = "read-only"
+
+[verification]
+authority = true
+
+[tools]
+default_shell_allowlist = ["cargo"]
+
+[[outcomes]]
+id = "passed"
+description = "All commands green, all acceptance criteria met. Certifies the task verified."
+edge_kind_hint = "forward"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[outcomes]]
+id = "failed"
+description = "One or more commands red, OR acceptance criteria unmet. Route back to Implementer."
+edge_kind_hint = "backtrack"
+
+[[outcomes.produced_artifacts]]
+path = "verification-report.toml"
+contract = { kind = "verification-report", schema_version = 1 }
+
+[[bindings.expected]]
+name = "spec"
+source = { source = "node_output", from_role = "spec-author" }
+
+[[bindings.expected]]
+name = "project_memory"
+source = { source = "run_artifact" }
+optional = true
+
+[approvals]
+policy = "on-request"
+
+[prompt]
+system = """\
+You are the Ollama Verifier. You are running on a different model than the
+agent that wrote this code, and that is deliberate: your job is to catch what
+an agent sharing the implementer's blind spots would wave through. Do not
+assume the implementation is close to correct.
+
+Run the project's verification commands and check the Spec contract acceptance
+criteria from `{{spec}}` (`spec.toml` entries and/or `spec.md` compatibility
+checkboxes). Treat any invariant recorded in the accumulated project memory
+`{{project_memory}}` as a check that must still hold. Your sandbox is declared
+read-only: do not edit the workspace.
+
+Process:
+1. Run, in order, only the commands the project actually uses (read `Makefile` / `justfile` / `taskfile.yml` / `package.json` / `Cargo.toml` first).
+2. For Rust workspaces: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`.
+3. For each `[[spec.subtasks.acceptance_criteria]]` entry or `## Acceptance Criteria` checkbox in `{{spec}}`, evaluate it (compile-check / test-pass / metric-under-budget) and note the result.
+
+Always write `verification-report.toml` recording the task id, the outcome
+(`passed` | `failed`), a one-line summary, and one `[[checks]]` entry per
+command you ran (`command`, `result`, optional `note`).
+
+Rules:
+- Do not edit code. Verification is read-only over the implementation.
+- Judge the implementation against the spec, not against how you would have written it. A different-but-correct approach passes.
+- Report concrete failures: command, exit code, the first 30 lines of relevant output.
+- `passed`: every command green AND every acceptance criterion satisfied. Anything less is `failed`.
+"""

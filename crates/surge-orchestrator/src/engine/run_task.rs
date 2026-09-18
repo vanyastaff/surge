@@ -106,6 +106,12 @@ pub(crate) struct RunTaskParams {
     /// `runtime.agent_id`. When `None`, the M5 mock-only fast path
     /// remains active.
     pub profile_registry: Option<Arc<crate::profile_loader::ProfileRegistry>>,
+    /// Unified agent registry (user `[agents.*]` merged over the builtin
+    /// catalog), if wired via `EngineConfig::agent_registry`. When `Some`,
+    /// agent stages resolve a profile's `runtime.agent_id` through it, so a
+    /// custom provider the operator declared launches through the same path
+    /// as a builtin one. `None` falls back to `Registry::builtin()`.
+    pub agent_registry: Option<Arc<surge_acp::Registry>>,
     /// Durable rate-limit capacity ledger (Task 12 M2/M3, R34-R38.1).
     /// Consulted before every agent-node dispatch and updated the moment a
     /// `StageError::RateLimited` is observed — see
@@ -960,6 +966,7 @@ async fn execute_agent_node(
         tool_call_loop_guard: params.run_config.tool_call_loop_guard.unwrap_or_default(),
         output_spill: params.run_config.output_spill.unwrap_or_default(),
         profile_registry: params.profile_registry.clone(),
+        agent_registry: params.agent_registry.clone(),
         hook_executor: &state.hook_executor,
         pending_elevations: state.pending_elevations.clone(),
         active_task_id: crate::engine::frames::active_task_id(&state.frames),

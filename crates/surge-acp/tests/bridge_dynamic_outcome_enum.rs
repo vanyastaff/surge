@@ -24,6 +24,7 @@ fn cfg_with(outcome: &str, wt: &std::path::Path) -> SessionConfig {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     }
 }
 

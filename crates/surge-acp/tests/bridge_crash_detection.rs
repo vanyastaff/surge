@@ -34,6 +34,7 @@ async fn crash_after_n_tool_calls_surfaces_within_2s() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();

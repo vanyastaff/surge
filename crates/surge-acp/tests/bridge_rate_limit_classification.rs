@@ -50,6 +50,7 @@ async fn real_429_with_retry_after_survives_the_acp_wire_as_rate_limited() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();

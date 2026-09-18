@@ -159,6 +159,9 @@ pub async fn run_feature_planner(
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: Some(params.profile_registry.clone()),
+        // The standalone Feature Planner driver has no engine config to read
+        // a merged agent registry from; builtins are the legacy fallback.
+        agent_registry: None,
         hook_executor: params.hook_executor,
         pending_elevations: crate::engine::elevation::PendingElevations::new(),
         // The feature planner runs standalone, not inside a task loop.

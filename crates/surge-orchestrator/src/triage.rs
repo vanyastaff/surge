@@ -334,6 +334,10 @@ async fn try_one_attempt(
         sandbox: delegated_sandbox(),
         permission_policy: PermissionPolicy::default(),
         bindings,
+        // Triage runs the direct-CLI Claude binary; it carries no per-agent
+        // env spec (Ollama routing lives in the `ollama-acp` registry entry,
+        // which triage does not use).
+        env: BTreeMap::new(),
     };
 
     let mut events = bridge.subscribe();

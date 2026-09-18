@@ -30,6 +30,7 @@ async fn handshake_failure_returns_open_session_error() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let err = bridge.open_session(cfg).await.unwrap_err();

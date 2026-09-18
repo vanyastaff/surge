@@ -54,6 +54,20 @@ pub struct EngineConfig {
     /// `start_run` and `resume_run` resolve the same value without needing
     /// anything to survive a trip through the event log.
     pub memory_store_path: Option<std::path::PathBuf>,
+    /// Agent registry the engine resolves a profile's `runtime.agent_id`
+    /// through — the unified catalog of every provider surge can launch.
+    ///
+    /// Production wiring (`surge-cli`, `surge-daemon`) populates this with
+    /// the **merged** registry: the user's `[agents.*]` from `surge.toml`
+    /// first, then the builtin entries, so a custom provider the operator
+    /// declared is a first-class runtime — same launch path, same env,
+    /// same settings seed as any builtin one. `None` falls back to
+    /// `Registry::builtin()` (the legacy path most tests take), which keeps
+    /// the builtin catalog working unchanged.
+    ///
+    /// Surge deliberately has no per-vendor branch anywhere: choosing a
+    /// provider is choosing a registry entry.
+    pub agent_registry: Option<Arc<surge_acp::Registry>>,
 }
 
 impl Default for EngineConfig {
@@ -65,6 +79,7 @@ impl Default for EngineConfig {
                 &surge_core::capacity_config::CapacityConfig::default(),
             ),
             memory_store_path: None,
+            agent_registry: None,
         }
     }
 }

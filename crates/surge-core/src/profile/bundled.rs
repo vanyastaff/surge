@@ -38,6 +38,7 @@ const TEST_AUTHOR_TOML: &str = include_str!("../../bundled/profiles/test-author-
 const VERIFIER_TOML: &str = include_str!("../../bundled/profiles/verifier-1.0.toml");
 const VERIFIER_2_0_TOML: &str = include_str!("../../bundled/profiles/verifier-2.0.toml");
 const CROSS_VERIFIER_TOML: &str = include_str!("../../bundled/profiles/cross-verifier-1.0.toml");
+const OLLAMA_VERIFIER_TOML: &str = include_str!("../../bundled/profiles/ollama-verifier-1.0.toml");
 const REVIEWER_TOML: &str = include_str!("../../bundled/profiles/reviewer-1.0.toml");
 const PR_COMPOSER_TOML: &str = include_str!("../../bundled/profiles/pr-composer-1.0.toml");
 
@@ -56,7 +57,7 @@ const FEATURE_PLANNER_TOML: &str = include_str!("../../bundled/profiles/feature-
 
 /// Total number of bundled profiles. Centralized so tests can spot-check
 /// that nothing was added or dropped silently.
-pub const BUNDLED_COUNT: usize = 20;
+pub const BUNDLED_COUNT: usize = 21;
 
 /// Look-up table for compile-time bundled profiles.
 ///
@@ -92,6 +93,7 @@ impl BundledRegistry {
             parse(VERIFIER_TOML, "verifier"),
             parse(VERIFIER_2_0_TOML, "verifier"),
             parse(CROSS_VERIFIER_TOML, "cross-verifier"),
+            parse(OLLAMA_VERIFIER_TOML, "ollama-verifier"),
             parse(REVIEWER_TOML, "reviewer"),
             parse(PR_COMPOSER_TOML, "pr-composer"),
             // Specialized (Task 11).
@@ -205,6 +207,44 @@ mod tests {
             verifier.runtime.agent_id, implementer.runtime.agent_id,
             "and verifier@2.0 does share it — which is why W5 fires on the \
              bundled flows and why this profile had to exist"
+        );
+    }
+
+    #[test]
+    fn ollama_verifier_is_a_sealed_authority_on_the_ollama_runtime() {
+        // Same shape as cross-verifier's test: a verifier in every respect
+        // except the runtime it shares with the implementer — here the
+        // `ollama-acp` runtime instead of Codex.
+        let ollama =
+            BundledRegistry::by_name_latest("ollama-verifier").expect("ollama-verifier bundled");
+        let implementer =
+            BundledRegistry::by_name_latest("implementer").expect("implementer bundled");
+
+        assert_eq!(ollama.sandbox.mode, SandboxMode::ReadOnly, "runs sealed");
+        assert!(ollama.verification.authority, "declares authority");
+        let passed = ollama
+            .outcomes
+            .iter()
+            .find(|o| o.id.as_ref() == "passed")
+            .expect("passed outcome");
+        assert!(
+            passed
+                .produced_artifacts
+                .iter()
+                .any(|a| a.contract.kind == ArtifactKind::VerificationReport),
+            "produces a verification-report, like any verifier"
+        );
+        assert_eq!(
+            ollama.runtime.agent_id, "ollama",
+            "resolves through the ollama-acp registry entry",
+        );
+        assert_ne!(
+            ollama.runtime.agent_id, implementer.runtime.agent_id,
+            "the whole point: the verifier must not share the implementer's runtime",
+        );
+        assert!(
+            ollama.runtime.recommended_model.is_empty(),
+            "the model is an operator fact (OLLAMA_MODEL), not a profile fact",
         );
     }
 

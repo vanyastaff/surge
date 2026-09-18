@@ -40,6 +40,7 @@ async fn inner_test() {
             sandbox: Box::new(AlwaysAllowSandbox),
             permission_policy: PermissionPolicy::default(),
             bindings: BTreeMap::new(),
+            env: Default::default(),
         };
         let sid = bridge.open_session(cfg).await.expect("open session");
         sids.push(sid);

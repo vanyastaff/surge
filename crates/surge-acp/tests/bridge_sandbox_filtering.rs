@@ -44,6 +44,7 @@ async fn denied_tool_does_not_appear_in_visible_list() {
         sandbox: Box::new(sandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let _sid = bridge.open_session(cfg).await.unwrap();

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — providers are registry data (Ollama included)
+
+- **One unified agent catalog.** The engine now resolves a profile's
+  `runtime.agent_id` through `Registry::for_run(&SurgeConfig)` — the
+  operator's `[agents.*]` from `surge.toml` first, then the builtin
+  entries — instead of `Registry::builtin()` only. A custom provider
+  declared in `surge.toml` is therefore launchable from `surge engine run`,
+  the daemon, `surge prompt`, `surge agent test` and the desktop chat alike;
+  before this it worked from the legacy pool but was reported unknown by a
+  run. See [ADR 0019](docs/adr/0019-providers-are-registry-data.md).
+- **`AgentConfig::env` / `RegistryEntry::env`** — a `BTreeMap<String,
+  AgentEnvValue>` of spawn-time environment. A value is either a literal or
+  `{ from = "VAR", default = …, required = … }`, read from the operator's
+  environment at spawn. A required-but-unset source variable fails the
+  launch with an error naming the variable, never a value. The legacy pool
+  (`surge prompt` etc.) resolves the same specs.
+- **`AgentConfig::settings_files` / `RegistryEntry::settings_files`** — a
+  list of `AgentSettingsFile { path, content }` materialised in the run's
+  worktree before the agent starts, generically
+  (`surge_acp::settings_seed`). Existing files are never clobbered;
+  absolute/`..` paths and symlinked parents are refused. Replaces the
+  Claude-specific headless seed with data any provider can declare.
+- **Ollama provider (`ollama-acp`, builtin)** — the worked example of the
+  above: `npx -y @zed-industries/claude-agent-acp` with
+  `ANTHROPIC_BASE_URL` from `OLLAMA_HOST`, `ANTHROPIC_AUTH_TOKEN` from
+  `OLLAMA_API_KEY` (optional; local servers need none), and
+  `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` from the required
+  `OLLAMA_MODEL`. Works against Ollama Cloud and a local server; surge never
+  reads the key value. Live smoke:
+  `cargo nextest run -p surge-acp --test ollama_acp_smoke --run-ignored ignored-only`.
+- **`ollama-verifier@1.0`** (bundled profile) — a sealed, authority-bearing
+  verifier resolving to the `ollama-acp` entry, so a Claude/Codex
+  implementer's flow can verify cross-vendor without an extra subscription.
+- **`surge doctor agent <id> --real`** now materialises the entry's declared
+  `settings_files` before its smoke, so the probe exercises the same startup
+  state a run does.
+
+### Changed — launch behaviour
+
+- Wrapper entries (npx/uvx) always resolve to the verbatim-spawn
+  `AgentKind::Custom` path, decided by the entry's shape rather than by a
+  vendor id — a user-declared npx provider can no longer be mis-launched by
+  the typed `ClaudeCode`/`Codex`/`GeminiCli` arms.
+- `EngineConfig::agent_registry` carries the merged catalog; `None` keeps the
+  previous `Registry::builtin()` behaviour for tests and legacy callers.
+- The sandbox matrix no longer carries an `ollama` row set: `RuntimeKind`
+  stays descriptive, and Ollama needs no variant because it is an entry.
+
 ### Added — Run Report: `surge run report <id> --format json|md|html`
 
 - **`RunReport::compile(run_id, events) -> RunReport`** (`surge_core::run_report`)

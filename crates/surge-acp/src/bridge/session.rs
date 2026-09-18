@@ -154,6 +154,13 @@ pub struct SessionConfig {
     /// `BridgeEvent::SessionEstablished` and treats them as opaque otherwise.
     /// Capped by `validate()` at 8 entries × 64 bytes each to bound payload size.
     pub bindings: BTreeMap<String, String>,
+
+    /// Environment variables to set on the spawned agent process, already
+    /// resolved to concrete values by the caller
+    /// ([`crate::agent_env::resolve`]). Empty for every runtime that needs
+    /// no extra env (the default). The bridge applies these after the
+    /// inherited environment, so they override it — and it never logs them.
+    pub env: BTreeMap<String, String>,
 }
 
 impl SessionConfig {
@@ -220,6 +227,7 @@ mod tests {
             sandbox: Box::new(AlwaysAllowSandbox),
             permission_policy: PermissionPolicy::default(),
             bindings: BTreeMap::new(),
+            env: BTreeMap::new(),
         }
     }
 

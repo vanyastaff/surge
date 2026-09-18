@@ -253,6 +253,11 @@ async fn run_command(
             Some(profile_registry),
             EngineConfig {
                 capacity: (&app_config.capacity).into(),
+                // The unified catalog: user `[agents.*]` over builtins, so a
+                // custom provider is a first-class runtime with no code change.
+                agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(
+                    &app_config,
+                ))),
                 ..EngineConfig::default()
             },
         ));

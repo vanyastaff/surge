@@ -286,24 +286,27 @@ impl AppState {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "project".to_string());
 
-        // Try loading surge.toml config and create AgentPool.
+        // Try loading surge.toml config and create AgentPool. The pool is
+        // built from the unified catalog (user `[agents.*]` over builtins),
+        // so a builtin provider like ollama-acp is usable from the desktop
+        // chat without first being copied into surge.toml.
         let config_path = path.join("surge.toml");
-        if config_path.exists() {
-            if let Ok(config) = SurgeConfig::load(&config_path) {
-                // Create AgentPool from config if agents are configured.
-                if !config.agents.is_empty() {
-                    if let Ok(pool) = AgentPool::new(
-                        config.agents.clone(),
-                        config.default_agent.clone(),
-                        path.to_path_buf(),
-                        PermissionPolicy::default(),
-                        config.resilience.clone(),
-                    ) {
-                        self.agent_pool = Some(Arc::new(pool));
-                    }
-                }
-                self.config = Some(config);
+        if let Ok(config) = SurgeConfig::load(&config_path) {
+            let registry = surge_acp::Registry::for_run(&config);
+            let agents = registry.agent_configs();
+            let default_agent = registry
+                .normalize_agent_id(&config.default_agent)
+                .unwrap_or_else(|| config.default_agent.clone());
+            if let Ok(pool) = AgentPool::new(
+                agents,
+                default_agent,
+                path.to_path_buf(),
+                PermissionPolicy::default(),
+                config.resilience.clone(),
+            ) {
+                self.agent_pool = Some(Arc::new(pool));
             }
+            self.config = Some(config);
         }
 
         // Re-detect installed agents (might have changed).
@@ -480,6 +483,8 @@ mod tests {
             transport: Transport::Stdio,
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         }
     }
 

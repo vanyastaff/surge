@@ -31,6 +31,7 @@ async fn open_send_close_round_trip() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.expect("open session");

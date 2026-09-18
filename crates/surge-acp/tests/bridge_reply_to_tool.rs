@@ -77,6 +77,7 @@ async fn reply_to_unknown_call_id_within_session_returns_unknown_call_id() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();
@@ -119,6 +120,7 @@ async fn reply_to_valid_call_id_emits_tool_result_and_returns_ok() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();

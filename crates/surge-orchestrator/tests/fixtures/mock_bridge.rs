@@ -304,6 +304,7 @@ mod tests {
             sandbox: Box::new(AlwaysAllowSandbox),
             permission_policy: PermissionPolicy::default(),
             bindings: BTreeMap::new(),
+            env: Default::default(),
         }
     }
 

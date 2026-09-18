@@ -151,6 +151,10 @@ fn main() -> std::process::ExitCode {
             Some(profile_registry),
             EngineConfig {
                 capacity: (&config.capacity).into(),
+                // The unified catalog: user `[agents.*]` over builtins, so a
+                // daemon-dispatched run resolves a custom provider exactly
+                // like a builtin one.
+                agent_registry: Some(Arc::new(surge_acp::Registry::for_run(&config))),
                 ..EngineConfig::default()
             },
         ));

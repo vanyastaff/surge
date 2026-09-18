@@ -20,6 +20,8 @@ fn stdio_config(command: &str, args: Vec<&str>) -> AgentConfig {
         transport: Transport::Stdio,
         mcp_servers: vec![],
         capabilities: vec![],
+        env: std::collections::BTreeMap::new(),
+        settings_files: vec![],
     }
 }
 

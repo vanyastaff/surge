@@ -495,6 +495,76 @@ mod duration_seconds {
     }
 }
 
+/// Value of one environment variable passed to a spawned agent process.
+///
+/// Secret values must not be written into `surge.toml`. The [`Self::Inject`]
+/// form stores only the **name** of the variable to read at spawn time — the
+/// same convention `[[task_sources]]` (`api_token_env`) and `[telegram]`
+/// (`bot_token_env`) already use. [`Self::Literal`] is for non-secret values
+/// (an empty `ANTHROPIC_API_KEY=""`, a base URL), never for credentials.
+///
+/// The wire form is untagged: a bare TOML string is a literal, a table is an
+/// injection spec. This keeps the common literal case (`KEY = "value"`)
+/// readable while giving injected secrets an explicit shape.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentEnvValue {
+    /// A value written verbatim into the spawned agent's environment.
+    Literal(String),
+    /// Read the value from the operator's process environment at spawn time.
+    Inject {
+        /// Name of the environment variable to read (e.g. `OLLAMA_API_KEY`).
+        from: String,
+        /// Value used when `from` is unset. `None` means the variable is
+        /// required unless `required = false`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        /// When `true` (the default), a missing `from` variable with no
+        /// `default` is a spawn-time error naming the variable — the agent
+        /// never launches with a silently absent credential.
+        #[serde(default = "default_agent_env_required")]
+        required: bool,
+    },
+}
+
+fn default_agent_env_required() -> bool {
+    true
+}
+
+/// A file an agent needs in its working directory before it can start.
+///
+/// Some ACP agents read a project-local settings file at session setup and
+/// reject values inherited from the operator's global configuration (most
+/// commonly a non-interactive permission mode). Which file, and what it must
+/// contain, is a property of the *agent*, not of surge — so it is declared
+/// as data on the provider's registry entry (or `[agents.<id>]` in
+/// `surge.toml`) and materialised generically by
+/// `surge_acp::settings_seed`. Surge has no per-vendor branch for this.
+///
+/// `path` is relative to the run's worktree; absolute paths and `..` are
+/// refused at seed time. An existing file is never clobbered — the
+/// operator's explicit project choice wins.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSettingsFile {
+    /// Worktree-relative path, e.g. `.claude/settings.json`.
+    pub path: String,
+    /// Exact file content to write when the file is absent.
+    pub content: String,
+}
+
+impl AgentSettingsFile {
+    /// Constructor for callers outside this crate (`#[non_exhaustive]`).
+    #[must_use]
+    pub fn new(path: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            content: content.into(),
+        }
+    }
+}
+
 /// Configuration for a single coding agent (Claude Code, Copilot CLI, etc.).
 ///
 /// Specifies the command to spawn, transport layer, MCP servers to inject,
@@ -516,6 +586,20 @@ pub struct AgentConfig {
     /// Capabilities this agent supports.
     #[serde(default)]
     pub capabilities: Vec<AgentCapability>,
+    /// Environment variables to set on the spawned agent process, keyed by
+    /// variable name. Values are either literals or `from`-injections of the
+    /// operator's environment (see [`AgentEnvValue`]).
+    ///
+    /// Read at spawn time by `surge-acp`'s env resolver — never by
+    /// `surge-core`, which is I/O-free. This is the per-agent half of the
+    /// config surface; a builtin registry entry carries the same shape so a
+    /// registry-launched runtime reaches the same resolution.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, AgentEnvValue>,
+    /// Files to materialise in the run's worktree before the agent starts
+    /// (see [`AgentSettingsFile`]). Data, so a new provider needs no code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings_files: Vec<AgentSettingsFile>,
 }
 
 impl AgentConfig {
@@ -1404,6 +1488,8 @@ max_parallel = 2
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         assert!(valid_config.validate().is_ok());
@@ -1421,6 +1507,8 @@ max_parallel = 2
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         let result = invalid_config.validate();
@@ -1442,6 +1530,8 @@ max_parallel = 2
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         let result = config_empty_cmd.validate();
@@ -1465,6 +1555,8 @@ max_parallel = 2
                 },
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         let result = config_empty_host.validate();
@@ -1488,6 +1580,8 @@ max_parallel = 2
                 },
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         let result = config_invalid_port.validate();
@@ -1527,6 +1621,8 @@ max_parallel = 2
                 },
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         assert!(config_valid_tcp.validate().is_ok());
@@ -1548,6 +1644,8 @@ max_parallel = 2
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         );
         config_bad_routing
@@ -1879,6 +1977,8 @@ transport = "stdio"
             transport: Transport::Stdio,
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -1899,6 +1999,8 @@ transport = "stdio"
             },
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         let result = agent.validate("test-agent");
         assert!(result.is_err());
@@ -2008,6 +2110,8 @@ after_spec = false
             },
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         assert!(agent_min.validate("test").is_ok());
 
@@ -2020,6 +2124,8 @@ after_spec = false
             },
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         assert!(agent_max.validate("test").is_ok());
     }
@@ -2109,6 +2215,8 @@ url = "ws://localhost:8080"
             },
             mcp_servers: vec![],
             capabilities: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         let err = agent.validate("test-agent").unwrap_err();
         assert!(

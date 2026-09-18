@@ -16,7 +16,13 @@
     "capabilities": ["code", "plan", "review", "test", "refactor", "chat"],
     "models": [],
     "long_description": "",
-    "runtime": "claude-code"
+    "runtime": "claude-code",
+    "settings_files": [
+      {
+        "path": ".claude/settings.json",
+        "content": "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n"
+      }
+    ]
   },
   {
     "id": "github-copilot-cli",
@@ -93,6 +99,46 @@
     "models": [],
     "long_description": "Developer preview. `dsh --profile acp` boots DeepSeek Harness's automation-only ACP server over JSON-RPC stdio — a documented zero-option command (packages/bundle/acp-app/src/index.ts in deepseek-ai/deepseek-harness). No separate `dsh` binary is expected on PATH; surge always launches it via npx, so discovery and version probing both go through npx, never a same-named binary. Version-pinned; see RuntimeVersionPolicy for `dsh` in versions.toml — surge fails loudly on protocol drift instead of degrading silently. authors/license confirmed from the repo LICENSE file (\"Copyright (c) 2026 DeepSeek\", MIT) and apps/cli/package.json's license field.",
     "runtime": "dsh",
-    "version_probe_args": ["-y", "@deepseek-ai/dsh"]
+    "version_probe_args": ["-y", "@deepseek-ai/dsh"],
+    "settings_files": [
+      {
+        "path": ".claude/settings.json",
+        "content": "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n"
+      }
+    ]
+  },
+  {
+    "id": "ollama-acp",
+    "display_name": "Ollama",
+    "description": "Ollama (local server or Ollama Cloud) through the Claude Agent adapter",
+    "version": "0.23.1",
+    "authors": ["Ollama", "Zed Industries"],
+    "license": "Apache-2.0",
+    "command": "npx",
+    "default_args": ["-y", "@zed-industries/claude-agent-acp"],
+    "transport": "stdio",
+    "install_instructions": "export OLLAMA_HOST=https://ollama.com OLLAMA_API_KEY=... OLLAMA_MODEL=glm-5.3 && npx -y @zed-industries/claude-agent-acp",
+    "cli_binary": null,
+    "website": "https://docs.ollama.com",
+    "tags": ["ollama", "open-source", "local", "cloud"],
+    "capabilities": ["code", "plan", "review", "chat"],
+    "models": [],
+    "long_description": "Ollama exposes an Anthropic-compatible endpoint (https://ollama.com for Ollama Cloud, http://localhost:11434 for a local server), and @zed-industries/claude-agent-acp drives Claude Code over ACP against it. surge stays ACP-only (ADR-0006): this entry is pure data — command, args, env spec, settings seed — with no vendor branch anywhere in code. The env spec points ANTHROPIC_BASE_URL at OLLAMA_HOST, ANTHROPIC_AUTH_TOKEN at OLLAMA_API_KEY (optional; a local server needs no key) and ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL at OLLAMA_MODEL. OLLAMA_MODEL is required and names a model from https://ollama.com/search (e.g. glm-5.3); surge refuses to launch without it rather than silently reaching Anthropic. surge never reads or stores the key value: the spec carries only the variable name. To add any other provider, copy this shape into [agents.<id>] in surge.toml — no code change. See docs/agent-runtimes.md.",
+    "runtime": "claude-code",
+    "version_probe_args": ["-y", "@zed-industries/claude-agent-acp"],
+    "env": {
+      "ANTHROPIC_BASE_URL": { "from": "OLLAMA_HOST", "required": true },
+      "ANTHROPIC_AUTH_TOKEN": { "from": "OLLAMA_API_KEY", "default": "ollama", "required": false },
+      "ANTHROPIC_API_KEY": "",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": { "from": "OLLAMA_MODEL", "required": true },
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": { "from": "OLLAMA_MODEL", "required": true },
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": { "from": "OLLAMA_MODEL", "required": true }
+    },
+    "settings_files": [
+      {
+        "path": ".claude/settings.json",
+        "content": "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n"
+      }
+    ]
   }
 ]

@@ -59,6 +59,12 @@ pub mod secrets;
 pub mod terminal;
 pub mod transport;
 
+// Spawn-time per-agent environment resolution (`AgentEnvValue` → concrete
+// `(name, value)` pairs). Used by both the ACP bridge and the legacy pool.
+pub mod agent_env;
+// Generic per-agent settings bootstrap (data-driven, no vendor branches).
+pub mod settings_seed;
+
 // New (M3) — Surge ACP bridge. Pure addition, legacy modules untouched.
 pub mod bridge;
 pub mod shared;

@@ -34,13 +34,35 @@ args = ["--verbose", "--log-level=debug"]
 transport = "stdio"
 capabilities = ["code", "test"]
 
-# Example 5: TCP transport agent (for remote agents)
+# Example 5: Per-agent environment (Ollama, local server or Ollama Cloud).
+#
+# Values are either literals or `from`-injections that read the operator's
+# environment at spawn time. Never put a credential in this file: `from`
+# carries the variable *name*, and the value exists only in the child
+# process. A bare string is a literal (`ANTHROPIC_API_KEY = ""` is the
+# adapter's requirement); `{ from = "...", required = true }` fails the
+# launch with a message naming the variable when it is unset.
+[agents.ollama]
+command = "npx"
+args = ["-y", "@zed-industries/claude-agent-acp"]
+transport = "stdio"
+capabilities = ["code", "plan", "review", "chat"]
+
+[agents.ollama.env]
+ANTHROPIC_BASE_URL = { from = "OLLAMA_HOST", required = true }
+ANTHROPIC_AUTH_TOKEN = { from = "OLLAMA_API_KEY", default = "ollama", required = false }
+ANTHROPIC_API_KEY = ""
+ANTHROPIC_DEFAULT_SONNET_MODEL = { from = "OLLAMA_MODEL", required = true }
+ANTHROPIC_DEFAULT_OPUS_MODEL = { from = "OLLAMA_MODEL", required = true }
+ANTHROPIC_DEFAULT_HAIKU_MODEL = { from = "OLLAMA_MODEL", required = true }
+
+# Example 6: TCP transport agent (for remote agents)
 [agents.remote-agent]
 command = "remote-agent-client"
 capabilities = ["code", "review"]
 transport = { tcp = { host = "localhost", port = 8080 } }
 
-# Example 6: Agent with MCP servers (Model Context Protocol)
+# Example 7: Agent with MCP servers (Model Context Protocol)
 # MCP servers provide additional context and tools to the agent
 [agents.claude-with-mcp]
 command = "claude"

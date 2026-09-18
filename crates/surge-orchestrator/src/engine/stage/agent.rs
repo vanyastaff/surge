@@ -105,6 +105,12 @@ pub struct AgentStageParams<'a> {
     /// merged profile's `runtime.agent_id`. When `None`, the legacy M5
     /// mock-only fast path remains active.
     pub profile_registry: Option<std::sync::Arc<crate::profile_loader::ProfileRegistry>>,
+    /// Unified agent registry (user `[agents.*]` merged over the builtin
+    /// catalog). `None` falls back to `Registry::builtin()`. This is the
+    /// one place a provider is chosen: an entry's `command`/`args`/`env`/
+    /// `settings_files` are the whole launch contract, so a custom provider
+    /// needs no code.
+    pub agent_registry: Option<std::sync::Arc<surge_acp::Registry>>,
     /// Lifecycle-hook executor. The default `HookExecutor::new()` runs hooks
     /// via the OS shell; tests substitute via `HookExecutor::with_spawner`.
     pub hook_executor: &'a HookExecutor,
@@ -346,31 +352,42 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
     // rendering pass, never re-fetched mid-turn.
     let prompt_text = append_bound_skills(prompt_text, p.bound_skills);
 
-    // Derive AgentKind. With a resolved profile in hand, take the agent_id
-    // from its runtime block; otherwise fall through to the legacy mock
-    // fast path so callers without a registry keep working.
-    let agent_kind = match resolved_profile.as_ref() {
-        Some(rp) => derive_agent_kind_from_id(profile_str, rp.profile.runtime.agent_id.as_str())?,
-        None => derive_agent_kind(profile_str, None)?,
+    // Derive AgentKind + its resolved spawn environment. With a resolved
+    // profile in hand, take the agent_id from its runtime block; otherwise
+    // fall through to the legacy mock fast path so callers without a
+    // registry keep working. The registry is the merged catalog (user
+    // `[agents.*]` over builtins), so a custom provider resolves exactly
+    // like a builtin one.
+    let agent_launch = match resolved_profile.as_ref() {
+        Some(rp) => derive_agent_kind_from_id(
+            profile_str,
+            rp.profile.runtime.agent_id.as_str(),
+            p.agent_registry.as_deref(),
+        )?,
+        None => AgentLaunch {
+            kind: derive_agent_kind(profile_str),
+            env: BTreeMap::new(),
+            settings_files: Vec::new(),
+        },
     };
+    let AgentLaunch {
+        kind: agent_kind,
+        env: agent_env,
+        settings_files,
+    } = agent_launch;
 
-    // Headless-runtime insulation. For the Claude Code runtime, ensure the
-    // worktree carries a project-level `.claude/settings.json` that pins a
-    // valid, non-interactive `permissions.defaultMode`. Otherwise the agent
-    // inherits the operator's GLOBAL `~/.claude/settings.json` mode — which
-    // may be a value the claude-agent-acp adapter rejects at session setup
-    // (e.g. "auto" → "Invalid permissions.defaultMode"), breaking the run
-    // before any turn. Auth and other global settings still apply; only the
-    // project-level mode is pinned, and an existing project file is never
-    // clobbered. No-op for non-Claude runtimes.
-    if let Some(rp) = resolved_profile.as_ref() {
-        // Seed off the executor: `seed_headless_runtime_settings` does
-        // synchronous (durable) file I/O, so run it on the blocking pool to
-        // avoid stalling the async launch path.
-        let agent_id = rp.profile.runtime.agent_id.clone();
+    // Materialise any settings files the agent's entry declares (e.g. the
+    // Claude-agent entries' `.claude/settings.json` with a non-interactive
+    // permission mode). Data-driven: the entry says which file and what
+    // content, so a new provider needs no code here. Best-effort — a
+    // failure degrades the agent to its global configuration, never fails
+    // the run on its own.
+    if !settings_files.is_empty() {
         let worktree = p.worktree_path.to_path_buf();
+        let files = settings_files.clone();
+        // Synchronous (durable) file I/O — keep it off the async launch path.
         let _ = tokio::task::spawn_blocking(move || {
-            seed_headless_runtime_settings(&agent_id, &worktree);
+            surge_acp::settings_seed::seed_settings_files(&files, &worktree);
         })
         .await;
     }
@@ -565,6 +582,7 @@ pub async fn execute_agent_stage(p: AgentStageParams<'_>) -> StageResult {
         sandbox,
         permission_policy: PermissionPolicy::default(),
         bindings: session_bindings,
+        env: agent_env,
     };
 
     // Subscribe to events BEFORE opening the session, so we don't miss the
@@ -2271,55 +2289,47 @@ pub fn verify_rotation_target(
     RotationRefusal::SameRuntimeIsSameAccount { runtime: current }
 }
 
-/// Resolve `profile_str` (the value of `AgentConfig::profile`) into an
-/// `AgentKind` using the profile registry, with the M5 mock fast path as
-/// the documented fallback when no registry is wired.
+/// Resolve `profile_str` into an `AgentKind` through the legacy M5 fallback
+/// path.
 ///
-/// Order:
-/// 1. If `profile_str` is `"mock"` or `"mock@..."` and the registry is
-///    `None`, short-circuit to `AgentKind::Mock`. Preserves legacy tests
-///    that build the engine without a registry.
-/// 2. If a registry is supplied, parse the reference, resolve through the
-///    full disk + bundled chain, take `merged.runtime.agent_id`, and map
-///    that id to a concrete `AgentKind` via `surge_acp::Registry::builtin`.
-///    Unknown agent ids surface a `StageError::Internal` rather than a
-///    silent mock.
-/// 3. If no registry is supplied AND the profile is non-mock, also fall
-///    back to `AgentKind::Mock` with a one-time WARN log so the test path
-///    keeps working but production wiring is still encouraged.
-fn derive_agent_kind(
-    profile_str: &str,
-    profile_registry: Option<&crate::profile_loader::ProfileRegistry>,
-) -> Result<AgentKind, StageError> {
-    // Step 1 / step 3 fallback path: no registry wired.
-    if profile_registry.is_none() {
-        if profile_str != "mock" && !profile_str.starts_with("mock@") {
-            tracing::warn!(
-                target: "engine::stage::agent",
-                profile = %profile_str,
-                "no profile_registry wired; falling back to AgentKind::Mock (legacy M5 path)"
-            );
-        }
-        return Ok(AgentKind::Mock { args: vec![] });
+/// Only called when no profile registry is wired (the caller already
+/// resolved a profile and used [`derive_agent_kind_from_id`] otherwise):
+/// every profile resolves to `AgentKind::Mock` with a one-time WARN so the
+/// legacy test path keeps working while production wiring is encouraged.
+fn derive_agent_kind(profile_str: &str) -> AgentKind {
+    if profile_str != "mock" && !profile_str.starts_with("mock@") {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            profile = %profile_str,
+            "no profile_registry wired; falling back to AgentKind::Mock (legacy M5 path)"
+        );
     }
-    let registry = profile_registry.expect("checked Some above");
-
-    // Step 2: registry-driven resolution.
-    let key_ref = surge_core::profile::keyref::parse_key_ref(profile_str).map_err(|e| {
-        StageError::Internal(format!("invalid profile reference {profile_str:?}: {e}"))
-    })?;
-    let resolved = registry
-        .resolve(&key_ref)
-        .map_err(|e| StageError::Internal(format!("profile resolve failed: {e}")))?;
-
-    derive_agent_kind_from_id(profile_str, resolved.profile.runtime.agent_id.as_str())
+    AgentKind::Mock { args: vec![] }
 }
 
-/// Map an `agent_id` string to an `AgentKind` via `surge_acp::Registry`.
+/// Map an `agent_id` string to an `AgentKind` via the agent registry,
+/// together with the agent's resolved spawn environment and the settings
+/// files its entry declares.
 ///
 /// Pulled out so [`execute_agent_stage`] can call it directly when the
 /// caller already resolved the profile and just needs the id translated.
-fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentKind, StageError> {
+///
+/// `registry` is the merged catalog (user `[agents.*]` over builtins). The
+/// launch contract is the entry itself — `command`, `default_args`, `env`,
+/// `settings_files` — and nothing in this function branches on a vendor:
+/// adding a provider is adding a registry entry.
+///
+/// Environment resolution happens here (not in `surge-core`, which is
+/// I/O-free): the entry's `env` spec is turned into concrete `(name, value)`
+/// pairs through [`surge_acp::agent_env::resolve`], reading the operator's
+/// process environment at stage time. A required-but-unset source variable
+/// fails the stage with a typed, actionable `StageError::Internal` — the run
+/// never spawns an agent with a silently absent credential.
+fn derive_agent_kind_from_id(
+    profile_str: &str,
+    agent_id: &str,
+    registry: Option<&surge_acp::Registry>,
+) -> Result<AgentLaunch, StageError> {
     // Debug-only test seam: force the in-process mock agent regardless of the
     // profile's runtime, so CLI/plumbing smoke tests can start runs without
     // spawning (and then having to tear down) a real ACP subprocess. Gated on
@@ -2330,7 +2340,7 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
             profile = %profile_str,
             "SURGE_FORCE_AGENT_MOCK set (debug build); using AgentKind::Mock"
         );
-        return Ok(AgentKind::Mock { args: vec![] });
+        return Ok(AgentLaunch::mock());
     }
     if agent_id.is_empty() {
         return Err(StageError::Internal(format!(
@@ -2338,9 +2348,10 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
         )));
     }
     if agent_id == "mock" {
-        return Ok(AgentKind::Mock { args: vec![] });
+        return Ok(AgentLaunch::mock());
     }
-    let agent_registry = surge_acp::Registry::builtin();
+    let builtin = surge_acp::Registry::builtin();
+    let agent_registry = registry.unwrap_or(&builtin);
     let normalized_agent_id = agent_registry.normalize_agent_id(agent_id).ok_or_else(|| {
         let known = agent_registry.known_ids_and_aliases().join(", ");
         tracing::warn!(
@@ -2351,126 +2362,91 @@ fn derive_agent_kind_from_id(profile_str: &str, agent_id: &str) -> Result<AgentK
             "unknown profile runtime agent id"
         );
         StageError::Internal(format!(
-            "profile {profile_str:?} references agent_id {agent_id:?} not present in surge_acp::Registry. Known ids and aliases: {known}"
+            "profile {profile_str:?} references agent_id {agent_id:?} not present in the agent registry. Known ids and aliases: {known}"
         ))
     })?;
     let entry = agent_registry.find(&normalized_agent_id).ok_or_else(|| {
         StageError::Internal(format!(
-            "normalized agent_id {normalized_agent_id:?} missing from surge_acp::Registry"
+            "normalized agent_id {normalized_agent_id:?} missing from the agent registry"
         ))
     })?;
     let binary = std::path::PathBuf::from(&entry.command);
     let extra_args = entry.default_args.clone();
-    // The builtin registry launches agents through an npx adapter
-    // (`command = "npx"`, `default_args = ["@vendor/pkg", ...]`), where
-    // `default_args` already encodes the COMPLETE invocation (including any
-    // `--acp` flag the adapter needs, e.g. gemini/copilot). Those registry
-    // ids ("claude-acp"/"codex-acp"/"gemini") deliberately fall through to
-    // `Custom`, which spawns `command + args` verbatim. The typed
-    // `ClaudeCode`/`Codex`/`GeminiCli` arms exist for the DIRECT-CLI launch
-    // model (e.g. `claude --acp`, exercised by the env-gated
-    // `real_acp_smoke` test), where `build_agent_command` injects the
-    // runtime's subcommand. Mapping the registry ids onto the typed arms
-    // would double/misplace `--acp` for the npx model and break the launch —
-    // so the runtime is tracked separately (registry `entry.runtime`, used
-    // by `seed_headless_runtime_settings`) rather than via the AgentKind.
-    let kind = match entry.id.as_str() {
-        "claude-code" => AgentKind::ClaudeCode { binary, extra_args },
-        "codex" => AgentKind::Codex { binary, extra_args },
-        "gemini-cli" => AgentKind::GeminiCli { binary, extra_args },
-        _ => AgentKind::Custom {
+    // The registry launches agents through a wrapper (`npx`, `uvx`, a native
+    // binary), and `default_args` already encodes the COMPLETE invocation —
+    // including any `--acp`-style flag the wrapper needs. Those entries
+    // therefore resolve to `Custom`, which spawns `command + args`
+    // verbatim. The typed `ClaudeCode`/`Codex`/`GeminiCli` arms exist for
+    // the DIRECT-CLI launch model (e.g. `claude --acp`, exercised by the
+    // env-gated `real_acp_smoke` test), where `build_agent_command` injects
+    // the runtime's subcommand. Mapping a wrapper entry onto a typed arm
+    // would double/misplace that flag and break the launch — so the choice
+    // is driven by the entry's shape, not by a vendor name.
+    let kind = if entry.is_npx() || entry.is_uvx() {
+        AgentKind::Custom {
             binary,
             args: extra_args,
-        },
+        }
+    } else {
+        match entry.id.as_str() {
+            "claude-code" => AgentKind::ClaudeCode { binary, extra_args },
+            "codex" => AgentKind::Codex { binary, extra_args },
+            "gemini-cli" => AgentKind::GeminiCli { binary, extra_args },
+            _ => AgentKind::Custom {
+                binary,
+                args: extra_args,
+            },
+        }
     };
+    // Resolve the entry's env spec against the operator's environment.
+    // `entry.id` names the agent in any missing-variable error.
+    let env = surge_acp::agent_env::resolve(&entry.id, &entry.env).map_err(|e| {
+        tracing::warn!(
+            target: "engine::stage::agent",
+            profile = %profile_str,
+            agent_id = %agent_id,
+            error = %e,
+            "agent env resolution failed"
+        );
+        StageError::Internal(format!(
+            "profile {profile_str:?} runtime {agent_id:?} cannot resolve its environment: {e}"
+        ))
+    })?;
     tracing::debug!(
         target: "engine::stage::agent",
         profile = %profile_str,
         agent_id = %agent_id,
         normalized_agent_id = %entry.id,
         kind = kind.label(),
-        "derived AgentKind from profile registry"
+        env_count = env.len(),
+        settings_file_count = entry.settings_files.len(),
+        "derived AgentKind from the agent registry"
     );
-    Ok(kind)
+    Ok(AgentLaunch {
+        kind,
+        env,
+        settings_files: entry.settings_files.clone(),
+    })
 }
 
-/// Best-effort: pin a headless permission mode for the Claude Code runtime by
-/// seeding `<worktree>/.claude/settings.json` when absent.
-///
-/// The claude-agent-acp adapter reads `permissions.defaultMode` from Claude's
-/// settings cascade at ACP `new_session`; an operator's global value the
-/// adapter doesn't accept (e.g. `"auto"`) aborts the handshake. A project-
-/// level settings file overrides the global mode while auth and other global
-/// settings still apply. An existing project file is left untouched (the
-/// operator's explicit choice wins). No-op for non-Claude runtimes or when
-/// the agent id is unknown.
-///
-/// Synchronous `std::fs` by design: `std::fs::File::write_all` writes through to
-/// the OS (no userspace buffering), so the bytes are durable and immediately
-/// visible to a subsequent read once it returns — unlike a `tokio::fs::File`,
-/// whose buffered writes can be lost on drop without an explicit flush. The
-/// work is one tiny `create_dir_all` + atomic create; callers that run on the
-/// async agent-launch path wrap this in `spawn_blocking` so the executor is
-/// never blocked.
-fn seed_headless_runtime_settings(agent_id: &str, worktree: &std::path::Path) {
-    use std::io::Write as _;
+/// An `AgentKind` paired with the concrete spawn environment and settings
+/// files resolved from its registry entry. Produced by
+/// [`derive_agent_kind_from_id`] and threaded into `SessionConfig` / the
+/// worktree seed.
+#[derive(Debug)]
+struct AgentLaunch {
+    kind: AgentKind,
+    env: BTreeMap<String, String>,
+    settings_files: Vec<surge_core::config::AgentSettingsFile>,
+}
 
-    let registry = surge_acp::Registry::builtin();
-    let is_claude = registry
-        .normalize_agent_id(agent_id)
-        .and_then(|id| registry.find(&id).and_then(|e| e.runtime))
-        .map_or_else(
-            || matches!(agent_id, "claude-code" | "claude-acp"),
-            |rt| matches!(rt, surge_core::RuntimeKind::ClaudeCode),
-        );
-    if !is_claude {
-        return;
-    }
-
-    let dir = worktree.join(".claude");
-    let settings = dir.join("settings.json");
-
-    // Refuse to follow a repo-provided `.claude` symlink (or a non-directory
-    // entry): a crafted checkout could otherwise redirect the write outside
-    // the worktree. `symlink_metadata` does not traverse the final component,
-    // so a symlink is reported as a symlink rather than its target.
-    if let Ok(md) = std::fs::symlink_metadata(&dir)
-        && (md.file_type().is_symlink() || !md.is_dir())
-    {
-        tracing::warn!(
-            target: "engine::stage::agent",
-            worktree = %worktree.display(),
-            "skipping headless settings seed: .claude exists but is not a real directory (symlink or file); refusing to write through it"
-        );
-        return;
-    }
-
-    // Create atomically with `create_new` (O_EXCL / CREATE_NEW) rather than an
-    // `exists()`-then-`write` pair: the latter has a TOCTOU window where a
-    // concurrent creator (another stage in the same worktree, or the operator)
-    // could be clobbered. An already-present file is the operator's explicit
-    // choice and is left untouched — `AlreadyExists` is a benign no-op.
-    let body = "{\n  \"permissions\": {\n    \"defaultMode\": \"default\"\n  }\n}\n";
-    let write_result = std::fs::create_dir_all(&dir).and_then(|()| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&settings)?;
-        file.write_all(body.as_bytes())
-    });
-    match write_result {
-        Ok(()) => tracing::debug!(
-            target: "engine::stage::agent",
-            worktree = %worktree.display(),
-            "seeded headless .claude/settings.json (permissions.defaultMode=default)"
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
-        Err(e) => tracing::warn!(
-            target: "engine::stage::agent",
-            worktree = %worktree.display(),
-            error = %e,
-            "failed to seed headless .claude/settings.json; agent may inherit the global permission mode"
-        ),
+impl AgentLaunch {
+    fn mock() -> Self {
+        Self {
+            kind: AgentKind::Mock { args: vec![] },
+            env: BTreeMap::new(),
+            settings_files: Vec::new(),
+        }
     }
 }
 
@@ -2539,57 +2515,99 @@ mod tests {
     use surge_core::profile::VerificationCfg;
 
     #[test]
-    fn seed_headless_settings_writes_default_mode_for_claude() {
-        let tmp = tempfile::tempdir().unwrap();
-        seed_headless_runtime_settings("claude-code", tmp.path());
-        let settings = tmp.path().join(".claude").join("settings.json");
-        let body = std::fs::read_to_string(&settings).expect("settings.json written");
-        assert!(
-            body.contains("\"defaultMode\"") && body.contains("\"default\""),
-            "expected headless defaultMode, got: {body}"
-        );
-    }
+    fn derive_agent_kind_carries_entry_env_and_settings_files() {
+        // A custom provider in the merged registry is a first-class runtime:
+        // its env spec and settings files flow into the launch with no
+        // vendor-specific code anywhere.
+        use std::collections::{BTreeMap, HashMap};
+        use surge_core::config::{AgentEnvValue, AgentSettingsFile};
 
-    #[test]
-    fn seed_headless_settings_does_not_clobber_existing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&dir).unwrap();
-        let settings = dir.join("settings.json");
-        std::fs::write(&settings, "{ \"keep\": true }").unwrap();
-        seed_headless_runtime_settings("claude-code", tmp.path());
+        let mut env = BTreeMap::new();
+        env.insert(
+            "PROVIDER_BASE_URL".to_string(),
+            AgentEnvValue::Literal("https://example.invalid".to_string()),
+        );
+        let mut agents = HashMap::new();
+        agents.insert(
+            "my-provider".to_string(),
+            surge_core::config::AgentConfig {
+                command: "my-agent".to_string(),
+                args: vec!["--acp".to_string()],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+                env,
+                settings_files: vec![AgentSettingsFile::new(
+                    ".my-agent/settings.json",
+                    "{\"mode\":\"headless\"}\n",
+                )],
+            },
+        );
+        let registry = surge_acp::Registry::from_config(agents);
+
+        let launch = derive_agent_kind_from_id("implementer@1.0", "my-provider", Some(&registry))
+            .expect("custom provider must resolve");
+        assert_eq!(launch.kind.label(), "custom");
         assert_eq!(
-            std::fs::read_to_string(&settings).unwrap(),
-            "{ \"keep\": true }",
-            "existing project settings must not be overwritten"
+            launch.env.get("PROVIDER_BASE_URL").map(String::as_str),
+            Some("https://example.invalid"),
+        );
+        assert_eq!(launch.settings_files.len(), 1);
+        assert_eq!(launch.settings_files[0].path, ".my-agent/settings.json");
+    }
+
+    #[test]
+    fn derive_agent_kind_refuses_a_required_env_var_that_is_unset() {
+        use std::collections::{BTreeMap, HashMap};
+        use surge_core::config::AgentEnvValue;
+
+        let mut env = BTreeMap::new();
+        env.insert(
+            "SURGE_TEST_DEFINITELY_UNSET".to_string(),
+            AgentEnvValue::Inject {
+                from: "SURGE_TEST_DEFINITELY_UNSET_SOURCE".to_string(),
+                default: None,
+                required: true,
+            },
+        );
+        let mut agents = HashMap::new();
+        agents.insert(
+            "strict-provider".to_string(),
+            surge_core::config::AgentConfig {
+                command: "my-agent".to_string(),
+                args: vec![],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+                env,
+                settings_files: vec![],
+            },
+        );
+        let registry = surge_acp::Registry::from_config(agents);
+
+        let err = derive_agent_kind_from_id("implementer@1.0", "strict-provider", Some(&registry))
+            .expect_err("a required-but-unset source must refuse the launch");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("SURGE_TEST_DEFINITELY_UNSET_SOURCE"),
+            "the refusal must name the missing variable: {rendered}",
         );
     }
 
     #[test]
-    fn seed_headless_settings_noop_for_non_claude_runtime() {
-        let tmp = tempfile::tempdir().unwrap();
-        seed_headless_runtime_settings("mock", tmp.path());
-        assert!(
-            !tmp.path().join(".claude").exists(),
-            "non-Claude runtime must not seed .claude/"
-        );
-    }
-
-    // A repo-provided `.claude` symlink must not be followed (the write could
-    // otherwise escape the worktree). Unix-only: creating symlinks on Windows
-    // requires elevated privileges or Developer Mode.
-    #[cfg(unix)]
-    #[test]
-    fn seed_headless_settings_refuses_symlinked_claude_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        // `<worktree>/.claude` -> some directory outside the worktree.
-        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".claude")).unwrap();
-        seed_headless_runtime_settings("claude-code", tmp.path());
-        assert!(
-            !outside.path().join("settings.json").exists(),
-            "must not write settings.json through a .claude symlink target"
-        );
+    fn builtin_registry_entries_carry_their_settings_files() {
+        // The builtin catalog declares the Claude-agent settings seed as
+        // data. If that declaration is dropped, the adapter fails at the
+        // handshake on any machine whose global mode it rejects — this pins
+        // the data, not a code path.
+        let registry = surge_acp::Registry::builtin();
+        for id in ["claude-acp", "dsh-acp"] {
+            let entry = registry.find(id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!(
+                !entry.settings_files.is_empty(),
+                "{id} must declare its settings seed",
+            );
+        }
     }
 
     #[test]
@@ -2800,6 +2818,8 @@ mod tests {
                 transport: surge_core::config::Transport::Stdio,
                 mcp_servers: vec![],
                 capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
             },
         )]))
     }

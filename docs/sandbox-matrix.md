@@ -44,6 +44,15 @@ Surge declares awareness of these runtimes but has not yet tested the live launc
 | `goose` | all 4 modes | Goose ACP surface stable; sandbox CLI flags not yet enumerated. |
 | `dsh` | all 4 modes | **Developer preview.** DeepSeek Harness's ACP profile (`dsh --profile acp`) is a documented zero-option command — no CLI sandbox-tier flags exist to verify. See [`RuntimeVersionPolicy`](../crates/surge-core/bundled/sandbox/versions.toml) for the separate (and, for this runtime, exact) version pin. |
 
+> **The matrix is not consulted at launch.** `resolve_launch_flags` has no
+> production caller: the ACP bridge spawns an entry's `command` + `args` and
+> never appends matrix flags, so the tiers above are declared intent rather
+> than enforced sandboxing (surge delegates enforcement to the runtime per
+> [ADR-0006](adr/0006-acp-only-transport.md)). This is pre-existing and
+> unrelated to provider support — a user-declared provider has the same
+> posture, and `RuntimeKind` is descriptive (matrix lookup, doctor report),
+> never a launch branch. See [ADR 0019](adr/0019-providers-are-registry-data.md).
+
 ## How surge picks a row
 
 1. Authors declare `sandbox.mode` on an Agent node (or inherit it from the profile) and optionally specify a `runtime` via the agent registry entry.

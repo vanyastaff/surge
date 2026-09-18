@@ -356,6 +356,7 @@ fn project_context_session_config(
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings,
+        env: invocation.agent_env.clone(),
     })
 }
 
@@ -869,6 +870,7 @@ struct ProjectContextInvocation {
     normalized_agent_id: String,
     agent_command: String,
     agent_args: Vec<String>,
+    agent_env: BTreeMap<String, String>,
     prompt_template: String,
     bindings: Vec<Binding>,
     binding_values: Vec<(TemplateVar, String)>,
@@ -923,6 +925,15 @@ fn project_context_invocation(
             optional: false,
         },
     ];
+    // Resolve the entry's env spec here, on the real invocation path, so a
+    // project-context run on Ollama (or any future env-bearing runtime)
+    // reaches the same provider routing as an engine run of that profile.
+    let agent_env = surge_acp::agent_env::resolve(&entry.id, &entry.env).map_err(|e| {
+        ProjectContextError::Profile(format!(
+            "runtime '{}' cannot resolve its environment: {e}",
+            entry.id
+        ))
+    })?;
     let binding_values = vec![
         (
             TemplateVar("worktree_root".to_string()),
@@ -949,6 +960,7 @@ fn project_context_invocation(
         normalized_agent_id,
         agent_command: entry.command.clone(),
         agent_args: entry.default_args.clone(),
+        agent_env,
         prompt_template: resolved.profile.prompt.system.clone(),
         bindings,
         binding_values,

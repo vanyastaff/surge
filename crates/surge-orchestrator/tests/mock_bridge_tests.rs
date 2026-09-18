@@ -26,6 +26,7 @@ fn minimal_session_config() -> SessionConfig {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     }
 }
 

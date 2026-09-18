@@ -318,6 +318,10 @@ async fn build_local_engine(
         // `[capacity]`-derived policy rather than the hardcoded default.
         EngineConfig {
             capacity: (&config.capacity).into(),
+            // Bootstrap dispatches agent nodes exactly like a follow-up run,
+            // so it resolves providers through the same unified catalog
+            // (user `[agents.*]` over builtins).
+            agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(config))),
             ..EngineConfig::default()
         },
     ));

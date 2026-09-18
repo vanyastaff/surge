@@ -74,7 +74,17 @@ fields                = []         # optional UI hints for the desktop shell
 
 ### `[runtime].agent_id`
 
-Identifies the agent runtime via `surge_acp::Registry`. The default is `"claude-code"`. Other valid ids: `"codex"`, `"gemini-cli"`, `"mock"` (test-only). The engine derives `AgentKind` by looking the id up in the agent registry, taking the registry entry's `command` as the binary path.
+Identifies the provider via the unified agent registry: the operator's
+`[agents.*]` from `surge.toml` first, then the builtin catalog
+(`crates/surge-acp/builtin_registry.json`). The default is `"claude-code"`.
+Any registry id or alias works — `"claude-acp"`/`"claude-code"`/`"claude"`,
+`"codex"`, `"gemini"`, `"ollama"`, `"dsh"` — and a provider the operator
+declares in `surge.toml` under its own id works the same way, with no surge
+change. The engine takes the entry's `command`, `default_args`, `env` (with
+`from`-injections resolved from the operator's environment) and
+`settings_files` as the whole launch contract; nothing branches on a vendor.
+See [ADR 0019](adr/0019-providers-are-registry-data.md) and
+[`agent-runtimes.md`](agent-runtimes.md).
 
 ### `[[outcomes]]`
 

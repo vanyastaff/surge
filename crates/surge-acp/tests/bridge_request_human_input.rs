@@ -32,6 +32,7 @@ async fn human_input_surfaces_as_distinct_event() {
         sandbox: Box::new(AlwaysAllowSandbox),
         permission_policy: PermissionPolicy::default(),
         bindings: BTreeMap::new(),
+        env: Default::default(),
     };
 
     let sid = bridge.open_session(cfg).await.unwrap();

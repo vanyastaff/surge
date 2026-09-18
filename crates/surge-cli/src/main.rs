@@ -398,21 +398,33 @@ async fn run_command(command: Commands) -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
+            // The unified catalog: user `[agents.*]` over builtins, so a
+            // builtin provider (e.g. ollama-acp) or a user-declared one is
+            // reachable here exactly as it is from a run.
+            let registry = surge_acp::Registry::for_run(&config);
+            let agents = registry.agent_configs();
+
             let agent_name = agent
                 .as_deref()
                 .unwrap_or(&config.default_agent)
                 .to_string();
+            let agent_name = registry
+                .normalize_agent_id(&agent_name)
+                .unwrap_or(agent_name);
 
-            if !config.agents.contains_key(&agent_name) {
-                anyhow::bail!("Agent '{}' not found in configuration", agent_name);
+            if !agents.contains_key(&agent_name) {
+                anyhow::bail!(
+                    "Agent '{}' not found in configuration or the builtin catalog",
+                    agent_name
+                );
             }
 
             println!("⚡ Pinging agent '{agent_name}'...");
 
             let cwd = std::env::current_dir()?;
             let pool = surge_acp::AgentPool::new(
-                config.agents.clone(),
-                config.default_agent.clone(),
+                agents,
+                agent_name.clone(),
                 cwd,
                 surge_acp::PermissionPolicy::default(),
                 config.resilience.clone(),
@@ -436,21 +448,31 @@ async fn run_command(command: Commands) -> Result<()> {
             let mut config = SurgeConfig::load_or_default()?;
             config.apply_env_overrides();
 
+            // Same unified catalog as `ping`: builtin + user entries.
+            let registry = surge_acp::Registry::for_run(&config);
+            let agents = registry.agent_configs();
+
             let agent_name = agent
                 .as_deref()
                 .unwrap_or(&config.default_agent)
                 .to_string();
+            let agent_name = registry
+                .normalize_agent_id(&agent_name)
+                .unwrap_or(agent_name);
 
-            if !config.agents.contains_key(&agent_name) {
-                anyhow::bail!("Agent '{}' not found in configuration", agent_name);
+            if !agents.contains_key(&agent_name) {
+                anyhow::bail!(
+                    "Agent '{}' not found in configuration or the builtin catalog",
+                    agent_name
+                );
             }
 
             println!("⚡ Sending to '{agent_name}'...\n");
 
             let cwd = std::env::current_dir()?;
             let pool = surge_acp::AgentPool::new(
-                config.agents.clone(),
-                config.default_agent.clone(),
+                agents,
+                agent_name.clone(),
                 cwd.clone(),
                 surge_acp::PermissionPolicy::default(),
                 config.resilience.clone(),

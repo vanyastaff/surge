@@ -379,6 +379,7 @@ mod tests {
             sandbox: Box::new(AlwaysAllowSandbox),
             permission_policy: PermissionPolicy::default(),
             bindings: Default::default(),
+            env: Default::default(),
         };
         let err = bridge.open_session(cfg).await.unwrap_err();
         // Phase 8.1 replaces the Phase 6 HandshakeFailed stub with the real

@@ -86,6 +86,25 @@ pub struct RegistryEntry {
     /// `surge_orchestrator::engine::version_probe::probe_version_with_args`.
     #[serde(default)]
     pub version_probe_args: Vec<String>,
+    /// Environment variables to set on the spawned agent process.
+    ///
+    /// Same shape as `surge_core::config::AgentConfig::env`: literals, or
+    /// injections of the operator's environment by variable name. The
+    /// builtin `ollama-acp` entry uses this to point the Claude-agent
+    /// adapter at Ollama (`ANTHROPIC_BASE_URL` from `OLLAMA_HOST`,
+    /// `ANTHROPIC_AUTH_TOKEN` from `OLLAMA_API_KEY`, model names from
+    /// `OLLAMA_MODEL`) without surge ever handling the credential value.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, surge_core::config::AgentEnvValue>,
+    /// Files to materialise in the run's worktree before the agent starts.
+    ///
+    /// Data, not code: which settings file an agent reads is a property of
+    /// the agent. The builtin Claude-agent entries declare
+    /// `.claude/settings.json` with a non-interactive
+    /// `permissions.defaultMode`; a user's custom provider declares whatever
+    /// its own CLI needs. `surge_acp::settings_seed` writes them generically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings_files: Vec<surge_core::config::AgentSettingsFile>,
 }
 
 impl RegistryEntry {
@@ -109,6 +128,8 @@ impl RegistryEntry {
                     AgentCapability::Chat => surge_core::config::AgentCapability::Chat,
                 })
                 .collect(),
+            env: self.env.clone(),
+            settings_files: self.settings_files.clone(),
         }
     }
 
@@ -434,6 +455,8 @@ impl Registry {
                     models: vec![],
                     long_description: String::new(),
                     version_probe_args: vec![],
+                    env: config.env,
+                    settings_files: config.settings_files,
                 }
             })
             .collect();
@@ -457,6 +480,49 @@ impl Registry {
 
         let config = SurgeConfig::discover()?;
         Ok(Self::from_config(config.agents))
+    }
+
+    /// Build the registry production runs resolve agent ids through: the
+    /// operator's `[agents.*]` from `config` first, then the builtin
+    /// catalog, then remote entries.
+    ///
+    /// This is the single constructor that makes a user-declared provider a
+    /// first-class runtime: an entry the operator adds to `surge.toml` gets
+    /// the same `command`/`args`/`env`/`settings_files` launch contract as
+    /// any builtin one, so no code change is needed to support a new agent.
+    /// Engine wiring (`surge-cli`, `surge-daemon`) and the legacy pool both
+    /// go through here; `merge` exists only so a caller that already
+    /// fetched a remote catalog can fold it in.
+    #[must_use]
+    pub fn for_run(config: &surge_core::config::SurgeConfig) -> Self {
+        Self::merged_with_config(
+            Self::from_config(config.agents.clone()),
+            Self::builtin(),
+            Self::empty(),
+        )
+    }
+
+    /// An empty registry — a neutral second operand for [`Self::merged`].
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Every entry as a spawnable [`AgentConfig`], keyed by id.
+    ///
+    /// The legacy pool (`surge prompt`, `surge agent test`, the desktop
+    /// chat) takes a `HashMap<String, AgentConfig>`, so this is how those
+    /// surfaces reach the same unified catalog the engine uses — a
+    /// user-declared provider becomes launchable there too, env spec and
+    /// settings seed included.
+    #[must_use]
+    pub fn agent_configs(&self) -> std::collections::HashMap<String, AgentConfig> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.to_agent_config()))
+            .collect()
     }
 
     /// Merge a builtin and a remote registry.
@@ -565,6 +631,7 @@ const REGISTRY_ID_ALIASES: &[(&str, &str)] = &[
     ("github-copilot", "github-copilot-cli"),
     ("copilot", "github-copilot-cli"),
     ("dsh", "dsh-acp"),
+    ("ollama", "ollama-acp"),
 ];
 
 fn registry_alias_target(id: &str) -> Option<&'static str> {
@@ -754,9 +821,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builtin_has_5_agents() {
+    fn test_builtin_agent_count() {
         let reg = Registry::builtin();
-        assert_eq!(reg.len(), 5);
+        assert_eq!(reg.len(), 6);
     }
 
     #[test]
@@ -845,6 +912,126 @@ mod tests {
         // other short-form runtime name uses.
         let reg = Registry::builtin();
         assert_eq!(reg.normalize_agent_id("dsh").as_deref(), Some("dsh-acp"),);
+    }
+
+    #[test]
+    fn test_ollama_alias_normalizes_to_ollama_acp() {
+        let reg = Registry::builtin();
+        assert_eq!(
+            reg.normalize_agent_id("ollama").as_deref(),
+            Some("ollama-acp"),
+        );
+    }
+
+    #[test]
+    fn for_run_puts_user_agents_ahead_of_builtins() {
+        // The whole point of the unified catalog: a provider the operator
+        // declares in surge.toml is reachable under its own id, the builtin
+        // catalog is still there, and a user entry may override a builtin id.
+        let mut config = surge_core::SurgeConfig::default();
+        config.agents.insert(
+            "my-provider".to_string(),
+            surge_core::config::AgentConfig {
+                command: "my-agent".to_string(),
+                args: vec!["--acp".to_string()],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
+            },
+        );
+
+        let registry = Registry::for_run(&config);
+        let custom = registry
+            .find("my-provider")
+            .expect("user-declared provider must be present");
+        assert_eq!(custom.command, "my-agent");
+        assert_eq!(custom.default_args, vec!["--acp"]);
+        assert!(
+            registry.find("claude-acp").is_some(),
+            "the builtin catalog must remain reachable",
+        );
+        assert!(
+            registry.find("ollama-acp").is_some(),
+            "builtin providers reachable without a surge.toml entry",
+        );
+
+        // A user entry shadowing a builtin id wins.
+        let mut config = surge_core::SurgeConfig::default();
+        config.agents.insert(
+            "ollama-acp".to_string(),
+            surge_core::config::AgentConfig {
+                command: "my-own-ollama-wrapper".to_string(),
+                args: vec![],
+                transport: surge_core::config::Transport::Stdio,
+                mcp_servers: vec![],
+                capabilities: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
+            },
+        );
+        let registry = Registry::for_run(&config);
+        assert_eq!(
+            registry.find("ollama-acp").map(|e| e.command.as_str()),
+            Some("my-own-ollama-wrapper"),
+            "a user entry must be able to override a builtin id",
+        );
+
+        // `agent_configs` exposes the same catalog to the legacy pool.
+        let configs = registry.agent_configs();
+        assert!(configs.contains_key("ollama-acp"));
+        assert!(configs.contains_key("claude-acp"));
+    }
+
+    #[test]
+    fn ollama_entry_declares_model_env_and_settings_seed() {
+        // A shipped provider is data: the model variable is required (so a
+        // launch without it fails loudly instead of reaching Anthropic), the
+        // key injection is optional-with-placeholder (a local server needs
+        // none), and the Claude-family settings seed is declared so the
+        // adapter does not reject the operator's global mode at handshake.
+        use surge_core::config::AgentEnvValue;
+
+        let reg = Registry::builtin();
+        let entry = reg.find("ollama-acp").expect("ollama-acp must be builtin");
+        for target in [
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ] {
+            match entry.env.get(target) {
+                Some(AgentEnvValue::Inject {
+                    from,
+                    required: true,
+                    default: None,
+                }) => assert_eq!(from, "OLLAMA_MODEL", "{target} reads OLLAMA_MODEL"),
+                other => panic!("{target} must require OLLAMA_MODEL: {other:?}"),
+            }
+        }
+        match entry.env.get("ANTHROPIC_AUTH_TOKEN") {
+            Some(AgentEnvValue::Inject {
+                from,
+                required: false,
+                default: Some(default),
+            }) => {
+                assert_eq!(from, "OLLAMA_API_KEY");
+                assert_eq!(default, "ollama", "local-server placeholder");
+            },
+            other => panic!("ANTHROPIC_AUTH_TOKEN must be an optional injection: {other:?}"),
+        }
+        assert_eq!(
+            entry.env.get("ANTHROPIC_API_KEY"),
+            Some(&AgentEnvValue::Literal(String::new())),
+            "the adapter requires the variable present and empty",
+        );
+        assert!(
+            entry
+                .settings_files
+                .iter()
+                .any(|f| f.path == ".claude/settings.json"),
+            "the Ollama entry runs Claude-family and needs the settings seed",
+        );
     }
 
     #[test]
@@ -943,7 +1130,7 @@ mod tests {
     fn test_all_are_code_capable() {
         let reg = Registry::builtin();
         let coders = reg.by_capability(&AgentCapability::Code);
-        assert_eq!(coders.len(), 5);
+        assert_eq!(coders.len(), 6);
     }
 
     #[test]
@@ -1003,6 +1190,8 @@ mod tests {
             long_description: String::new(),
             runtime: None,
             version_probe_args: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         }
     }
 
@@ -1194,6 +1383,8 @@ mod tests {
                 args: vec!["--acp".to_string()],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![],
             },
         );
@@ -1221,6 +1412,8 @@ mod tests {
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![
                     surge_core::config::AgentCapability::Code,
                     surge_core::config::AgentCapability::Test,
@@ -1251,6 +1444,8 @@ mod tests {
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![],
             },
         );
@@ -1261,6 +1456,8 @@ mod tests {
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![],
             },
         );
@@ -1387,6 +1584,8 @@ max_qa_iterations = 5
                 args: vec!["--acp".to_string()],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![
                     surge_core::config::AgentCapability::Code,
                     surge_core::config::AgentCapability::Plan,
@@ -1419,6 +1618,8 @@ max_qa_iterations = 5
                 args: vec![],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![surge_core::config::AgentCapability::Code],
             },
         );
@@ -1459,6 +1660,8 @@ max_qa_iterations = 5
                 args: vec!["--custom-arg".to_string()],
                 transport: Transport::Stdio,
                 mcp_servers: vec![],
+                env: std::collections::BTreeMap::new(),
+                settings_files: vec![],
                 capabilities: vec![surge_core::config::AgentCapability::Code],
             },
         );
@@ -1480,8 +1683,8 @@ max_qa_iterations = 5
         assert!(merged.find("codex-acp").is_some());
         assert!(merged.find("gemini").is_some());
 
-        // Total: 1 custom + 5 builtin = 6 agents
-        assert_eq!(merged.len(), 6);
+        // Total: 1 custom + 6 builtin = 7 agents
+        assert_eq!(merged.len(), 7);
 
         // Verify custom agent has correct metadata
         let custom = merged.find("custom-agent").unwrap();

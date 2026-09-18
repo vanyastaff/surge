@@ -519,6 +519,8 @@ mod tests {
             long_description: String::new(),
             runtime: None,
             version_probe_args: vec![],
+            env: std::collections::BTreeMap::new(),
+            settings_files: vec![],
         };
         assert!(entry.is_npx());
 

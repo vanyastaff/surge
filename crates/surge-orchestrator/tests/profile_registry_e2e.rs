@@ -230,6 +230,7 @@ async fn agent_stage_uses_disk_override_prompt_via_registry() {
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: Some(registry.clone()),
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,
@@ -342,6 +343,7 @@ async fn agent_stage_falls_back_to_mock_without_registry() {
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: None, // legacy path
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,

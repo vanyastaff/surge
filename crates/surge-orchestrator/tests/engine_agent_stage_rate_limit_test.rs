@@ -139,6 +139,7 @@ async fn agent_stage_maps_bridge_rate_limit_to_stage_rate_limited() {
         // No profile registry wired (legacy path) — the runtime key must
         // come back `None`, never a fabricated placeholder (Task 12 §1.10).
         profile_registry: None,
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,
@@ -219,6 +220,7 @@ async fn agent_stage_with_profile_registry_reports_normalized_runtime() {
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: Some(registry),
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,
@@ -341,6 +343,7 @@ async fn agent_stage_with_unregistered_mock_runtime_falls_back_to_raw_id_not_non
         tool_call_loop_guard: surge_core::loop_config::ToolCallLoopGuardConfig::default(),
         output_spill: surge_core::spill_config::OutputSpillConfig::default(),
         profile_registry: Some(registry),
+        agent_registry: None,
         hook_executor: &hook_executor,
         pending_elevations: surge_orchestrator::engine::elevation::PendingElevations::new(),
         active_task_id: None,
