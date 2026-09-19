@@ -82,6 +82,8 @@ fn build_n_node_graph(n: usize) -> Graph {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: NodeKey::try_from("n0").unwrap(),
         nodes,

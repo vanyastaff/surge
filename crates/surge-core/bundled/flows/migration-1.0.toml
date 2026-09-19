@@ -6,6 +6,7 @@ start = "migration_plan"
 [metadata]
 name = "migration"
 created_at = "2026-05-11T00:00:00Z"
+when_to_use = "A migration (dependency, API or data) with a compatibility plan and rollback."
 
 [nodes.migration_plan]
 id = "migration_plan"

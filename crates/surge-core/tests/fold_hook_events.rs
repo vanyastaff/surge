@@ -80,6 +80,8 @@ fn minimal_graph() -> Graph {
             created_at: fixed_ts(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: agent,
         nodes,

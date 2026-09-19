@@ -1,6 +1,5 @@
 ---
 source: crates/surge-core/tests/snapshots.rs
-assertion_line: 89
 expression: g
 ---
 Graph {
@@ -14,6 +13,8 @@ Graph {
         created_at: 2026-05-02T00:00:00Z,
         author: None,
         archetype: None,
+        when_to_use: None,
+        autonomy: None,
     },
     start: NodeKey("roadmap_planner"),
     nodes: {

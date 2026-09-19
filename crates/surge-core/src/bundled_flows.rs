@@ -131,6 +131,24 @@ mod tests {
         assert_eq!(BundledFlows::all().len(), BUNDLED_FLOW_COUNT);
     }
 
+    /// Every operator-selectable archetype declares the fit guidance the
+    /// task-flow selector reads. `bootstrap` is the composition pipeline
+    /// itself, not a task template, and is exempt.
+    #[test]
+    fn task_archetypes_declare_when_to_use() {
+        for flow in BundledFlows::all() {
+            if flow.name == "bootstrap" {
+                continue;
+            }
+            assert!(
+                flow.graph.metadata.when_to_use.is_some(),
+                "bundled archetype {:?} has no [metadata] when_to_use — the flow \
+                 selector would have nothing to match against",
+                flow.name
+            );
+        }
+    }
+
     #[test]
     fn bootstrap_resolves_by_latest_name() {
         let flow = BundledFlows::by_name_latest("bootstrap").expect("bootstrap flow is bundled");

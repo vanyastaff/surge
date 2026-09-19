@@ -6,6 +6,7 @@ start = "design_plan"
 [metadata]
 name = "feature"
 created_at = "2026-05-11T00:00:00Z"
+when_to_use = "A small feature with a spec, an ADR and implementation — the default multi-agent shape."
 
 [nodes.design_plan]
 id = "design_plan"

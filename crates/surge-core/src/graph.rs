@@ -5,6 +5,7 @@ use crate::edge::Edge;
 use crate::keys::{NodeKey, SubgraphKey, TemplateKey};
 use crate::node::Node;
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -61,6 +62,8 @@ impl GraphMetadata {
             created_at,
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         }
     }
 }
@@ -79,6 +82,28 @@ pub struct GraphMetadata {
     /// `None` for graphs that pre-date the bootstrap milestone.
     #[serde(default)]
     pub archetype: Option<ArchetypeMetadata>,
+    /// One-line guidance for the flow selector: what kind of task this
+    /// template fits ("a bug with a reproduction", "a broad refactor across
+    /// modules"). The classifier reads this instead of the graph shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<String>,
+    /// Where the operator wanted `human_gate` nodes placed when this
+    /// template is used for a task. `None` means the template's own gates
+    /// stand as authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<AutonomyLevel>,
+}
+
+/// How much human supervision a task flow asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyLevel {
+    /// Run the whole task without gates unless one is already authored in.
+    Auto,
+    /// Gate at milestone boundaries only.
+    MilestoneGates,
+    /// Gate after every task.
+    TaskGates,
 }
 
 #[cfg(test)]
@@ -96,6 +121,8 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 author: None,
                 archetype: None,
+                when_to_use: None,
+                autonomy: None,
             },
             start: NodeKey::try_from("placeholder").unwrap(),
             nodes: BTreeMap::new(),

@@ -23,6 +23,7 @@ tracing    = { workspace = true }
 dirs       = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 proptest   = { workspace = true }
 insta      = { workspace = true }
 criterion  = { workspace = true }

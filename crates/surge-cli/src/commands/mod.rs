@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod doctor;
 pub mod engine;
 pub mod feature;
+pub mod flow;
 pub mod format;
 pub mod git;
 pub mod inbox;

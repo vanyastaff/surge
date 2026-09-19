@@ -6,6 +6,7 @@ start = "research_outline"
 [metadata]
 name = "docs"
 created_at = "2026-05-11T00:00:00Z"
+when_to_use = "Documentation work: read the code, write the page, verify the claims against it."
 
 [nodes.research_outline]
 id = "research_outline"

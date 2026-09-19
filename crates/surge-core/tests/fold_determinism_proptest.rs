@@ -103,6 +103,8 @@ fn build_linear_graph(keys: Vec<NodeKey>, outcome: OutcomeKey) -> (Graph, Vec<No
             created_at: Utc.timestamp_opt(FIXED_RUN_TIMESTAMP_BASE, 0).unwrap(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: keys[0].clone(),
         nodes,

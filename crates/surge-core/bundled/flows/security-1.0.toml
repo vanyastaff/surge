@@ -6,6 +6,7 @@ start = "security_audit"
 [metadata]
 name = "security"
 created_at = "2026-05-11T00:00:00Z"
+when_to_use = "A security-shaped change: threat model, fix, audit."
 
 [nodes.security_audit]
 id = "security_audit"

@@ -8,6 +8,7 @@ start = "spike_1"
 [metadata]
 name = "spike"
 created_at = "2026-05-06T00:00:00Z"
+when_to_use = "A time-boxed investigation with an answer as the deliverable, not code."
 
 [nodes.spike_1]
 id = "spike_1"

@@ -16,6 +16,7 @@ start = "impl_1"
 [metadata]
 name = "single-task"
 created_at = "2026-05-05T00:00:00Z"
+when_to_use = "One focused change, no ceremony: one agent, one task."
 
 [nodes.impl_1]
 id = "impl_1"

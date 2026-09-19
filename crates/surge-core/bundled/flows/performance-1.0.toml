@@ -6,6 +6,7 @@ start = "profile_baseline"
 [metadata]
 name = "performance"
 created_at = "2026-05-11T00:00:00Z"
+when_to_use = "A performance problem with a measurable baseline (benchmark before and after)."
 
 [nodes.profile_baseline]
 id = "profile_baseline"

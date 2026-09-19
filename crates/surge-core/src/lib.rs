@@ -45,6 +45,7 @@ pub mod context_pack;
 pub mod doctor;
 pub mod edge;
 pub mod evidence;
+pub mod flow_catalog;
 pub mod flow_ref;
 pub mod graph;
 pub mod home;
@@ -116,8 +117,9 @@ pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
 pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
+pub use flow_catalog::{FlowCatalog, FlowCatalogEntry, FlowCatalogError};
 pub use flow_ref::{FlowRef, FlowRefParseError};
-pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
+pub use graph::{AutonomyLevel, Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};
 // `memory::Provenance` is deliberately not re-exported here: the name

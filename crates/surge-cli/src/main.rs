@@ -193,6 +193,12 @@ enum Commands {
         command: commands::mcp::McpCommands,
     },
 
+    /// List and inspect flow templates visible to this repository.
+    Flow {
+        #[command(subcommand)]
+        command: commands::flow::FlowCommands,
+    },
+
     /// List, show, validate, or scaffold profiles.
     Profile {
         #[command(subcommand)]
@@ -607,6 +613,9 @@ async fn run_command(command: Commands) -> Result<()> {
         },
         Commands::Mcp { command } => {
             commands::mcp::run(command).await?;
+        },
+        Commands::Flow { command } => {
+            commands::flow::run(command).await?;
         },
 
         Commands::Profile { command } => {

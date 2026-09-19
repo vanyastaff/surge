@@ -47,6 +47,8 @@ fn minimal_graph(node_name: &str) -> Graph {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: node,
         nodes,

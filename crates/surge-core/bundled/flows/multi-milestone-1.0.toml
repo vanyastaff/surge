@@ -9,6 +9,7 @@ start = "milestone_loop"
 [metadata]
 name = "multi-milestone"
 created_at = "2026-05-06T00:00:00Z"
+when_to_use = "A roadmap with several milestones, each looped task by task."
 
 # ── outer milestone loop ──
 [nodes.milestone_loop]
