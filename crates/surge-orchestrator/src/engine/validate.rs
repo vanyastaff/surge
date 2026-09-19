@@ -210,6 +210,159 @@ fn apply_surge_core_validation(graph: &Graph) -> Result<(), EngineError> {
     )))
 }
 
+/// Why a graph is being validated. The bootstrap pipeline composes one
+/// project-wide graph where a missing verifier is a warning; a **task** flow
+/// is the thing the sealed-verifier rule exists for, so the same findings
+/// become errors there (ADR-0020, spec §Flow catalog).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowPurpose {
+    /// The bootstrap pipeline: warnings stand.
+    Bootstrap,
+    /// A per-task flow: verifier findings are errors unless the run's
+    /// registry has a single runtime (see [`validate_for_task`]).
+    Task,
+}
+
+/// Validate a graph as a **task flow** under `purpose`, returning every
+/// finding (errors and warnings) so the caller can render them on the
+/// approval card rather than only logging them.
+///
+/// Rules added over [`validate_for_m6`]:
+///
+/// - `UnverifiedSuccessPath` — a success terminal reachable without a
+///   verification-authority node — is an **error**.
+/// - `SameRuntimeVerification` is an **error** when `runtime_count > 1`
+///   (there was a cross-vendor choice to make and the flow did not make it)
+///   and a warning when `runtime_count <= 1` (there is no second vendor to
+///   choose; refusing every composed flow on a single-runtime setup would
+///   make the feature unusable, so the finding is surfaced on the card
+///   instead).
+/// - When `autonomy` requires gates (`MilestoneGates` or `TaskGates`) and the
+///   graph contains no `HumanGate` node, an error names the missing level.
+/// - Reference resolution runs **before** this returns, so a flow that
+///   references an unknown profile fails here rather than at run start.
+///
+/// `Bootstrap` purpose returns the plain [`validate_for_m6_with_resolver`]
+/// outcome with an empty findings list.
+///
+/// # Errors
+/// [`EngineError::GraphInvalid`] when any error-severity finding exists; the
+/// message lists every finding so the retry loop can hand them back to the
+/// generator in one turn.
+pub fn validate_for_task(
+    graph: &Graph,
+    purpose: FlowPurpose,
+    resolver: Option<&dyn surge_core::ReferenceResolver>,
+    runtime_count: usize,
+    autonomy: Option<surge_core::graph::AutonomyLevel>,
+) -> Result<Vec<surge_core::ValidationError>, EngineError> {
+    if purpose == FlowPurpose::Bootstrap {
+        match resolver {
+            Some(resolver) => validate_for_m6_with_resolver(graph, resolver)?,
+            None => validate_for_m6(graph)?,
+        }
+        return Ok(Vec::new());
+    }
+
+    // Structural pass first: a structurally broken graph has no meaningful
+    // verifier analysis.
+    validate_for_m6(graph)?;
+    let core_findings = if let Some(resolver) = resolver {
+        validate_for_m6_with_resolver(graph, resolver)?;
+        // The resolver-aware pass is what can see `SameRuntimeVerification`;
+        // re-running it below would double-log the warnings
+        // `validate_for_m6_with_resolver` already emitted, so the findings
+        // are recomputed here in one place instead.
+        let (Ok(findings) | Err(findings)) = surge_core::validate_with_resolver(graph, resolver);
+        findings
+    } else {
+        let (Ok(findings) | Err(findings)) = surge_core::validate(graph);
+        findings
+    };
+
+    let mut errors: Vec<surge_core::ValidationError> = Vec::new();
+    let mut warnings: Vec<surge_core::ValidationError> = Vec::new();
+    for finding in core_findings {
+        match finding.kind {
+            surge_core::ValidationErrorKind::UnverifiedSuccessPath { .. } => {
+                errors.push(finding);
+            },
+            surge_core::ValidationErrorKind::SameRuntimeVerification { .. } => {
+                if runtime_count > 1 {
+                    errors.push(finding);
+                } else {
+                    warnings.push(finding);
+                }
+            },
+            _ => {
+                if finding.kind.severity() == surge_core::Severity::Error {
+                    errors.push(finding);
+                } else {
+                    warnings.push(finding);
+                }
+            },
+        }
+    }
+
+    if let Some(required) = autonomy {
+        let needs_gate = matches!(
+            required,
+            surge_core::graph::AutonomyLevel::MilestoneGates
+                | surge_core::graph::AutonomyLevel::TaskGates
+        );
+        if needs_gate && !graph_has_human_gate(graph) {
+            errors.push(surge_core::ValidationError {
+                kind: surge_core::ValidationErrorKind::HumanGateWithoutOptions,
+                location: surge_core::validation::ErrorLocation::Graph,
+                message: format!(
+                    "task flow declares autonomy `{}` but contains no HumanGate node; \
+                     place a human_gate where the operator should review",
+                    match required {
+                        surge_core::graph::AutonomyLevel::Auto => "auto",
+                        surge_core::graph::AutonomyLevel::MilestoneGates => "milestone_gates",
+                        surge_core::graph::AutonomyLevel::TaskGates => "task_gates",
+                    }
+                ),
+            });
+        }
+    }
+
+    if !errors.is_empty() {
+        let rendered = errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(EngineError::GraphInvalid(format!(
+            "task-flow validation failed: {rendered}"
+        )));
+    }
+
+    // No `tracing::warn!` loop here: the calls above (`apply_surge_core_validation`
+    // via `validate_for_m6`, and `validate_for_m6_with_resolver`) already
+    // emitted every warning under `engine::validate`; re-logging here would
+    // double each line. The returned vector is the caller's copy — its
+    // purpose is the approval card, not the log.
+    Ok(warnings)
+}
+
+/// Whether the outer graph or any subgraph contains a `HumanGate` node.
+fn graph_has_human_gate(graph: &Graph) -> bool {
+    use surge_core::node::NodeConfig;
+
+    let in_nodes =
+        |nodes: &std::collections::BTreeMap<surge_core::keys::NodeKey, surge_core::node::Node>| {
+            nodes
+                .values()
+                .any(|node| matches!(node.config, NodeConfig::HumanGate(_)))
+        };
+    in_nodes(&graph.nodes)
+        || graph
+            .subgraphs
+            .values()
+            .any(|subgraph| in_nodes(&subgraph.nodes))
+}
+
 // Back-compat alias for any internal caller still using the M5 name.
 #[allow(dead_code)]
 pub use validate_for_m6 as validate_for_m5;
@@ -1644,6 +1797,188 @@ mod tests {
         assert!(
             lines[0].contains("claude-code"),
             "expected SameRuntimeVerification under engine::validate: {lines:?}"
+        );
+    }
+
+    // ── FlowPurpose::Task rules (T9) ────────────────────────────────
+
+    /// A graph whose success terminal is reachable with no verifier — a
+    /// warning under `validate_for_m6`, an error for a task flow.
+    fn graph_without_verifier() -> Graph {
+        use surge_core::agent_config::AgentConfig;
+        use surge_core::edge::{Edge, EdgeKind, EdgePolicy, PortRef};
+        use surge_core::keys::{EdgeKey, ProfileKey};
+        use surge_core::node::OutcomeDecl;
+
+        let impl_key = NodeKey::try_from("impl").unwrap();
+        let end_key = NodeKey::try_from("end").unwrap();
+        let done = OutcomeKey::try_from("done").unwrap();
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            impl_key.clone(),
+            Node {
+                id: impl_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![OutcomeDecl {
+                    id: done.clone(),
+                    description: "done".into(),
+                    edge_kind_hint: EdgeKind::Forward,
+                    is_terminal: false,
+                    ledger_effect: surge_core::LedgerEffect::default(),
+                }],
+                config: NodeConfig::Agent(AgentConfig {
+                    profile: ProfileKey::try_from("implementer@1.0").unwrap(),
+                    prompt_overrides: None,
+                    tool_overrides: None,
+                    sandbox_override: None,
+                    approvals_override: None,
+                    bindings: Vec::new(),
+                    rules_overrides: None,
+                    limits: surge_core::agent_config::NodeLimits::default(),
+                    hooks: Vec::new(),
+                    custom_fields: BTreeMap::default(),
+                }),
+            },
+        );
+        nodes.insert(
+            end_key.clone(),
+            Node {
+                id: end_key.clone(),
+                position: Position::default(),
+                declared_outcomes: vec![],
+                config: NodeConfig::Terminal(TerminalConfig {
+                    kind: TerminalKind::Success,
+                    message: None,
+                }),
+            },
+        );
+        let mut g = graph_with_one_terminal("impl");
+        g.nodes = nodes;
+        g.start = impl_key.clone();
+        g.edges = vec![Edge {
+            id: EdgeKey::try_from("e1").unwrap(),
+            from: PortRef {
+                node: impl_key,
+                outcome: done,
+            },
+            to: end_key,
+            kind: EdgeKind::Forward,
+            policy: EdgePolicy::default(),
+        }];
+        g
+    }
+
+    #[test]
+    fn bootstrap_purpose_keeps_unverified_success_a_warning() {
+        let g = graph_without_verifier();
+        let result = validate_for_task(&g, FlowPurpose::Bootstrap, None, 2, None);
+        assert!(
+            result.is_ok(),
+            "bootstrap composition must still tolerate an unverified path (warning)"
+        );
+    }
+
+    #[test]
+    fn task_purpose_rejects_unverified_success() {
+        let g = graph_without_verifier();
+        let err = validate_for_task(&g, FlowPurpose::Task, None, 2, None).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("task-flow validation failed"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn task_purpose_requires_a_gate_at_the_declared_autonomy() {
+        // The unverified-path error also fires here; drop the agent by using
+        // a gate-less graph that reaches success from a HumanGate-free path
+        // is not constructible without the same finding, so assert on the
+        // gate message specifically.
+        let mut g = graph_with_one_terminal("end");
+        g.metadata.autonomy = Some(surge_core::graph::AutonomyLevel::TaskGates);
+        let err = validate_for_task(
+            &g,
+            FlowPurpose::Task,
+            None,
+            1,
+            Some(surge_core::graph::AutonomyLevel::TaskGates),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("contains no HumanGate node"),
+            "expected the missing-gate error: {err}"
+        );
+    }
+
+    /// A linear-3-shaped graph with a same-runtime verifier, resolved by a
+    /// stub registry (the syntactic pass cannot see runtimes).
+    fn same_runtime_flow() -> Graph {
+        let mut g = graph_with_one_terminal("end");
+        g.nodes.insert(
+            NodeKey::try_from("impl_1").unwrap(),
+            agent_node_with_profile("impl_1", "implementer@1.0", surge_core::LedgerEffect::None),
+        );
+        g.nodes.insert(
+            NodeKey::try_from("verify_1").unwrap(),
+            agent_node_with_profile(
+                "verify_1",
+                "verifier@1.0",
+                surge_core::LedgerEffect::Verified,
+            ),
+        );
+        g.start = NodeKey::try_from("impl_1").unwrap();
+        g.edges = vec![
+            forward_edge("e1", "impl_1", "done", "verify_1"),
+            forward_edge("e2", "verify_1", "done", "end"),
+        ];
+        g
+    }
+
+    #[test]
+    fn task_purpose_warning_lists_same_runtime_when_one_runtime() {
+        let resolver = StubRuntimeResolver {
+            runtimes: std::collections::HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "claude-code"),
+            ]),
+        };
+        let warnings = validate_for_task(
+            &same_runtime_flow(),
+            FlowPurpose::Task,
+            Some(&resolver),
+            1,
+            Some(surge_core::graph::AutonomyLevel::Auto),
+        )
+        .expect("single-runtime task flow passes with warnings");
+        assert!(
+            warnings.iter().any(|w| matches!(
+                w.kind,
+                surge_core::ValidationErrorKind::SameRuntimeVerification { .. }
+            )),
+            "expected SameRuntimeVerification as a warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn task_purpose_errors_same_runtime_when_multiple_runtimes() {
+        let resolver = StubRuntimeResolver {
+            runtimes: std::collections::HashMap::from([
+                ("implementer@1.0", "claude-code"),
+                ("verifier@1.0", "claude-code"),
+            ]),
+        };
+        let err = validate_for_task(
+            &same_runtime_flow(),
+            FlowPurpose::Task,
+            Some(&resolver),
+            2,
+            Some(surge_core::graph::AutonomyLevel::Auto),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("task-flow validation failed"),
+            "expected an error with two runtimes: {err}"
         );
     }
 }
