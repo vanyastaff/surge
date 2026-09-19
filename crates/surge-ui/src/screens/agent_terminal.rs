@@ -789,11 +789,15 @@ impl Render for AgentTerminalScreen {
                     .overflow_x_hidden()
                     .bg(theme::background())
                     .child(
-                        MessageScroller::new("terminal-messages", scroller_state, move |index, _w, _cx| {
-                            rows[index.min(rows_len.saturating_sub(1))]
-                                .take()
-                                .unwrap_or_else(|| div().into_any_element())
-                        })
+                        MessageScroller::new(
+                            "terminal-messages",
+                            scroller_state,
+                            move |index, _w, _cx| {
+                                rows[index.min(rows_len.saturating_sub(1))]
+                                    .take()
+                                    .unwrap_or_else(|| div().into_any_element())
+                            },
+                        )
                         .with_bottom_fade(theme::background()),
                     ),
             )
