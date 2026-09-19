@@ -233,6 +233,13 @@ pub struct EngineRunConfig {
     /// run's own fate. `None` for direct runs (bootstrap, CLI, templates).
     #[serde(default)]
     pub origin: Option<surge_core::run_event::RunOrigin>,
+    /// Events the caller wants durably in the run's log *before* the first
+    /// stage executes — currently `ComposedArtifactInstalled`, recorded by
+    /// the task scheduler when it installed a composed flow for this task
+    /// (T12). A run's log is the authority for what it used; an install that
+    /// happened one tick earlier would otherwise exist only outside it.
+    #[serde(default)]
+    pub startup_events: Vec<surge_core::run_event::VersionedEventPayload>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -340,6 +347,7 @@ impl Default for EngineRunConfig {
             memory_store_path: None,
             project_layer: None,
             origin: None,
+            startup_events: Vec::new(),
         }
     }
 }
@@ -414,6 +422,7 @@ mod tests {
             memory_store_path: None,
             project_layer: None,
             origin: None,
+            startup_events: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -451,6 +460,7 @@ mod tests {
             memory_store_path: None,
             project_layer: None,
             origin: None,
+            startup_events: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -502,6 +512,7 @@ mod tests {
             memory_store_path: None,
             project_layer: None,
             origin: None,
+            startup_events: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

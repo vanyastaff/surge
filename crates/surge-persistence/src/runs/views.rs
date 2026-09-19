@@ -35,16 +35,17 @@ pub fn maintain(
         ApprovalDecided, ApprovalRequested, ArtifactProduced, BootstrapApprovalDecided,
         BootstrapApprovalRequested, BootstrapArtifactProduced, BootstrapEditRequested,
         BootstrapStageStarted, BootstrapTelemetry, BudgetExceeded, BudgetWarningRaised,
-        EdgeTraversed, EscalationRequested, ForkCreated, GraphRevisionAccepted, HookExecuted,
-        HumanInputRequested, HumanInputResolved, HumanInputTimedOut, LoopCompleted,
-        LoopIterationCompleted, LoopIterationStarted, NotifyDelivered, OutcomeRejectedByHook,
-        OutcomeReported, PipelineMaterialized, RoadmapPatchApplied, RoadmapPatchApprovalDecided,
-        RoadmapPatchApprovalRequested, RoadmapPatchDrafted, RoadmapUpdated, RunAborted,
-        RunCompleted, RunFailed, RunParked, RunStarted, RunWokeFromPark, RuntimeVersionWarning,
-        SandboxElevationDecided, SandboxElevationRequested, SandboxElevationTimedOut,
-        SessionClosed, SessionOpened, SkillBound, StageCompleted, StageEntered, StageFailed,
-        StageInputsResolved, SteerDelivered, SubgraphEntered, SubgraphExited, TaskDiscovered,
-        TaskStatusChanged, TaskVerified, TokensConsumed, ToolCalled, ToolResultReceived,
+        ComposedArtifactInstalled, EdgeTraversed, EscalationRequested, ForkCreated,
+        GraphRevisionAccepted, HookExecuted, HumanInputRequested, HumanInputResolved,
+        HumanInputTimedOut, LoopCompleted, LoopIterationCompleted, LoopIterationStarted,
+        NotifyDelivered, OutcomeRejectedByHook, OutcomeReported, PipelineMaterialized,
+        RoadmapPatchApplied, RoadmapPatchApprovalDecided, RoadmapPatchApprovalRequested,
+        RoadmapPatchDrafted, RoadmapUpdated, RunAborted, RunCompleted, RunFailed, RunParked,
+        RunStarted, RunWokeFromPark, RuntimeVersionWarning, SandboxElevationDecided,
+        SandboxElevationRequested, SandboxElevationTimedOut, SessionClosed, SessionOpened,
+        SkillBound, StageCompleted, StageEntered, StageFailed, StageInputsResolved, SteerDelivered,
+        SubgraphEntered, SubgraphExited, TaskDiscovered, TaskStatusChanged, TaskVerified,
+        TokensConsumed, ToolCalled, ToolResultReceived,
     };
     match payload {
         StageEntered { node, attempt } => {
@@ -478,6 +479,11 @@ pub fn maintain(
         | SteerDelivered { .. }
         | SubgraphEntered { .. }
         | SubgraphExited { .. } => {},
+        // `ComposedArtifactInstalled` (T12) is a run-log audit record: the
+        // artifact lives on disk and in the trust store, so no materialized
+        // view is derived from it. Named explicitly so the catch-all below
+        // does not fire in debug for the first composed run.
+        ComposedArtifactInstalled { .. } => {},
         // `EventPayload` is `#[non_exhaustive]` (defined in `surge-core`), so
         // a cross-crate `match` here is *compiler-required* to carry a
         // wildcard no matter how many variants are already listed above —

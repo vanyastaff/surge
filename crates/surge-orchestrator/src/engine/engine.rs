@@ -564,6 +564,10 @@ impl Engine {
         run_config: &EngineRunConfig,
     ) -> Result<Vec<VersionedEventPayload>, EngineError> {
         let mut events = Self::startup_run_events(graph, worktree_path, run_config)?;
+        // Caller-supplied events (e.g. a composed flow installed for this
+        // task) land before the first stage, so the log's prefix is the
+        // authority for what this run was handed.
+        events.extend(run_config.startup_events.iter().cloned());
         events.extend(
             self.collect_startup_artifact_events(artifact_store, run_id, worktree_path, run_config)
                 .await?,

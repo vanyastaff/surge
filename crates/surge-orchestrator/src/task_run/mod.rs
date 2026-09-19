@@ -20,8 +20,17 @@
 //!
 //! A pinned reference is resolved against the catalog and **never falls
 //! back**: an unresolvable pin is the error the operator needs to see.
-//! `compose` is not reachable in v1 — [`TaskFlowError::ComposeUnavailable`]
-//! says so by name instead of silently pretending.
+//!
+//! ## Composing a new flow
+//!
+//! When no template fits, a classifier may answer `compose`. The generator
+//! runs behind [`FlowComposer`] (the ACP seam), its output is validated as a
+//! task flow, and the validated graph is installed into
+//! `.surge/flows/<name>-1.0.toml` and pinned in the trust store **in the same
+//! step** — see [`compose_task_flow`]. Nothing composed is used before it is
+//! on disk, validated and trusted, which is what makes the artifact the
+//! operator can read, edit and pin (and what the `ComposedArtifactInstalled`
+//! event records).
 //!
 //! ## Every selected flow passes task validation
 //!
@@ -57,16 +66,28 @@ pub enum TaskFlowError {
         /// Template the mapping expected.
         expected: String,
     },
-    /// A classifier would have been asked to compose a new template; that
-    /// path is not implemented in v1.
+    /// A classifier answered `compose` but no composer was wired for this
+    /// caller (the CLI's `surge flow show` path, or a test).
     #[error(
-        "flow composition (`compose`) is not available in this build; pin the task's flow \
-         with `flow = \"name@MAJOR\"` in .surge/roadmap.toml or extend the task's size mapping"
+        "flow composition (`compose`) is not available in this caller; pin the task's flow \
+         with `flow = \"name@MAJOR\"` in .surge/roadmap.toml or extend the size mapping"
     )]
     ComposeUnavailable,
     /// The catalog could not be scanned.
     #[error("scan flow catalog: {0}")]
     Catalog(String),
+    /// The composer failed to produce a graph.
+    #[error("flow composition failed: {0}")]
+    Compose(String),
+    /// The composed graph failed task validation (nothing was written).
+    #[error("composed flow is not a valid task flow: {reason}")]
+    ComposeInvalid {
+        /// Rendered validation error.
+        reason: String,
+    },
+    /// The composed graph could not be installed or pinned.
+    #[error("install composed flow: {0}")]
+    ComposeInstall(String),
     /// The selected graph failed task validation.
     #[error("selected flow {reference} is not a valid task flow: {reason}")]
     Validation {
@@ -104,6 +125,24 @@ pub struct SelectedFlow {
     pub graph: Graph,
     /// True when the task pinned this reference explicitly.
     pub pinned: bool,
+    /// Set when the flow was **composed** for this task rather than selected
+    /// from the catalog: the file installed under `.surge/flows/`.
+    pub composed: Option<crate::task_compose::ComposedArtifact>,
+}
+
+/// Generates a new flow graph for a task that no template fits.
+///
+/// The production adapter runs the ACP flow generator; tests script it. The
+/// generator's output is untrusted until [`compose_task_flow`] validates and
+/// installs it.
+#[async_trait::async_trait]
+pub trait FlowComposer: Send + Sync {
+    /// Compose a graph for `task`, with the catalog rendered into the prompt.
+    ///
+    /// # Errors
+    /// A human-readable reason when composition fails (no agent, refusal,
+    /// unparseable output).
+    async fn compose(&self, task: &RoadmapTask, catalog: String) -> Result<Graph, String>;
 }
 
 /// Select, validate and return the flow for `task`.
@@ -185,6 +224,74 @@ pub fn select_task_flow(
         layer: entry.layer,
         graph: entry.graph.clone(),
         pinned,
+        composed: None,
+    })
+}
+
+/// Compose, validate and install a new flow for `task`.
+///
+/// The generator's graph is validated as a task flow; on success it is
+/// installed under `.surge/flows/<name>-1.0.toml` and pinned in the trust
+/// store in the same call, and the returned [`SelectedFlow`] carries the
+/// installed artifact so the caller can record
+/// `ComposedArtifactInstalled` after the approval gate resolves. A graph
+/// that fails validation is **not** written.
+///
+/// `flow_name` is the catalog name the composed template should carry (the
+/// generator proposes it; the caller may pass the task id when it has no
+/// better name).
+///
+/// # Errors
+/// [`TaskFlowError::Compose`] when the generator fails;
+/// [`TaskFlowError::ComposeInvalid`] when the composed graph fails task
+/// validation; [`TaskFlowError::ComposeInstall`] when it cannot be written
+/// or pinned.
+pub async fn compose_task_flow(
+    composer: &dyn FlowComposer,
+    task: &RoadmapTask,
+    project: &ProjectLayer,
+    home_flows_dir: Option<&Path>,
+    trust: &mut surge_persistence::trust_store::TrustStore,
+    flow_name: &str,
+    now_ms: i64,
+) -> Result<SelectedFlow, TaskFlowError> {
+    let catalog = FlowCatalog::scan(project, home_flows_dir)
+        .map_err(|e| TaskFlowError::Catalog(e.to_string()))?;
+    let graph = composer
+        .compose(task, catalog.render_catalog())
+        .await
+        .map_err(TaskFlowError::Compose)?;
+    let artifact = crate::task_compose::install_composed_flow(
+        project.root(),
+        trust,
+        flow_name,
+        &graph,
+        now_ms,
+    )
+    .map_err(|e| match e {
+        crate::task_compose::ComposeError::FlowInvalid { reason, .. } => {
+            TaskFlowError::ComposeInvalid { reason }
+        },
+        other => TaskFlowError::ComposeInstall(other.to_string()),
+    })?;
+    let reference = artifact
+        .path
+        .as_str()
+        .rsplit('/')
+        .next()
+        .and_then(|file| file.strip_suffix(".toml"))
+        .and_then(|stem| {
+            let (name, version) = stem.rsplit_once('-')?;
+            let (major, minor) = version.split_once('.')?;
+            FlowRef::new(name, major.parse().ok()?, Some(minor.parse().ok()?)).ok()
+        })
+        .ok_or_else(|| TaskFlowError::ComposeInstall("installed name is not a FlowRef".into()))?;
+    Ok(SelectedFlow {
+        reference,
+        layer: surge_core::Layer::Project,
+        graph,
+        pinned: true,
+        composed: Some(artifact),
     })
 }
 
@@ -363,8 +470,105 @@ mod tests {
     }
 
     #[test]
-    fn compose_is_named_unavailable() {
+    fn compose_unwired_is_named() {
         let error = TaskFlowError::ComposeUnavailable;
-        assert!(error.to_string().contains("not available in this build"));
+        assert!(error.to_string().contains("not available in this caller"));
+    }
+
+    struct StubComposer {
+        graph: std::sync::Mutex<Option<Graph>>,
+        seen_catalog: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl FlowComposer for StubComposer {
+        async fn compose(&self, _task: &RoadmapTask, catalog: String) -> Result<Graph, String> {
+            *self.seen_catalog.lock().unwrap() = Some(catalog);
+            self.graph
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| "no scripted graph".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn compose_installs_validated_flow_and_pins_it() {
+        let (_dir, layer) = project();
+        let composer = StubComposer {
+            graph: std::sync::Mutex::new(Some(
+                surge_core::BundledFlows::by_name_latest("linear-3")
+                    .unwrap()
+                    .graph,
+            )),
+            seen_catalog: std::sync::Mutex::new(None),
+        };
+        let mut trust = surge_persistence::trust_store::TrustStore::in_memory();
+        let selected = compose_task_flow(
+            &composer,
+            &task(Some(TaskSize::M), None),
+            &layer,
+            None,
+            &mut trust,
+            "composed-review",
+            1,
+        )
+        .await
+        .unwrap();
+
+        // The installed artifact is the one the event must record.
+        let artifact = selected.composed.expect("composed artifact");
+        assert_eq!(
+            artifact.path.as_str(),
+            ".surge/flows/composed-review-1.0.toml"
+        );
+        assert_eq!(selected.reference.to_string(), "composed-review@1.0");
+        assert!(layer.root().join(artifact.path.as_str()).exists());
+        // Pinned in the same step: the trust gate will not re-prompt.
+        let content = std::fs::read(layer.root().join(artifact.path.as_str())).unwrap();
+        assert!(trust.check(&artifact.path, &content).unwrap().is_none());
+        // The classifier's prompt carried the catalog's fit guidance.
+        assert!(
+            composer
+                .seen_catalog
+                .lock()
+                .unwrap()
+                .as_deref()
+                .unwrap_or_default()
+                .contains("bug-fix@1.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_that_fails_validation_is_not_written() {
+        let (_dir, layer) = project();
+        let composer = StubComposer {
+            // `single-task` has no verifier: invalid as a task flow.
+            graph: std::sync::Mutex::new(Some(
+                surge_core::BundledFlows::by_name_latest("single-task")
+                    .unwrap()
+                    .graph,
+            )),
+            seen_catalog: std::sync::Mutex::new(None),
+        };
+        let mut trust = surge_persistence::trust_store::TrustStore::in_memory();
+        let error = compose_task_flow(
+            &composer,
+            &task(Some(TaskSize::S), None),
+            &layer,
+            None,
+            &mut trust,
+            "no-verifier",
+            1,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, TaskFlowError::ComposeInvalid { .. }));
+        assert!(
+            !layer
+                .root()
+                .join(".surge/flows/no-verifier-1.0.toml")
+                .exists()
+        );
     }
 }
