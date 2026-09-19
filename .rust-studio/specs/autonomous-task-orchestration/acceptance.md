@@ -44,10 +44,10 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: rs-acceptance/v1 def=fec5a585aeaf30e8 exit=0 expect=matched out=de5d96f208ac5afb:1567 cwd=. shell=sh at=2026-09-19T03:23:23.393Z
 
-- [ ] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
-  CHECK: cargo nextest run -p surge-orchestrator -E '(test(profile_claiming_authority_is_refused) + test(profile_shadowing_a_bundled_name_is_rejected))'
+- [x] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
+  CHECK: cargo nextest run -p surge-orchestrator -E '(test(profile_claiming_authority_is_refused) + test(profile_shadowing_a_bundled_name_is_refused))'
   EXPECT: /2 tests? run: 2 passed/
-  EVIDENCE: failed at=2026-09-19T03:23:27.810Z exit=0 expect=unmatched
+  EVIDENCE: rs-acceptance/v1 def=eba8e0c842d832ab exit=0 expect=matched out=5dc95c51314d3e53:574 cwd=. shell=sh at=2026-09-19T03:24:20.406Z
 
 - [x] G9: a `.surge/profiles/x-1.0.toml` resolves with Provenance::Project over home and bundled, and two repos never see each other's profiles
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(engine_project_layer_scoping) + binary(profile_registry_e2e)'
