@@ -55,6 +55,8 @@ struct StubFacade {
     storage: Arc<Storage>,
     behavior: Mutex<StubBehavior>,
     dispatches: Mutex<Vec<(RunId, PathBuf, EngineRunConfig)>>,
+    /// The graph each dispatch was given, for template-selection assertions.
+    graphs: Mutex<Vec<surge_core::graph::Graph>>,
     /// Files to write into the worktree before completing, keyed by task id.
     commits: Mutex<HashMap<String, (String, String)>>,
 }
@@ -65,6 +67,7 @@ impl StubFacade {
             storage,
             behavior: Mutex::new(StubBehavior::CompleteVerified),
             dispatches: Mutex::new(Vec::new()),
+            graphs: Mutex::new(Vec::new()),
             commits: Mutex::new(HashMap::new()),
         }
     }
@@ -110,6 +113,7 @@ impl EngineFacade for StubFacade {
             .lock()
             .unwrap()
             .push((run_id, worktree_path.clone(), run_config.clone()));
+        self.graphs.lock().unwrap().push(_graph.clone());
 
         let behavior = *self.behavior.lock().unwrap();
         if behavior == StubBehavior::WriteNothing {
@@ -302,6 +306,10 @@ fn scheduler(
         Arc::new(surge_notify::MultiplexingNotifier::new()),
     );
     scheduler.template = TaskTemplateSource::BundledSingleTask;
+    // One runtime: same-vendor verification is a warning, not a refusal, so
+    // the fixture flows are selectable regardless of what is installed on
+    // the test host.
+    scheduler.runtime_count = 1;
     scheduler
 }
 
@@ -550,5 +558,82 @@ async fn paused_project_dispatches_nothing() {
         facade.task_ids().is_empty(),
         "a paused project must not dispatch"
     );
+    let _ = repo_dir;
+}
+
+/// A task whose size is `l` selects `linear-3` — the dispatch must carry the
+/// selected template's graph (its node keys differ from every other bundled
+/// flow), not a project-wide one.
+#[tokio::test(flavor = "multi_thread")]
+async fn dispatch_uses_the_size_selected_template() {
+    let mut milestone = RoadmapMilestone::new("m1", "One");
+    let mut t1 = RoadmapTask::new("t1", "Big work");
+    t1.size = Some(TaskSize::L);
+    let (repo_dir, repo) = init_repo_with_roadmap(&RoadmapArtifact::new(vec![milestone.clone()]));
+    milestone.tasks.push(t1);
+    std::fs::write(
+        repo.join(PROJECT_ROADMAP_RELPATH),
+        toml::to_string_pretty(&RoadmapArtifact::new(vec![milestone])).unwrap(),
+    )
+    .unwrap();
+
+    let storage = Storage::open(repo_dir.path().join("surge-home"))
+        .await
+        .unwrap();
+    let facade = Arc::new(StubFacade::new(storage.clone()));
+    let clock = Arc::new(MockClock::new(NOW));
+    storage
+        .task_queue_store()
+        .register_project(&repo, NOW)
+        .unwrap();
+    let sched = scheduler(storage.clone(), facade.clone(), clock);
+    sched.tick().await.unwrap();
+
+    let graphs = facade.graphs.lock().unwrap();
+    let graph = graphs.first().expect("one dispatch");
+    assert!(
+        graph
+            .nodes
+            .contains_key(&surge_core::keys::NodeKey::try_from("verify_1").unwrap()),
+        "linear-3 carries a verifier; the dispatched graph must be the selected template"
+    );
+    let _ = repo_dir;
+}
+
+/// A pinned flow is resolved from the catalog; an unresolvable pin is a
+/// named refusal (the row is requeued, nothing dispatches).
+#[tokio::test(flavor = "multi_thread")]
+async fn unresolvable_pin_refuses_dispatch() {
+    let mut milestone = RoadmapMilestone::new("m1", "One");
+    let mut t1 = RoadmapTask::new("t1", "Pinned");
+    t1.size = Some(TaskSize::M);
+    t1.flow = Some("does-not-exist@1".parse().unwrap());
+    milestone.tasks.push(t1);
+    let (repo_dir, repo) = init_repo_with_roadmap(&RoadmapArtifact::new(vec![milestone]));
+
+    let storage = Storage::open(repo_dir.path().join("surge-home"))
+        .await
+        .unwrap();
+    let facade = Arc::new(StubFacade::new(storage.clone()));
+    let clock = Arc::new(MockClock::new(NOW));
+    storage
+        .task_queue_store()
+        .register_project(&repo, NOW)
+        .unwrap();
+    let sched = scheduler(storage.clone(), facade.clone(), clock);
+    sched.tick().await.unwrap();
+
+    assert!(facade.task_ids().is_empty(), "nothing may dispatch");
+    let row = storage
+        .task_queue_store()
+        .get(&repo, "t1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.dispatch_state,
+        DispatchState::Queued,
+        "the row is requeued"
+    );
+    assert_eq!(row.attempt, 2, "the refusal is one attempt");
     let _ = repo_dir;
 }

@@ -78,6 +78,7 @@ pub mod scheduler;
 /// Output-spill policy for oversized tool results. See
 /// `.autopilot/competitive-waves/spec.md` §16.
 pub mod spill;
+pub mod task_run;
 pub mod triage;
 
 /// TOML source of the `Triage Author` bootstrap profile, bundled at compile time.

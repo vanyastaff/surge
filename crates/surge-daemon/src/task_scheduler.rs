@@ -95,6 +95,13 @@ pub struct TaskScheduler {
     pub template: TaskTemplateSource,
     /// Notifier for merge-conflict and stale-dispatch escalations.
     pub notifier: Arc<dyn NotifyDeliverer>,
+    /// How many distinct agent runtimes this daemon can dispatch to.
+    ///
+    /// Drives the same-runtime verification rule: one runtime warns, two or
+    /// more refuse a same-vendor verifier. Constructed from the installed
+    /// builtin registry, overridable for tests and for a future per-run
+    /// registry.
+    pub runtime_count: usize,
     /// How often to tick.
     pub poll_interval: Duration,
 }
@@ -109,6 +116,17 @@ pub struct TaskScheduler {
 pub enum TaskTemplateSource {
     /// Run the bundled `single-task` template for every task.
     BundledSingleTask,
+}
+
+/// Installed builtin runtimes, at least one (an empty PATH must not turn
+/// every same-vendor verifier into an error).
+fn installed_runtime_count() -> usize {
+    surge_acp::Registry::builtin()
+        .list()
+        .iter()
+        .filter(|entry| entry.is_installed())
+        .count()
+        .max(1)
 }
 
 impl TaskScheduler {
@@ -128,6 +146,7 @@ impl TaskScheduler {
             clock,
             template: TaskTemplateSource::BundledSingleTask,
             notifier,
+            runtime_count: installed_runtime_count(),
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
     }
@@ -306,7 +325,36 @@ impl TaskScheduler {
             return Ok(false);
         }
 
-        let prompt = render_task_prompt(task, roadmap);
+        let project_layer = ProjectLayer::for_project(project_root);
+        let selected = match surge_orchestrator::task_run::select_task_flow(
+            task,
+            &project_layer,
+            None,
+            self.runtime_count,
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                warn!(
+                    target: "surge.task_scheduler",
+                    task_id,
+                    %error,
+                    "task flow selection failed; requeueing the task"
+                );
+                queue
+                    .requeue(project_root, task_id, now_ms)
+                    .map_err(|e| e.to_string())?;
+                return Ok(false);
+            },
+        };
+        info!(
+            target: "surge.task_scheduler",
+            task_id,
+            flow = %selected.reference,
+            layer = %selected.layer,
+            pinned = selected.pinned,
+            "task flow selected"
+        );
+        let prompt = surge_orchestrator::task_run::render_task_prompt(task);
         let origin = RunOrigin::Task {
             project_root: project_root.to_path_buf(),
             task_id: task.id.clone(),
@@ -336,22 +384,33 @@ impl TaskScheduler {
             },
         };
 
-        let graph = match self.task_graph(project_root) {
-            Ok(graph) => graph,
-            Err(error) => {
-                warn!(
-                    target: "surge.task_scheduler",
-                    task_id,
-                    %error,
-                    "task graph composition failed; requeueing the task"
-                );
-                queue
-                    .requeue(project_root, task_id, now_ms)
-                    .map_err(|e| e.to_string())?;
-                return Ok(false);
-            },
-        };
+        let graph = surge_orchestrator::task_run::apply_task_context(&selected.graph, task);
+        self.start_claimed(
+            queue,
+            project_root,
+            task_id,
+            run_id,
+            graph,
+            worktree,
+            run_config,
+            now_ms,
+        )
+        .await
+    }
 
+    /// Start a claimed task's run and settle the row on a start failure.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_claimed(
+        &self,
+        queue: &TaskQueueStore,
+        project_root: &Path,
+        task_id: &str,
+        run_id: RunId,
+        graph: surge_core::graph::Graph,
+        worktree: PathBuf,
+        run_config: EngineRunConfig,
+        now_ms: i64,
+    ) -> Result<bool, String> {
         match self
             .facade
             .start_run(run_id, graph, worktree, run_config)
@@ -383,23 +442,6 @@ impl TaskScheduler {
                     .requeue(project_root, task_id, now_ms)
                     .map_err(|e| e.to_string())?;
                 Ok(false)
-            },
-        }
-    }
-
-    /// The graph a task run executes. T8/T10 replace this with flow-catalog
-    /// selection; the named stub keeps every layer measurable until then.
-    ///
-    /// **Not validated as a task flow yet**: the stub `single-task` template
-    /// declares no verifier, so `FlowPurpose::Task` would refuse every
-    /// dispatch. T10 composes real task flows and is the caller that runs
-    /// `validate_for_task` on them (with the run's actual runtime count).
-    fn task_graph(&self, _project_root: &Path) -> Result<surge_core::graph::Graph, String> {
-        match self.template {
-            TaskTemplateSource::BundledSingleTask => {
-                surge_core::BundledFlows::by_name_latest("single-task")
-                    .map(|flow| flow.graph)
-                    .ok_or_else(|| "bundled `single-task` template is missing".to_string())
             },
         }
     }
@@ -702,33 +744,6 @@ enum RunFate {
     Failed,
     /// No registry row and no events: the dispatch crashed before starting.
     Missing,
-}
-
-/// Render the task into the run's initial prompt.
-///
-/// T10 replaces this with flow-catalog selection plus a classifier; the
-/// prompt shape stays the same because it is the task's own text.
-fn render_task_prompt(task: &surge_core::RoadmapTask, roadmap: &RoadmapArtifact) -> String {
-    use std::fmt::Write;
-
-    let _ = roadmap;
-    let mut s = String::new();
-    s.push_str("You are executing one queued project task.\n\n");
-    let _ = writeln!(s, "Task: {} — {}", task.id, task.title);
-    if let Some(description) = &task.description {
-        let _ = write!(s, "\nDescription:\n{description}\n");
-    }
-    if !task.acceptance_criteria.is_empty() {
-        s.push_str("\nAcceptance criteria:\n");
-        for criterion in &task.acceptance_criteria {
-            let _ = writeln!(s, "- {criterion}");
-        }
-    }
-    s.push_str(
-        "\nImplement the task in this worktree, run the project's tests, and report the \
-         outcome.",
-    );
-    s
 }
 
 /// Dependency map type alias used by the policy wiring.
