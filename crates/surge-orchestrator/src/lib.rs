@@ -73,6 +73,8 @@ pub mod prompt;
 pub mod roadmap_amendment;
 pub mod roadmap_document;
 pub mod roadmap_target;
+/// Pure ordering policy for the project task queue (ADR-0020).
+pub mod scheduler;
 /// Output-spill policy for oversized tool results. See
 /// `.autopilot/competitive-waves/spec.md` §16.
 pub mod spill;

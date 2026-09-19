@@ -1313,6 +1313,7 @@ mod tests {
                 project_path: PathBuf::from("/tmp"),
                 initial_prompt: "test".into(),
                 config: RunConfig {
+                    origin: None,
                     budget: Default::default(),
                     sandbox_default: SandboxMode::WorkspaceWrite,
                     approval_default: ApprovalPolicy::OnRequest,
@@ -1341,6 +1342,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1370,6 +1372,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1617,6 +1620,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1693,6 +1697,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1784,6 +1789,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "test".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1889,6 +1895,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -1989,6 +1996,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -2143,6 +2151,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,
@@ -2506,6 +2515,7 @@ mod tests {
                     project_path: PathBuf::from("/tmp"),
                     initial_prompt: "build".into(),
                     config: RunConfig {
+                        origin: None,
                         budget: Default::default(),
                         sandbox_default: SandboxMode::WorkspaceWrite,
                         approval_default: ApprovalPolicy::OnRequest,

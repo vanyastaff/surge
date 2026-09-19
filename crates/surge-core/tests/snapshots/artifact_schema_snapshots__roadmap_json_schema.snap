@@ -1,6 +1,5 @@
 ---
 source: crates/surge-core/tests/artifact_schema_snapshots.rs
-assertion_line: 22
 expression: schema
 ---
 {
@@ -176,6 +175,21 @@ expression: schema
         "verified": {
           "description": "True only when a verification-authority node reported the task\nverified. Distinct from [`RoadmapStatus::Completed`], which any\nstage can claim.",
           "type": "boolean"
+        },
+        "priority": {
+          "description": "Manual scheduling priority. `#[serde(default)]` — a v2 roadmap that\npredates the queue parses as [`Priority::Medium`], which is the\ndefault the roadmap planner assigns.",
+          "$ref": "#/$defs/Priority"
+        },
+        "flow": {
+          "description": "Pinned flow template for this task (`name@MAJOR[.MINOR]`). When set,\ndispatch uses it instead of selecting a template by fit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlowRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -202,6 +216,36 @@ expression: schema
           "const": "l"
         }
       ]
+    },
+    "Priority": {
+      "description": "Priority level for roadmap scheduling.\n\nDeclaration order is **most important first** (`Critical` … `Low`), which\nis the opposite of the natural reading order for `Ord`. The manual\n`PartialOrd`/`Ord` impls below therefore order by [`Priority::level`], so\n`Low < Medium < High < Critical` — `max()` is the most important task and\na plain `sort()` produces least-important-first. Deriving `Ord` would\nsilently invert every comparison in the scheduler.",
+      "oneOf": [
+        {
+          "description": "Do first.",
+          "type": "string",
+          "const": "critical"
+        },
+        {
+          "description": "Important.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "The default.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Background work; the queue ages it up if it is passed over too often.",
+          "type": "string",
+          "const": "low"
+        }
+      ]
+    },
+    "FlowRef": {
+      "description": "Flow template reference `name@MAJOR[.MINOR]` (e.g. `bug-fix@1`). The version is required; an unresolvable reference is an error, never a fallback.",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]*@[0-9]+(\\.[0-9]+)?$"
     },
     "RoadmapDependency": {
       "description": "Directed dependency between roadmap milestones.",

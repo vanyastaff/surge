@@ -210,6 +210,59 @@ pub struct SurgeConfig {
     /// L3 (`surge:auto`) auto-merge gate configuration (spec §10/R31).
     #[serde(default)]
     pub merge_gate: MergeGateConfig,
+    /// Project task-queue scheduling knobs (ADR-0020).
+    #[serde(default)]
+    pub queue: QueueConfig,
+}
+
+/// Project task-queue scheduling knobs (ADR-0020).
+///
+/// The queue's ordering policy (`surge_orchestrator::scheduler::QueuePolicy`)
+/// is pure and takes this by reference; nothing here changes the semantics of
+/// dispatch, only how starved work is aged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QueueConfig {
+    /// Number of dispatches a task may be passed over before its effective
+    /// priority rises one level. `Low` (or any priority) climbs at most to
+    /// `Critical`. Default [`DEFAULT_AGING_THRESHOLD`]; `0` is rejected by
+    /// [`QueueConfig::validate`] because the policy divides by it.
+    #[serde(default = "default_aging_threshold")]
+    pub aging_threshold: u32,
+}
+
+/// Default aging threshold — five passes over a task before it ages up one
+/// priority level. Conservative: on a queue that dispatches a handful of
+/// tasks per day, a Low task cannot be starved for long, and a small backlog
+/// never sees the mechanism fire at all.
+pub const DEFAULT_AGING_THRESHOLD: u32 = 5;
+
+pub(crate) fn default_aging_threshold() -> u32 {
+    DEFAULT_AGING_THRESHOLD
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            aging_threshold: DEFAULT_AGING_THRESHOLD,
+        }
+    }
+}
+
+impl QueueConfig {
+    /// Reject a threshold the aging arithmetic cannot use.
+    ///
+    /// # Errors
+    /// [`crate::SurgeError::Config`] when `aging_threshold` is `0`.
+    pub fn validate(&self) -> Result<(), crate::SurgeError> {
+        if self.aging_threshold == 0 {
+            return Err(crate::SurgeError::Config(
+                "queue.aging_threshold must be at least 1 (0 would divide by zero in the \
+                 queue's aging arithmetic)"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// L3 auto-merge gate configuration (spec §10/R31).
@@ -1121,6 +1174,7 @@ impl Default for SurgeConfig {
             context_pack: ContextPackConfig::default(),
             capacity: CapacityConfig::default(),
             merge_gate: MergeGateConfig::default(),
+            queue: QueueConfig::default(),
         }
     }
 }
@@ -1172,6 +1226,7 @@ impl SurgeConfig {
         self.pipeline.validate()?;
         self.init.validate()?;
         self.capacity.validate()?;
+        self.queue.validate()?;
 
         // Validate routing agent_preferences reference existing agents
         if !self.agents.is_empty() {

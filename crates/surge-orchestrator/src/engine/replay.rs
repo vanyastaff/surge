@@ -248,6 +248,7 @@ mod tests {
         );
 
         let run_config = RunConfig {
+            origin: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -314,6 +315,7 @@ mod tests {
 
         // Persist RunConfig with an empty mcp_servers list (mirrors pre-M7 runs).
         let run_config = RunConfig {
+            origin: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
@@ -369,6 +371,7 @@ mod tests {
         let previous_graph_hash = ContentHash::compute(b"base-flow");
         let graph_hash = ContentHash::compute(b"amended-flow");
         let run_config = RunConfig {
+            origin: None,
             budget: BudgetGuard::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

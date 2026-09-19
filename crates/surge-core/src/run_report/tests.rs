@@ -111,6 +111,7 @@ fn run_started(seq: u64) -> RunEvent {
             project_path: PathBuf::from("/project"),
             initial_prompt: "build it".into(),
             config: RunConfig {
+                origin: None,
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
                 auto_pr: false,

@@ -42,6 +42,7 @@ insta = { workspace = true }
 criterion = { workspace = true }
 which = "6"
 tracing-subscriber = { workspace = true }
+proptest = { workspace = true }
 
 [[example]]
 name = "engine_in_daemon"

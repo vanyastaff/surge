@@ -813,6 +813,43 @@ pub struct RunConfig {
     /// field decodable (they resume unlimited, exactly as they did before).
     #[serde(default)]
     pub budget: crate::budget::BudgetGuard,
+    /// What this run was started for, when that is not "someone invoked the
+    /// engine directly". `None` (the default, and every log written before
+    /// this field) means a direct run — bootstrap, CLI, template launch.
+    ///
+    /// This is a **field** on an existing variant, not a new variant, so it
+    /// does not bump the event schema: an old log parses with `None`, a new
+    /// log round-trips through [`RunOrigin`]'s own `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RunOrigin>,
+}
+
+/// Why a run exists, carried on [`RunConfig::origin`] so the daemon can
+/// reconcile a task queue row against the run's own event log without
+/// consulting the queue table's mutable state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RunOrigin {
+    /// A queued project task, dispatched by the daemon's task scheduler.
+    Task {
+        /// Repository root the task belongs to — the queue's partition key.
+        /// Never a worktree path; the same task key must survive the run's
+        /// own worktree being recreated.
+        project_root: std::path::PathBuf,
+        /// [`crate::roadmap::RoadmapTask::id`] inside that project's
+        /// roadmap. A `String`, not [`crate::id::TaskId`]: the roadmap's id
+        /// is human-authored (`m1-t1`), while `TaskId` is a ULID minted for
+        /// a different concept.
+        task_id: String,
+        /// 1 for the first attempt; incremented by the scheduler when a
+        /// crashed dispatch is re-queued.
+        attempt: u32,
+        /// Hash of the roadmap file the task was mirrored from. Recorded at
+        /// dispatch and never updated, so a priority edit that raced the
+        /// dispatch is visible by comparing it to the current file hash.
+        roadmap_hash: crate::content_hash::ContentHash,
+    },
 }
 
 #[cfg(test)]
@@ -862,6 +899,7 @@ mod tests {
             project_path: PathBuf::from("/work/proj"),
             initial_prompt: "build it".into(),
             config: RunConfig {
+                origin: None,
                 budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,
@@ -878,6 +916,7 @@ mod tests {
     fn run_config_persists_budget_and_defaults_when_absent() {
         use crate::budget::{BudgetGuard, BudgetLimits};
         let config = RunConfig {
+            origin: None,
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,
@@ -904,6 +943,48 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("budget");
         let decoded: RunConfig = serde_json::from_value(legacy).unwrap();
         assert_eq!(decoded.budget, BudgetGuard::default());
+    }
+
+    #[test]
+    fn run_config_without_origin_deserializes_to_none() {
+        let config = RunConfig {
+            origin: None,
+            sandbox_default: SandboxMode::WorkspaceWrite,
+            approval_default: ApprovalPolicy::OnRequest,
+            auto_pr: false,
+            mcp_servers: Vec::new(),
+            budget: Default::default(),
+        };
+        let value = serde_json::to_value(&config).unwrap();
+        // A direct run omits the key entirely (`skip_serializing_if`).
+        assert!(value.get("origin").is_none());
+        let back: RunConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(back.origin, None);
+
+        // A pre-origin log (key absent) still decodes — the field defaults.
+        let legacy: RunConfig = serde_json::from_value(serde_json::json!({
+            "sandbox_default": "workspace-write",
+            "approval_default": "on-request",
+            "auto_pr": false,
+            "mcp_servers": [],
+        }))
+        .unwrap();
+        assert_eq!(legacy.origin, None);
+    }
+
+    #[test]
+    fn run_origin_task_round_trips() {
+        use crate::content_hash::ContentHash;
+        let origin = RunOrigin::Task {
+            project_root: std::path::PathBuf::from("/repo"),
+            task_id: "m1-t1".into(),
+            attempt: 2,
+            roadmap_hash: ContentHash::compute(b"roadmap bytes"),
+        };
+        let json = serde_json::to_string(&origin).unwrap();
+        let back: RunOrigin = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, origin);
+        assert!(json.contains("\"type\":\"task\""), "got {json}");
     }
 
     #[test]
@@ -1644,6 +1725,7 @@ mod tests {
         use std::time::Duration;
 
         let cfg = RunConfig {
+            origin: None,
             budget: Default::default(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,

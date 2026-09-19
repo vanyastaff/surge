@@ -174,3 +174,10 @@ bot_token_env = "SURGE_TELEGRAM_BOT_TOKEN"
 [inbox]
 snooze_poll_interval_seconds = 300
 delivery_channels = ["telegram", "desktop"]
+
+# Project task queue (ADR-0020). The daemon's scheduler mirrors
+# `.surge/roadmap.toml` into the registry and dispatches one task per run,
+# in dependency order, then by manual priority (`RoadmapTask.priority`),
+# then by size and age.
+[queue]
+aging_threshold = 5                      # Dispatches a task may be passed over before its effective priority rises one level (must be >= 1)

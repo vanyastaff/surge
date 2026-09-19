@@ -951,6 +951,7 @@ mod tests {
                     project_path: "/p".into(),
                     initial_prompt: XSS_PAYLOAD.into(),
                     config: crate::run_event::RunConfig {
+                        origin: None,
                         sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
                         approval_default: crate::approvals::ApprovalPolicy::OnRequest,
                         auto_pr: false,
@@ -1374,6 +1375,7 @@ mod tests {
                     project_path: "/p".into(),
                     initial_prompt: forged_prompt.into(),
                     config: crate::run_event::RunConfig {
+                        origin: None,
                         sandbox_default: crate::sandbox::SandboxMode::WorkspaceWrite,
                         approval_default: crate::approvals::ApprovalPolicy::OnRequest,
                         auto_pr: false,

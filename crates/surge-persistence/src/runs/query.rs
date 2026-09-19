@@ -202,6 +202,7 @@ mod tests {
 
     fn run_config() -> RunConfig {
         RunConfig {
+            origin: None,
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

@@ -25,6 +25,14 @@ Each `[[milestones.tasks]]` entry carries:
   must be completable in one fresh agent session; split anything larger.
 - `verified` — set only when a verification-authority node reports the task
   verified. Distinct from `status = "completed"`, which any stage can claim.
+- `priority` — `low` / `medium` / `high` / `critical`, default `medium`.
+  Manual scheduling priority for the project queue (ADR-0020). Omitted at
+  `is_medium`. Aging (`[queue] aging_threshold` in `surge.toml`) can raise
+  the *effective* priority at dispatch time without rewriting the file.
+- `flow` — pinned flow template (`name@MAJOR[.MINOR]`, e.g. `bug-fix@1`).
+  When set, dispatch uses that template instead of selecting one by fit.
+  Omitted when unset; an unresolvable reference is an error, never a
+  fallback to another template.
 
 `status` gains two ledger transitions: `ready_for_verification` (implementation
 done, awaiting a verifier) and `failed_verification` (verifier rejected it).
@@ -49,6 +57,8 @@ title = "Add validators"
 description = "Validate canonical generated artifacts."
 acceptance_criteria = ["Invalid schema versions fail", "Valid fixtures pass"]
 size = "m"
+priority = "high"
+flow = "feature@1"
 
 [[milestones]]
 id = "hook-enforcement"
@@ -93,6 +103,8 @@ mitigation = "Keep profile prompts linked to this convention."
 - **Schema v2 only:** every task has a `size` (`s` / `m` / `l`) sized to one agent
   session (validation requires `size` at v2; legacy v1 roadmaps omit it).
 - Task ids are unique; `depends_on` / `discovered_from` reference real task ids.
+- `priority` (if present) is one of `low` / `medium` / `high` / `critical`;
+  `flow` (if present) matches `name@MAJOR[.MINOR]`.
 - `[[dependencies]]` (if present) reference real milestone ids and are not self-referential.
 - The task `depends_on` graph is acyclic.
 - Tasks include clear titles and testable acceptance criteria when known.

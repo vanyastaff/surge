@@ -681,6 +681,7 @@ mod tests {
             project_path: PathBuf::from("/proj"),
             initial_prompt: "x".into(),
             config: RunConfig {
+                origin: None,
                 budget: Default::default(),
                 sandbox_default: SandboxMode::WorkspaceWrite,
                 approval_default: ApprovalPolicy::OnRequest,

@@ -57,6 +57,7 @@ fn minimal_graph(node_name: &str) -> Graph {
 
 fn run_config() -> RunConfig {
     RunConfig {
+        origin: None,
         budget: Default::default(),
         sandbox_default: SandboxMode::WorkspaceWrite,
         approval_default: ApprovalPolicy::OnRequest,

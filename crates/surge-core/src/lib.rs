@@ -45,6 +45,7 @@ pub mod context_pack;
 pub mod doctor;
 pub mod edge;
 pub mod evidence;
+pub mod flow_ref;
 pub mod graph;
 pub mod home;
 pub mod hooks;
@@ -73,7 +74,7 @@ pub mod terminal_config;
 pub mod validation;
 
 // ── Legacy re-exports (kept stable) ──
-pub use config::SurgeConfig;
+pub use config::{DEFAULT_AGING_THRESHOLD, QueueConfig, SurgeConfig};
 pub use error::SurgeError;
 pub use event::{
     PlanEntry, PlanPriority, PlanStatus, SurgeEvent, ToolCallStatus, ToolDiff, ToolKind,
@@ -81,10 +82,10 @@ pub use event::{
 };
 pub use id::{MemoryClaimId, RunId, SessionId, SpecId, SubtaskId, TaskId};
 pub use roadmap::{
-    DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, Priority, RoadmapArtifact,
-    RoadmapDependency, RoadmapItem, RoadmapLedgerIssue, RoadmapMilestone, RoadmapRisk,
-    RoadmapStatus, RoadmapTask, TaskSize, Timeline, TimelineBatch, VerificationCheck,
-    VerificationReportArtifact, VerificationReportOutcome,
+    DiscoveredTaskEntry, DiscoveredTaskIssue, DiscoveredTasksArtifact, Priority,
+    PriorityParseError, RoadmapArtifact, RoadmapDependency, RoadmapItem, RoadmapLedgerIssue,
+    RoadmapMilestone, RoadmapRisk, RoadmapStatus, RoadmapTask, TaskSize, Timeline, TimelineBatch,
+    VerificationCheck, VerificationReportArtifact, VerificationReportOutcome,
 };
 pub use roadmap_patch::{
     ActivePickupPolicy, InsertionPoint, OperatorConflictChoice, ROADMAP_PATCH_SCHEMA_VERSION,
@@ -114,6 +115,7 @@ pub use bundled_flows::{BUNDLED_FLOW_COUNT, BundledFlow, BundledFlows};
 pub use content_hash::ContentHash;
 pub use doctor::{DoctorEntry, DoctorReport, MatrixCell, MatrixCellStatus, VersionStatus};
 pub use edge::{Edge, EdgeKind, EdgePolicy, ExceededAction, PortRef};
+pub use flow_ref::{FlowRef, FlowRefParseError};
 pub use graph::{Graph, GraphMetadata, SCHEMA_VERSION, Subgraph};
 pub use keys::{EdgeKey, NodeKey, OutcomeKey, ProfileKey, SubgraphKey, TemplateKey};
 pub use mcp_config::{McpServerRef, McpTransportConfig};

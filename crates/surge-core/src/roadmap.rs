@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::artifact_contract::{ARTIFACT_SCHEMA_VERSION, ROADMAP_SCHEMA_VERSION};
+use crate::flow_ref::FlowRef;
 use crate::id::SpecId;
 use crate::spec::Complexity;
 
@@ -480,6 +481,25 @@ pub struct RoadmapTask {
     /// stage can claim.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub verified: bool,
+    /// Manual scheduling priority. `#[serde(default)]` — a v2 roadmap that
+    /// predates the queue parses as [`Priority::Medium`], which is the
+    /// default the roadmap planner assigns.
+    #[serde(default, skip_serializing_if = "Priority::is_medium")]
+    pub priority: Priority,
+    /// Pinned flow template for this task (`name@MAJOR[.MINOR]`). When set,
+    /// dispatch uses it instead of selecting a template by fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<FlowRef>,
+}
+
+impl Priority {
+    /// `skip_serializing_if` helper: the default priority is omitted from
+    /// written roadmaps, so a task with no explicit priority round-trips
+    /// byte-identically.
+    #[must_use]
+    pub fn is_medium(&self) -> bool {
+        *self == Self::Medium
+    }
 }
 
 impl RoadmapTask {
@@ -496,6 +516,8 @@ impl RoadmapTask {
             discovered_from: None,
             size: None,
             verified: false,
+            priority: Priority::Medium,
+            flow: None,
         }
     }
 }
@@ -743,15 +765,85 @@ pub struct RoadmapItem {
 }
 
 /// Priority level for roadmap scheduling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// Declaration order is **most important first** (`Critical` … `Low`), which
+/// is the opposite of the natural reading order for `Ord`. The manual
+/// `PartialOrd`/`Ord` impls below therefore order by [`Priority::level`], so
+/// `Low < Medium < High < Critical` — `max()` is the most important task and
+/// a plain `sort()` produces least-important-first. Deriving `Ord` would
+/// silently invert every comparison in the scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
+    /// Do first.
     Critical,
+    /// Important.
     High,
+    /// The default.
     #[default]
     Medium,
+    /// Background work; the queue ages it up if it is passed over too often.
     Low,
 }
+
+impl Priority {
+    /// Every variant, lowest importance first (the `Ord` order).
+    pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::Critical];
+
+    /// Rank in the `Ord` order: `Low` = 0 … `Critical` = 3.
+    #[must_use]
+    pub fn level(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Medium => 1,
+            Self::High => 2,
+            Self::Critical => 3,
+        }
+    }
+
+    /// The inverse of [`Priority::level`], saturating at `Critical`. Used by
+    /// the queue's aging arithmetic, which can outrun the scale.
+    #[must_use]
+    pub fn from_level(level: u8) -> Self {
+        match level {
+            0 => Self::Low,
+            1 => Self::Medium,
+            2 => Self::High,
+            _ => Self::Critical,
+        }
+    }
+}
+
+impl PartialOrd for Priority {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Priority {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.level().cmp(&other.level())
+    }
+}
+
+impl std::str::FromStr for Priority {
+    type Err = PriorityParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "critical" => Ok(Self::Critical),
+            "high" => Ok(Self::High),
+            "medium" => Ok(Self::Medium),
+            "low" => Ok(Self::Low),
+            other => Err(PriorityParseError(other.to_string())),
+        }
+    }
+}
+
+/// Returned when a string does not name a [`Priority`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown priority {0:?} (expected low|medium|high|critical)")]
+pub struct PriorityParseError(String);
 
 impl std::fmt::Display for Priority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
