@@ -104,6 +104,29 @@ impl Storage {
         crate::task_ledger::TaskLedgerStore::new(self.registry_pool.clone())
     }
 
+    /// Registry-level project task queue store (ADR-0020).
+    pub fn task_queue_store(&self) -> crate::task_queue::TaskQueueStore {
+        crate::task_queue::TaskQueueStore::new(self.registry_pool.clone())
+    }
+
+    /// List run summaries without the stale-pid reconciliation pass.
+    ///
+    /// [`Storage::list_runs`] mutates: it rewrites a `Running` row whose
+    /// daemon pid is dead to `Crashed` before returning it. Readers that
+    /// must not write — the scheduler's reconcile sweep, which compares a
+    /// queue row against the run's fate — call this instead, so observing
+    /// state cannot itself change it (memory note: `list_runs` is not
+    /// read-only).
+    ///
+    /// # Errors
+    /// Returns [`StorageError`] when the registry DB cannot be read.
+    pub fn list_runs_readonly(
+        &self,
+        filter: RunFilter,
+    ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
+        registry::list_runs(&self.registry_pool, &filter)
+    }
+
     /// Mirror a run's folded task-ledger into the cross-run registry index.
     ///
     /// Reads the run's per-run `task_ledger` view (maintained in the append

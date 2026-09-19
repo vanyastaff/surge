@@ -75,6 +75,9 @@ pub mod roadmap_patches;
 /// Registry-level task-ledger index for `surge ready` / `surge ledger`.
 pub mod task_ledger;
 
+/// Registry-level project task queue (ADR-0020).
+pub mod task_queue;
+
 /// SQLite-based storage implementation
 pub mod store;
 

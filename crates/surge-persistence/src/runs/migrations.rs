@@ -81,6 +81,10 @@ pub const REGISTRY_MIGRATIONS: MigrationSet = &[
         "registry-0016-runs-wake-at",
         include_str!("migrations/registry/0016_runs_wake_at.sql"),
     ),
+    (
+        "registry-0017-task-queue",
+        include_str!("migrations/registry/0017_task_queue.sql"),
+    ),
 ];
 
 /// Migrations applied to each per-run DB.
@@ -236,6 +240,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_wake_at, 1, "0016 must add runs.wake_at");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table' AND name='task_queue'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "0017 must create task_queue");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table' AND name='project_queue'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "0017 must create project_queue");
 
         let applied: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations", [], |r| r.get(0))

@@ -7561,6 +7561,7 @@ dependencies = [
  "humantime-serde",
  "insta",
  "interprocess",
+ "proptest",
  "rand 0.9.2",
  "semver",
  "serde",

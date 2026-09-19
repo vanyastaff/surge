@@ -208,6 +208,24 @@ impl RoadmapArtifact {
             .flat_map(|milestone| milestone.tasks.iter())
     }
 
+    /// Project this roadmap into the queue mirror's planning rows.
+    ///
+    /// The queue mirror (registry `task_queue`) is keyed by task id and
+    /// carries only the scheduling-relevant fields — a roadmap that grows
+    /// prose fields the scheduler does not consult produces the same rows.
+    /// Pure: the caller supplies the hash and the persistence layer writes.
+    #[must_use]
+    pub fn to_queue_entries(&self) -> Vec<QueueMirrorEntry> {
+        self.tasks()
+            .map(|task| QueueMirrorEntry {
+                task_id: task.id.clone(),
+                priority: task.priority,
+                depends_on: task.depends_on.clone(),
+                size: task.size,
+            })
+            .collect()
+    }
+
     /// Find one cycle in the task-level `depends_on` graph, if any.
     ///
     /// Deterministic: tasks are visited in declaration order, and each task's
@@ -520,6 +538,21 @@ impl RoadmapTask {
             flow: None,
         }
     }
+}
+
+/// One planning-side queue row: the subset of a [`RoadmapTask`] the project
+/// queue mirror persists (ADR-0020). The execution columns — dispatch state,
+/// run id, attempt, skip count — belong to the registry, not the roadmap file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueMirrorEntry {
+    /// Task id (`m1-t1`).
+    pub task_id: String,
+    /// Manual scheduling priority.
+    pub priority: Priority,
+    /// Task ids that must complete first.
+    pub depends_on: Vec<String>,
+    /// Context-budget class, when known.
+    pub size: Option<TaskSize>,
 }
 
 /// Context-budget size class for one roadmap task.
@@ -1178,6 +1211,104 @@ mod tests {
         assert_eq!(Priority::High.to_string(), "high");
         assert_eq!(Priority::Medium.to_string(), "medium");
         assert_eq!(Priority::Low.to_string(), "low");
+    }
+
+    #[test]
+    fn priority_orders_by_importance_not_declaration() {
+        // Declaration order starts at Critical; the Ord impl must not.
+        assert!(Priority::Low < Priority::Medium);
+        assert!(Priority::Medium < Priority::High);
+        assert!(Priority::High < Priority::Critical);
+        assert_eq!(
+            Priority::ALL,
+            [
+                Priority::Low,
+                Priority::Medium,
+                Priority::High,
+                Priority::Critical
+            ]
+        );
+        assert_eq!(Priority::from_level(2), Priority::High);
+        assert_eq!(Priority::from_level(9), Priority::Critical);
+    }
+
+    #[test]
+    fn priority_from_str_matches_display() {
+        for priority in Priority::ALL {
+            assert_eq!(priority.to_string().parse::<Priority>().unwrap(), priority);
+        }
+        assert!("urgent".parse::<Priority>().is_err());
+    }
+
+    #[test]
+    fn roadmap_task_defaults_priority_and_flow_are_omitted_from_toml() {
+        let mut milestone = RoadmapMilestone::new("m1", "M1");
+        milestone.tasks.push(RoadmapTask::new("m1-t1", "Do it"));
+        let artifact = RoadmapArtifact::new(vec![milestone]);
+        let toml_str = toml::to_string(&artifact).unwrap();
+        assert!(
+            !toml_str.contains("priority"),
+            "default priority must not be serialized: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("flow"),
+            "unset flow must not be serialized"
+        );
+    }
+
+    #[test]
+    fn roadmap_task_priority_and_flow_round_trip() {
+        let mut task = RoadmapTask::new("m1-t1", "Do it");
+        task.priority = Priority::Critical;
+        task.flow = Some("bug-fix@1.2".parse().unwrap());
+        let mut milestone = RoadmapMilestone::new("m1", "M1");
+        milestone.tasks.push(task);
+        let artifact = RoadmapArtifact::new(vec![milestone]);
+        let toml_str = toml::to_string(&artifact).unwrap();
+        let back: RoadmapArtifact = toml::from_str(&toml_str).unwrap();
+        let task = back.tasks().next().unwrap();
+        assert_eq!(task.priority, Priority::Critical);
+        assert_eq!(task.flow.as_ref().unwrap().to_string(), "bug-fix@1.2");
+    }
+
+    #[test]
+    fn legacy_roadmap_task_without_priority_parses_as_medium() {
+        let toml_str = r#"
+schema_version = 2
+
+[[milestones]]
+id = "m1"
+title = "M1"
+
+[[milestones.tasks]]
+id = "m1-t1"
+title = "Legacy"
+size = "m"
+"#;
+        let artifact: RoadmapArtifact = toml::from_str(toml_str).unwrap();
+        let task = artifact.tasks().next().unwrap();
+        assert_eq!(task.priority, Priority::Medium);
+        assert_eq!(task.flow, None);
+    }
+
+    #[test]
+    fn to_queue_entries_projects_only_scheduling_fields() {
+        let mut a = RoadmapTask::new("t1", "First");
+        a.size = Some(TaskSize::S);
+        a.priority = Priority::High;
+        let mut b = RoadmapTask::new("t2", "Second");
+        b.size = Some(TaskSize::M);
+        b.depends_on = vec!["t1".to_string()];
+        let mut milestone = RoadmapMilestone::new("m1", "M1");
+        milestone.tasks.push(a);
+        milestone.tasks.push(b);
+
+        let entries = RoadmapArtifact::new(vec![milestone]).to_queue_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].task_id, "t1");
+        assert_eq!(entries[0].priority, Priority::High);
+        assert_eq!(entries[0].size, Some(TaskSize::S));
+        assert_eq!(entries[1].depends_on, vec!["t1".to_string()]);
     }
 
     #[test]
