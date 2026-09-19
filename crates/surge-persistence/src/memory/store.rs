@@ -181,6 +181,33 @@ impl MemoryStore {
                 tx.commit()?;
                 Ok(next_version)
             },
+            2 => {
+                // v2 -> v3: add `project_root` to `memory_claims` (ticket
+                // 21). Additive and nullable: every existing claim keeps
+                // resolving exactly as it did, and only newly-written ones
+                // become self-describing.
+                //
+                // Guarded: the v1 -> v2 step creates the table from today's
+                // `CREATE_MEMORY_CLAIMS_TABLE`, which already carries the
+                // column, so a v1 database climbing both steps would hit
+                // "duplicate column name" on the unguarded ALTER. The guard
+                // makes the step idempotent for any path that reached v2
+                // with the column already present.
+                let tx = self.conn.transaction()?;
+                let has_column: bool = tx
+                    .prepare("SELECT 1 FROM pragma_table_info('memory_claims') WHERE name = 'project_root'")?
+                    .exists([])?;
+                if !has_column {
+                    tx.execute("ALTER TABLE memory_claims ADD COLUMN project_root TEXT", [])?;
+                }
+                let next_version = 3;
+                tx.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    [next_version],
+                )?;
+                tx.commit()?;
+                Ok(next_version)
+            },
             other => Err(PersistenceError::Storage(format!(
                 "no migration step defined for memory schema version {other}"
             ))),
@@ -208,7 +235,7 @@ impl MemoryStore {
             .query_row(
                 r#"
                 SELECT id, text, source, source_hash, verified_by, verified_at,
-                       confidence, status
+                       confidence, status, project_root
                 FROM memory_claims WHERE id = ?1
                 "#,
                 [id.to_string()],
@@ -223,7 +250,7 @@ impl MemoryStore {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, text, source, source_hash, verified_by, verified_at,
-                   confidence, status
+                   confidence, status, project_root
             FROM memory_claims ORDER BY rowid
             "#,
         )?;
@@ -895,6 +922,10 @@ fn row_to_claim(row: &Row<'_>) -> rusqlite::Result<MemoryClaim> {
     let verified_at: Option<i64> = row.get(5)?;
     let confidence: String = row.get(6)?;
     let status: String = row.get(7)?;
+    // Column 8 is ticket 21's `project_root`: parsed when a reader that
+    // knows the project reads the row; this legacy read path has no
+    // project anchor to bind, so the value is skipped on purpose.
+    let _project_root: Option<String> = row.get(8)?;
 
     let id = MemoryClaimId::from_str(&id).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -917,6 +948,10 @@ fn row_to_claim(row: &Row<'_>) -> rusqlite::Result<MemoryClaim> {
             hash,
             verified_by,
             verified_at: verified_at.map(|ms| ms as u64),
+            // The row predates ticket 21's project-root column: this read
+            // path has no project anchor, so `None` is the honest value
+            // and the audit falls back to its own anchor as before.
+            project_root: None,
         },
         confidence,
         status,
@@ -970,8 +1005,8 @@ fn insert_claim(
             r#"
             INSERT {or_ignore}INTO memory_claims (
                 id, text, source, source_hash, verified_by, verified_at,
-                confidence, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                confidence, status, project_root
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#
         ),
         rusqlite::params![
@@ -983,6 +1018,11 @@ fn insert_claim(
             claim.provenance().verified_at.map(|ms| ms as i64),
             claim.confidence().as_str(),
             claim.status().as_str(),
+            claim
+                .provenance()
+                .project_root
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
         ],
     )?;
     Ok(())

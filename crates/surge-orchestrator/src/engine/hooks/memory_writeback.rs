@@ -43,6 +43,7 @@ use surge_persistence::runs::run_writer::RunWriter;
 /// Tolerant of every store failure: write-back must never be the reason a
 /// run fails, mirroring `project_context::load_memory_claims_seed`'s
 /// tolerance for a missing or unreadable store.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_node_failure(
     run_id: RunId,
     node: &NodeKey,
@@ -50,6 +51,7 @@ pub async fn record_node_failure(
     writer: &RunWriter,
     stage_failed_seq: EventSeq,
     store_path_override: Option<&Path>,
+    project_root: Option<&Path>,
 ) {
     let cause = root_cause(node, symptom, writer, stage_failed_seq).await;
     let text = format!("{}{cause}", node_tag(node));
@@ -84,7 +86,14 @@ pub async fn record_node_failure(
         },
     };
 
-    match write_claim(&store, run_id, node, &text, stage_failed_seq.as_u64()) {
+    match write_claim(
+        &store,
+        run_id,
+        node,
+        &text,
+        stage_failed_seq.as_u64(),
+        project_root,
+    ) {
         Ok(true) => tracing::info!(
             target: "engine::memory_writeback",
             node = %node,
@@ -172,10 +181,24 @@ fn write_claim(
     node: &NodeKey,
     text: &str,
     turn: u64,
+    project_root: Option<&Path>,
 ) -> surge_persistence::Result<bool> {
     let source = format!("transcript:{run_id}#turn-{turn}");
     let hash = ContentHash::compute(text.as_bytes());
     let tag = node_tag(node);
+
+    // Ticket 21: attach the project root the claim belongs to, when the
+    // caller knows it. A transcript locator is already self-describing
+    // (`transcript:<run-id>#turn-N`), but the claim's *text* routinely
+    // names a project file, and the audit resolves those against the
+    // claim's own root rather than whichever repo it happens to run in.
+    let claim_for = |store_text: &str| -> MemoryClaim {
+        let mut claim = MemoryClaim::from_transcript(store_text, source.clone(), hash);
+        if let Some(root) = project_root {
+            claim = claim.with_provenance_root(root);
+        }
+        claim
+    };
 
     let covering = store
         .list_claims()?
@@ -183,12 +206,12 @@ fn write_claim(
         .find(|claim| claim.is_aging_eligible() && claim.text().starts_with(&tag));
 
     let Some(existing) = covering else {
-        store.add_claim(&MemoryClaim::from_transcript(text, source, hash))?;
+        store.add_claim(&claim_for(text))?;
         return Ok(false);
     };
 
     store.delete_claim(existing.id())?;
-    let refreshed = MemoryClaim::from_transcript(text, source, hash).with_id(existing.id());
+    let refreshed = claim_for(text).with_id(existing.id());
     store.add_claim(&refreshed)?;
     Ok(true)
 }

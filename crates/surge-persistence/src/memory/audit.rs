@@ -329,7 +329,21 @@ pub fn stale_claims(
                 // did, once, rather than re-deriving a different answer
                 // here, then anchor a relative result at `project_root`.
                 let raw_path = file_uri_to_path(source).unwrap_or_else(|| PathBuf::from(source));
-                let path = resolve_against(project_root, &raw_path);
+                // Ticket 21: a claim that recorded the project it belongs
+                // to resolves against **that** root, not whichever repo
+                // the audit happens to run in. Without this, a claim from
+                // project A audited from project B (or from outside any
+                // repo) reports a missing source that is not missing —
+                // the worst direction for an audit whose output is
+                // "propose deletion". Claims written before v3 have no
+                // root and fall back to the caller's anchor, exactly as
+                // before.
+                let claim_root = claim
+                    .provenance()
+                    .project_root
+                    .as_deref()
+                    .unwrap_or(project_root);
+                let path = resolve_against(claim_root, &raw_path);
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         let current = ContentHash::compute(&bytes);
@@ -1250,5 +1264,37 @@ mod tests {
                  every time, not one that depends on HashSet iteration order"
             );
         }
+    }
+
+    /// Ticket 21: a claim that recorded its own project root resolves
+    /// against that root, not the caller's. Without the recorded root, a
+    /// claim from project A audited from project B reports a missing
+    /// source that is not missing — a false deletion proposal.
+    #[test]
+    fn claim_with_its_own_project_root_resolves_there_not_at_the_audit_anchor() {
+        let project_a = tempfile::tempdir().unwrap();
+        let project_b = tempfile::tempdir().unwrap();
+        std::fs::write(project_a.path().join("src.rs"), "fn main() {}").unwrap();
+        let hash = ContentHash::compute(b"fn main() {}");
+
+        let claim =
+            file_claim(std::path::Path::new("src.rs"), hash).with_provenance_root(project_a.path());
+
+        // Audited from project B (where `src.rs` does not exist): the
+        // recorded root wins, so the claim is fresh, not stale.
+        let (stale, unverifiable) = stale_claims(std::slice::from_ref(&claim), project_b.path());
+        assert!(
+            stale.is_empty(),
+            "the claim must resolve against its own root, got {stale:?}"
+        );
+        assert!(unverifiable.is_empty());
+
+        // A claim with no recorded root keeps the old behavior: audited
+        // from B, it IS stale (B has no `src.rs`) — the pre-v3 truth,
+        // unchanged.
+        let legacy = file_claim(std::path::Path::new("src.rs"), hash);
+        let (stale, _) = stale_claims(&[legacy], project_b.path());
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].reason, StaleReason::SourceMissing);
     }
 }

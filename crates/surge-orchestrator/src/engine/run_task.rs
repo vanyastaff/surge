@@ -1519,6 +1519,7 @@ async fn resolve_stage_error(
             &params.writer,
             seq,
             params.run_config.memory_store_path.as_deref(),
+            Some(&params.worktree_path),
         )
         .await;
     }

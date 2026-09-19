@@ -17,7 +17,7 @@
 /// migrated forward by materializing every existing row as an unverified,
 /// `Asserted`-confidence claim (see `MemoryStore::migrate_one_step`) — see
 /// `docs/schema-versioning.md`.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Schema version table DDL.
 pub const CREATE_SCHEMA_VERSION_TABLE: &str = r#"
@@ -293,7 +293,11 @@ CREATE TABLE IF NOT EXISTS memory_claims (
     verified_by TEXT,
     verified_at INTEGER,
     confidence TEXT NOT NULL,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    -- Ticket 21: the repository root a relative `source` resolves against.
+    -- NULL for claims written before v3 and for callers with no project;
+    -- the audit then anchors them itself, exactly as before.
+    project_root TEXT
 )
 "#;
 

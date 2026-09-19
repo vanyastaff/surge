@@ -158,6 +158,22 @@ pub struct Provenance {
     pub verified_by: Option<String>,
     /// Unix-ms timestamp of the last verification, if any.
     pub verified_at: Option<u64>,
+    /// The repository root a **relative** `source` locator resolves
+    /// against, when the claim's author knew it.
+    ///
+    /// The claim store is one per machine (`$SURGE_HOME/memory.db`), but a
+    /// file locator like `src/lib.rs` is meaningless without its project
+    /// (ticket 21): the same string resolves to different files in two
+    /// checkouts, and a claim audited from the wrong project reports a
+    /// missing source that is not missing. Recording the root makes the
+    /// claim self-describing; `None` means "written before this field, or
+    /// by a caller with no project" and the audit falls back to its own
+    /// anchor, exactly as it did before.
+    ///
+    /// Additive `#[serde(default)]`: an old claim deserializes with `None`,
+    /// so no schema bump (see `docs/schema-versioning.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<std::path::PathBuf>,
 }
 
 impl Provenance {
@@ -170,7 +186,17 @@ impl Provenance {
             hash,
             verified_by: None,
             verified_at: None,
+            project_root: None,
         }
+    }
+
+    /// This provenance with the repository root a relative `source`
+    /// resolves against (ticket 21). Builder form, so every existing
+    /// constructor stays source-compatible.
+    #[must_use]
+    pub fn with_project_root(mut self, project_root: impl Into<std::path::PathBuf>) -> Self {
+        self.project_root = Some(project_root.into());
+        self
     }
 
     /// Provenance for a claim that has just been verified.
@@ -186,6 +212,7 @@ impl Provenance {
             hash,
             verified_by: Some(verified_by.into()),
             verified_at: Some(verified_at_ms),
+            project_root: None,
         }
     }
 
@@ -272,6 +299,15 @@ impl MemoryClaim {
     #[must_use]
     pub fn with_id(mut self, id: MemoryClaimId) -> Self {
         self.id = id;
+        self
+    }
+
+    /// This claim with `project_root` attached to its provenance (ticket
+    /// 21). Consumes and returns the claim so it chains after
+    /// [`MemoryClaim::from_transcript`] or [`MemoryClaim::with_id`].
+    #[must_use]
+    pub fn with_provenance_root(mut self, project_root: impl Into<std::path::PathBuf>) -> Self {
+        self.provenance = self.provenance.with_project_root(project_root);
         self
     }
 
