@@ -40,6 +40,12 @@ use surge_persistence::intake::{IntakeError, IntakeRepo, IntakeRow, TicketState}
 use surge_persistence::runs::storage::Storage;
 use tracing::{info, warn};
 
+/// Sentinel error string returned by [`TicketRunLauncher::launch`] when the
+/// ticket was planned into the project queue instead of starting a run. The
+/// caller treats it as success-with-no-run: it logs and does not spawn a
+/// state-sync follower (there is no run handle to follow).
+pub const PLANNED_INTO_QUEUE: &str = "surge:planned-into-queue";
+
 /// Bundle returned by [`TicketRunLauncher::fetch_ticket_for_start`] —
 /// everything the launch step needs about the ticket.
 #[derive(Clone)]
@@ -95,6 +101,10 @@ pub struct TicketRunLauncher {
     worktrees_root: PathBuf,
     project_root: PathBuf,
     config: SurgeConfig,
+    /// Planner used to turn a ticket into a roadmap patch when the project
+    /// has a `.surge/roadmap.toml` (T11). `None` keeps the pre-ATO behavior:
+    /// every ticket starts its own bootstrap/template run.
+    pub planner: Option<Arc<dyn surge_orchestrator::intake_planner::RoadmapPlanner>>,
 }
 
 impl TicketRunLauncher {
@@ -117,6 +127,7 @@ impl TicketRunLauncher {
             worktrees_root,
             project_root,
             config,
+            planner: None,
         }
     }
 
@@ -202,6 +213,68 @@ impl TicketRunLauncher {
             details,
         } = start;
 
+        // Planning path (T11): a project with a `.surge/roadmap.toml` and a
+        // configured planner takes the ticket into its queue instead of
+        // starting a detached run. The planner drafts a patch, the patch is
+        // applied to the roadmap (running-milestone conflicts deferred), and
+        // the amended roadmap is written before the ticket is acknowledged.
+        if let Some(planner) = &self.planner
+            && self
+                .project_root
+                .join(surge_orchestrator::intake_planner::PROJECT_ROADMAP_RELPATH)
+                .exists()
+        {
+            match self
+                .launch_planned(
+                    planner.as_ref(),
+                    &ticket_row,
+                    &task_id,
+                    &details,
+                    &source,
+                    decided_via,
+                )
+                .await
+            {
+                Ok(outcome) => return Ok(outcome),
+                // Only the planned-into-queue sentinel is success; a real
+                // planning error falls through to the legacy detached run so
+                // the ticket still gets worked on.
+                Err(error) if error == PLANNED_INTO_QUEUE => {
+                    return Err(PLANNED_INTO_QUEUE.to_string());
+                },
+                Err(error) => {
+                    warn!(
+                        target: "intake::launcher",
+                        task_id = %task_id,
+                        %error,
+                        "planning path failed; falling back to a detached run"
+                    );
+                },
+            }
+        }
+
+        self.launch_detached(
+            &ticket_row,
+            source,
+            task_id,
+            &details,
+            decided_via,
+            policy_hint,
+        )
+        .await
+    }
+
+    /// The legacy path: provision a worktree, start a detached run, mark
+    /// the ticket `RunStarted` and post the tracker comment.
+    async fn launch_detached(
+        &self,
+        ticket_row: &IntakeRow,
+        source: Arc<dyn TaskSource>,
+        task_id: TaskId,
+        details: &TaskDetails,
+        decided_via: &str,
+        policy_hint: Option<&str>,
+    ) -> Result<LaunchOutcome, String> {
         // Provision worktree.
         let run_id = RunId::new();
         let worktree = self.worktrees_root.join(run_id.to_string());
@@ -211,9 +284,9 @@ impl TicketRunLauncher {
         // else falls back to the configured bootstrap builder.
         let graph = self
             .resolve_graph(
-                &ticket_row,
+                ticket_row,
                 &task_id,
-                &details,
+                details,
                 run_id,
                 &worktree,
                 policy_hint,
@@ -253,7 +326,7 @@ impl TicketRunLauncher {
         };
         if let Err((from, to)) = transition_result {
             return Ok(LaunchOutcome::StateRejected {
-                task_id: ticket_row.task_id,
+                task_id: ticket_row.task_id.clone(),
                 from,
                 to,
             });
@@ -284,6 +357,135 @@ impl TicketRunLauncher {
             source,
             handle,
         }))
+    }
+
+    /// Take a ticket into the project queue through the planner (T11).
+    ///
+    /// On success the roadmap file is replaced with the amended TOML, the
+    /// queue is mirrored, the ticket is marked `RunStarted` (so the tracker
+    /// flow stays the same as a launched run from the FSM's point of view),
+    /// and a tracker comment names the planned tasks. The actual run is
+    /// started by the daemon's `TaskScheduler` on its next tick — this
+    /// function never calls `start_run`.
+    async fn launch_planned(
+        &self,
+        planner: &dyn surge_orchestrator::intake_planner::RoadmapPlanner,
+        ticket_row: &IntakeRow,
+        task_id: &TaskId,
+        details: &TaskDetails,
+        source: &Arc<dyn TaskSource>,
+        decided_via: &str,
+    ) -> Result<LaunchOutcome, String> {
+        use surge_orchestrator::intake_planner::plan_into_queue;
+
+        let request = format!("{}\n\n{}", details.title, details.description.trim());
+        let plan_result = match plan_into_queue(planner, &self.project_root, &request).await {
+            Ok(plan) => plan,
+            Err(error) => {
+                // A planner that cannot run (no agent binary, model refusal)
+                // must not lose the ticket: log, and fall through to the
+                // legacy detached-run path so the work still happens.
+                tracing::warn!(
+                    target: "intake::launcher",
+                    task_id = %task_id,
+                    %error,
+                    "planning path failed; falling back to a detached run"
+                );
+                return Err(format!("planning path: {error}"));
+            },
+        };
+
+        let roadmap_path = self
+            .project_root
+            .join(surge_orchestrator::intake_planner::PROJECT_ROADMAP_RELPATH);
+        std::fs::write(&roadmap_path, &plan_result.roadmap_toml)
+            .map_err(|e| format!("write {}: {e}", roadmap_path.display()))?;
+
+        // Mirror the amended roadmap so the scheduler sees the new tasks
+        // immediately, and register the project (a no-op if it already is).
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let queue = self.storage.task_queue_store();
+        queue
+            .register_project(&self.project_root, now_ms)
+            .map_err(|e| format!("register project: {e}"))?;
+        let hash = surge_core::ContentHash::compute(plan_result.roadmap_toml.as_bytes());
+        queue
+            .mirror(
+                &self.project_root,
+                &hash,
+                &plan_result.queue_entries,
+                now_ms,
+            )
+            .map_err(|e| format!("mirror roadmap: {e}"))?;
+
+        // FSM: the ticket moved from awaiting-decision to started.
+        {
+            let conn = self
+                .storage
+                .acquire_registry_conn()
+                .map_err(|e| e.to_string())?;
+            let repo = IntakeRepo::new(&conn);
+            match repo.update_state_validated(&ticket_row.task_id, TicketState::RunStarted) {
+                Ok(()) => {
+                    repo.clear_callback_token(&ticket_row.task_id)
+                        .map_err(|e| e.to_string())?;
+                },
+                Err(IntakeError::InvalidTransition { from, to }) => {
+                    return Ok(LaunchOutcome::StateRejected {
+                        task_id: ticket_row.task_id.clone(),
+                        from,
+                        to,
+                    });
+                },
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+
+        let inserted: Vec<&str> = plan_result
+            .queue_entries
+            .iter()
+            .filter(|entry| {
+                // Only the tasks the patch inserted are new; everything else
+                // was already in the roadmap.
+                plan_result
+                    .patch
+                    .operations
+                    .iter()
+                    .any(|op| matches!(op, surge_core::roadmap_patch::RoadmapPatchOperation::AddTask { task, .. } if task.id == entry.task_id))
+            })
+            .map(|entry| entry.task_id.as_str())
+            .collect();
+        let comment = format!(
+            "Surge planned this ticket into the project roadmap{}{} — the task queue will              run it (see `surge task list`).",
+            if plan_result.deferred {
+                " (deferred past the running milestone)"
+            } else {
+                ""
+            },
+            if inserted.is_empty() {
+                String::new()
+            } else {
+                format!(" as {}", inserted.join(", "))
+            },
+        );
+        if let Err(e) = source.post_comment(task_id, &comment).await {
+            warn!(error = %e, task_id = %task_id, "tracker comment on plan failed");
+        }
+        info!(
+            target: "intake::launcher",
+            task_id = %task_id,
+            via = decided_via,
+            deferred = plan_result.deferred,
+            "ticket planned into the project queue"
+        );
+
+        // The FSM expects a `LaunchedRun`; the planner path has no run yet.
+        // Returning `StateRejected` would lie (the transition succeeded), so
+        // the outcome type gains no new variant here — instead the caller's
+        // state-sync follower is not spawned for planned tickets, and the
+        // caller already treats `StateRejected` as "do not spawn". A planned
+        // ticket is reported through the roadmap/queue, not a run handle.
+        Err(PLANNED_INTO_QUEUE.to_string())
     }
 
     /// Resolve the run graph from `policy_hint` (L2 template) or fall

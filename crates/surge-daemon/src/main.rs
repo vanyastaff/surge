@@ -151,7 +151,7 @@ fn main() -> std::process::ExitCode {
             tool_dispatcher,
             Arc::clone(&notifier),
             None, // PR 5 simplification: registry is per-run, populated when run starts (PR 6 polish)
-            Some(profile_registry),
+            Some(Arc::clone(&profile_registry)),
             EngineConfig {
                 capacity: (&config.capacity).into(),
                 // The unified catalog: user `[agents.*]` over builtins, so a
@@ -379,6 +379,8 @@ fn main() -> std::process::ExitCode {
             Arc::clone(&source_registry),
             Arc::clone(&facade),
             Arc::clone(&cockpit_engine),
+            Arc::clone(&bridge),
+            Arc::clone(&profile_registry),
             &config,
             shutdown.clone(),
         ).await;
@@ -1427,11 +1429,14 @@ async fn spawn_task_router(
     Some((source_map_for_caller, conn_for_caller))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_inbox_subsystems(
     storage: Arc<surge_persistence::runs::storage::Storage>,
     sources: Arc<std::collections::HashMap<String, Arc<dyn TaskSource>>>,
     engine: Arc<dyn surge_orchestrator::engine::facade::EngineFacade>,
     cockpit_engine: Arc<surge_orchestrator::engine::Engine>,
+    bridge: Arc<dyn surge_acp::bridge::facade::BridgeFacade>,
+    profile_registry: Arc<surge_orchestrator::profile_loader::ProfileRegistry>,
     config: &surge_core::config::SurgeConfig,
     shutdown: CancellationToken,
 ) {
@@ -1466,6 +1471,13 @@ async fn spawn_inbox_subsystems(
         project_root,
         config: config.clone(),
         poll_interval: std::time::Duration::from_millis(500),
+        planner: Some(
+            surge_orchestrator::intake_planner::feature_planner::planner_for_daemon(
+                Arc::clone(&storage),
+                Arc::clone(&bridge),
+                Arc::clone(&profile_registry),
+            ),
+        ),
     };
     let shutdown_for_consumer = shutdown.clone();
     tokio::spawn(consumer.run(shutdown_for_consumer));

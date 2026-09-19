@@ -67,6 +67,7 @@ pub mod flow_amendment;
 /// Engine-level loop hygiene for a node's agent stage — repeat-tool-call and
 /// wall-clock guards. See `.autopilot/competitive-waves/spec.md` §15.
 pub mod guard;
+pub mod intake_planner;
 pub mod profile_loader;
 pub mod project_context;
 pub mod prompt;

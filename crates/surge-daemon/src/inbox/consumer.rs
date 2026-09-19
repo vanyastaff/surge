@@ -41,6 +41,8 @@ pub struct InboxActionConsumer {
     pub config: SurgeConfig,
     /// How often the queue is polled.
     pub poll_interval: Duration,
+    /// Planner for the roadmap path (T11); `None` keeps the legacy behavior.
+    pub planner: Option<Arc<dyn surge_orchestrator::intake_planner::RoadmapPlanner>>,
 }
 
 impl InboxActionConsumer {
@@ -98,7 +100,8 @@ impl InboxActionConsumer {
     /// small-config clone. Done per `handle_start` invocation rather than
     /// stored to avoid touching upstream construction sites.
     fn launcher(&self) -> TicketRunLauncher {
-        TicketRunLauncher::new(
+        #[allow(clippy::needless_update)]
+        let mut launcher = TicketRunLauncher::new(
             Arc::clone(&self.storage),
             Arc::clone(&self.engine),
             Arc::clone(&self.bootstrap),
@@ -106,7 +109,9 @@ impl InboxActionConsumer {
             self.worktrees_root.clone(),
             self.project_root.clone(),
             self.config.clone(),
-        )
+        );
+        launcher.planner.clone_from(&self.planner);
+        launcher
     }
 
     async fn handle_start(&self, row: &InboxActionRow) -> Result<(), String> {
@@ -132,10 +137,24 @@ impl InboxActionConsumer {
             return Ok(());
         }
 
-        match launcher
+        let launch_result = launcher
             .launch(start, &row.decided_via, row.policy_hint.as_deref())
-            .await?
-        {
+            .await;
+        let launch_result = match launch_result {
+            // A ticket planned into the project queue starts no run here; the
+            // scheduler will dispatch its new tasks. Not an error, and there
+            // is no run handle to sync.
+            Err(error) if error == crate::inbox::ticket_run_launcher::PLANNED_INTO_QUEUE => {
+                info!(
+                    target: "intake::consumer",
+                    task_id = %row.task_id,
+                    "ticket planned into the project queue; no detached run started"
+                );
+                return Ok(());
+            },
+            other => other?,
+        };
+        match launch_result {
             LaunchOutcome::Launched(run) => {
                 let sync = crate::inbox::state_sync::TicketStateSync::new(
                     run.task_id.clone(),

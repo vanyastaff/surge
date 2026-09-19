@@ -224,6 +224,7 @@ fn make_consumer(
         worktrees_root: std::env::temp_dir().join("inbox_test_worktrees"),
         project_root: std::env::temp_dir(),
         config: SurgeConfig::default(),
+        planner: None,
         poll_interval: Duration::from_millis(50),
     }
 }
