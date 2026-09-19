@@ -356,9 +356,11 @@ fn summary_from_values(values: &[rusqlite::types::Value]) -> Result<RunSummary, 
         .parse()
         .map_err(|e: ulid::DecodeError| format!("invalid run id {id_str:?}: {e}"))?;
     let status_str = text(3)?;
-    let status: RunStatus = status_str.parse().map_err(|e: surge_core::ParseRunStatusError| {
-        format!("invalid run status {status_str:?}: {e}")
-    })?;
+    let status: RunStatus = status_str
+        .parse()
+        .map_err(|e: surge_core::ParseRunStatusError| {
+            format!("invalid run status {status_str:?}: {e}")
+        })?;
     let int = |index: usize| -> Result<Option<i64>, String> {
         match values.get(index) {
             Some(rusqlite::types::Value::Integer(v)) => Ok(Some(*v)),
