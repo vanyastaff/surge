@@ -38,9 +38,24 @@ pub(crate) fn surge_home_dir() -> Result<PathBuf> {
 /// classify and stale-check the same way regardless of the operator's `cwd`
 /// on audit day.
 pub(crate) fn project_root(cwd: &Path) -> PathBuf {
-    surge_git::GitManager::discover()
+    let root = surge_git::GitManager::discover()
         .map(|manager| manager.repo_path().to_path_buf())
-        .unwrap_or_else(|_| cwd.to_path_buf())
+        .unwrap_or_else(|_| cwd.to_path_buf());
+    normalize_project_root(&root)
+}
+
+/// Canonicalize a project root for use as the queue's partition key.
+///
+/// `git2`'s workdir can carry a trailing separator (`/repo/`), and a
+/// symlinked path (macOS `/tmp`) spells the same directory differently — both
+/// would produce a queue row that a later command spelling the same repo
+/// differently cannot see. Canonicalization is the only normalization that
+/// makes the key identical across `git2`, `std::env::current_dir` and a
+/// user-supplied path; when the directory cannot be canonicalized (it was
+/// deleted), the path is used as-is and the key simply does not match
+/// anything.
+pub(crate) fn normalize_project_root(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// The project's `.surge/` layer for a command run from the current

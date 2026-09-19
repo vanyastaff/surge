@@ -38,6 +38,8 @@ use crate::runs::error::StorageError;
 pub enum DispatchState {
     /// Waiting for dispatch.
     Queued,
+    /// Paused by the operator: leaves the ready set until resumed.
+    Paused,
     /// A run was minted for it; `run_id` is set.
     Dispatched,
     /// The run finished successfully (verified).
@@ -52,6 +54,7 @@ impl DispatchState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::Paused => "paused",
             Self::Dispatched => "dispatched",
             Self::Done => "done",
             Self::Failed => "failed",
@@ -66,6 +69,7 @@ impl DispatchState {
     pub fn parse(label: &str) -> Result<Self, StorageError> {
         match label {
             "queued" => Ok(Self::Queued),
+            "paused" => Ok(Self::Paused),
             "dispatched" => Ok(Self::Dispatched),
             "done" => Ok(Self::Done),
             "failed" => Ok(Self::Failed),
@@ -363,6 +367,66 @@ impl TaskQueueStore {
         Ok(affected == 1)
     }
 
+    /// Set or clear a task's pause flag.
+    ///
+    /// A paused task leaves the `queued` state, so the dispatch scan never
+    /// sees it; resuming returns it to `queued`. A `dispatched` (running)
+    /// task is refused — pause is a queue control, not a run control.
+    ///
+    /// # Errors
+    /// Returns [`StorageError`] when the registry DB cannot be written.
+    pub fn set_task_paused(
+        &self,
+        project_root: &Path,
+        task_id: &str,
+        paused: bool,
+        now_ms: i64,
+    ) -> Result<bool, StorageError> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| StorageError::Pool(e.to_string()))?;
+        let (from, to) = if paused {
+            ("queued", "paused")
+        } else {
+            ("paused", "queued")
+        };
+        let affected = conn.execute(
+            "UPDATE task_queue SET dispatch_state = ?, updated_at = ?
+             WHERE project_root = ? AND task_id = ? AND dispatch_state = ?",
+            params![to, now_ms, project_root.to_string_lossy(), task_id, from],
+        )?;
+        Ok(affected == 1)
+    }
+
+    /// Mark a queued/paused/failed task skipped (`failed`), the operator
+    /// action that stops it blocking its dependents.
+    ///
+    /// Distinct from [`Self::settle`], which only settles a *dispatched*
+    /// row: `surge task skip` must work on a task that never ran, or whose
+    /// dependency chain already failed.
+    ///
+    /// # Errors
+    /// Returns [`StorageError`] when the registry DB cannot be written.
+    pub fn skip(
+        &self,
+        project_root: &Path,
+        task_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, StorageError> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| StorageError::Pool(e.to_string()))?;
+        let affected = conn.execute(
+            "UPDATE task_queue SET dispatch_state = 'failed', updated_at = ?
+             WHERE project_root = ? AND task_id = ?
+               AND dispatch_state IN ('queued', 'paused', 'failed')",
+            params![now_ms, project_root.to_string_lossy(), task_id],
+        )?;
+        Ok(affected == 1)
+    }
+
     /// Return a `dispatched` row to `queued` and bump its attempt.
     ///
     /// Used by the reconciliation sweep for a dispatch that never produced a
@@ -573,7 +637,9 @@ fn queue_state_as_roadmap(state: DispatchState) -> surge_core::RoadmapStatus {
     match state {
         DispatchState::Done => RoadmapStatus::Completed,
         DispatchState::Failed => RoadmapStatus::Failed,
-        DispatchState::Queued | DispatchState::Dispatched => RoadmapStatus::Pending,
+        DispatchState::Queued | DispatchState::Paused | DispatchState::Dispatched => {
+            RoadmapStatus::Pending
+        },
     }
 }
 

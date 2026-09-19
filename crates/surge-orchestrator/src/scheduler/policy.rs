@@ -43,7 +43,7 @@ use surge_core::{Priority, QueueConfig, RoadmapStatus, TaskSize};
 /// `dep_states` is **derived by the caller** (a join over the queue rows and
 /// the roadmap's statuses) and never stored: storing it would freeze a
 /// snapshot of other tasks' states into this task's row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct QueueEntry {
     /// [`surge_core::RoadmapTask::id`].
     pub task_id: String,
@@ -107,7 +107,7 @@ impl EffectivePriority {
 }
 
 /// A task whose dependency made it undispatachable until a human intervenes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Blocked {
     /// The blocked task.
     pub task_id: String,
@@ -116,7 +116,7 @@ pub struct Blocked {
 }
 
 /// What the scheduler should do this tick.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct QueueDecision {
     /// Dispatchable tasks, best first. v1 dispatches `ready.first()`.
     pub ready: Vec<String>,

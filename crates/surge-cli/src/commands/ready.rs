@@ -1,26 +1,31 @@
-//! `surge ready` — the actionable task backlog from the cross-run task-ledger
-//! index (Phase 1 M5).
+//! `surge ready` — the actionable task backlog.
 //!
-//! Lists ledger tasks that still need attention (not completed/failed/skipped)
-//! across all projects. The registry index is mirrored from each run's folded
-//! ledger at completion; a run that has not completed since the index was
-//! introduced will not appear until it next syncs.
+//! Two modes:
 //!
-//! Per-project scoping is disabled until runs record their origin repo: a run's
-//! stored `project_path` is its isolated worktree, which never matches the
-//! invoking repo (a documented follow-up).
-//!
-//! Note: dependency-aware unblocking (only tasks whose `depends_on` are all
-//! satisfied) is not yet applied — the index does not carry `depends_on`, which
-//! lives in the roadmap artifact. This is a documented follow-up.
+//! 1. **Project queue mode** (ADR-0020), when the current repository has a
+//!    `.surge/roadmap.toml`: the project's queue is mirrored and evaluated
+//!    with [`surge_orchestrator::scheduler::QueuePolicy`]. The output is
+//!    dependency-aware — only tasks whose `depends_on` are all completed are
+//!    listed as ready, and tasks blocked by a failed dependency are reported
+//!    as `blocked_by_failed` with the offending id. This is the mode that
+//!    answers "what can Surge start now".
+//! 2. **Ledger index mode** (the Phase-1 fallback), when there is no project
+//!    roadmap in the current directory: the cross-run task-ledger index is
+//!    listed as before, and its rows cannot be dependency-aware because the
+//!    index does not carry `depends_on` (the roadmap artifact does).
 
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use surge_core::{RoadmapStatus, RunId};
+use surge_core::{RoadmapArtifact, RoadmapStatus, RunId};
+use surge_orchestrator::scheduler::{QueueDecision, QueueEntry, QueuePolicy};
 use surge_persistence::runs::Storage;
+use surge_persistence::task_queue::{DispatchState, TaskQueueFilter};
 
-use crate::commands::common::surge_home_dir;
+use crate::commands::common::{project_root, surge_home_dir};
 use surge_persistence::task_ledger::{TaskLedgerIndexFilter, TaskLedgerIndexRecord};
+
+/// Relative path of the project roadmap inside the repository.
+const ROADMAP_RELPATH: &str = ".surge/roadmap.toml";
 
 /// Arguments for `surge ready`.
 #[derive(Args, Debug)]
@@ -53,6 +58,108 @@ pub struct ReadyArgs {
 /// # Errors
 /// Returns an error if storage cannot be opened or the query fails.
 pub async fn run(args: ReadyArgs) -> Result<()> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let root = project_root(&cwd);
+    if root.join(ROADMAP_RELPATH).exists() {
+        return run_project_queue(&root, args).await;
+    }
+    run_ledger_index(args).await
+}
+
+/// Dependency-aware view over the current project's task queue.
+async fn run_project_queue(root: &std::path::Path, args: ReadyArgs) -> Result<()> {
+    if args.run_id.is_some() || args.status.is_some() || args.discovered {
+        // Those filters are ledger-index concepts; the project view answers
+        // "what is unblocked", so mixing them silently would be a lie.
+        anyhow::bail!(
+            "`--status`, `--run` and `--discovered` apply to the cross-run ledger view; \
+             this repository has a .surge/roadmap.toml, so `surge ready` is showing its \
+             queue instead. Run from a directory without a project roadmap to use them."
+        );
+    }
+    let roadmap_path = root.join(ROADMAP_RELPATH);
+    let text = std::fs::read_to_string(&roadmap_path)
+        .with_context(|| format!("read {}", roadmap_path.display()))?;
+    let roadmap: RoadmapArtifact =
+        toml::from_str(&text).with_context(|| format!("parse {}", roadmap_path.display()))?;
+    let hash = surge_core::ContentHash::compute(text.as_bytes());
+
+    let storage = Storage::open(&surge_home_dir()?)
+        .await
+        .context("open storage")?;
+    let queue = storage.task_queue_store();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    queue
+        .register_project(root, now_ms)
+        .context("register project")?;
+    queue
+        .mirror(root, &hash, &roadmap.to_queue_entries(), now_ms)
+        .context("mirror roadmap")?;
+
+    let rows = queue
+        .list(&TaskQueueFilter {
+            project_root: Some(root.to_path_buf()),
+            dispatch_state: Some(DispatchState::Queued),
+            ..Default::default()
+        })
+        .context("list queue")?;
+    let dep_states = queue.dependency_states(root).context("dependency states")?;
+    let config = surge_core::SurgeConfig::load_or_default().unwrap_or_default();
+    let entries: Vec<QueueEntry> = rows
+        .iter()
+        .map(|row| QueueEntry {
+            task_id: row.task_id.clone(),
+            priority: row.priority,
+            depends_on: row.depends_on.clone(),
+            dep_states: dep_states.get(&row.task_id).cloned().unwrap_or_default(),
+            size: row.size,
+            enqueued_at: row.enqueued_at,
+            skipped_dispatches: row.skipped_dispatches,
+        })
+        .collect();
+    let decision = QueuePolicy::next(&entries, &config.queue);
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&decision)?);
+    } else {
+        print_project_ready_table(&mut std::io::stdout().lock(), &decision, args.limit);
+    }
+    Ok(())
+}
+
+fn print_project_ready_table(
+    out: &mut impl std::io::Write,
+    decision: &QueueDecision,
+    limit: usize,
+) {
+    let ready: Vec<&String> = decision.ready.iter().take(limit).collect();
+    if ready.is_empty() {
+        let _ = writeln!(out, "No actionable tasks.");
+    } else {
+        let _ = writeln!(out, "{:<24} ORDER", "TASK");
+        for (index, task) in ready.iter().enumerate() {
+            let _ = writeln!(out, "{:<24} {}", task, index + 1);
+        }
+        let _ = writeln!(out, "\n{} ready task(s).", ready.len());
+    }
+    for blocked in &decision.blocked_by_failed {
+        let by = blocked
+            .by
+            .iter()
+            .map(|(id, state)| format!("{id} ({state})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "blocked_by_failed: {} — unblock with `surge task requeue <dependency>` or \
+             `surge task skip <dependency>` (blocked by {by})",
+            blocked.task_id
+        );
+    }
+}
+
+/// Cross-run ledger view (no project roadmap in the current directory).
+async fn run_ledger_index(args: ReadyArgs) -> Result<()> {
     let storage = Storage::open(&surge_home_dir()?)
         .await
         .context("open storage")?;

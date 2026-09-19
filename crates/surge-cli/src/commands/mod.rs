@@ -27,6 +27,7 @@ pub mod run;
 pub mod run_fold;
 pub mod skill;
 pub mod steer;
+pub mod task;
 pub mod telegram;
 pub mod tracker;
 

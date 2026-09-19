@@ -169,6 +169,12 @@ enum Commands {
     /// Show the full task ledger (every task) for a run or project.
     Ledger(commands::ledger::LedgerArgs),
 
+    /// Inspect and control the project task queue (ADR-0020).
+    Task {
+        #[command(subcommand)]
+        command: commands::task::TaskCommands,
+    },
+
     /// Manage the long-running surge-daemon process.
     Daemon {
         #[command(subcommand)]
@@ -587,6 +593,9 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Ledger(args) => {
             commands::ledger::run(args).await?;
+        },
+        Commands::Task { command } => {
+            commands::task::run(command).await?;
         },
 
         Commands::Daemon { command } => {
