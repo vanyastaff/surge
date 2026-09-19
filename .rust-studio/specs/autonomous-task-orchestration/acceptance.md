@@ -37,32 +37,32 @@ Spec: spec.md
 - [ ] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(classif)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T03:03:50.016Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T03:07:52.313Z exit=4 expect=unmatched
 
 - [ ] G7: a `compose` answer is validated with FlowPurpose::Task (unverified success path and same-runtime verifier rejected and retried) and on success the file exists in `.surge/flows/` with ComposedArtifactInstalled{kind: Flow} after the gate
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(task_run_select_test)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T03:03:50.341Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T03:07:52.589Z exit=94 expect=unmatched
 
 - [ ] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
   CHECK: cargo nextest run -E 'test(composed_profile)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:12.311Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T03:07:53.299Z exit=4 expect=unmatched
 
 - [x] G9: a `.surge/profiles/x-1.0.toml` resolves with Provenance::Project over home and bundled, and two repos never see each other's profiles
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(engine_project_layer_scoping) + binary(profile_registry_e2e)'
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: rs-acceptance/v1 def=3a40684cdd376700 exit=0 expect=matched out=afed59a3be6a6d4c:2714 cwd=. shell=sh at=2026-09-18T23:33:19.186Z
 
-- [ ] G10: a GitHub issue candidate starts a planning run (not a work run); after approval `.surge/roadmap.toml` contains the task at the planner's insertion point and a queue row exists
+- [x] G10: a GitHub issue candidate starts a planning run (not a work run); after approval `.surge/roadmap.toml` contains the task at the planner's insertion point and a queue row exists
   CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_intake_planning_run)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:12.582Z exit=94 expect=unmatched
+  EVIDENCE: rs-acceptance/v1 def=1f0460892586e010 exit=0 expect=matched out=3d2c6a5ad520515e:720 cwd=. shell=sh at=2026-09-19T03:07:18.228Z
 
-- [ ] G11: a patch conflicting with the running milestone is deferred to the next milestone without operator input
-  CHECK: cargo nextest run -E 'test(defer_to_next_milestone)'
-  EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:13.315Z exit=4 expect=unmatched
+- [x] G11: a patch conflicting with the running milestone is deferred to the next milestone without operator input
+  CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_intake_planning_run) and test(running_milestone_conflict_defers_without_operator_input)'
+  EXPECT: /1 test run: 1 passed/
+  EVIDENCE: rs-acceptance/v1 def=a153188b40253f6f exit=0 expect=matched out=cb8d27ff360f1373:486 cwd=. shell=sh at=2026-09-19T03:07:53.952Z
 
 - [x] G12: `surge task pause` stops new dispatch and halts the running run at its next stage boundary; resume continues
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(pause)'
@@ -74,10 +74,10 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: rs-acceptance/v1 def=17800866dba4cd43 exit=0 expect=matched out=3a6f28314c4ca5f1:471 cwd=. shell=sh at=2026-09-19T02:33:25.919Z
 
-- [ ] G14: editing `.surge/flows/bug-fix-1.0.toml` mid-run leaves the current task unaffected and the next task using it gets the edited content after the trust prompt
-  CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(edit)'
-  EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:13.769Z exit=4 expect=unmatched
+- [x] G14: editing `.surge/flows/bug-fix-1.0.toml` mid-run leaves the current task unaffected and the next task using it gets the edited content after the trust prompt
+  CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_scheduler) and test(flow_edit_mid_run_applies_to_the_next_task_after_trust)'
+  EXPECT: /1 test run: 1 passed/
+  EVIDENCE: rs-acceptance/v1 def=edd9904bfe0753b8 exit=0 expect=matched out=63b8a77a64b22395:481 cwd=. shell=sh at=2026-09-19T03:07:54.668Z
 
 - [x] G15: a fresh clone with an unpinned `.surge/` profile does not start the run, logs EscalationRequested{UntrustedProjectFile}, and `surge trust accept` pins it
   CHECK: cargo nextest run -E 'test(untrusted_project_file)'
