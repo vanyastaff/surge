@@ -11,6 +11,8 @@ Current command groups:
 ```text
 surge init              create or update project-level surge.toml
 surge project describe  create or refresh stable project.md context
+surge project start|pause|resume|status
+                        register / pause / resume the project task queue (ADR-0020)
 surge agent ...         manage configured agents
 surge registry ...      inspect built-in/remote ACP agent registry
 surge bootstrap ...     generate an adaptive flow from a free-form prompt
@@ -24,9 +26,16 @@ surge intake ...        inspect tracker-intake state (ticket index)
 surge inbox             fleet inbox: runs grouped by attention (needs input / working / done)
 surge resolve ...       answer a run blocked on human input
 surge steer ...         queue operator guidance for a working run
-surge run diff|path     review a run's worktree changes / print its path
-surge ready             list the actionable task backlog from the task ledger
+surge run diff|path|report
+                        review a run's worktree changes / path / Run Report
+surge run pause|resume|status
+                        pause a live run at its next stage boundary / resume / query
+surge ready             list unblocked tasks (project queue mode) or the ledger backlog
 surge ledger            show the full task ledger for a run or project
+surge task list|priority|pause|resume|requeue|skip
+                        inspect and control the project task queue (ADR-0020)
+surge flow list|show    inspect flow templates visible to this repository
+surge trust list|accept pin repo-resident .surge/ artefacts (load-time trust)
 surge telegram ...      configure cockpit bot token / pairings / revoke
 surge mcp ...           list/start/stop/logs configured MCP servers
 surge clean             clean up orphaned worktrees and merged branches
@@ -254,13 +263,28 @@ surge intake list --limit 200             # cap (hard ceiling 1000)
 
 `surge intake list` columns: `SOURCE | TASK | STATE | PRIO | RUN | LAST SEEN`. State is the `ticket_index` FSM value (`Seen`, `Triaged`, `InboxNotified`, `RunStarted`, `Active`, `Completed`, `Failed`, `Aborted`, `Skipped`, …). See [tracker-automation.md](tracker-automation.md) for tier semantics (L0–L3) and the label conventions that drive them.
 
-## Target Command Ideas
+## Project Task Queue (ADR-0020)
 
-From the product model in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), command names are not final while the CLI is being aligned:
+A repository with `.surge/roadmap.toml` runs through a **project queue**: the daemon dispatches one task per run, in dependency order, and merges each verified task into the project's integration branch before its dependents start. The planning truth is the roadmap file; `surge task` writes both the file and the mirrored registry row so a later mirror pass cannot undo a change.
 
 ```text
-surge task ...          create a focused task run
+surge project start     # register the repo + mirror .surge/roadmap.toml into the queue
+surge project pause     # stop dispatching new tasks (a running task finishes its stage)
+surge project resume
+surge project status
+
+surge task list         # state, priority, dependencies, derived ready set
+surge task priority <id> low|medium|high|critical
+                        # writes the roadmap and re-mirrors; applies at the next dispatch
+surge task pause <id>   # a queued task leaves the ready set; a running task's run is
+surge task resume <id>  #   halted at its next stage boundary (same pause as surge run pause)
+surge task requeue <id> # return a failed task to the queue (unblocks dependents)
+surge task skip <id>    # stop a task blocking its dependents
 ```
+
+Ordering is **dependencies → manual priority → size → age** (`[queue] aging_threshold` in `surge.toml`). A dependency in `Failed`/`Skipped` blocks its dependents and `surge ready` reports it as `blocked_by_failed`; `requeue`/`skip` resolve it. `surge ready` reads the queue when the current directory has a project roadmap and falls back to the cross-run ledger index otherwise.
+
+Per-task flows come from the **flow catalog** (`.surge/flows/` → `${SURGE_HOME}/flows/` → bundled archetypes, selected by task size or a pinned `flow = "name@MAJOR"`); every task flow must reach success through a verifier-authority node. A composed flow or profile is installed under `.surge/` only after validation, and both `surge trust list` and the dispatcher's gate read the same definition of what needs pinning (profiles, flows, skills, `mcp.toml`).
 
 ## Telegram Cockpit
 

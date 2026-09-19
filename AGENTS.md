@@ -76,13 +76,18 @@ Mechanically, a run is a `flow.toml` workflow graph executed by a long-running d
 | File | Purpose |
 |---|---|
 | `Cargo.toml` | Workspace root — lists 12 crate members and pins all dependency versions in `[workspace.dependencies]`. Member crates use `{ workspace = true }`. |
-| `crates/surge-cli/src/main.rs` | `surge` CLI binary entrypoint — clap-derived command tree (init, project, agents, specs, worktrees, engine, daemon, registry). |
+| `crates/surge-cli/src/main.rs` | `surge` CLI binary entrypoint — clap-derived command tree (init, project, task, flow, trust, agents, specs, worktrees, engine, daemon, registry). |
 | `crates/surge-cli/src/commands/init.rs` | `surge init` wizard and `--default` project onboarding. |
-| `crates/surge-cli/src/commands/project.rs` | `surge project describe` stable project-context command. |
+| `crates/surge-cli/src/commands/project.rs` | `surge project describe` stable project-context command; `start|pause|resume|status` for the project task queue (ADR-0020). |
+| `crates/surge-cli/src/commands/task.rs` | `surge task list|priority|pause|resume|requeue|skip` — queue control. |
+| `crates/surge-cli/src/commands/flow.rs` | `surge flow list|show` — flow-catalog inspection. |
+| `crates/surge-cli/src/commands/trust.rs` | `surge trust list|accept` — load-time trust for `.surge/` artefacts. |
 | `crates/surge-cli/src/commands/artifact.rs` | `surge artifact validate` contract validation surface for generated artifacts. |
 | `crates/surge-cli/src/commands/` | Other per-subcommand modules. |
 | `crates/surge-daemon/src/main.rs` | `surge-daemon` binary entrypoint. |
-| `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`. |
+| `crates/surge-daemon/src/lib.rs` | Daemon library: `admission`, `broadcast`, `intake_completion`, `lifecycle`, `pidfile`, `server`, `inbox`, `task_scheduler` (project queue dispatcher). |
+| `crates/surge-orchestrator/src/task_run/mod.rs` | Per-task flow selection (`select_task_flow`, `compose_task_flow`) and task-context binding. |
+| `crates/surge-orchestrator/src/scheduler/policy.rs` | Pure queue ordering policy: dependencies → priority → size → age. |
 | `crates/surge-core/src/lib.rs` | Leaf core types: graph, node, edge, event, profile, sandbox, validation. No I/O. |
 | `crates/surge-core/src/artifact_contract.rs` | Canonical artifact contracts and pure validators for description, roadmap, spec, ADR, story, plan, and flow artifacts. |
 | `crates/surge-orchestrator/src/project_context.rs` | Deterministic project scan, `project.md` generation, and run-level context seeding helpers. |

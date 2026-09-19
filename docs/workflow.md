@@ -62,6 +62,25 @@ flowchart TD
 
 The AFK part is explicit: the local machine keeps executing while the user only handles strategic decisions, such as approving generated plans, granting a permission, answering a HumanGate, or reviewing the final PR.
 
+## Project Task Queue (ADR-0020)
+
+The AFK loop in this page describes a single run executing one flow. A repository that carries `.surge/roadmap.toml` gets the next layer: a **project queue** the daemon drains one task at a time.
+
+```text
+.surge/roadmap.toml ──mirror──▶ registry task_queue ──dispatch──▶ one run per task
+        ▲                                                              │
+        └──────── feature-planner patch ◀── external tasks ────────────┘
+                     (GitHub / Linear / surge task add)
+```
+
+1. **Register** — `surge project start` records the repository and mirrors every roadmap task (status, priority, dependencies, size) into the registry.
+2. **Order** — the scheduler computes the ready set with `QueuePolicy`: dependencies first, then manual priority, then size, then age (`[queue] aging_threshold` ages a passed-over task one level per N dispatches, capped at `critical`).
+3. **Dispatch** — one task per free admission slot, and at most one in flight per project. Each task gets a **generated flow** from the catalog: a pinned `RoadmapTask.flow`, or the template its size selects (`linear-3` for `s`/`l`, `linear-with-review` for `m`/unknown). The flow must reach success through a verifier-authority node, or it is refused at dispatch.
+4. **Verify + merge** — the verifier owns the task's `done`; only a verified completion merges the run's branch into the project's integration branch, and the next dependent's worktree is cut from it. A merge conflict pauses the project and escalates instead of retrying.
+5. **External work** — a tracker ticket for a project with a roadmap does not start a detached run: the feature planner drafts a roadmap patch, running-milestone conflicts are deferred to the next milestone automatically, and the new tasks join the same queue.
+
+Controls land on the queue at the dispatch boundary (`surge project pause`, `surge task priority|pause|resume|requeue|skip`); a running task is never mutated except by the run-level pause, which halts it at its next stage boundary. See [cli.md](cli.md) §Project Task Queue and [ADR-0020](adr/0020-project-queue-in-registry-tasks-are-runs.md).
+
 ## Flow Model
 
 A `flow.toml` is a workflow graph. Each node is a bounded stage with its own:
