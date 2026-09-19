@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::bubble::{Bubble, BubbleVariant};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::message::{Message, MessageAlignment, MessageContent};
+use gpui_component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_component::{Icon, IconName, StyledExt};
 
 use crate::app_state::AppState;
@@ -82,7 +85,8 @@ pub struct AgentTerminalScreen {
     session: Option<surge_acp::SessionHandle>,
     /// Collapse state: key → is_collapsed.
     collapsed: HashMap<String, bool>,
-    scroll_handle: ScrollHandle,
+    /// Virtualized transcript state (jump-to-latest, follow-tail).
+    scroller: Option<Entity<MessageScrollerState>>,
 }
 
 impl AgentTerminalScreen {
@@ -107,7 +111,7 @@ impl AgentTerminalScreen {
             agent_name,
             session: None,
             collapsed: HashMap::new(),
-            scroll_handle: ScrollHandle::new(),
+            scroller: None,
         }
     }
 
@@ -181,7 +185,7 @@ impl AgentTerminalScreen {
             state.set_value("", window, cx);
         });
         self.is_sending = true;
-        self.scroll_handle.scroll_to_bottom();
+        self.follow_tail(cx);
         cx.notify();
 
         let pool = {
@@ -238,7 +242,7 @@ impl AgentTerminalScreen {
                 let _ = this.update(cx, |this: &mut Self, cx| {
                     this.finish_prompt(result);
                     this.is_sending = false;
-                    this.scroll_handle.scroll_to_bottom();
+                    this.follow_tail(cx);
                     cx.notify();
                 });
             });
@@ -308,8 +312,16 @@ impl AgentTerminalScreen {
     /// One live-stream event delivered to the timeline: fold it, scroll.
     fn on_stream_event(&mut self, event: surge_core::SurgeEvent, cx: &mut Context<Self>) {
         self.handle_surge_event(event, cx);
-        self.scroll_handle.scroll_to_bottom();
+        self.follow_tail(cx);
         cx.notify();
+    }
+
+    /// Nudge the transcript to the live edge. A no-op while the
+    /// scroller has not been built yet (first frame).
+    fn follow_tail(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = &self.scroller {
+            state.update(cx, |state, cx| state.scroll_to_end(cx));
+        }
     }
 
     /// Fold one live `SurgeEvent` into the conversation timeline.
@@ -453,16 +465,18 @@ impl AgentTerminalScreen {
     }
 
     /// Render all items sequentially.
-    fn render_all_items(&self, cx: &mut Context<Self>) -> Vec<Div> {
+    fn render_all_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         (0..self.items.len())
             .map(|i| match &self.items[i] {
-                ChatItem::UserMessage { content } => render_user_message(content),
+                ChatItem::UserMessage { content } => {
+                    render_user_message(content).into_any_element()
+                },
                 ChatItem::AgentText { content } => render_agent_text(content),
-                ChatItem::Thinking(block) => self.render_thinking(i, block, cx),
-                ChatItem::ToolCall(tc) => self.render_tool_call(tc, cx),
-                ChatItem::Plan { entries } => self.render_plan(i, entries, cx),
-                ChatItem::Permission(perm) => render_permission(perm),
-                ChatItem::System { content } => render_system(content),
+                ChatItem::Thinking(block) => self.render_thinking(i, block, cx).into_any_element(),
+                ChatItem::ToolCall(tc) => self.render_tool_call(tc, cx).into_any_element(),
+                ChatItem::Plan { entries } => self.render_plan(i, entries, cx).into_any_element(),
+                ChatItem::Permission(perm) => render_permission(perm).into_any_element(),
+                ChatItem::System { content } => render_system(content).into_any_element(),
             })
             .collect()
     }
@@ -741,20 +755,47 @@ impl Render for AgentTerminalScreen {
 
         let items = self.render_all_items(cx);
 
+        // The transcript rides gpui-component's MessageScroller: a
+        // virtualized list that follows the tail while it can, keeps the
+        // anchor when the reader scrolls up, and offers a jump-to-latest
+        // button. Its renderer is a plain closure over prebuilt rows —
+        // `AnyElement` is single-use, but a new Vec is built every frame
+        // anyway, so the scroller consumes rows for exactly this frame.
+        let scroller_state = match &self.scroller {
+            Some(state) => {
+                let count = items.len();
+                if state.read(cx).item_count() != count {
+                    state.update(cx, |state, cx| state.reset(count, cx));
+                }
+                state.clone()
+            },
+            None => {
+                let state = cx.new(|cx| MessageScrollerState::new(items.len(), cx));
+                self.scroller = Some(state.clone());
+                state
+            },
+        };
+        let mut rows: Vec<Option<AnyElement>> = items.into_iter().map(Some).collect();
+        let rows_len = rows.len();
+
         div()
             .size_full()
             .v_flex()
             .child(self.render_header())
             .child(
                 div()
-                    .id("terminal-messages")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
                     .overflow_x_hidden()
-                    .track_scroll(&self.scroll_handle)
                     .bg(theme::background())
-                    .children(items),
+                    .child(
+                        MessageScroller::new("terminal-messages", scroller_state, move |index, _w, _cx| {
+                            rows[index.min(rows_len.saturating_sub(1))]
+                                .take()
+                                .unwrap_or_else(|| div().into_any_element())
+                        })
+                        .with_bottom_fade(theme::background()),
+                    ),
             )
             .child(
                 div()
@@ -823,73 +864,58 @@ impl Render for AgentTerminalScreen {
 
 // ── Stateless render functions ──────────────────────────────────────
 
-fn render_user_message(content: &str) -> Div {
-    div()
-        .w_full()
-        .px(px(12.0))
-        .py(px(6.0))
-        .bg(theme::primary().opacity(0.05))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .mb(px(2.0))
-                .child(
-                    Icon::new(IconName::User)
-                        .size_3()
-                        .text_color(theme::primary()),
-                )
+/// A user prompt: trailing-aligned secondary bubble with a "You" label.
+fn render_user_message(content: &str) -> impl IntoElement {
+    Message::new().alignment(MessageAlignment::End).content(
+        MessageContent::new().bubble(
+            Bubble::new()
+                .with_variant(BubbleVariant::Tinted)
                 .child(
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
+                        .mb(px(2.0))
                         .text_color(theme::primary())
                         .child("You"),
-                ),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme::text_primary())
-                .child(content.to_string()),
-        )
-}
-
-fn render_agent_text(content: &str) -> Div {
-    if content.is_empty() {
-        return div();
-    }
-    div()
-        .w_full()
-        .overflow_x_hidden()
-        .px(px(12.0))
-        .py(px(6.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .mb(px(2.0))
-                .child(
-                    Icon::new(IconName::Bot)
-                        .size_3()
-                        .text_color(theme::success()),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::success())
-                        .child("Agent"),
+                        .text_sm()
+                        .text_color(theme::text_primary())
+                        .child(content.to_string()),
                 ),
+        ),
+    )
+}
+
+/// An agent text response: leading-aligned outline bubble with markdown.
+fn render_agent_text(content: &str) -> AnyElement {
+    if content.is_empty() {
+        return div().into_any_element();
+    }
+    Message::new()
+        .content(
+            MessageContent::new().bubble(
+                Bubble::new()
+                    .with_variant(BubbleVariant::Outline)
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .mb(px(2.0))
+                            .text_color(theme::success())
+                            .child("Agent"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .overflow_x_hidden()
+                            .text_color(theme::text_primary())
+                            .child(markdown::render_markdown(content)),
+                    ),
+            ),
         )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme::text_primary())
-                .child(markdown::render_markdown(content)),
-        )
+        .into_any_element()
 }
 
 fn render_permission(perm: &PermissionBlock) -> Div {
