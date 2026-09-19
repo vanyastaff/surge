@@ -703,3 +703,101 @@ fn trust_gate_covers_composition_not_planning_files() {
     assert!(!is_trust_gated_path(".surge/roadmap.toml"));
     assert!(!is_trust_gated_path(".surge/memory/note.md"));
 }
+
+/// G14: a project flow edited between two tasks affects only the next task,
+/// and the trust gate makes the operator accept the change first.
+///
+/// The scenario uses the production path throughout: the project template
+/// shadows the bundled one (FlowCatalog precedence), the edit changes the
+/// project file's hash (TrustStore), and the dispatch refuses until
+/// `trust accept` pins the new content.
+#[tokio::test(flavor = "multi_thread")]
+async fn flow_edit_mid_run_applies_to_the_next_task_after_trust() {
+    use surge_core::artifact_contract::RelPath;
+    use surge_persistence::trust_store::{TrustStore, repo_id};
+
+    // Two independent M tasks so both select `linear-with-review`.
+    let mut milestone = RoadmapMilestone::new("m1", "Flows");
+    let mut t1 = RoadmapTask::new("t1", "First");
+    t1.size = Some(TaskSize::M);
+    let mut t2 = RoadmapTask::new("t2", "Second");
+    t2.size = Some(TaskSize::M);
+    milestone.tasks.push(t1);
+    milestone.tasks.push(t2);
+    let (repo_dir, repo) = init_repo_with_roadmap(&RoadmapArtifact::new(vec![milestone]));
+
+    // A project copy of the bundled template, marked with a description the
+    // stub facade can observe on the dispatched graph.
+    let mut project_flow = surge_core::BundledFlows::by_name_latest("linear-with-review")
+        .expect("bundled")
+        .graph;
+    project_flow.metadata.description = Some("project v1".into());
+    let flows_dir = repo.join(".surge/flows");
+    std::fs::create_dir_all(&flows_dir).unwrap();
+    let flow_path = flows_dir.join("linear-with-review-1.0.toml");
+    std::fs::write(&flow_path, toml::to_string(&project_flow).unwrap()).unwrap();
+
+    let surge_home = repo_dir.path().join("surge-home");
+    let storage = Storage::open(&surge_home).await.unwrap();
+    let facade = Arc::new(StubFacade::new(storage.clone()));
+    facade
+        .commits
+        .lock()
+        .unwrap()
+        .insert("t1".into(), ("t1.txt".into(), "from t1".into()));
+    facade
+        .commits
+        .lock()
+        .unwrap()
+        .insert("t2".into(), ("t2.txt".into(), "from t2".into()));
+    let clock = Arc::new(MockClock::new(NOW));
+    storage
+        .task_queue_store()
+        .register_project(&repo, NOW)
+        .unwrap();
+    let mut sched = scheduler(storage.clone(), facade.clone(), clock);
+    sched.surge_home = Some(surge_home.clone());
+
+    // Pin the project flow so the first dispatch is allowed.
+    let rel = RelPath::new(".surge/flows/linear-with-review-1.0.toml").unwrap();
+    let mut trust = TrustStore::open(&surge_home, &repo_id(None, &repo)).unwrap();
+    trust.accept_file(&repo, &rel, NOW).unwrap();
+
+    // Dispatch 1: the project template wins over the bundled one.
+    sched.tick().await.unwrap();
+    {
+        let graphs = facade.graphs.lock().unwrap();
+        assert_eq!(
+            graphs[0].metadata.description.as_deref(),
+            Some("project v1"),
+            "the project's flow must shadow the bundled template"
+        );
+    }
+
+    // Edit the flow while t1 is still in flight.
+    project_flow.metadata.description = Some("project v2".into());
+    std::fs::write(&flow_path, toml::to_string(&project_flow).unwrap()).unwrap();
+
+    // Tick 2: t1 settles and merges, but t2 does not dispatch — the edited
+    // flow is not trusted yet.
+    sched.tick().await.unwrap();
+    assert_eq!(
+        facade.task_ids(),
+        vec!["t1"],
+        "the edited flow must not dispatch before it is trusted"
+    );
+
+    // Accept the edit and tick again: t2 runs on the edited template.
+    trust.accept_file(&repo, &rel, NOW + 1).unwrap();
+    sched.tick().await.unwrap();
+    assert_eq!(facade.task_ids(), vec!["t1", "t2"]);
+    {
+        let graphs = facade.graphs.lock().unwrap();
+        assert_eq!(
+            graphs[1].metadata.description.as_deref(),
+            Some("project v2"),
+            "the next task must get the edited flow content"
+        );
+    }
+    let _ = repo_dir;
+}
