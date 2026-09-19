@@ -331,7 +331,6 @@ impl Engine {
     ) -> Result<RunHandle, EngineError> {
         use crate::engine::handle::RunHandle;
         use crate::engine::run_task::{RunTaskParams, execute};
-        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
         use tokio::sync::broadcast;
 
         tracing::info!(
@@ -352,10 +351,7 @@ impl Engine {
         // agent-runtime identity (e.g. `ValidationErrorKind::SameRuntimeVerification`,
         // `ProfileNotFound`) — see `profile_loader::resolver`'s `ReferenceResolver`
         // impl. No registry keeps today's resolver-free behavior unchanged.
-        match profile_registry.as_ref() {
-            Some(registry) => validate_for_m6_with_resolver(&graph, registry.as_ref())?,
-            None => validate_for_m6(&graph)?,
-        }
+        self.validate_start_graph(&graph, profile_registry.as_ref())?;
 
         run_config.memory_store_path =
             self.resolve_memory_store_path(run_config.memory_store_path.take());
@@ -504,6 +500,28 @@ impl Engine {
     /// # Errors
     /// [`EngineError::ProjectLayer`] when the project lane cannot be read or
     /// carries a broken prompt template.
+    /// Validate the graph a run is about to start.
+    ///
+    /// With a profile registry the resolver composes it with the archetype
+    /// registry, so both `ProfileNotFound` and `TemplateNotFound` are live
+    /// (ticket 22). With no profile registry the resolver-free path runs
+    /// unchanged.
+    fn validate_start_graph(
+        &self,
+        graph: &Graph,
+        profile_registry: Option<&Arc<ProfileRegistry>>,
+    ) -> Result<(), EngineError> {
+        use crate::engine::validate::{validate_for_m6, validate_for_m6_with_resolver};
+        let Some(registry) = profile_registry else {
+            return validate_for_m6(graph);
+        };
+        let resolver = crate::profile_loader::EngineReferenceResolver::new(
+            Arc::clone(registry),
+            self.config.archetype_registry.clone(),
+        );
+        validate_for_m6_with_resolver(graph, &resolver)
+    }
+
     fn registry_for_run(
         &self,
         layer: Option<&surge_core::ProjectLayer>,

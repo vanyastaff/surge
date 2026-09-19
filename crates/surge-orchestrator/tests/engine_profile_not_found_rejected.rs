@@ -167,3 +167,81 @@ async fn unresolvable_profile_rejects_before_any_run_or_bridge_state_exists() {
          before any run/worktree state exists"
     );
 }
+
+/// Ticket 22: `ValidationErrorKind::TemplateNotFound` reaches `start_run`
+/// once `EngineConfig::archetype_registry` is wired. Before this, the
+/// resolver had no template store and answered permissively, so the rule
+/// existed but could never fire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unresolvable_template_origin_rejects_at_start_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path()).await.unwrap();
+    let mock = Arc::new(fixtures::mock_bridge::MockBridge::new());
+    let bridge: Arc<dyn BridgeFacade> = mock.clone();
+    let dispatcher =
+        Arc::new(WorktreeToolDispatcher::new(dir.path().to_path_buf())) as Arc<dyn ToolDispatcher>;
+
+    let profile_registry = Arc::new(ProfileRegistry::new(DiskProfileSet::empty()));
+    // An empty archetype registry: every template name is unknown.
+    let archetypes = Arc::new(
+        surge_orchestrator::archetype_registry::ArchetypeRegistry::from_dir(std::path::Path::new(
+            "definitely-missing-dir-for-tests",
+        ))
+        .expect("empty registry"),
+    );
+    let engine = Engine::new(
+        bridge,
+        storage.clone(),
+        dispatcher,
+        EngineConfig {
+            profile_registry: Some(profile_registry),
+            archetype_registry: Some(archetypes),
+            ..EngineConfig::default()
+        },
+    );
+
+    let mut graph = graph_with_unresolvable_profile();
+    // Make the profile resolvable so the failure is the template, not the
+    // profile: `implementer@1.0` is bundled.
+    if let Some(node) = graph
+        .nodes
+        .get_mut(&NodeKey::try_from("implement").unwrap())
+        && let NodeConfig::Agent(cfg) = &mut node.config
+    {
+        cfg.profile = ProfileKey::try_from("implementer@1.0").unwrap();
+    }
+    graph.metadata.template_origin =
+        Some(surge_core::keys::TemplateKey::try_from("definitely-not-a-template").unwrap());
+
+    let run_id = RunId::new();
+    let result = engine
+        .start_run(
+            run_id,
+            graph,
+            dir.path().to_path_buf(),
+            EngineRunConfig::default(),
+        )
+        .await;
+
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!(
+            "start_run should reject a graph naming an unresolvable template_origin but \
+             returned Ok — ValidationErrorKind::TemplateNotFound did not reach the \
+             production start_run path"
+        ),
+    };
+    match &err {
+        EngineError::GraphInvalid(msg) => {
+            assert!(
+                msg.contains("definitely-not-a-template"),
+                "error should name the unresolvable template, got: {msg}"
+            );
+        },
+        other => panic!("expected GraphInvalid, got {other:?}"),
+    }
+    assert!(
+        mock.recorded_calls.lock().await.is_empty(),
+        "a graph-invalid run must never touch the bridge"
+    );
+}

@@ -260,6 +260,16 @@ async fn run_command(
                 agent_registry: Some(std::sync::Arc::new(surge_acp::Registry::for_run(
                     &app_config,
                 ))),
+                // Templates resolve for `TemplateNotFound` (ticket 22).
+                archetype_registry: Some(std::sync::Arc::new(
+                    surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
+                        .unwrap_or_else(|_| {
+                            surge_orchestrator::archetype_registry::ArchetypeRegistry::from_dir(
+                                std::path::Path::new("definitely-missing"),
+                            )
+                            .expect("empty registry")
+                        }),
+                )),
                 ..EngineConfig::default()
             },
         ));

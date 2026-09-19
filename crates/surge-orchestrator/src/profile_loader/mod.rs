@@ -37,3 +37,4 @@ pub use catalog::render_profile_catalog;
 pub use disk::DiskProfileSet;
 pub use paths::{profiles_dir, surge_home};
 pub use registry::ProfileRegistry;
+pub use resolver::EngineReferenceResolver;

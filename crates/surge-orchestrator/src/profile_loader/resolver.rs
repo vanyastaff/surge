@@ -7,18 +7,65 @@
 //! workspace was test-only — see `engine/validate.rs`'s
 //! `validate_for_m6_with_resolver` doc comment for that history.
 //!
-//! `template_exists` / `named_agent_exists` answer permissively (`true`):
-//! `ProfileRegistry` has no template or named-agent registry to consult, so
-//! answering anything else would be inventing a rejection this registry
-//! cannot back (ticket 22 tracks building those registries). This adapter
-//! revives exactly two of the resolver-backed rules —
-//! `ValidationErrorKind::ProfileNotFound` and
-//! `ValidationErrorKind::SameRuntimeVerification` — not all three.
+//! `template_exists` answers permissively (`true`): `ProfileRegistry` has no
+//! template registry to consult. The engine composes it with the real
+//! `ArchetypeRegistry` when it validates a run (`EngineConfig::
+//! archetype_registry` + the resolver in `engine::validate`), which is what
+//! makes `ValidationErrorKind::TemplateNotFound` live (ticket 22). This
+//! adapter itself revives `ValidationErrorKind::ProfileNotFound` and
+//! `ValidationErrorKind::SameRuntimeVerification`.
+
+use std::sync::Arc;
 
 use surge_core::ReferenceResolver;
 use surge_core::parse_key_ref;
 
 use super::ProfileRegistry;
+use crate::archetype_registry::ArchetypeRegistry;
+
+/// The production resolver: profiles from [`ProfileRegistry`], templates from
+/// [`ArchetypeRegistry`].
+///
+/// `ProfileRegistry` alone cannot answer `template_exists` (it has no
+/// template store), which left `ValidationErrorKind::TemplateNotFound`
+/// inert (ticket 22). This composite is what the engine wires when both
+/// registries are configured; either missing half degrades to the
+/// permissive answer it gave before the composite existed.
+pub struct EngineReferenceResolver {
+    profiles: Arc<ProfileRegistry>,
+    archetypes: Option<Arc<ArchetypeRegistry>>,
+}
+
+impl EngineReferenceResolver {
+    /// Compose the two registries. `archetypes` may be `None`, in which case
+    /// template references stay permissive.
+    #[must_use]
+    pub fn new(profiles: Arc<ProfileRegistry>, archetypes: Option<Arc<ArchetypeRegistry>>) -> Self {
+        Self {
+            profiles,
+            archetypes,
+        }
+    }
+}
+
+impl ReferenceResolver for EngineReferenceResolver {
+    fn profile_exists(&self, name: &str) -> bool {
+        self.profiles.profile_exists(name)
+    }
+
+    fn template_exists(&self, name: &str) -> bool {
+        match &self.archetypes {
+            Some(archetypes) => archetypes.resolve(name).is_ok(),
+            // No template registry wired: permissive, exactly as
+            // `ProfileRegistry`'s own impl answers.
+            None => true,
+        }
+    }
+
+    fn profile_runtime(&self, name: &str) -> Option<String> {
+        self.profiles.profile_runtime(name)
+    }
+}
 
 impl ReferenceResolver for ProfileRegistry {
     fn profile_exists(&self, name: &str) -> bool {
@@ -32,11 +79,6 @@ impl ReferenceResolver for ProfileRegistry {
         // No template registry backs `ProfileRegistry` (ticket 22) —
         // permissive is the honest answer, not a lie a real check papers
         // over.
-        true
-    }
-
-    fn named_agent_exists(&self, _id: &str) -> bool {
-        // Same reasoning as `template_exists`: no named-agent registry yet.
         true
     }
 
@@ -338,6 +380,43 @@ system = "test fixture prompt"
         let tmp = TempDir::new().unwrap();
         let reg = registry_with_disk(tmp.path());
         assert!(reg.template_exists("anything"));
-        assert!(reg.named_agent_exists("anything"));
+    }
+
+    /// Ticket 22: the composite resolver makes `TemplateNotFound` live.
+    /// A graph naming an unregistered `template_origin` fails through the
+    /// real `ArchetypeRegistry`; a bundled name passes.
+    #[test]
+    fn composite_resolver_answers_template_exists_for_real_archetypes() {
+        let tmp = TempDir::new().unwrap();
+        let profiles = registry_with_disk(tmp.path());
+        let resolver = super::EngineReferenceResolver::new(
+            std::sync::Arc::new(profiles),
+            Some(std::sync::Arc::new(
+                crate::archetype_registry::ArchetypeRegistry::from_dir(std::path::Path::new(
+                    "definitely-missing-dir-for-tests",
+                ))
+                .expect("empty registry"),
+            )),
+        );
+        use surge_core::ReferenceResolver;
+        assert!(
+            resolver.template_exists("bug-fix"),
+            "bundled templates resolve"
+        );
+        assert!(
+            !resolver.template_exists("no-such-template"),
+            "an unknown template must be reported, not waved through"
+        );
+    }
+
+    /// With no archetype registry wired the answer stays permissive, exactly
+    /// as `ProfileRegistry`'s own impl gave before the composite existed.
+    #[test]
+    fn composite_resolver_without_archetypes_is_permissive() {
+        let tmp = TempDir::new().unwrap();
+        let profiles = registry_with_disk(tmp.path());
+        let resolver = super::EngineReferenceResolver::new(std::sync::Arc::new(profiles), None);
+        use surge_core::ReferenceResolver;
+        assert!(resolver.template_exists("anything"));
     }
 }

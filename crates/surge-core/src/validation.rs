@@ -103,11 +103,6 @@ pub enum ValidationErrorKind {
     TemplateNotFound {
         template: String,
     },
-    /// Named-agent reference unknown to the resolver.
-    NamedAgentNotFound {
-        node: NodeKey,
-        agent_id: String,
-    },
     /// An `Agent` node's `sandbox_override` declared `mode = Custom` but every
     /// allowlist was empty — there is no signal for what the sandbox should
     /// permit.
@@ -293,7 +288,6 @@ impl ValidationErrorKind {
             | Self::McpCommandPathUnsafe { .. }
             | Self::ProfileNotFound { .. }
             | Self::TemplateNotFound { .. }
-            | Self::NamedAgentNotFound { .. }
             | Self::SandboxCustomEmpty { .. }
             | Self::SandboxWritableRootEscape { .. }
             | Self::SandboxNetworkPatternInvalid { .. }
@@ -314,8 +308,6 @@ pub trait ReferenceResolver {
     fn profile_exists(&self, name: &str) -> bool;
     /// Returns true when a pipeline template with this name is registered.
     fn template_exists(&self, name: &str) -> bool;
-    /// Returns true when the named-agent registry contains this id.
-    fn named_agent_exists(&self, id: &str) -> bool;
 
     /// Returns the resolved profile's **canonical** agent runtime id — e.g.
     /// `"claude-acp"`, `"codex-acp"` — the identity
@@ -349,9 +341,6 @@ impl ReferenceResolver for NoOpResolver {
         true
     }
     fn template_exists(&self, _: &str) -> bool {
-        true
-    }
-    fn named_agent_exists(&self, _: &str) -> bool {
         true
     }
 }
@@ -495,9 +484,6 @@ mod resolver_tests {
         fn template_exists(&self, _: &str) -> bool {
             true
         }
-        fn named_agent_exists(&self, _: &str) -> bool {
-            true
-        }
     }
 
     fn graph_with_agent(profile: &str) -> Graph {
@@ -601,7 +587,6 @@ mod resolver_tests {
                 &e.kind,
                 ValidationErrorKind::ProfileNotFound { .. }
                     | ValidationErrorKind::TemplateNotFound { .. }
-                    | ValidationErrorKind::NamedAgentNotFound { .. }
             )
         });
         assert!(
@@ -3213,9 +3198,6 @@ mod w5_tests {
             true
         }
         fn template_exists(&self, _: &str) -> bool {
-            true
-        }
-        fn named_agent_exists(&self, _: &str) -> bool {
             true
         }
         fn profile_runtime(&self, name: &str) -> Option<String> {

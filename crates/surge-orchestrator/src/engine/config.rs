@@ -27,6 +27,11 @@ pub struct EngineConfig {
     /// [`EngineRunConfig::project_layer`] — so the project lane is never
     /// shared across runs.
     pub profile_registry: Option<Arc<ProfileRegistry>>,
+    /// Archetype/template registry used by graph validation to resolve
+    /// `[metadata] template_origin` (`ValidationErrorKind::TemplateNotFound`,
+    /// ticket 22). `None` keeps template checks permissive, exactly as
+    /// before this field existed.
+    pub archetype_registry: Option<Arc<crate::archetype_registry::ArchetypeRegistry>>,
     /// Capacity-aware dispatch policy every run's pre-dispatch check and
     /// post-429 park decision runs against (Task 12 M3, R37/R37.1;
     /// acceptance criterion B).
@@ -80,6 +85,7 @@ impl Default for EngineConfig {
         Self {
             snapshot_policy: SnapshotPolicy::StageBoundary,
             profile_registry: None,
+            archetype_registry: None,
             capacity: surge_core::capacity::CapacityPolicy::from(
                 &surge_core::capacity_config::CapacityConfig::default(),
             ),

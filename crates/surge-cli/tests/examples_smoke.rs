@@ -37,9 +37,6 @@ impl ReferenceResolver for ArchetypeResolver {
     fn template_exists(&self, _: &str) -> bool {
         true
     }
-    fn named_agent_exists(&self, _: &str) -> bool {
-        true
-    }
 }
 
 fn assert_archetype_clean(name: &str) {

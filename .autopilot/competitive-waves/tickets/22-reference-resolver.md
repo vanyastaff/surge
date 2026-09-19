@@ -2,7 +2,7 @@
 
 **Требования:** нет — найдено при подключении валидации (таск 18), вне брифа
 **Волна:** после прогона
-**Status:** deferred — **решение о запуске принимает пользователь**
+**Status:** done — закрыт вместе с ATO-волной. Замер выполнен первым, как требовал тикет: у `NamedAgentNotFound` **нет ни одного эмиттера** и в системе нет понятия «named agent» — вариант удалён вместе с методом трейта. `TemplateNotFound` оживлён: `EngineConfig::archetype_registry` + композитный `EngineReferenceResolver` (профили + архетипы) в `Engine::start_run`; тест `unresolvable_template_origin_rejects_at_start_run` мутационно-доказуем. `ProfileNotFound` был жив и раньше.
 
 ## Что не работает
 

@@ -158,6 +158,17 @@ fn main() -> std::process::ExitCode {
                 // daemon-dispatched run resolves a custom provider exactly
                 // like a builtin one.
                 agent_registry: Some(Arc::new(surge_acp::Registry::for_run(&config))),
+                // Templates resolve for `TemplateNotFound` (ticket 22).
+                archetype_registry: Some(Arc::new(
+                    surge_orchestrator::archetype_registry::ArchetypeRegistry::load()
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(error = %e, "ArchetypeRegistry::load failed; using empty registry");
+                            surge_orchestrator::archetype_registry::ArchetypeRegistry::from_dir(
+                                std::path::Path::new("definitely-missing"),
+                            )
+                            .expect("empty registry")
+                        }),
+                )),
                 ..EngineConfig::default()
             },
         ));

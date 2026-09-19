@@ -28,9 +28,6 @@ impl ReferenceResolver for StaticResolver {
     fn template_exists(&self, _: &str) -> bool {
         true
     }
-    fn named_agent_exists(&self, _: &str) -> bool {
-        true
-    }
 }
 
 #[test]

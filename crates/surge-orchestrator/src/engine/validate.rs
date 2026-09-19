@@ -522,7 +522,7 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 }
 
 /// `validate_for_m6` plus the `surge_core::ReferenceResolver` lookups for
-/// profiles, templates, named agents, and same-runtime verification.
+/// profiles, templates, and same-runtime verification.
 ///
 /// As of Ticket 18, `validate_for_m6` itself already runs the full
 /// `surge_core::validate` structural rule set (see that function's docs),
@@ -532,11 +532,12 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 /// `Engine::start_run` calls this instead of the resolver-free
 /// `validate_for_m6` whenever `self.config.profile_registry` is `Some`;
 /// `ProfileRegistry`'s `ReferenceResolver` impl (`profile_loader::resolver`)
-/// is the production adapter passed in. That adapter actually answers two
-/// of the four resolver-backed rules — `ProfileNotFound` and
-/// `SameRuntimeVerification` (Warning) — while `TemplateNotFound` /
-/// `NamedAgentNotFound` stay permissively silent: `ProfileRegistry` has no
-/// template or named-agent registry to check against (ticket 22).
+/// is the production adapter passed in. That adapter answers
+/// `ProfileNotFound` and `SameRuntimeVerification`; `TemplateNotFound` is
+/// answered by the resolver the caller composes with
+/// `EngineConfig::archetype_registry` (ticket 22). `NamedAgentNotFound` no
+/// longer exists: no code path ever emitted it and the workspace has no
+/// named-agent concept to back it.
 ///
 /// # Errors
 /// - All `validate_for_m6` errors (M6-specific checks plus the full
@@ -545,8 +546,8 @@ fn find_forward_only_cycle(edges: &[Edge]) -> Option<Vec<NodeKey>> {
 ///   reported by `surge_core::validate_with_resolver` — in practice, since
 ///   `validate_for_m6` above already ran the structural rules and returned
 ///   early on any failure, only the resolver-specific diagnostics
-///   (`ProfileNotFound`, `TemplateNotFound`, `NamedAgentNotFound`) can still
-///   surface here as errors. Tagged with a `[ref]` prefix (`[structural]`
+///   (`ProfileNotFound`, `TemplateNotFound`) can still surface here as
+///   errors. Tagged with a `[ref]` prefix (`[structural]`
 ///   for the defensive fallback arm, which today cannot be reached for the
 ///   reason above) so callers can distinguish them at a glance.
 /// - `Severity::Warning` findings the resolver pass adds beyond what
@@ -572,8 +573,8 @@ pub fn validate_for_m6_with_resolver(
     // step) purely to fold the resolver-specific findings into one Vec —
     // so `findings` here is a superset: the identical structural findings
     // already logged above, plus whatever the resolver-backed rules
-    // (`ProfileNotFound`/`TemplateNotFound`/`NamedAgentNotFound`/
-    // `SameRuntimeVerification`) newly contribute. Only that added subset
+    // (`ProfileNotFound`/`TemplateNotFound`/`SameRuntimeVerification`)
+    // newly contribute. Only that added subset
     // is inspected below; the rest is skipped so nothing is logged twice
     // under the same target.
     let (Ok(findings) | Err(findings)) = surge_core::validate_with_resolver(graph, resolver);
@@ -583,7 +584,6 @@ pub fn validate_for_m6_with_resolver(
             finding.kind,
             surge_core::ValidationErrorKind::ProfileNotFound { .. }
                 | surge_core::ValidationErrorKind::TemplateNotFound { .. }
-                | surge_core::ValidationErrorKind::NamedAgentNotFound { .. }
                 | surge_core::ValidationErrorKind::SameRuntimeVerification { .. }
         );
         if !resolver_added {
@@ -594,8 +594,7 @@ pub fn validate_for_m6_with_resolver(
         }
         let label = match finding.kind {
             surge_core::ValidationErrorKind::ProfileNotFound { .. }
-            | surge_core::ValidationErrorKind::TemplateNotFound { .. }
-            | surge_core::ValidationErrorKind::NamedAgentNotFound { .. } => "ref",
+            | surge_core::ValidationErrorKind::TemplateNotFound { .. } => "ref",
             // SameRuntimeVerification (W5) — resolver-backed but
             // Warning-only, so it never reaches `error_messages` below;
             // this label only ever surfaces in the `tracing::warn!` call.
@@ -1606,9 +1605,6 @@ mod tests {
             true
         }
         fn template_exists(&self, _name: &str) -> bool {
-            true
-        }
-        fn named_agent_exists(&self, _id: &str) -> bool {
             true
         }
         fn profile_runtime(&self, name: &str) -> Option<String> {
