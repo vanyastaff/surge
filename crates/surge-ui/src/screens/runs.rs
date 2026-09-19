@@ -25,6 +25,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::shimmer::ShimmerText;
 use surge_core::id::RunId;
 use surge_orchestrator::engine::facade::EngineFacade as _;
 use surge_orchestrator::engine::handle::RunStatus;
@@ -338,6 +339,9 @@ pub struct RunsScreen {
     artifact_view: Option<(String, String)>,
     /// Artifact loads in flight.
     artifact_loading: Option<String>,
+    /// Replay scrubber: number of replayed rows to show. `None` = the
+    /// whole timeline (live runs always show the whole timeline).
+    scrub: Option<usize>,
 }
 
 impl RunsScreen {
@@ -380,6 +384,7 @@ impl RunsScreen {
             artifacts_loading: false,
             artifact_view: None,
             artifact_loading: None,
+            scrub: None,
         }
     }
 
@@ -391,6 +396,7 @@ impl RunsScreen {
             self.selected = Some(run_id);
             self.artifact_view = None;
             self.artifacts.clear();
+            self.scrub = None;
         }
         cx.notify();
     }
@@ -1047,6 +1053,100 @@ impl RunsScreen {
             )
     }
 
+    /// Scrubber for a replayed timeline: a segmented slider over the
+    /// log (10 stops, left = run start, right = latest). Live runs have
+    /// no scrubber — the timeline is already "now".
+    fn render_scrubber(&self, row: &RunRow, cx: &mut Context<Self>) -> Div {
+        let total = row.event_rows.len();
+        let is_replayed = self
+            .selected
+            .is_some_and(|id| self.replays.contains_key(&id))
+            && !row.live_stream;
+        if !(is_replayed && total > 0) {
+            return div();
+        }
+
+        const SEGMENTS: usize = 10;
+        let shown = self.scrub.unwrap_or(total);
+        let mut track = div().flex_1().h(px(8.0)).h_flex().gap(px(2.0));
+        for i in 0..SEGMENTS {
+            // The last segment is always the full timeline.
+            let seg_shown = if i + 1 == SEGMENTS {
+                total
+            } else {
+                (((total as f32) * ((i as f32 + 1.0) / SEGMENTS as f32)).ceil() as usize).max(1)
+            };
+            let filled = shown >= seg_shown;
+            let scrub_to = seg_shown;
+            track = track.child(
+                div()
+                    .id(SharedString::from(format!("runs-scrub-{i}")))
+                    .flex_1()
+                    .h_full()
+                    .rounded_sm()
+                    .bg(if filled {
+                        theme::accent()
+                    } else {
+                        theme::panel_deep()
+                    })
+                    .border_1()
+                    .border_color(if filled {
+                        theme::accent().opacity(0.4)
+                    } else {
+                        theme::hairline()
+                    })
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.6)))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.scrub = Some(scrub_to);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        div()
+            .flex_shrink_0()
+            .h_flex()
+            .gap(px(10.0))
+            .items_center()
+            .px(px(20.0))
+            .py(px(6.0))
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme::text_muted())
+                    .child("REPLAY"),
+            )
+            .child(track)
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::text_muted())
+                    .child(format!("{shown} / {total}")),
+            )
+            .when(self.scrub.is_some(), |el| {
+                el.child(
+                    div()
+                        .id("runs-scrub-live")
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::accent())
+                        .cursor_pointer()
+                        .px(px(8.0))
+                        .py(px(2.0))
+                        .rounded_md()
+                        .hover(|s: StyleRefinement| s.bg(theme::panel_raised()))
+                        .on_click(cx.listener(|this, _e, _w, cx| {
+                            this.scrub = None;
+                            cx.notify();
+                        }))
+                        .child("→ live tail"),
+                )
+            })
+    }
+
     fn render_event_log(&self, row: &RunRow, live: bool) -> Div {
         let mut body = div()
             .flex_1()
@@ -1057,7 +1157,19 @@ impl RunsScreen {
             .px(px(20.0))
             .pb(px(12.0));
 
-        if row.event_rows.is_empty() {
+        // A scrubbed replay shows only the first `shown` rows — the
+        // timeline rewinds to where the operator stopped the scrubber.
+        let rows_shown = if !row.live_stream && !self.replays.is_empty() {
+            self.scrub
+        } else {
+            None
+        };
+        let visible_rows: &[EventRow] = match rows_shown {
+            Some(n) => &row.event_rows[..row.event_rows.len().min(n)],
+            None => &row.event_rows,
+        };
+
+        if visible_rows.is_empty() {
             let text = if row.live_stream {
                 "Stream attached — events will appear as the run emits them \
                  (no history replay before attach)."
@@ -1075,7 +1187,7 @@ impl RunsScreen {
                     .child(text),
             );
         } else {
-            for e in &row.event_rows {
+            for e in visible_rows {
                 body = body.child(
                     div()
                         .h_flex()
@@ -1200,7 +1312,10 @@ impl RunsScreen {
             );
 
         if self.artifacts_loading && self.artifacts.is_empty() {
-            pane = pane.child(ui::meta("loading…"));
+            pane = pane.child(
+                ShimmerText::new("loading artifacts…")
+                    .duration(std::time::Duration::from_millis(1800)),
+            );
             return pane;
         }
         if self.artifacts.is_empty() {
@@ -1381,6 +1496,7 @@ impl Render for RunsScreen {
                 .child(self.render_header(row, live, cx))
                 .child(self.render_kpis(row))
                 .child(self.render_pipeline(row, live))
+                .child(self.render_scrubber(row, cx))
                 .child(self.render_artifacts(row, cx))
                 .children(self.render_artifact_view())
                 .child(self.render_event_log(row, live));

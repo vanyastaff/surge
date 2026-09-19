@@ -4,6 +4,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
+use gpui_component::{Icon, IconName};
 
 use crate::project::{RecentProject, RecentProjects};
 use crate::theme;
@@ -48,9 +52,24 @@ impl WelcomeScreen {
             .items_center()
             .gap_2()
             .pb_8()
-            .child(div().text_color(theme::primary()).child("⚡".to_string()))
             .child(
                 div()
+                    .w(px(44.0))
+                    .h(px(44.0))
+                    .rounded_xl()
+                    .bg(theme::accent().opacity(0.14))
+                    .border_1()
+                    .border_color(theme::accent().opacity(0.35))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(22.0))
+                    .text_color(theme::accent())
+                    .child("⚡".to_string()),
+            )
+            .child(
+                div()
+                    .text_size(px(20.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::text_primary())
                     .child("Surge".to_string()),
@@ -229,7 +248,7 @@ impl Render for WelcomeScreen {
             .child(
                 div()
                     .v_flex()
-                    .w(px(600.0))
+                    .w(px(640.0))
                     .gap_4()
                     // Logo
                     .child(self.render_logo())
@@ -253,13 +272,26 @@ impl Render for WelcomeScreen {
                             .overflow_hidden()
                             .when(project_items.is_empty(), |el: Div| {
                                 el.child(
-                                    div()
-                                        .p_8()
-                                        .text_center()
-                                        .text_color(theme::text_muted())
-                                        .child(
-                                        "No recent projects. Open or create one to get started."
-                                            .to_string(),
+                                    div().p_4().child(
+                                        Empty::new().header(
+                                            EmptyHeader::new()
+                                                .media(
+                                                    EmptyMedia::new()
+                                                        .with_variant(EmptyMediaVariant::Icon)
+                                                        .child(
+                                                            Icon::new(IconName::FolderOpen)
+                                                                .size_6(),
+                                                        ),
+                                                )
+                                                .title(EmptyTitle::new().child("No projects yet"))
+                                                .description(
+                                                    EmptyDescription::new().child(
+                                                        "Open an existing repository or init a \
+                                                         new one — Surge sets up surge.toml and \
+                                                         connects your agents.",
+                                                    ),
+                                                ),
+                                        ),
                                     ),
                                 )
                             })

@@ -20,6 +20,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
+use gpui_component::shimmer::ShimmerText;
 use std::path::PathBuf;
 use surge_core::TaskState;
 use surge_orchestrator::engine::handle::RunStatus;
@@ -371,7 +372,10 @@ impl BacklogScreen {
                 ))
             })
             .when(self.loading, |el| {
-                el.child(ui::pill("loading…", theme::accent(), theme::panel_raised()))
+                el.child(
+                    ShimmerText::new("loading queue…")
+                        .duration(std::time::Duration::from_millis(1800)),
+                )
             })
             .when(self.load_error.is_some(), |el| {
                 el.child(ui::pill(

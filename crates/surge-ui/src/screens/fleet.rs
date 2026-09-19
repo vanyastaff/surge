@@ -337,7 +337,10 @@ impl FleetScreen {
                 theme::hairline()
             })
             .cursor_pointer()
-            .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.6)))
+            .hover(|s: StyleRefinement| {
+                s.border_color(theme::accent().opacity(0.6))
+                    .shadow_lg()
+            })
             .on_click(cx.listener(move |_this, _e, _w, cx| {
                 if is_review || is_failed {
                     cx.emit(FleetAction::OpenGate(id_for_click.clone()));
@@ -434,25 +437,44 @@ impl FleetScreen {
         let live = node.live;
         let primary_label = if live { "Open run" } else { "Approve & merge" };
 
-        // primary button
+        // primary button — real action only when the node is live. A
+        // sample node has no engine behind it: "Approve & merge" would
+        // fake a decision the engine never sees.
         let id_primary = id.clone();
-        let primary = div()
-            .id("fleet-inspector-primary")
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(36.0))
-            .rounded_lg()
-            .bg(theme::accent())
-            .text_color(theme::on_accent())
-            .text_size(px(12.0))
-            .font_weight(FontWeight::BOLD)
-            .cursor_pointer()
-            .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
-            .on_click(cx.listener(move |_this, _e, _w, cx| {
-                cx.emit(FleetAction::OpenGate(id_primary.clone()));
-            }))
-            .child(primary_label);
+        let primary = if live {
+            div()
+                .id("fleet-inspector-primary")
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(36.0))
+                .rounded_lg()
+                .bg(theme::accent())
+                .text_color(theme::on_accent())
+                .text_size(px(12.0))
+                .font_weight(FontWeight::BOLD)
+                .cursor_pointer()
+                .hover(|s: StyleRefinement| s.bg(theme::accent().opacity(0.85)))
+                .on_click(cx.listener(move |_this, _e, _w, cx| {
+                    cx.emit(FleetAction::OpenGate(id_primary.clone()));
+                }))
+                .child(primary_label)
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(36.0))
+                .rounded_lg()
+                .border_1()
+                .border_color(theme::hairline_strong())
+                .text_color(theme::text_muted())
+                .text_size(px(11.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("sample — nothing to approve")
+                .into_any_element()
+        };
 
         ui::panel()
             .absolute()
@@ -477,7 +499,7 @@ impl FleetScreen {
                             .child(if live {
                                 "NEEDS ATTENTION"
                             } else {
-                                "REVIEW GATE"
+                                "DESIGN PREVIEW"
                             }),
                     )
                     .child(div().flex_1())
@@ -498,7 +520,7 @@ impl FleetScreen {
                     .child(if live {
                         "This run ended without merging. Open its cockpit to inspect what happened."
                     } else {
-                        "Branch ready to merge into main. Awaiting your call."
+                        "Branch ready to merge into main. Start the daemon for live gates."
                     }),
             )
             .child(primary)
