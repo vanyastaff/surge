@@ -118,11 +118,30 @@ pub fn get_run(
     }
 }
 
-/// List runs matching the filter, sorted by started_at DESC.
-pub fn list_runs(
+/// A listing plus the rows that could not be decoded.
+///
+/// Ticket 20: a single unreadable row (a malformed id, an unknown status)
+/// used to fail the whole `list_runs` via `collect::<Result<Vec<_>>>()?`,
+/// which takes `plan_recovery` down with it — a corrupt row would stop
+/// crash recovery. The row is now skipped, logged with its key, and counted
+/// here, so the loss is visible rather than silent.
+#[derive(Debug, Clone, Default)]
+pub struct RunListing {
+    /// Rows that decoded.
+    pub runs: Vec<RunSummary>,
+    /// Rows that were skipped, with the raw `id` column when readable.
+    pub skipped: Vec<String>,
+}
+
+/// List runs matching the filter, sorted by started_at DESC, reporting rows
+/// that could not be decoded instead of failing the listing.
+///
+/// # Errors
+/// [`StorageError`] when the query itself fails; a bad row is not an error.
+pub fn list_runs_reporting(
     pool: &Pool<SqliteConnectionManager>,
     filter: &RunFilter,
-) -> Result<Vec<RunSummary>, StorageError> {
+) -> Result<RunListing, StorageError> {
     let conn = pool.get().map_err(|e| StorageError::Pool(e.to_string()))?;
 
     let mut sql = String::from(
@@ -144,13 +163,65 @@ pub fn list_runs(
         binds.push(Box::new(lim as i64));
     }
 
+    // The map closure cannot return a non-`rusqlite::Error` error type, so
+    // the decode is done outside it: the row is collected raw, and the
+    // fallible conversion happens in the loop where the skip is recorded.
     let mut stmt = conn.prepare(&sql)?;
     let bind_refs: Vec<&dyn rusqlite::ToSql> =
         binds.iter().map(std::convert::AsRef::as_ref).collect();
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(bind_refs), row_to_summary)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+    let rows = stmt.query_map(rusqlite::params_from_iter(bind_refs), |row| {
+        (0..8)
+            .map(|i| row.get::<_, rusqlite::types::Value>(i))
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })?;
+    let mut listing = RunListing::default();
+    for row in rows {
+        let values = row?;
+        match summary_from_values(&values) {
+            Ok(summary) => listing.runs.push(summary),
+            Err(error) => {
+                let id = values
+                    .first()
+                    .and_then(|v| match v {
+                        rusqlite::types::Value::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "?".into());
+                tracing::warn!(
+                    target: "runs::registry",
+                    run_id = %id,
+                    %error,
+                    "skipping an unreadable run row; the rest of the listing is served"
+                );
+                listing.skipped.push(id);
+            },
+        }
+    }
+    if !listing.skipped.is_empty() {
+        tracing::warn!(
+            target: "runs::registry",
+            skipped = listing.skipped.len(),
+            served = listing.runs.len(),
+            "run listing served with {} unreadable row(s): {}",
+            listing.skipped.len(),
+            listing.skipped.join(", ")
+        );
+    }
+    Ok(listing)
+}
+
+/// List runs matching the filter, sorted by started_at DESC.
+///
+/// Convenience wrapper over [`list_runs_reporting`] for callers that do not
+/// need the skipped-row detail; unreadable rows are still logged there.
+///
+/// # Errors
+/// [`StorageError`] when the query itself fails.
+pub fn list_runs(
+    pool: &Pool<SqliteConnectionManager>,
+    filter: &RunFilter,
+) -> Result<Vec<RunSummary>, StorageError> {
+    Ok(list_runs_reporting(pool, filter)?.runs)
 }
 
 /// Delete a run row.
@@ -267,6 +338,47 @@ pub fn due_parked(
         .query_map(params![RunStatus::Parked.as_str(), now_ms], row_to_summary)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Decode one `runs` row from raw SQLite values, outside a `Row` borrow.
+///
+/// Separate from [`row_to_summary`] so the listing loop can skip an
+/// unreadable row while the connection is free for the next one (ticket 20).
+fn summary_from_values(values: &[rusqlite::types::Value]) -> Result<RunSummary, String> {
+    let text = |index: usize| -> Result<String, String> {
+        match values.get(index) {
+            Some(rusqlite::types::Value::Text(s)) => Ok(s.clone()),
+            other => Err(format!("column {index} is not text: {other:?}")),
+        }
+    };
+    let id_str = text(0)?;
+    let id: RunId = id_str
+        .parse()
+        .map_err(|e: ulid::DecodeError| format!("invalid run id {id_str:?}: {e}"))?;
+    let status_str = text(3)?;
+    let status: RunStatus = status_str.parse().map_err(|e: surge_core::ParseRunStatusError| {
+        format!("invalid run status {status_str:?}: {e}")
+    })?;
+    let int = |index: usize| -> Result<Option<i64>, String> {
+        match values.get(index) {
+            Some(rusqlite::types::Value::Integer(v)) => Ok(Some(*v)),
+            Some(rusqlite::types::Value::Null) | None => Ok(None),
+            other => Err(format!("column {index} is not an integer: {other:?}")),
+        }
+    };
+    Ok(RunSummary {
+        id,
+        project_path: PathBuf::from(text(1)?),
+        pipeline_template: match values.get(2) {
+            Some(rusqlite::types::Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+        status,
+        started_at_ms: int(4)?.unwrap_or_default(),
+        ended_at_ms: int(5)?,
+        daemon_pid: int(6)?.map(|v| v as i32),
+        wake_at_ms: int(7)?,
+    })
 }
 
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
@@ -512,5 +624,43 @@ mod tests {
             vec![earlier.id, later.id],
             "earliest wake_at must come first"
         );
+    }
+
+    /// Ticket 20: one unreadable row must not take the whole listing (and
+    /// `plan_recovery`, which starts from it) down. The bad row is skipped,
+    /// named, and counted.
+    #[test]
+    fn one_unreadable_row_does_not_fail_the_listing() {
+        let tmp = TempDir::new().unwrap();
+        let clock = MockClock::new(1_700_000_000_000);
+        let pool = open_registry_pool(tmp.path(), &clock).unwrap();
+
+        let good = fixture_summary(RunId::new(), Some(1));
+        insert_run(&pool, &good).unwrap();
+
+        // A malformed id is reachable today without any new status: the
+        // column is free text and only parsed on read.
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO runs (id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid, wake_at)
+             VALUES ('not-a-ulid', '/tmp/proj', NULL, 'running', 1, NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let listing = list_runs_reporting(&pool, &RunFilter::default()).unwrap();
+        assert_eq!(listing.runs.len(), 1, "the readable row is served");
+        assert_eq!(listing.runs[0].id, good.id);
+        assert_eq!(
+            listing.skipped,
+            vec!["not-a-ulid".to_string()],
+            "the skipped row is named, not silently dropped"
+        );
+
+        // The convenience wrapper keeps the old signature and serves the
+        // same readable set.
+        let runs = list_runs(&pool, &RunFilter::default()).unwrap();
+        assert_eq!(runs.len(), 1);
     }
 }

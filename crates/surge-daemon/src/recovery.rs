@@ -246,6 +246,11 @@ pub struct RecoveryDecision {
 pub struct RecoveryReport {
     /// Per-run decisions, in registry-listing order.
     pub decisions: Vec<RecoveryDecision>,
+    /// Registry rows that could not be decoded and were therefore never
+    /// considered (ticket 20). Non-empty means the scan is incomplete by
+    /// exactly this many rows — surfaced so "no decisions" is never
+    /// mistaken for "nothing to recover".
+    pub unreadable_rows: Vec<String>,
 }
 
 impl RecoveryReport {
@@ -288,7 +293,8 @@ pub async fn plan_recovery(
     // `Bootstrapping` row whose recorded daemon pid is no longer alive is
     // flipped to `Crashed` in the registry. After a daemon crash that is
     // exactly the population we want to recover.
-    let runs = storage.list_runs(RunFilter::default()).await?;
+    let listing = storage.list_runs_reporting(RunFilter::default()).await?;
+    let runs = listing.runs;
 
     // Task 12 M3 review, BLOCKING #2: the single source of "is a parked
     // run due" — `registry::due_parked`'s own query (`status = 'parked'
@@ -380,7 +386,10 @@ pub async fn plan_recovery(
         });
     }
 
-    Ok(RecoveryReport { decisions })
+    Ok(RecoveryReport {
+        decisions,
+        unreadable_rows: listing.skipped,
+    })
 }
 
 /// Side effects recovery performs. Abstracted behind a trait so the
@@ -858,6 +867,7 @@ mod execute_recovery_tests {
 
     fn full_report() -> RecoveryReport {
         RecoveryReport {
+            unreadable_rows: Vec::new(),
             decisions: vec![
                 decision(RecoveryAction::Resume),
                 decision(RecoveryAction::ReconcileTerminal { failed: true }),
@@ -920,6 +930,7 @@ mod execute_recovery_tests {
             ..Default::default()
         };
         let report = RecoveryReport {
+            unreadable_rows: Vec::new(),
             decisions: vec![
                 decision(RecoveryAction::Resume),
                 decision(RecoveryAction::MarkFailedWorktreeLost),

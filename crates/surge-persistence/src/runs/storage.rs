@@ -372,27 +372,43 @@ impl Storage {
         clippy::unused_async_trait_impl,
         reason = "async is load-bearing laziness here, not trait-impl ceremony: `ready()`/`async move` alternatives both run the body at a different time than `.await`"
     )]
+    pub async fn list_runs_reporting(
+        &self,
+        filter: RunFilter,
+    ) -> Result<registry::RunListing, crate::runs::error::StorageError> {
+        let mut listing = registry::list_runs_reporting(&self.registry_pool, &filter)?;
+        for r in &mut listing.runs {
+            self.reconcile_stale_pid(r);
+        }
+        Ok(listing)
+    }
+
+    /// The stale-pid reconciliation both listing methods apply to one row.
+    fn reconcile_stale_pid(&self, r: &mut RunSummary) {
+        if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping)
+            && let Some(pid) = r.daemon_pid
+            && !self.process_probe.is_alive(pid)
+        {
+            r.status = RunStatus::Crashed;
+            r.ended_at_ms = Some(self.clock.now_ms());
+            let _ = registry::update_status(
+                &self.registry_pool,
+                &r.id,
+                RunStatus::Crashed,
+                r.ended_at_ms,
+            );
+        }
+    }
+
+    /// List runs matching the filter, with stale-pid detection.
+    ///
+    /// The convenience form of [`Self::list_runs_reporting`]: unreadable
+    /// rows are skipped and logged there, and the readable set is returned.
     pub async fn list_runs(
         &self,
         filter: RunFilter,
     ) -> Result<Vec<RunSummary>, crate::runs::error::StorageError> {
-        let mut runs = registry::list_runs(&self.registry_pool, &filter)?;
-        for r in &mut runs {
-            if matches!(r.status, RunStatus::Running | RunStatus::Bootstrapping)
-                && let Some(pid) = r.daemon_pid
-                && !self.process_probe.is_alive(pid)
-            {
-                r.status = RunStatus::Crashed;
-                r.ended_at_ms = Some(self.clock.now_ms());
-                let _ = registry::update_status(
-                    &self.registry_pool,
-                    &r.id,
-                    RunStatus::Crashed,
-                    r.ended_at_ms,
-                );
-            }
-        }
-        Ok(runs)
+        Ok(self.list_runs_reporting(filter).await?.runs)
     }
 
     /// Snapshot of currently active runs (status Running or Bootstrapping).
@@ -420,20 +436,36 @@ impl Storage {
         // SQLite errors propagate via the `From<rusqlite::Error>` impl on
         // `StorageError`, surfacing as `StorageError::Sqlite`. Pool-acquire
         // failures above keep the `StorageError::Pool` mapping.
+        //
+        // The status values are **bound**, never written as SQL literals:
+        // `RunStatus::as_str()` produces lower-case (`"running"`,
+        // `"bootstrapping"`) and SQLite compares strings case-sensitively, so
+        // the previous `status IN ('Running', 'Bootstrapping')` literals made
+        // this query return nothing, always (ticket 20).
+        let active_statuses: Vec<&str> = [
+            surge_core::RunStatus::Running,
+            surge_core::RunStatus::Bootstrapping,
+        ]
+        .iter()
+        .map(|status| status.as_str())
+        .collect();
         let mut stmt = conn.prepare(
             "SELECT id, status, started_at FROM runs
-             WHERE status IN ('Running', 'Bootstrapping')
+             WHERE status IN (?1, ?2)
              ORDER BY started_at DESC
-             LIMIT ?1",
+             LIMIT ?3",
         )?;
-        let rows = stmt.query_map([limit as i64], |row| {
-            Ok(ActiveRunRow {
-                run_id: row.get::<_, String>(0)?,
-                task_id: None,
-                status: row.get::<_, String>(1)?,
-                started_at_ms: row.get::<_, i64>(2)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![active_statuses[0], active_statuses[1], limit as i64],
+            |row| {
+                Ok(ActiveRunRow {
+                    run_id: row.get::<_, String>(0)?,
+                    task_id: None,
+                    status: row.get::<_, String>(1)?,
+                    started_at_ms: row.get::<_, i64>(2)?,
+                })
+            },
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -735,13 +767,17 @@ mod snapshot_active_runs_tests {
         let dir = tempdir().unwrap();
         let storage = Storage::open(dir.path()).await.unwrap();
 
-        // Insert one Running, one Bootstrapping, one Completed.
+        // Insert one Running, one Bootstrapping, one Completed — with the
+        // exact spelling `RunStatus::as_str()` writes to disk (lower-case).
+        // The previous fixture inserted `"Running"`, which SQLite's
+        // case-sensitive `=` never matches, so the test passed while the
+        // query was broken (ticket 20).
         let pool = storage.registry_pool.clone();
         let conn = pool.get().unwrap();
         for (id, status) in [
-            ("01HXX0000000000000000RUN1", "Running"),
-            ("01HXX0000000000000000BTS1", "Bootstrapping"),
-            ("01HXX0000000000000000DONE", "Completed"),
+            ("01HXX0000000000000000RUN1", "running"),
+            ("01HXX0000000000000000BTS1", "bootstrapping"),
+            ("01HXX0000000000000000DONE", "completed"),
         ] {
             conn.execute(
                 "INSERT INTO runs (id, project_path, pipeline_template, status, started_at, ended_at, daemon_pid)
@@ -760,7 +796,8 @@ mod snapshot_active_runs_tests {
         assert_eq!(snap.len(), 2, "only Running + Bootstrapping should appear");
         assert!(
             snap.iter()
-                .all(|r| matches!(r.status.as_str(), "Running" | "Bootstrapping"))
+                .all(|r| matches!(r.status.as_str(), "running" | "bootstrapping")),
+            "the query must match the lower-case on-disk spelling: {snap:?}"
         );
     }
 }
