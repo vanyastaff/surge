@@ -34,20 +34,20 @@ Spec: spec.md
   EXPECT: /[1-9][0-9]* passed/
   EVIDENCE: rs-acceptance/v1 def=3dd17e80f73aef0b exit=0 expect=matched out=9411a5f60a8f780e:2386 cwd=. shell=sh at=2026-09-18T23:57:31.942Z
 
-- [ ] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
-  CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(classif)'
-  EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T03:07:52.313Z exit=4 expect=unmatched
+- [x] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
+  CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_scheduler) and test(dispatch_uses_the_size_selected_template)'
+  EXPECT: /1 test run: 1 passed/
+  EVIDENCE: rs-acceptance/v1 def=718c521113f10120 exit=0 expect=matched out=ef53eedbeb9f5e31:467 cwd=. shell=sh at=2026-09-19T03:21:27.788Z
 
-- [ ] G7: a `compose` answer is validated with FlowPurpose::Task (unverified success path and same-runtime verifier rejected and retried) and on success the file exists in `.surge/flows/` with ComposedArtifactInstalled{kind: Flow} after the gate
-  CHECK: cargo nextest run -p surge-orchestrator -E 'binary(task_run_select_test)'
+- [x] G7: a `compose` answer is validated with FlowPurpose::Task (unverified success path and same-runtime verifier rejected and retried) and on success the file exists in `.surge/flows/` with ComposedArtifactInstalled{kind: Flow} after the gate
+  CHECK: cargo nextest run -p surge-orchestrator -E '(test(compose_installs_validated_flow_and_pins_it) + test(compose_that_fails_validation_is_not_written)) + binary(engine_compose_record_test)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T03:07:52.589Z exit=94 expect=unmatched
+  EVIDENCE: rs-acceptance/v1 def=fec5a585aeaf30e8 exit=0 expect=matched out=de5d96f208ac5afb:1567 cwd=. shell=sh at=2026-09-19T03:23:23.393Z
 
 - [ ] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
-  CHECK: cargo nextest run -E 'test(composed_profile)'
-  EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T03:07:53.299Z exit=4 expect=unmatched
+  CHECK: cargo nextest run -p surge-orchestrator -E '(test(profile_claiming_authority_is_refused) + test(profile_shadowing_a_bundled_name_is_rejected))'
+  EXPECT: /2 tests? run: 2 passed/
+  EVIDENCE: failed at=2026-09-19T03:23:27.810Z exit=0 expect=unmatched
 
 - [x] G9: a `.surge/profiles/x-1.0.toml` resolves with Provenance::Project over home and bundled, and two repos never see each other's profiles
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(engine_project_layer_scoping) + binary(profile_registry_e2e)'
