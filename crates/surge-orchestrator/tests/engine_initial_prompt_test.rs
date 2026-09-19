@@ -53,6 +53,8 @@ fn minimal_terminal_graph() -> Graph {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: end,
         nodes,

@@ -172,6 +172,8 @@ fn graph(name: &str, start: &str, nodes: Vec<Node>, edges: Vec<Edge>) -> Graph {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: NodeKey::try_from(start).unwrap(),
         nodes: node_map,

@@ -516,6 +516,8 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 author: None,
                 archetype: None,
+                when_to_use: None,
+                autonomy: None,
             },
             start: loop_key.clone(),
             nodes,

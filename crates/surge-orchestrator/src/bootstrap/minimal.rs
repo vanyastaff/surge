@@ -202,6 +202,8 @@ fn build_single_agent_graph(prompt_text: &str) -> Result<Graph, String> {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: agent_key,
         nodes,

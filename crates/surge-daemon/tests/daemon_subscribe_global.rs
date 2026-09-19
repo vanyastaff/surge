@@ -59,6 +59,8 @@ fn make_minimal_graph() -> surge_core::graph::Graph {
             created_at: chrono::Utc::now(),
             author: None,
             archetype: None,
+            when_to_use: None,
+            autonomy: None,
         },
         start: NodeKey::try_from("placeholder").unwrap(),
         nodes: BTreeMap::new(),

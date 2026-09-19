@@ -207,6 +207,8 @@ fn resume_after_partial_progress() {
                 created_at: chrono::Utc::now(),
                 author: None,
                 archetype: None,
+                when_to_use: None,
+                autonomy: None,
             },
             start: s1,
             nodes,
