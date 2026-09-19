@@ -100,7 +100,7 @@ pub const MIN_SUPPORTED_VERSION: u32 = 1;
 /// says so); and `run_event.rs` now pins the variant-tag set to this
 /// constant in a snapshot test, so the next variant added without touching
 /// this line fails a test instead of a review.
-pub const MAX_SUPPORTED_VERSION: u32 = 9;
+pub const MAX_SUPPORTED_VERSION: u32 = 10;
 
 /// Single schema-version translator.
 pub trait Migration: Send + Sync {
@@ -297,6 +297,27 @@ impl Migration for IdentityV9 {
     }
 }
 
+/// Identity migration for v10 — the schema bump that introduced
+/// [`crate::run_event::EscalationCause::UntrustedProjectFile`] (load-time
+/// trust for repo-resident `.surge/` composition, ADR-0020 T13). The wire
+/// shape is unchanged (same JSON-encoded [`VersionedEventPayload`]
+/// wrapper); old `EscalationRequested` payloads decode cleanly because they
+/// never carry this cause tag — same reason as v8.
+#[derive(Debug, Default, Copy, Clone)]
+pub struct IdentityV10;
+
+impl Migration for IdentityV10 {
+    fn version(&self) -> u32 {
+        10
+    }
+
+    fn migrate(&self, bytes: &[u8]) -> Result<EventPayload, SurgeError> {
+        let wrapper: VersionedEventPayload = serde_json::from_slice(bytes)
+            .map_err(|e| SurgeError::Spec(format!("v10 payload decode failed: {e}")))?;
+        Ok(wrapper.payload)
+    }
+}
+
 /// Ordered registry of [`Migration`]s indexed by their declared version.
 pub struct MigrationChain {
     migrations: Vec<Box<dyn Migration>>,
@@ -305,7 +326,7 @@ pub struct MigrationChain {
 impl MigrationChain {
     /// Build the default chain. Contains [`IdentityV1`], [`IdentityV2`],
     /// [`IdentityV3`], [`IdentityV4`], [`IdentityV5`], [`IdentityV6`],
-    /// [`IdentityV7`], [`IdentityV8`], and [`IdentityV9`].
+    /// [`IdentityV7`], [`IdentityV8`], [`IdentityV9`], and [`IdentityV10`].
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -319,6 +340,7 @@ impl MigrationChain {
                 Box::new(IdentityV7),
                 Box::new(IdentityV8),
                 Box::new(IdentityV9),
+                Box::new(IdentityV10),
             ],
         }
     }
@@ -427,7 +449,7 @@ mod tests {
             elapsed_seconds: 30,
         });
         assert_eq!(wrapper.schema_version, MAX_SUPPORTED_VERSION);
-        assert_eq!(wrapper.schema_version, 9);
+        assert_eq!(wrapper.schema_version, 10);
     }
 
     #[test]
@@ -435,7 +457,7 @@ mod tests {
         let err = migrate_payload(99, b"{}").unwrap_err();
         assert!(matches!(
             err,
-            SurgeError::SchemaTooNew { found: 99, max: 9 }
+            SurgeError::SchemaTooNew { found: 99, max: 10 }
         ));
     }
 
@@ -495,6 +517,23 @@ mod tests {
     }
 
     #[test]
+    fn v10_untrusted_project_file_escalation_round_trips() {
+        use crate::run_event::EscalationCause;
+
+        let payload = EventPayload::EscalationRequested {
+            stage: None,
+            reason: "project file .surge/profiles/x-1.0.toml is not pinned".into(),
+            cause: EscalationCause::UntrustedProjectFile,
+        };
+        let bytes = serde_json::to_vec(&VersionedEventPayload::new(payload.clone())).unwrap();
+        let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
+        assert_eq!(decoded, payload);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["schema_version"], 10);
+        assert_eq!(json["payload"]["cause"], "untrusted_project_file");
+    }
+
+    #[test]
     fn v9_composed_artifact_installed_round_trips() {
         use crate::artifact_contract::{ArtifactKind, RelPath};
         use crate::content_hash::ContentHash;
@@ -509,9 +548,12 @@ mod tests {
         let decoded = migrate_payload(MAX_SUPPORTED_VERSION, &bytes).unwrap();
         assert_eq!(decoded, payload);
 
-        // Wire shape other crates (and the trust store) will see.
+        // Wire shape other crates (and the trust store) will see. `new()`
+        // stamps the current schema version, so this test pins the payload
+        // shape, not the number — the number is pinned in
+        // `writer_emits_max_supported_version`.
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["schema_version"], 9);
+        assert_eq!(json["schema_version"], MAX_SUPPORTED_VERSION);
         assert_eq!(json["payload"]["type"], "composed_artifact_installed");
         assert_eq!(json["payload"]["kind"], "flow");
         assert_eq!(json["payload"]["path"], ".surge/flows/bug-fix-1.0.toml");

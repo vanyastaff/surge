@@ -78,6 +78,9 @@ pub mod task_ledger;
 /// Registry-level project task queue (ADR-0020).
 pub mod task_queue;
 
+/// Load-time trust for repo-resident `.surge/` composition (ADR-0020, T13).
+pub mod trust_store;
+
 /// SQLite-based storage implementation
 pub mod store;
 

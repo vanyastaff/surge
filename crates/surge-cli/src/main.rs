@@ -219,6 +219,12 @@ enum Commands {
         command: commands::skill::SkillCommands,
     },
 
+    /// Inspect and pin repo-resident `.surge/` files (load-time trust).
+    Trust {
+        #[command(subcommand)]
+        command: commands::trust::TrustCommands,
+    },
+
     /// Configure and inspect the Telegram cockpit (bot token, pairings).
     Telegram {
         #[command(subcommand)]
@@ -632,6 +638,9 @@ async fn run_command(command: Commands) -> Result<()> {
 
         Commands::Telegram { command } => {
             commands::telegram::run(command).await?;
+        },
+        Commands::Trust { command } => {
+            commands::trust::run(command).await?;
         },
 
         Commands::Init(args) => {

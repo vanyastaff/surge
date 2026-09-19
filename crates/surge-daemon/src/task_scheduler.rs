@@ -95,6 +95,10 @@ pub struct TaskScheduler {
     pub template: TaskTemplateSource,
     /// Notifier for merge-conflict and stale-dispatch escalations.
     pub notifier: Arc<dyn NotifyDeliverer>,
+    /// Registry home used to locate the trust store
+    /// (`<surge_home>/trust/<repo-id>.toml`). `None` skips the trust gate —
+    /// tests that do not exercise it, and a daemon built without a home.
+    pub surge_home: Option<PathBuf>,
     /// How many distinct agent runtimes this daemon can dispatch to.
     ///
     /// Drives the same-runtime verification rule: one runtime warns, two or
@@ -116,6 +120,102 @@ pub struct TaskScheduler {
 pub enum TaskTemplateSource {
     /// Run the bundled `single-task` template for every task.
     BundledSingleTask,
+}
+
+/// Check every `.surge/` file in `project_root` against the trust store.
+///
+/// Returns `Ok(())` when every file is pinned at its current content, and
+/// `Err(summary)` naming the first few untrusted paths otherwise. A missing
+/// store file means nothing is pinned yet, which is exactly the fresh-clone
+/// case the gate exists for.
+fn trust_check(surge_home: &Path, project_root: &Path) -> Result<(), String> {
+    use surge_persistence::trust_store::{TrustStore, repo_id};
+
+    let id = repo_id(remote_url(project_root).as_deref(), project_root);
+    let store = TrustStore::open(surge_home, &id).map_err(|e| e.to_string())?;
+    let mut untrusted = Vec::new();
+    let mut files = Vec::new();
+    collect_project_files(&project_root.join(".surge"), project_root, &mut files);
+    for path in files {
+        // Only *executable composition* is gated: profiles, flows, skills
+        // and the project MCP list. `roadmap.toml` and other planning data
+        // are read as data, not bound into a prompt — the spec names
+        // "profile / flow / skill / `[[mcp_servers]]`", and gating planning
+        // files would prompt on every roadmap edit.
+        if !surge_persistence::trust_store::is_trust_gated_path(path.as_str()) {
+            continue;
+        }
+        let absolute = path.join_onto(project_root);
+        let content = std::fs::read(&absolute).map_err(|e| e.to_string())?;
+        if store
+            .check(&path, &content)
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            untrusted.push(path.as_str().to_string());
+        }
+    }
+    if untrusted.is_empty() {
+        return Ok(());
+    }
+    untrusted.sort();
+    let shown = untrusted
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = untrusted.len().saturating_sub(5);
+    if more > 0 {
+        Err(format!("{shown} (+{more} more) are not pinned or changed"))
+    } else {
+        Err(format!("{shown} are not pinned or changed"))
+    }
+}
+
+/// The repository's `origin` URL, when it has one.
+fn remote_url(root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
+/// Recursively collect `.surge/` files as project-relative paths.
+fn collect_project_files(
+    dir: &Path,
+    root: &Path,
+    out: &mut Vec<surge_core::artifact_contract::RelPath>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "worktrees" || name == "runs" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_project_files(&path, root, out);
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        if let Ok(rel_path) =
+            surge_core::artifact_contract::RelPath::new(rel.to_string_lossy().replace('\\', "/"))
+        {
+            out.push(rel_path);
+        }
+    }
 }
 
 /// Installed builtin runtimes, at least one (an empty PATH must not turn
@@ -146,6 +246,7 @@ impl TaskScheduler {
             clock,
             template: TaskTemplateSource::BundledSingleTask,
             notifier,
+            surge_home: None,
             runtime_count: installed_runtime_count(),
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -311,6 +412,10 @@ impl TaskScheduler {
         let roadmap_text = std::fs::read_to_string(&roadmap_path).map_err(|e| e.to_string())?;
         let roadmap_hash = ContentHash::compute(roadmap_text.as_bytes());
 
+        if !self.trust_gate(project_root).await {
+            return Ok(false);
+        }
+
         let run_id = RunId::new();
         if !queue
             .claim(project_root, task_id, run_id, now_ms)
@@ -396,6 +501,38 @@ impl TaskScheduler {
             now_ms,
         )
         .await
+    }
+
+    /// Load-time trust gate: refuse to dispatch while the project's `.surge/`
+    /// files are new or changed since the operator pinned them.
+    ///
+    /// Runs before the claim so an untrusted project does not consume an
+    /// attempt every tick; it is re-checked on each tick until
+    /// `surge trust accept` resolves it. Returns `true` when dispatch may
+    /// proceed.
+    async fn trust_gate(&self, project_root: &Path) -> bool {
+        let Some(home) = &self.surge_home else {
+            return true;
+        };
+        let Err(untrusted) = trust_check(home, project_root) else {
+            return true;
+        };
+        warn!(
+            target: "surge.task_scheduler",
+            project = %project_root.display(),
+            %untrusted,
+            "project files are not trusted; not dispatching"
+        );
+        self.escalate(
+            project_root,
+            "Untrusted project files",
+            format!(
+                "{untrusted} — run `surge trust list` and `surge trust accept --all`, then \
+                 the queue will continue."
+            ),
+        )
+        .await;
+        false
     }
 
     /// Start a claimed task's run and settle the row on a start failure.

@@ -637,3 +637,69 @@ async fn unresolvable_pin_refuses_dispatch() {
     assert_eq!(row.attempt, 2, "the refusal is one attempt");
     let _ = repo_dir;
 }
+
+/// T13/G15: an untrusted `.surge/` file stops dispatch; pinning it with the
+/// trust store lets the next tick proceed.
+#[tokio::test(flavor = "multi_thread")]
+async fn untrusted_project_file_blocks_dispatch_until_accepted() {
+    use surge_core::artifact_contract::RelPath;
+    use surge_persistence::trust_store::{TrustStore, repo_id};
+
+    let (repo_dir, repo) = init_repo_with_roadmap(&two_task_chain());
+    // A project profile makes the repository carry composed context.
+    std::fs::create_dir_all(repo.join(".surge/profiles")).unwrap();
+    std::fs::write(
+        repo.join(".surge/profiles/custom-1.0.toml"),
+        "role = { id = \"custom\", version = \"1.0.0\" }\n",
+    )
+    .unwrap();
+
+    let surge_home = repo_dir.path().join("surge-home");
+    let storage = Storage::open(&surge_home).await.unwrap();
+    let facade = Arc::new(StubFacade::new(storage.clone()));
+    let clock = Arc::new(MockClock::new(NOW));
+    storage
+        .task_queue_store()
+        .register_project(&repo, NOW)
+        .unwrap();
+    let mut sched = scheduler(storage.clone(), facade.clone(), clock);
+    sched.surge_home = Some(surge_home.clone());
+
+    // Unpinned: nothing dispatches.
+    sched.tick().await.unwrap();
+    assert!(
+        facade.task_ids().is_empty(),
+        "an untrusted project must not dispatch"
+    );
+
+    // Pin every project file; the next tick dispatches.
+    let mut store = TrustStore::open(&surge_home, &repo_id(None, &repo)).unwrap();
+    store
+        .accept_file(
+            &repo,
+            &RelPath::new(".surge/profiles/custom-1.0.toml").unwrap(),
+            NOW,
+        )
+        .unwrap();
+    sched.tick().await.unwrap();
+    assert_eq!(
+        facade.task_ids(),
+        vec!["t1"],
+        "pinning the files must unblock dispatch"
+    );
+    let _ = repo_dir;
+}
+
+/// Only executable composition is gated: editing `roadmap.toml` must not
+/// prompt (it is planning data), while adding a profile must.
+#[test]
+fn trust_gate_covers_composition_not_planning_files() {
+    use surge_persistence::trust_store::is_trust_gated_path;
+
+    assert!(is_trust_gated_path(".surge/profiles/x-1.0.toml"));
+    assert!(is_trust_gated_path(".surge/flows/bug-fix-1.0.toml"));
+    assert!(is_trust_gated_path(".surge/skills/foo/SKILL.md"));
+    assert!(is_trust_gated_path(".surge/mcp.toml"));
+    assert!(!is_trust_gated_path(".surge/roadmap.toml"));
+    assert!(!is_trust_gated_path(".surge/memory/note.md"));
+}

@@ -769,6 +769,12 @@ pub enum EscalationCause {
     /// once per streak (cleared by the next `StageCompleted`), not on every
     /// tick past the limit.
     CapacityBlindParkLimitExceeded,
+    /// A project file under `.surge/` (profile, flow, skill or MCP entry)
+    /// is new or its content hash changed since the operator pinned it —
+    /// load-time trust for repo-resident composition (ADR-0020, T13). A
+    /// fresh clone prompts once per file; the run is not started until
+    /// `surge trust accept` pins the current content.
+    UntrustedProjectFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

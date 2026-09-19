@@ -1,6 +1,6 @@
 ---
 source: crates/surge-core/src/run_event.rs
-expression: "tags.join(\"\\n\")"
+expression: "variants.join(\"\\n\")"
 ---
 ApprovalDecided
 ApprovalRequested

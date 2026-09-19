@@ -12,22 +12,22 @@ Spec: spec.md
 - [ ] G1: t1 dispatches first; t2 is not dispatched until t1's ledger row is verified
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:04.883Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:38:46.066Z exit=94 expect=unmatched
 
 - [ ] G2: after t1 is verified, the project branch contains t1's commits and t2's worktree is based on it
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(merge)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:05.150Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:38:46.426Z exit=94 expect=unmatched
 
 - [ ] G3: a merge conflict marks the row Failed{merge_conflict}, logs EscalationRequested, and keeps t2 blocked
   CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_merge)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:05.412Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:38:46.723Z exit=94 expect=unmatched
 
-- [ ] G4: a dependency in Failed is listed by `surge ready` as blocked_by_failed and is not dispatched; `surge task requeue` unblocks it
+- [x] G4: a dependency in Failed is listed by `surge ready` as blocked_by_failed and is not dispatched; `surge task requeue` unblocks it
   CHECK: cargo nextest run -p surge-cli -E 'test(blocked_by_failed)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:31.340Z exit=4 expect=unmatched
+  EVIDENCE: rs-acceptance/v1 def=8c797a3d7908c96f exit=0 expect=matched out=0def4c4b1a7751b6:772 cwd=. shell=sh at=2026-09-19T01:39:04.611Z
 
 - [x] G5: a Low task skipped aging_threshold times rises one effective priority level; order is total, deterministic, deps dominate (property tests on QueuePolicy)
   CHECK: cargo nextest run -p surge-orchestrator -E 'test(scheduler::policy)'
@@ -37,17 +37,17 @@ Spec: spec.md
 - [ ] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(classif)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:32.213Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:39:04.949Z exit=94 expect=unmatched
 
 - [ ] G7: a `compose` answer is validated with FlowPurpose::Task (unverified success path and same-runtime verifier rejected and retried) and on success the file exists in `.surge/flows/` with ComposedArtifactInstalled{kind: Flow} after the gate
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(task_run_select_test)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-18T23:57:32.486Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:39:05.251Z exit=94 expect=unmatched
 
 - [ ] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
   CHECK: cargo nextest run -E 'test(composed_profile)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:19.617Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:02.168Z exit=4 expect=unmatched
 
 - [x] G9: a `.surge/profiles/x-1.0.toml` resolves with Provenance::Project over home and bundled, and two repos never see each other's profiles
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(engine_project_layer_scoping) + binary(profile_registry_e2e)'
@@ -57,32 +57,32 @@ Spec: spec.md
 - [ ] G10: a GitHub issue candidate starts a planning run (not a work run); after approval `.surge/roadmap.toml` contains the task at the planner's insertion point and a queue row exists
   CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_intake_planning_run)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:20.012Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:02.755Z exit=94 expect=unmatched
 
 - [ ] G11: a patch conflicting with the running milestone is deferred to the next milestone without operator input
   CHECK: cargo nextest run -E 'test(defer_to_next_milestone)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:22.359Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:16.700Z exit=4 expect=unmatched
 
 - [ ] G12: `surge task pause` stops new dispatch and halts the running run at its next stage boundary; resume continues
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(pause)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:22.824Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:16.980Z exit=94 expect=unmatched
 
 - [ ] G13: `surge task priority t3 critical` while t1 runs changes file and row so t3 dispatches next, and the running run's RunOrigin.roadmap_hash still shows the old hash
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(priorit)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:23.283Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:17.387Z exit=94 expect=unmatched
 
 - [ ] G14: editing `.surge/flows/bug-fix-1.0.toml` mid-run leaves the current task unaffected and the next task using it gets the edited content after the trust prompt
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(edit)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:23.669Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:17.707Z exit=94 expect=unmatched
 
 - [ ] G15: a fresh clone with an unpinned `.surge/` profile does not start the run, logs EscalationRequested{UntrustedProjectFile}, and `surge trust accept` pins it
   CHECK: cargo nextest run -E 'test(untrusted_project_file)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:24.787Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:18.613Z exit=4 expect=unmatched
 
 - [x] G16: event schema migration 8→9 round-trips every supported version
   CHECK: cargo nextest run -p surge-core -E 'binary(migrations_v1_roundtrip)'
@@ -97,9 +97,9 @@ Spec: spec.md
 - [ ] G18: daemon restart with a row in Dispatched reconciles against the run — live run left alone, dead run marked Failed and the task re-queued once (attempt+1)
   CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_scheduler) and test(reconcile)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:25.104Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T01:43:55.817Z exit=4 expect=unmatched
 
-- [ ] G19: `surge ready` no longer reports the worktree as the project path
+- [x] G19: `surge ready` no longer reports the worktree as the project path
   CHECK: cargo nextest run -p surge-cli -E 'test(ready) and test(project)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T00:01:26.338Z exit=4 expect=unmatched
+  EVIDENCE: rs-acceptance/v1 def=60e626790f3091c3 exit=0 expect=matched out=1f1a99d31f42d8c6:460 cwd=. shell=sh at=2026-09-19T01:44:00.012Z

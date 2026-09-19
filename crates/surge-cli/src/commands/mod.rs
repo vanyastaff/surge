@@ -31,6 +31,7 @@ pub mod steer;
 pub mod task;
 pub mod telegram;
 pub mod tracker;
+pub mod trust;
 
 // Fuzzy-resolve a spec id (full ULID, prefix, or filename) to a
 // `LegacySpecFile` loaded from `.surge/specs/`. Used by analytics /
