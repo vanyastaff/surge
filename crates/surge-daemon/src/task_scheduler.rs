@@ -335,9 +335,22 @@ impl TaskScheduler {
             )
             .map_err(|e| e.to_string())?;
 
-        // One dispatch per free admission slot.
+        // v1 is sequential per project: at most one task is in flight, so
+        // the integration branch advances (or fails) in roadmap order and
+        // two runs never race to merge. The policy still returns a Vec, so
+        // N-wide is a config change rather than a rewrite.
         loop {
             if !self.has_free_slot().await {
+                return Ok(());
+            }
+            let in_flight = queue
+                .list(&TaskQueueFilter {
+                    project_root: Some(project_root.to_path_buf()),
+                    dispatch_state: Some(DispatchState::Dispatched),
+                    ..Default::default()
+                })
+                .map_err(|e| e.to_string())?;
+            if !in_flight.is_empty() {
                 return Ok(());
             }
             let rows = queue
