@@ -16,6 +16,7 @@ use clap::{Subcommand, ValueEnum};
 use surge_core::RunId;
 use surge_core::run_report::{RunReport, render_html, render_json, render_markdown};
 use surge_git::GitManager;
+use surge_orchestrator::engine::facade::EngineFacade;
 use surge_persistence::runs::Storage;
 
 use crate::commands::common;
@@ -44,6 +45,21 @@ pub enum RunCommand {
         /// Output format.
         #[arg(long, value_enum, default_value = "md")]
         format: RunReportFormat,
+    },
+    /// Pause a live run at its next stage boundary (T14).
+    Pause {
+        /// Run id (or its short suffix as shown by `surge inbox`).
+        run: String,
+    },
+    /// Resume a run paused by `surge run pause`.
+    Resume {
+        /// Run id (or its short suffix as shown by `surge inbox`).
+        run: String,
+    },
+    /// Report whether a live run is paused.
+    Status {
+        /// Run id (or its short suffix as shown by `surge inbox`).
+        run: String,
     },
 }
 
@@ -78,6 +94,9 @@ pub async fn run(cmd: RunCommand) -> Result<()> {
         RunCommand::Diff { run } => diff(&run).await,
         RunCommand::Path { run } => path(&run).await,
         RunCommand::Report { run, format } => report(&run, format).await,
+        RunCommand::Pause { run } => set_paused(&run, true).await,
+        RunCommand::Resume { run } => set_paused(&run, false).await,
+        RunCommand::Status { run } => status(&run).await,
     }
 }
 
@@ -139,4 +158,42 @@ async fn resolve_run_id(value: &str) -> Result<RunId> {
         .await
         .context("open storage")?;
     common::resolve_run_id(&storage, value).await
+}
+
+/// Pause or resume a live run through the daemon (T14).
+async fn set_paused(run: &str, paused: bool) -> Result<()> {
+    let storage = Storage::open(&common::surge_home_dir()?)
+        .await
+        .context("open storage")?;
+    let run_id = common::resolve_run_id(&storage, run).await?;
+    let daemon = common::connect_daemon().await?;
+    if paused {
+        daemon.pause_run(run_id).await.map_err(daemon_err)?;
+        println!("paused run {run_id} at the next stage boundary");
+    } else {
+        daemon.unpause_run(run_id).await.map_err(daemon_err)?;
+        println!("resumed run {run_id}");
+    }
+    Ok(())
+}
+
+/// Report a live run's pause state (T14).
+async fn status(run: &str) -> Result<()> {
+    let storage = Storage::open(&common::surge_home_dir()?)
+        .await
+        .context("open storage")?;
+    let run_id = common::resolve_run_id(&storage, run).await?;
+    let daemon = common::connect_daemon().await?;
+    let paused = daemon.is_run_paused(run_id).await.map_err(daemon_err)?;
+    println!(
+        "run {run_id}: {}",
+        if paused { "paused" } else { "running" }
+    );
+    Ok(())
+}
+
+/// Map an engine error into an `anyhow` error with the same message the
+/// steer command uses.
+fn daemon_err(error: surge_orchestrator::engine::EngineError) -> anyhow::Error {
+    anyhow!("{error}")
 }

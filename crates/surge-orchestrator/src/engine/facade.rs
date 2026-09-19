@@ -63,6 +63,32 @@ pub trait EngineFacade: Send + Sync {
         response: serde_json::Value,
     ) -> Result<(), EngineError>;
 
+    /// Pause a live run at its next stage boundary (T14). Not supported by
+    /// default: an implementation that cannot pause (a read-only facade)
+    /// returns [`EngineError::OperationNotSupported`].
+    async fn pause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        let _ = run_id;
+        Err(EngineError::OperationNotSupported {
+            operation: "pause_run",
+        })
+    }
+
+    /// Resume a paused run.
+    async fn unpause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        let _ = run_id;
+        Err(EngineError::OperationNotSupported {
+            operation: "unpause_run",
+        })
+    }
+
+    /// Whether a live run is paused.
+    async fn is_run_paused(&self, run_id: RunId) -> Result<bool, EngineError> {
+        let _ = run_id;
+        Err(EngineError::OperationNotSupported {
+            operation: "is_run_paused",
+        })
+    }
+
     /// Queue an operator steer message for a live run (delivered at the next
     /// agent stage boundary). Returns the queued steer id.
     async fn submit_steer(&self, run_id: RunId, message: String) -> Result<String, EngineError> {
@@ -158,6 +184,18 @@ impl EngineFacade for LocalEngineFacade {
         self.engine
             .resolve_human_input(run_id, call_id, response)
             .await
+    }
+
+    async fn pause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        self.engine.pause_run(run_id).await
+    }
+
+    async fn unpause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        self.engine.unpause_run(run_id).await
+    }
+
+    async fn is_run_paused(&self, run_id: RunId) -> Result<bool, EngineError> {
+        self.engine.is_run_paused(run_id).await
     }
 
     async fn submit_steer(&self, run_id: RunId, message: String) -> Result<String, EngineError> {

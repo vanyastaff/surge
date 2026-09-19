@@ -40,6 +40,8 @@ const NOW: i64 = 1_700_000_000_000;
 struct OuterFacade {
     storage: Arc<Storage>,
     dispatches: Mutex<Vec<(RunId, PathBuf, String)>>,
+    /// `RunOrigin.roadmap_hash` recorded at each dispatch, by task id.
+    origins: Mutex<HashMap<String, ContentHash>>,
     commits: Mutex<HashMap<String, String>>,
 }
 
@@ -48,6 +50,7 @@ impl OuterFacade {
         Self {
             storage,
             dispatches: Mutex::new(Vec::new()),
+            origins: Mutex::new(HashMap::new()),
             commits: Mutex::new(HashMap::new()),
         }
     }
@@ -89,6 +92,14 @@ impl EngineFacade for OuterFacade {
             .lock()
             .unwrap()
             .push((run_id, worktree_path.clone(), task_id.clone()));
+        if let Some(surge_core::run_event::RunOrigin::Task { roadmap_hash, .. }) =
+            run_config.origin.as_ref()
+        {
+            self.origins
+                .lock()
+                .unwrap()
+                .insert(task_id.clone(), *roadmap_hash);
+        }
 
         self.storage
             .create_run(run_id, &worktree_path, None)
@@ -355,8 +366,17 @@ async fn outer_scenario_pause_reprioritise_and_dependency_order() {
         "t3 merged before t2 too"
     );
 
-    // Final state: all three settled done, and `RunOrigin.roadmap_hash`
-    // recorded the hash at dispatch (it is not rewritten by the edit).
+    // G13: t1 dispatched under the pre-edit roadmap hash; the mid-flight
+    // reprioritisation must not retroactively rewrite what its run recorded.
+    let origin_hash_of_t1 = facade.origins.lock().unwrap().get("t1").copied();
+    let roadmap_after_edit = std::fs::read(repo.join(PROJECT_ROADMAP_RELPATH)).unwrap();
+    let hash_after_edit = ContentHash::compute(&roadmap_after_edit);
+    assert!(
+        origin_hash_of_t1.is_some_and(|h| h != hash_after_edit),
+        "t1's recorded roadmap_hash must be the pre-edit one, not the edited file's"
+    );
+
+    // Final state: all three settled done.
     sched.tick().await.unwrap();
     let rows = queue
         .list(&TaskQueueFilter {

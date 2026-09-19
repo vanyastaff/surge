@@ -673,6 +673,43 @@ async fn dispatch(
             }),
         },
 
+        DaemonRequest::PauseRun { request_id, run_id } => match facade.pause_run(run_id).await {
+            Ok(()) => Some(DaemonResponse::RunPauseChanged {
+                request_id,
+                paused: true,
+            }),
+            Err(e) => Some(DaemonResponse::Error {
+                request_id,
+                code: ErrorCode::EngineError,
+                message: format!("{e}"),
+            }),
+        },
+
+        DaemonRequest::UnpauseRun { request_id, run_id } => {
+            match facade.unpause_run(run_id).await {
+                Ok(()) => Some(DaemonResponse::RunPauseChanged {
+                    request_id,
+                    paused: false,
+                }),
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
+        },
+
+        DaemonRequest::IsRunPaused { request_id, run_id } => {
+            match facade.is_run_paused(run_id).await {
+                Ok(paused) => Some(DaemonResponse::RunPausedState { request_id, paused }),
+                Err(e) => Some(DaemonResponse::Error {
+                    request_id,
+                    code: ErrorCode::EngineError,
+                    message: format!("{e}"),
+                }),
+            }
+        },
+
         DaemonRequest::ListSteers { request_id, run_id } => {
             match facade.list_steers(run_id).await {
                 Ok(steers) => Some(DaemonResponse::ListSteersOk { request_id, steers }),

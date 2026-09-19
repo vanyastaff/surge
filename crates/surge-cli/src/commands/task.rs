@@ -8,6 +8,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
 use surge_core::{Priority, RoadmapArtifact};
+use surge_orchestrator::engine::facade::EngineFacade;
 use surge_orchestrator::scheduler::{QueueEntry, QueuePolicy};
 use surge_persistence::runs::Storage;
 use surge_persistence::task_queue::{DispatchState, TaskQueueFilter, TaskQueueRow};
@@ -254,20 +255,41 @@ async fn set_task_paused(root: &std::path::Path, task_id: &str, paused: bool) ->
     };
     if paused {
         if row.dispatch_state == DispatchState::Dispatched {
-            bail!(
-                "task {task_id:?} is currently running (run {}); `surge task pause` affects \
-                 queued tasks only — use `surge engine stop` for a running one",
-                row.run_id.map(|id| id.to_string()).unwrap_or_default()
+            // A running task pauses its run at the next stage boundary: the
+            // run stops advancing without losing in-flight work, and the
+            // scheduler (which dispatches at most one task per project) has
+            // nothing else to start meanwhile.
+            let Some(run_id) = row.run_id else {
+                bail!("task {task_id:?} is running but has no recorded run id");
+            };
+            let daemon = super::common::connect_daemon().await?;
+            daemon.pause_run(run_id).await.map_err(|e| anyhow!("{e}"))?;
+            println!(
+                "paused {task_id} (run {run_id} stops at its next stage boundary; \
+                 `surge task resume {task_id}` continues it)"
             );
+            return Ok(());
         }
         queue
             .set_task_paused(root, task_id, true, now_ms())
             .context("pause task")?;
         println!("paused {task_id}");
     } else {
+        // A paused task may be a queued task (flag) or a running one (gate).
+        // Clear the flag first; then, if the row is dispatched, unpause its
+        // run too — either call is a no-op for the other state.
         queue
             .set_task_paused(root, task_id, false, now_ms())
             .context("resume task")?;
+        if row.dispatch_state == DispatchState::Dispatched
+            && let Some(run_id) = row.run_id
+        {
+            let daemon = super::common::connect_daemon().await?;
+            daemon
+                .unpause_run(run_id)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+        }
         println!("resumed {task_id}");
     }
     Ok(())

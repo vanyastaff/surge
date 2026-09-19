@@ -131,6 +131,27 @@ pub enum DaemonRequest {
         /// The operator's steer message.
         message: String,
     },
+    /// Pause a live run at its next stage boundary (T14).
+    PauseRun {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run to pause.
+        run_id: RunId,
+    },
+    /// Resume a run paused by [`DaemonRequest::PauseRun`].
+    UnpauseRun {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run to resume.
+        run_id: RunId,
+    },
+    /// Report whether a live run is paused.
+    IsRunPaused {
+        /// Client-assigned identifier echoed in the response.
+        request_id: RequestId,
+        /// Identifier of the run to query.
+        run_id: RunId,
+    },
     /// List the steer messages currently queued for a run.
     ListSteers {
         /// Client-assigned identifier echoed in the response.
@@ -226,6 +247,9 @@ impl DaemonRequest {
             | Self::SubmitRoadmapAmendment { request_id, .. }
             | Self::ResolveHumanInput { request_id, .. }
             | Self::SubmitSteer { request_id, .. }
+            | Self::PauseRun { request_id, .. }
+            | Self::UnpauseRun { request_id, .. }
+            | Self::IsRunPaused { request_id, .. }
             | Self::ListSteers { request_id, .. }
             | Self::CancelSteer { request_id, .. }
             | Self::ListRuns { request_id }
@@ -333,6 +357,20 @@ pub enum DaemonResponse {
         /// Queue id of the newly-queued steer.
         steer_id: String,
     },
+    /// [`DaemonRequest::PauseRun`]/[`DaemonRequest::UnpauseRun`] reply.
+    RunPauseChanged {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Whether the run is paused after this call.
+        paused: bool,
+    },
+    /// [`DaemonRequest::IsRunPaused`] reply.
+    RunPausedState {
+        /// Echoed `request_id` from the originating request.
+        request_id: RequestId,
+        /// Whether the run is currently paused.
+        paused: bool,
+    },
     /// [`DaemonRequest::ListSteers`] reply.
     ListSteersOk {
         /// Echoed `request_id` from the originating request.
@@ -422,6 +460,8 @@ impl DaemonResponse {
             | Self::SubmitRoadmapAmendmentOk { request_id, .. }
             | Self::ResolveHumanInputOk { request_id }
             | Self::SubmitSteerOk { request_id, .. }
+            | Self::RunPauseChanged { request_id, .. }
+            | Self::RunPausedState { request_id, .. }
             | Self::ListSteersOk { request_id, .. }
             | Self::CancelSteerOk { request_id, .. }
             | Self::ListRunsOk { request_id, .. }

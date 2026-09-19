@@ -20,8 +20,8 @@ Spec: spec.md
   EVIDENCE: failed at=2026-09-19T01:38:46.426Z exit=94 expect=unmatched
 
 - [ ] G3: a merge conflict marks the row Failed{merge_conflict}, logs EscalationRequested, and keeps t2 blocked
-  CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_merge)'
-  EXPECT: /[1-9][0-9]* passed/
+  CHECK: cargo nextest run -p surge-daemon -E 'binary(daemon_task_scheduler) and test(merge_conflict)'
+  EXPECT: /1 test run: 1 passed/
   EVIDENCE: failed at=2026-09-19T01:38:46.723Z exit=94 expect=unmatched
 
 - [x] G4: a dependency in Failed is listed by `surge ready` as blocked_by_failed and is not dispatched; `surge task requeue` unblocks it

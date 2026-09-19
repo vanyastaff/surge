@@ -65,6 +65,10 @@ pub(crate) struct ActiveRun {
     /// Queued operator steer messages. `Engine::submit_steer` pushes here; the
     /// run task drains at the next stage boundary and delivers into the prompt.
     pub pending_steers: crate::engine::steer::SteerQueue,
+    /// Run-level pause gate (T14). `Engine::pause_run` closes it; the run
+    /// task waits at the top of its stage loop until `resume_run_op` opens
+    /// it or the run is stopped.
+    pub pause_gate: crate::engine::pause::PauseHandle,
 }
 
 /// The per-run resolution/steer/cancellation state `start_run` and
@@ -90,6 +94,7 @@ struct FreshRunRegistration {
         tokio::sync::mpsc::Receiver<crate::engine::run_task::RoadmapAmendmentCommand>,
     pending_elevations: Arc<crate::engine::elevation::PendingElevations>,
     pending_steers: crate::engine::steer::SteerQueue,
+    pause_gate: crate::engine::pause::PauseHandle,
 }
 
 impl Engine {
@@ -294,6 +299,7 @@ impl Engine {
         let (roadmap_amendment_tx, roadmap_amendment_rx) = tokio::sync::mpsc::channel(16);
         let pending_elevations = crate::engine::elevation::PendingElevations::new();
         let pending_steers = crate::engine::steer::new_queue();
+        let pause_gate = crate::engine::pause::new_gate();
         let active = ActiveRun {
             cancel: cancel.clone(),
             gate_resolutions: gate_resolutions.clone(),
@@ -301,6 +307,7 @@ impl Engine {
             roadmap_amendments: roadmap_amendment_tx,
             pending_elevations: pending_elevations.clone(),
             pending_steers: pending_steers.clone(),
+            pause_gate: pause_gate.clone(),
         };
         self.runs.write().await.insert(run_id, active);
         FreshRunRegistration {
@@ -310,6 +317,7 @@ impl Engine {
             roadmap_amendment_rx,
             pending_elevations,
             pending_steers,
+            pause_gate,
         }
     }
 
@@ -415,6 +423,7 @@ impl Engine {
             roadmap_amendments: registration.roadmap_amendment_rx,
             pending_elevations: registration.pending_elevations,
             pending_steers: registration.pending_steers,
+            pause_gate: registration.pause_gate,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_clone,
             profile_registry,
@@ -943,6 +952,7 @@ impl Engine {
             roadmap_amendments: registration.roadmap_amendment_rx,
             pending_elevations: registration.pending_elevations,
             pending_steers: registration.pending_steers,
+            pause_gate: registration.pause_gate,
             mcp_registry: per_run_mcp_registry,
             mcp_servers: mcp_servers_for_resume,
             profile_registry,
@@ -1181,6 +1191,35 @@ impl Engine {
                 last_event_seq: None,
             })
             .collect()
+    }
+
+    /// Pause a live run at its next stage boundary (T14).
+    ///
+    /// The run task is between stages, so this never interrupts an agent
+    /// mid-turn; it stops the graph from advancing. Returns
+    /// [`EngineError::RunNotFound`] when the run is not active.
+    pub async fn pause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        active.pause_gate.pause();
+        Ok(())
+    }
+
+    /// Resume a run paused by [`Engine::pause_run`]. Returns
+    /// [`EngineError::RunNotFound`] when the run is not active; an unpaused
+    /// run resumes as a no-op.
+    pub async fn unpause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        active.pause_gate.unpause();
+        Ok(())
+    }
+
+    /// Whether a live run is currently paused.
+    pub async fn is_run_paused(&self, run_id: RunId) -> Result<bool, EngineError> {
+        let runs = self.runs.read().await;
+        let active = runs.get(&run_id).ok_or(EngineError::RunNotFound(run_id))?;
+        Ok(active.pause_gate.is_paused())
     }
 
     /// Cancel an in-flight run. Signals the cancellation token so the run task

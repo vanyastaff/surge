@@ -41,6 +41,7 @@ pub mod frames;
 pub mod handle;
 pub mod hooks;
 pub mod ipc;
+pub mod pause;
 pub mod predicates;
 pub mod replay;
 pub mod replay_view;

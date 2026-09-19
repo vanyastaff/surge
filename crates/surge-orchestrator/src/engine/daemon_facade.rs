@@ -482,6 +482,42 @@ impl EngineFacade for DaemonEngineFacade {
         }
     }
 
+    async fn pause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::PauseRun { request_id, run_id })
+            .await?
+        {
+            DaemonResponse::RunPauseChanged { .. } => Ok(()),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn unpause_run(&self, run_id: RunId) -> Result<(), EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::UnpauseRun { request_id, run_id })
+            .await?
+        {
+            DaemonResponse::RunPauseChanged { .. } => Ok(()),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
+    async fn is_run_paused(&self, run_id: RunId) -> Result<bool, EngineError> {
+        match self
+            .inner
+            .rpc(|request_id| DaemonRequest::IsRunPaused { request_id, run_id })
+            .await?
+        {
+            DaemonResponse::RunPausedState { paused, .. } => Ok(paused),
+            DaemonResponse::Error { code, message, .. } => Err(map_error(code, &message)),
+            other => Err(EngineError::Internal(format!("unexpected: {other:?}"))),
+        }
+    }
+
     async fn list_steers(
         &self,
         run_id: RunId,

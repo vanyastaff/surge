@@ -87,6 +87,10 @@ pub(crate) struct RunTaskParams {
     /// run task drains this before opening each agent stage and prepends the
     /// messages to that stage's prompt (Phase 2 B2, non-destructive steering).
     pub pending_steers: crate::engine::steer::SteerQueue,
+    /// Run-level pause gate (T14), shared with the `ActiveRun` entry. Checked
+    /// at the top of every loop iteration — each graph stage is a boundary —
+    /// so a paused run stops advancing without losing in-flight work.
+    pub pause_gate: crate::engine::pause::PauseHandle,
     /// Engine-side tracker for in-flight ACP elevation requests. Shared with
     /// the `ActiveRun` entry so `Engine::resolve_elevation` can fire
     /// decisions from outside the stage event loop.
@@ -194,6 +198,15 @@ async fn execute_inner(mut params: RunTaskParams) -> RunOutcome {
         apply_pending_revisions(&mut state);
 
         if let Some(outcome) = abort_if_cancelled(&params).await {
+            return outcome;
+        }
+
+        // Run-level pause (T14): stop at this stage boundary until the
+        // operator resumes or stops the run. Cancellation above wins, so a
+        // stopped paused run never hangs here.
+        if params.pause_gate.wait_if_paused(&params.cancel).await
+            && let Some(outcome) = abort_if_cancelled(&params).await
+        {
             return outcome;
         }
 
