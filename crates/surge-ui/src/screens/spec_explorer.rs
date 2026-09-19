@@ -94,10 +94,10 @@ impl SpecExplorerScreen {
         specs
             .iter()
             .filter(|s| {
-                if let Some(status) = self.filter_status {
-                    if s.status != status {
-                        return false;
-                    }
+                if let Some(status) = self.filter_status
+                    && s.status != status
+                {
+                    return false;
                 }
                 if !self.search_query.is_empty() {
                     let q = self.search_query.to_lowercase();

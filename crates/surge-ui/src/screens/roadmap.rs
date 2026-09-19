@@ -8,10 +8,11 @@
 //! - **THE LINE** — the default delivery pipeline rendered from the
 //!   real bundled `linear-with-review` flow graph (nodes walked from
 //!   `graph.start` along forward edges; human gates highlighted).
-//! - **Milestones** — parsed from the project's `roadmap.toml`
-//!   (`surge_core::roadmap::RoadmapArtifact`, the v2 ledger schema
-//!   with per-task status/size/verified) when present; falls back to
-//!   in-memory specs; labelled sample otherwise.
+//! - **Milestones** — parsed from the project's roadmap document
+//!   (`roadmap.toml` / `roadmap.md` via
+//!   `surge_orchestrator::roadmap_document`, the same parser the
+//!   amendment flow uses) when present; falls back to in-memory specs;
+//!   labelled sample otherwise.
 //!
 //! "Amend roadmap" is a real workflow (`surge feature describe` →
 //! roadmap-patch → approval) that runs through the engine; the header
@@ -35,7 +36,6 @@ struct LineStep {
 /// Milestone view-model (from roadmap.toml, specs, or sample).
 #[derive(Clone)]
 struct MilestoneRow {
-    id: String,
     title: String,
     status_label: String,
     status_color: Hsla,
@@ -45,6 +45,16 @@ struct MilestoneRow {
     /// (task id, task title, dot color) chips.
     tasks: Vec<(String, String, Hsla)>,
     note: String,
+}
+
+/// Dot color for a roadmap task chip: verified wins over the status
+/// color (an unverified "completed" must not read as done-done).
+fn task_dot_color(task: &surge_core::roadmap::RoadmapTask) -> Hsla {
+    if task.verified {
+        theme::success()
+    } else {
+        status_parts(&task.status).1
+    }
 }
 
 fn status_parts(status: &RoadmapStatus) -> (&'static str, Hsla) {
@@ -63,7 +73,7 @@ fn status_parts(status: &RoadmapStatus) -> (&'static str, Hsla) {
 /// Where the milestone data came from (shown honestly in the header).
 #[derive(PartialEq, Clone, Copy)]
 enum SourceKind {
-    RoadmapToml,
+    RoadmapDoc,
     Specs,
     Sample,
 }
@@ -115,16 +125,26 @@ impl RoadmapScreen {
         None
     }
 
-    /// Parse the project's roadmap.toml when it exists.
+    /// Parse the project's roadmap document when it exists. Both the
+    /// TOML ledger (`.surge/roadmap.toml`, the scheduler's planning
+    /// truth) and the Markdown rendering (`roadmap.md`) go through the
+    /// one parser the engine's amendment flow uses.
     fn roadmap_artifact(&self, cx: &Context<Self>) -> Option<RoadmapArtifact> {
         let state = self.state.read(cx);
         let root = state.project_path.as_ref()?;
-        for candidate in [root.join("roadmap.toml"), root.join(".surge/roadmap.toml")] {
+        for candidate in [
+            root.join("roadmap.toml"),
+            root.join(".surge/roadmap.toml"),
+            root.join("roadmap.md"),
+            root.join(".surge/roadmap.md"),
+        ] {
             if let Ok(text) = std::fs::read_to_string(&candidate) {
-                match toml::from_str::<RoadmapArtifact>(&text) {
-                    Ok(artifact) => return Some(artifact),
+                match surge_orchestrator::roadmap_document::parse_roadmap_document(
+                    &candidate, &text,
+                ) {
+                    Ok(parsed) => return Some(parsed.roadmap),
                     Err(e) => {
-                        tracing::warn!(path = %candidate.display(), "roadmap.toml parse failed: {e}");
+                        tracing::warn!(path = %candidate.display(), "roadmap parse failed: {e}");
                     },
                 }
             }
@@ -149,16 +169,11 @@ impl RoadmapScreen {
                         .tasks
                         .iter()
                         .take(6)
-                        .map(|t| {
-                            let (_, color) = status_parts(&t.status);
-                            let color = if t.verified { theme::success() } else { color };
-                            (t.id.clone(), t.title.clone(), color)
-                        })
+                        .map(|t| (t.id.clone(), t.title.clone(), task_dot_color(t)))
                         .collect();
                     let sized: usize = m.tasks.iter().filter(|t| t.size.is_some()).count();
                     let verified = m.tasks.iter().filter(|t| t.verified).count();
                     MilestoneRow {
-                        id: m.id.clone(),
                         title: m.title.clone(),
                         status_label: status_label.to_string(),
                         status_color,
@@ -170,7 +185,7 @@ impl RoadmapScreen {
                     }
                 })
                 .collect();
-            return (rows, SourceKind::RoadmapToml);
+            return (rows, SourceKind::RoadmapDoc);
         }
 
         let state = self.state.read(cx);
@@ -202,7 +217,6 @@ impl RoadmapScreen {
                         })
                         .collect();
                     MilestoneRow {
-                        id: spec.id.short().to_lowercase(),
                         title: spec.title.clone(),
                         status_label: format!("{:?}", spec.complexity).to_lowercase(),
                         status_color: theme::accent(),
@@ -272,8 +286,8 @@ impl RoadmapScreen {
             ))
             .child(div().flex_1())
             .child(match source {
-                SourceKind::RoadmapToml => ui::pill(
-                    "roadmap.toml",
+                SourceKind::RoadmapDoc => ui::pill(
+                    "roadmap doc",
                     theme::success(),
                     theme::success().opacity(0.12),
                 ),
@@ -289,7 +303,7 @@ impl RoadmapScreen {
             .child(ui::meta("amend via `surge feature describe`"))
     }
 
-    fn render_project_card(&self, cx: &Context<Self>) -> Div {
+    fn render_project_card(&self, _cx: &Context<Self>) -> Div {
         let (body, is_real): (String, bool) = match self.cached_project_md.clone() {
             Some(text) => {
                 // Skip markdown headers; take the first paragraphs.
@@ -596,7 +610,6 @@ impl Render for RoadmapScreen {
 fn sample_milestones() -> Vec<MilestoneRow> {
     vec![
         MilestoneRow {
-            id: "m1".into(),
             title: "Harden the intake path".into(),
             status_label: "completed".into(),
             status_color: theme::success(),
@@ -624,7 +637,6 @@ fn sample_milestones() -> Vec<MilestoneRow> {
             note: String::new(),
         },
         MilestoneRow {
-            id: "m2".into(),
             title: "Data import v2".into(),
             status_label: "running".into(),
             status_color: theme::accent(),
@@ -653,7 +665,6 @@ fn sample_milestones() -> Vec<MilestoneRow> {
             note: "m2-t4 failed verification — routed back".into(),
         },
         MilestoneRow {
-            id: "m3".into(),
             title: "Observability & cost controls".into(),
             status_label: "pending".into(),
             status_color: theme::text_muted(),

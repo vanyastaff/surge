@@ -1,23 +1,26 @@
 //! Flow — the DAG editor.
 //!
-//! Adapted from the "Surge - Interactive" concept's flow editor, but
-//! wired to the **real** engine model: it loads an actual bundled flow
-//! (`surge_core::BundledFlows`) and renders its true nodes, positions,
-//! `NodeKind`s and outcome-keyed edges. The concept's thesis — "the
-//! engine is dumb: routing is graph data, edges keyed by outcome" — is
-//! literally what Surge does, so nothing here is faked.
+//! Wired to the **real** engine model: it renders actual flow templates
+//! from the project's flow catalog — `<repo>/.surge/flows/*.toml`,
+//! `~/.surge/flows/*.toml`, and the bundled archetypes in lane order
+//! ([`surge_core::FlowCatalog`]) — falling back to a bundled template
+//! when no project is open. Nodes are positioned from their real
+//! `position`, edges painted as curved Béziers, outcome-keyed. The
+//! concept's thesis — "the engine is dumb: routing is graph data, edges
+//! keyed by outcome" — is literally what Surge does, so nothing here is
+//! faked.
 //!
-//! Three panes: node-kind palette · DAG canvas (nodes positioned from
-//! their real `position`, edges painted as curved Béziers) · inspector
-//! (kind, profile, outcomes→edges, a compact flow listing).
+//! Three panes: template list + node-kind palette · DAG canvas ·
+//! inspector (kind, profile, outcomes→edges, a compact flow listing).
 
 use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
-use surge_core::{BundledFlow, BundledFlows, EdgeKind, Node, NodeConfig, NodeKind};
+use surge_core::{BundledFlow, BundledFlows, EdgeKind, Graph, Node, NodeConfig, NodeKind};
 
+use crate::app_state::AppState;
 use crate::theme;
 use crate::ui;
 
@@ -94,23 +97,93 @@ struct EdgeSeg {
 
 /// Flow editor screen.
 pub struct FlowScreen {
-    flow: Option<BundledFlow>,
+    /// Flow template selector entries (project first, then bundled).
+    templates: Vec<TemplateEntry>,
+    /// Index into `templates` of the rendered template.
+    selected_template: usize,
     /// Selected node id (defaults to the graph's start node).
     selected: Option<String>,
 }
 
+/// One selectable flow template: either a catalog entry (project /
+/// home / bundled) or the legacy bundled fallback.
+#[derive(Clone)]
+struct TemplateEntry {
+    /// Label ("bug-fix@1.0", "bootstrap").
+    label: String,
+    /// Lane the template came from.
+    lane: &'static str,
+    /// One-line fit guidance, when the template declares it.
+    when_to_use: Option<String>,
+    /// Parsed graph.
+    graph: Graph,
+}
+
+impl TemplateEntry {
+    fn from_bundled(flow: &BundledFlow) -> Self {
+        Self {
+            label: flow.name.clone(),
+            lane: "bundled",
+            when_to_use: flow.graph.metadata.when_to_use.clone(),
+            graph: flow.graph.clone(),
+        }
+    }
+}
+
 impl FlowScreen {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        let flow = BundledFlows::by_name_latest(DEFAULT_FLOW)
-            .or_else(|| BundledFlows::all().into_iter().next());
-        let selected = flow.as_ref().map(|f| f.graph.start.as_str().to_string());
-        Self { flow, selected }
+    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let mut templates = Self::load_templates(&state, cx);
+        if templates.is_empty() {
+            // Catalog scan failed entirely — fall back to the bundled
+            // set so the editor still shows something real.
+            templates = BundledFlows::all()
+                .iter()
+                .map(TemplateEntry::from_bundled)
+                .collect();
+        }
+        let selected_template = templates
+            .iter()
+            .position(|t| t.label == DEFAULT_FLOW)
+            .unwrap_or(0);
+        let selected = templates
+            .get(selected_template)
+            .map(|t| t.graph.start.as_str().to_string());
+        Self {
+            templates,
+            selected_template,
+            selected,
+        }
+    }
+
+    /// Scan the flow catalog for the open project (project lane → home
+    /// lane → bundled), newest compatible versions first per name.
+    fn load_templates(state: &Entity<AppState>, cx: &Context<Self>) -> Vec<TemplateEntry> {
+        let root = state.read(cx).project_path.clone();
+        let project = surge_core::ProjectLayer::for_project(root.unwrap_or_default());
+        let Ok(catalog) = surge_core::flow_catalog::scan_with_default_home(&project) else {
+            return Vec::new();
+        };
+        catalog
+            .entries()
+            .iter()
+            .map(|entry| TemplateEntry {
+                label: entry.reference.to_string(),
+                lane: entry.layer.as_str(),
+                when_to_use: entry.when_to_use.clone(),
+                graph: entry.graph.clone(),
+            })
+            .collect()
+    }
+
+    /// The currently rendered template, if any.
+    fn current(&self) -> Option<&TemplateEntry> {
+        self.templates.get(self.selected_template)
     }
 
     /// Map a node's engine-space position to stage coords (top-left).
     fn layout(&self) -> HashMap<String, (f32, f32)> {
         let mut out = HashMap::new();
-        let Some(flow) = &self.flow else {
+        let Some(flow) = self.current() else {
             return out;
         };
         let g = &flow.graph;
@@ -152,13 +225,77 @@ impl FlowScreen {
 
     // ── palette ─────────────────────────────────────────────────────
 
-    fn render_palette(&self) -> Div {
+    fn render_palette(&self, cx: &mut Context<Self>) -> Div {
+        // Template selector: one row per catalog entry, lane-tagged.
+        let rows: Vec<Stateful<Div>> = self
+            .templates
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let is_selected = i == self.selected_template;
+                let mut row = div()
+                    .id(SharedString::from(format!("flow-tpl-{i}")))
+                    .h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .px(px(9.0))
+                    .py(px(7.0))
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(if is_selected {
+                        theme::accent().opacity(0.5)
+                    } else {
+                        theme::hairline()
+                    })
+                    .bg(if is_selected {
+                        theme::accent().opacity(0.08)
+                    } else {
+                        theme::panel_raised()
+                    })
+                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.selected_template = i;
+                        this.selected = Some(this.templates[i].graph.start.as_str().to_string());
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(10.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text_primary())
+                            .child(t.label.clone()),
+                    )
+                    .child(ui::pill(
+                        t.lane,
+                        if is_selected {
+                            theme::accent()
+                        } else {
+                            theme::text_muted()
+                        },
+                        theme::panel_raised(),
+                    ));
+                if let Some(when) = &t.when_to_use {
+                    let hint: String = when.chars().take(64).collect();
+                    row = row.child(
+                        div()
+                            .text_size(px(9.0))
+                            .line_height(px(13.0))
+                            .text_color(theme::text_muted().opacity(0.8))
+                            .child(hint),
+                    );
+                }
+                row
+            })
+            .collect();
+
         let counts: HashMap<&str, usize> = self
-            .flow
-            .as_ref()
-            .map(|f| {
+            .current()
+            .map(|t| {
                 let mut m: HashMap<&str, usize> = HashMap::new();
-                for n in f.graph.nodes.values() {
+                for n in t.graph.nodes.values() {
                     *m.entry(kind_label(n.kind())).or_default() += 1;
                 }
                 m
@@ -201,7 +338,7 @@ impl FlowScreen {
             .collect();
 
         div()
-            .w(px(190.0))
+            .w(px(250.0))
             .flex_shrink_0()
             .v_flex()
             .gap(px(10.0))
@@ -209,6 +346,23 @@ impl FlowScreen {
             .bg(theme::panel())
             .border_r_1()
             .border_color(theme::hairline())
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme::text_muted())
+                    .child("TEMPLATES"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .id("flow-templates")
+                    .overflow_y_scroll()
+                    .v_flex()
+                    .gap(px(6.0))
+                    .children(rows),
+            )
             .child(
                 div()
                     .text_size(px(10.0))
@@ -224,7 +378,6 @@ impl FlowScreen {
                     .child("Closed enum — extend via profiles, not new kinds."),
             )
             .child(div().v_flex().gap(px(6.0)).children(items))
-            .child(div().flex_1())
             .child(
                 div()
                     .v_flex()
@@ -376,16 +529,15 @@ impl FlowScreen {
 
     fn render_canvas(&self, cx: &mut Context<Self>) -> Div {
         let (name, node_count, edge_count) = self
-            .flow
-            .as_ref()
-            .map(|f| (f.name.clone(), f.graph.nodes.len(), f.graph.edges.len()))
+            .current()
+            .map(|t| (t.label.clone(), t.graph.nodes.len(), t.graph.edges.len()))
             .unwrap_or_else(|| ("—".to_string(), 0, 0));
 
         let positions = self.layout();
 
         // resolved edge segments for the canvas
         let mut segs: Vec<EdgeSeg> = Vec::new();
-        if let Some(flow) = &self.flow {
+        if let Some(flow) = self.current() {
             for e in &flow.graph.edges {
                 let from = e.from.node.as_str();
                 let to = e.to.as_str();
@@ -405,7 +557,7 @@ impl FlowScreen {
         // stage children: canvas (back) → node boxes
         let mut stage_children: Vec<AnyElement> =
             vec![self.render_canvas_layer(segs).into_any_element()];
-        if let Some(flow) = &self.flow {
+        if let Some(flow) = self.current() {
             for n in flow.graph.nodes.values() {
                 if let Some(&pos) = positions.get(n.id.as_str()) {
                     stage_children.push(self.render_node_box(n, pos, cx).into_any_element());
@@ -496,7 +648,7 @@ impl FlowScreen {
             .border_l_1()
             .border_color(theme::hairline());
 
-        let Some(flow) = &self.flow else {
+        let Some(flow) = self.current() else {
             return panel.child(ui::meta("no flow loaded").p(px(16.0)));
         };
         let g = &flow.graph;
@@ -716,7 +868,7 @@ impl Render for FlowScreen {
             .size_full()
             .flex()
             .min_h_0()
-            .child(self.render_palette())
+            .child(self.render_palette(cx))
             .child(self.render_canvas(cx))
             .child(self.render_inspector())
     }

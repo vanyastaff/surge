@@ -183,11 +183,17 @@ impl AppSidebar {
             &state.daemon_state,
             ConnectionState::Failed(_) | ConnectionState::Disconnected
         );
-        let (dot, label): (Hsla, &str) = match &state.daemon_state {
-            ConnectionState::Connected(_) => (theme::success(), "DAEMON · LIVE"),
-            ConnectionState::Connecting => (theme::warning(), "DAEMON · SYNC"),
-            ConnectionState::Failed(_) | ConnectionState::Disconnected => {
-                (theme::text_muted(), "DAEMON · OFFLINE — START")
+        let (dot, label): (Hsla, String) = match &state.daemon_state {
+            ConnectionState::Connected(_) => (theme::success(), "DAEMON · LIVE".into()),
+            ConnectionState::Connecting => (theme::warning(), "DAEMON · SYNC".into()),
+            ConnectionState::Failed(reason) => {
+                // The real reason, not a generic OFFLINE: an operator
+                // staring at a dead footer deserves to know why.
+                let head: String = reason.chars().take(60).collect();
+                (theme::error(), format!("DAEMON · {head}"))
+            },
+            ConnectionState::Disconnected => {
+                (theme::text_muted(), "DAEMON · OFFLINE — START".into())
             },
         };
 

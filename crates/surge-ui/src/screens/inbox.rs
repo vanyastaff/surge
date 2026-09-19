@@ -8,12 +8,13 @@
 //! Real sources, in urgency order:
 //! 1. **Live blocked decisions** from per-run event streams
 //!    ([`AppState::pending_decisions`]): escalations, sandbox
-//!    elevations, human-input requests, gate approvals, roadmap
-//!    patches. Gate/input items resolve through the real
-//!    `EngineFacade::resolve_human_input` IPC; errors surface verbatim.
-//! 2. **Tasks awaiting review** (`HumanReview` / `QaReview`) — QA
-//!    verdict + reasoning attached as evidence; approve/reject goes
-//!    through the gate-decision plumbing.
+//!    elevations, human-input requests, roadmap patches. Gate/input
+//!    items resolve through the real `EngineFacade::resolve_human_input`
+//!    IPC; errors surface verbatim.
+//! 2. **Tasks awaiting review** (`HumanReview` / `QaReview`) — the QA
+//!    verdict + reasoning are shown as evidence; the task opens in the
+//!    Backlog detail overlay. (Local `TaskEntry`s are not engine state:
+//!    a live run's gate never surfaces as one of these.)
 //! 3. **Failed / aborted runs** — failure triage; opens the cockpit.
 //!
 //! Sandbox elevations have no resolve IPC yet (daemon seam missing) —
@@ -39,8 +40,8 @@ use crate::ui;
 pub enum InboxAction {
     /// Open the run cockpit focused on this run.
     OpenRun(RunId),
-    /// Operator decided a task-level review gate (approve / reject).
-    TaskDecision { task_id: String, approved: bool },
+    /// Navigate to a screen (e.g. Backlog for a task-review item).
+    OpenScreen(crate::router::Screen),
 }
 
 impl EventEmitter<InboxAction> for InboxScreen {}
@@ -54,8 +55,9 @@ enum Source {
         kind: DecisionKind,
         call_id: Option<String>,
     },
-    /// A task sitting in HumanReview / QaReview.
-    Task { task_id: String },
+    /// A task sitting in HumanReview / QaReview (local TaskEntry —
+    /// opened in the Backlog overlay, not resolvable here).
+    Task,
     /// A failed or aborted run needing triage.
     FailedRun { run_id: RunId },
     /// Labelled sample (offline).
@@ -87,17 +89,21 @@ pub struct InboxScreen {
     action_note: Option<String>,
     /// Sample items dismissed this session (sample mode only).
     dismissed_samples: Vec<String>,
+    /// Focus handle for the screen-wide arrow navigation.
+    focus: gpui::FocusHandle,
 }
 
 impl InboxScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
+        let focus = cx.focus_handle();
         Self {
             state,
             selected: 0,
             response_input: None,
             action_note: None,
             dismissed_samples: Vec::new(),
+            focus,
         }
     }
 
@@ -206,9 +212,7 @@ impl InboxScreen {
                 ),
                 age: task.updated_at.clone(),
                 evidence,
-                source: Source::Task {
-                    task_id: task.id.to_string(),
-                },
+                source: Source::Task,
             });
         }
 
@@ -298,14 +302,26 @@ impl InboxScreen {
     /// Read the shared comment box and clear it — a comment belongs to
     /// exactly one decision, never the next one too.
     fn take_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> String {
-        let Some(input) = self.response_input.clone() else {
-            return String::new();
-        };
-        let text = input.read(cx).value().trim().to_string();
+        let text = self.comment_text(cx);
         if !text.is_empty() {
-            input.update(cx, |s, cx| s.set_value("", window, cx));
+            self.clear_comment(window, cx);
         }
         text
+    }
+
+    /// The current comment-box text (untrimmed → trimmed).
+    fn comment_text(&self, cx: &Context<Self>) -> String {
+        self.response_input
+            .as_ref()
+            .map(|input| input.read(cx).value().trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Wipe the shared comment box.
+    fn clear_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.response_input.clone() {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
     }
 
     fn decide(
@@ -331,11 +347,9 @@ impl InboxScreen {
                 }
                 self.resolve_live(*run_id, call_id.clone(), payload, cx);
             },
-            Source::Task { task_id } => {
-                cx.emit(InboxAction::TaskDecision {
-                    task_id: task_id.clone(),
-                    approved: outcome == "approve",
-                });
+            Source::Task => {
+                // Informational item (no resolvable channel here); the
+                // focus pane's "Open backlog" button does the navigating.
             },
             Source::FailedRun { run_id } => {
                 cx.emit(InboxAction::OpenRun(*run_id));
@@ -346,6 +360,19 @@ impl InboxScreen {
                 self.selected = 0;
                 cx.notify();
             },
+        }
+    }
+
+    /// Send the free-text response for the currently selected item (if
+    /// it is a tool-driven human-input request). Bound to ↵ in the
+    /// comment box.
+    fn send_response_to_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (items, _) = self.items(cx);
+        if let Some(item) = items
+            .get(self.selected.min(items.len().saturating_sub(1)))
+            .cloned()
+        {
+            self.send_response(&item, window, cx);
         }
     }
 
@@ -445,9 +472,7 @@ impl InboxScreen {
                     if this.selected != i {
                         // A half-typed comment belongs to the item it was
                         // written for — never carry it to the next one.
-                        if let Some(input) = this.response_input.clone() {
-                            input.update(cx, |s, cx| s.set_value("", window, cx));
-                        }
+                        this.clear_comment(window, cx);
                     }
                     this.selected = i;
                     this.action_note = None;
@@ -571,13 +596,7 @@ impl InboxScreen {
                 window,
                 |this: &mut Self, _input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
-                        let (items, _) = this.items(cx);
-                        if let Some(item) = items
-                            .get(this.selected.min(items.len().saturating_sub(1)))
-                            .cloned()
-                        {
-                            this.send_response(&item, window, cx);
-                        }
+                        this.send_response_to_selected(window, cx);
                     }
                 },
             )
@@ -626,7 +645,7 @@ impl InboxScreen {
                 ..
             }
         );
-        let is_task = matches!(&item.source, Source::Task { .. });
+        let is_task = matches!(&item.source, Source::Task);
 
         let mut pane = div()
             .flex_1()
@@ -697,7 +716,7 @@ impl InboxScreen {
         }
 
         // response / comment input — only where a decision can carry it
-        if is_tool_input || is_gate_input || is_task {
+        if is_tool_input || is_gate_input {
             pane =
                 pane.child(
                     div()
@@ -847,26 +866,27 @@ impl InboxScreen {
                     ),
                 );
             }
+        } else if is_task {
+            // Local task-review rows are informational: the task opens
+            // in the Backlog overlay. No approve/reject buttons — those
+            // would fake a decision channel the engine never sees.
+            actions = actions.child(
+                secondary("inbox-open-task".into(), "Open backlog".to_string()).on_click(
+                    cx.listener(|_this, _e, _w, cx| {
+                        cx.emit(InboxAction::OpenScreen(crate::router::Screen::Backlog));
+                    }),
+                ),
+            );
         } else {
-            // Task review gates + samples: canonical approve / reject.
-            let item_approve = item.clone();
-            let item_reject = item.clone();
-            actions = actions
-                .child(
-                    primary("inbox-approve".into(), "Approve".to_string()).on_click(cx.listener(
-                        move |this, _e, window, cx| {
-                            this.decide(&item_approve, "approve", window, cx);
-                        },
-                    )),
-                )
-                .child(div().flex_1())
-                .child(
-                    danger("inbox-reject".into(), "Reject".to_string()).on_click(cx.listener(
-                        move |this, _e, window, cx| {
-                            this.decide(&item_reject, "reject", window, cx);
-                        },
-                    )),
-                );
+            // Sample rows: dismiss. Real sources are all handled above.
+            let item_dismiss = item.clone();
+            actions = actions.child(
+                secondary("inbox-dismiss".into(), "Dismiss".to_string()).on_click(cx.listener(
+                    move |this, _e, window, cx| {
+                        this.decide(&item_dismiss, "dismiss", window, cx);
+                    },
+                )),
+            );
         }
 
         pane.child(actions)
@@ -900,13 +920,46 @@ impl Render for InboxScreen {
             None => self.render_all_clear().into_any_element(),
         };
 
-        // Plain .flex() row so both panes stretch to full height
-        // (h_flex would vertically center them).
-        div()
-            .size_full()
-            .flex()
-            .child(self.render_queue(&items, live, cx))
-            .child(focus)
+        // Queue navigation: j/k move (vim-style), so typing in the
+        // comment box (arrows, Enter) is never intercepted. The
+        // keynav surface takes focus once the user clicks the screen —
+        // it never steals focus from an input.
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus);
+        }
+        let keynav = div()
+            .id("inbox-keynav")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _w, cx| {
+                let moved = match event.keystroke.key.as_ref() {
+                    "j" => {
+                        this.selected = this.selected.saturating_add(1);
+                        true
+                    },
+                    "k" => {
+                        this.selected = this.selected.saturating_sub(1);
+                        true
+                    },
+                    _ => false,
+                };
+                if moved {
+                    this.action_note = None;
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
+            .size_full();
+
+        keynav
+            .child(
+                // Plain .flex() row so both panes stretch to full height
+                // (h_flex would vertically center them).
+                div()
+                    .flex()
+                    .child(self.render_queue(&items, live, cx))
+                    .child(focus),
+            )
+            .into_any_element()
     }
 }
 

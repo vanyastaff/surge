@@ -1,11 +1,3 @@
-// UI code under development - suppress dead code warnings temporarily
-#![allow(dead_code)]
-#![allow(unused_variables)]
-// Pre-existing legacy code; M5 does not modify surge-ui.  Suppress pedantic
-// lints that activate because -D clippy::pedantic is now applied workspace-wide.
-#![allow(clippy::excessive_nesting)]
-#![allow(clippy::ptr_arg)]
-
 mod actions;
 mod app;
 mod app_state;
@@ -14,6 +6,8 @@ mod daemon_link;
 mod markdown;
 mod notifications;
 mod project;
+mod queue_link;
+mod replay_link;
 mod router;
 mod run_stream;
 mod screens;

@@ -170,10 +170,6 @@ pub fn apply_theme(name: ThemeName, mode: ThemeMode) {
     COLORS.with(|c| *c.borrow_mut() = colors);
 }
 
-pub fn set_accent(accent: Hsla) {
-    COLORS.with(|c| c.borrow_mut().primary = accent);
-}
-
 fn get<F: FnOnce(&SurgeThemeColors) -> Hsla>(f: F) -> Hsla {
     COLORS.with(|c| f(&c.borrow()))
 }
@@ -255,66 +251,3 @@ pub fn hairline_strong() -> Hsla {
 pub fn graph_line() -> Hsla {
     get(|c| c.graph_line)
 }
-
-// ── Backwards compat aliases (will be removed) ────────────────────
-// These keep old code compiling during migration. Values are kept in
-// sync with `SurgeThemeColors::dark(ThemeName::Default.accent())` so
-// screens that still read these consts render the same colours as
-// screens that have already migrated to the dynamic accessors —
-// nobody sees a half-yellow / half-purple frame mid-migration.
-
-pub const PRIMARY: Hsla = Hsla {
-    // ThemeName::Default.accent() = hsla(45°, 0.85, 0.55).
-    h: 45.0 / 360.0,
-    s: 0.85,
-    l: 0.55,
-    a: 1.0,
-};
-pub const SURFACE: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.14,
-    a: 1.0,
-};
-pub const BACKGROUND: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.07,
-    a: 1.0,
-};
-pub const SIDEBAR_BG: Hsla = Hsla {
-    h: 240.0 / 360.0,
-    s: 0.33,
-    l: 0.10,
-    a: 1.0,
-};
-pub const TEXT_PRIMARY: Hsla = Hsla {
-    h: 0.0,
-    s: 0.0,
-    l: 0.93,
-    a: 1.0,
-};
-pub const TEXT_MUTED: Hsla = Hsla {
-    h: 0.0,
-    s: 0.0,
-    l: 0.55,
-    a: 1.0,
-};
-pub const SUCCESS: Hsla = Hsla {
-    h: 142.0 / 360.0,
-    s: 0.71,
-    l: 0.45,
-    a: 1.0,
-};
-pub const WARNING: Hsla = Hsla {
-    h: 38.0 / 360.0,
-    s: 0.92,
-    l: 0.50,
-    a: 1.0,
-};
-pub const ERROR: Hsla = Hsla {
-    h: 0.0 / 360.0,
-    s: 0.84,
-    l: 0.60,
-    a: 1.0,
-};

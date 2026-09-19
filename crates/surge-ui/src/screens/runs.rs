@@ -1,17 +1,23 @@
-//! Runs — the per-run cockpit (rail · stage pipeline · event log · steer).
+//! Runs — the per-run cockpit (rail · stage pipeline · event log ·
+//! artifacts · steer).
 //!
-//! Adapted from the "Surge - Interactive" concept. Everything rendered
-//! from live data is real: the run rail and KPI strip come from
-//! [`AppState::runs`] (daemon `list_runs` + global events), **Stop run**
-//! calls `EngineFacade::stop_run`, and the steer bar queues a real
-//! operator message via `EngineFacade::submit_steer`.
+//! Everything rendered from live data is real: the run rail and KPI
+//! strip come from [`AppState::runs`] (daemon `list_runs` + global
+//! events), **Stop run** calls `EngineFacade::stop_run`, and the steer
+//! bar queues a real operator message via `EngineFacade::submit_steer`.
 //!
-//! What the daemon does NOT expose yet (per-run stage/event streaming —
-//! `daemon_link.rs` stops at global lifecycle events) is shown honestly:
-//! the pipeline renders the run *lifecycle* (accepted → executing →
-//! terminal) rather than fake graph stages, and the event pane says so.
-//! When there are no runs at all, a clearly-labelled sample cockpit
-//! shows the design intent offline (same policy as the Fleet screen).
+//! The stage pipeline and event log come from two honest sources:
+//! the **live per-run stream** when attached (folded telemetry), or a
+//! **durable replay** ([`crate::replay_link`]) folded from the run's
+//! event log in `~/.surge/runs/<id>/` — loaded in the background for
+//! every selected run without a live stream, so a run that finished
+//! before the cockpit opened is still fully reconstructable. A queued
+//! run has no log yet; the pane says so.
+//!
+//! The artifacts pane lists the run's durable artifacts
+//! (`RunReader::artifacts`); clicking one renders its text content
+//! inline (UTF-8, size-capped). When there are no runs at all, a
+//! clearly-labelled sample cockpit shows the design intent offline.
 
 use std::time::Duration;
 
@@ -24,6 +30,7 @@ use surge_orchestrator::engine::facade::EngineFacade as _;
 use surge_orchestrator::engine::handle::RunStatus;
 
 use crate::app_state::{AppState, UiRun};
+use crate::replay_link::{ReplayArtifact, ReplaySnapshot};
 use crate::theme;
 use crate::ui;
 
@@ -157,6 +164,17 @@ fn fmt_tokens(n: u64) -> String {
     }
 }
 
+/// Artifact size label ("1.2 kB", "340 kB", "2.1 MB").
+fn format_artifact_size(bytes: u64) -> String {
+    if bytes < 1_000 {
+        format!("{bytes} B")
+    } else if bytes < 1_000_000 {
+        format!("{:.1} kB", bytes as f64 / 1000.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    }
+}
+
 /// Lifecycle pipeline for a real run: what we truthfully know from
 /// `RunStatus` alone. Per-node graph stages arrive with the per-run
 /// event stream (follow-up daemon phase).
@@ -258,6 +276,39 @@ impl RunRow {
             self.usage = Some((stream.tokens_in, stream.tokens_out, stream.cost_usd));
         }
     }
+
+    /// Enrich a row with a durable replay (folded event log): same
+    /// pipeline/log/usage projection as the live stream. Only fills
+    /// gaps — a live stream wins where both exist.
+    fn attach_replay(&mut self, replay: &crate::replay_link::ReplaySnapshot) {
+        if self.stages.len() <= 1 {
+            let stages: Vec<Stage> = replay.stages.iter().map(stage_from_stream).collect();
+            if !stages.is_empty() {
+                self.stages = stages;
+            }
+        }
+        if self.event_rows.is_empty() && !replay.rows.is_empty() {
+            self.event_rows = replay
+                .rows
+                .iter()
+                .rev()
+                .map(|r| EventRow {
+                    t: r.time.clone(),
+                    kind: r.kind,
+                    color: r.tone.color(),
+                    text: r.text.clone(),
+                })
+                .collect();
+        }
+        if replay.last_seq > 0 {
+            self.events = replay.last_seq.to_string();
+        }
+        if self.usage.is_none()
+            && (replay.tokens_in > 0 || replay.tokens_out > 0 || replay.cost_usd > 0.0)
+        {
+            self.usage = Some((replay.tokens_in, replay.tokens_out, replay.cost_usd));
+        }
+    }
 }
 
 /// Runs screen — daemon-run cockpit.
@@ -270,28 +321,45 @@ pub struct RunsScreen {
     steer_input: Option<Entity<InputState>>,
     /// One-line feedback from the last facade call (honest, verbatim).
     action_note: Option<String>,
+    /// Durable replays folded from the event log, keyed by run.
+    replays: crate::replay_link::ReplayCache,
+    /// Replay loads in flight (no double-fetch per render).
+    replay_loading: std::collections::HashSet<RunId>,
+    /// Runs whose replay load failed (missing log / no runtime) —
+    /// retried only on an explicit re-select, not on every render.
+    replay_failed: std::collections::HashSet<RunId>,
+    /// Artifacts of the selected run, loaded in the background.
+    artifacts: Vec<ReplayArtifact>,
+    /// Runs whose artifact listing failed — not retried per render.
+    artifacts_failed: std::collections::HashSet<RunId>,
+    /// Artifact load in flight.
+    artifacts_loading: bool,
+    /// Text of the currently opened artifact (inline viewer).
+    artifact_view: Option<(String, String)>,
+    /// Artifact loads in flight.
+    artifact_loading: Option<String>,
 }
 
 impl RunsScreen {
+    /// One ticker beat: notify only while a non-terminal run exists —
+    /// terminal-only lists are frozen, so waking the renderer for them
+    /// is pure waste.
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        let ticking = self.state.read(cx).runs.iter().any(|r| !r.is_terminal());
+        if ticking {
+            cx.notify();
+        }
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
 
-        // 1s ticker so ELAPSED / age counters move. Notifies only while
-        // a non-terminal run exists — terminal-only lists are frozen, so
-        // waking the renderer for them is pure waste.
+        // 1s ticker so ELAPSED / age counters move.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                let alive = cx.update(|cx| {
-                    this.update(cx, |screen, cx| {
-                        let ticking = screen.state.read(cx).runs.iter().any(|r| !r.is_terminal());
-                        if ticking {
-                            cx.notify();
-                        }
-                    })
-                    .is_ok()
-                });
-                if !matches!(alive, Ok(true)) {
+                let alive = cx.update(|cx| this.update(cx, RunsScreen::tick)).is_ok();
+                if !alive {
                     break;
                 }
             }
@@ -304,17 +372,151 @@ impl RunsScreen {
             sample_selected: 0,
             steer_input: None,
             action_note: None,
+            replays: std::collections::HashMap::new(),
+            replay_loading: std::collections::HashSet::new(),
+            replay_failed: std::collections::HashSet::new(),
+            artifacts: Vec::new(),
+            artifacts_failed: std::collections::HashSet::new(),
+            artifacts_loading: false,
+            artifact_view: None,
+            artifact_loading: None,
         }
     }
 
-    /// Focus a specific run (used by Fleet → "Open run" deep links).
+    /// Focus a specific run (used by Fleet → "Open run" deep links and
+    /// rail clicks). Resets per-run panes so a switch does not show the
+    /// previous run's artifacts.
     pub fn select_run(&mut self, run_id: RunId, cx: &mut Context<Self>) {
-        self.selected = Some(run_id);
+        if self.selected != Some(run_id) {
+            self.selected = Some(run_id);
+            self.artifact_view = None;
+            self.artifacts.clear();
+        }
+        cx.notify();
+    }
+
+    /// Kick a durable replay fold for the selected run when it has no
+    /// live stream and no cached replay yet. Runs in the background;
+    /// the render path only reads the cache.
+    fn ensure_replay(&mut self, run_id: RunId, cx: &mut Context<Self>) {
+        let has_live_stream = self
+            .state
+            .read(cx)
+            .run_streams
+            .get(&run_id)
+            .is_some_and(|s| s.live);
+        if has_live_stream
+            || self.replays.contains_key(&run_id)
+            || self.replay_failed.contains(&run_id)
+            || !self.replay_loading.insert(run_id)
+        {
+            return;
+        }
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let snap = crate::replay_link::load_replay(run_id).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| screen.apply_replay(run_id, snap, cx));
+            });
+        })
+        .detach();
+    }
+
+    /// Store (or log) a finished replay load. A failure is *remembered*
+    /// for the session: retrying on every render would spin the loop a
+    /// no-runtime / no-log environment lives in.
+    fn apply_replay(
+        &mut self,
+        run_id: RunId,
+        snap: Result<ReplaySnapshot, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.replay_loading.remove(&run_id);
+        match snap {
+            Ok(s) => {
+                self.replays.insert(run_id, s);
+            },
+            Err(e) => {
+                tracing::debug!(run_id = %run_id, "replay load failed: {e}");
+                self.replay_failed.insert(run_id);
+            },
+        }
+        cx.notify();
+    }
+
+    /// Kick an artifact listing for the selected run.
+    fn ensure_artifacts(&mut self, run_id: RunId, cx: &mut Context<Self>) {
+        if self.artifacts_loading || self.artifacts_failed.contains(&run_id) {
+            return;
+        }
+        self.artifacts_loading = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = crate::replay_link::load_artifacts(run_id).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| screen.apply_artifacts(run_id, result, cx));
+            });
+        })
+        .detach();
+    }
+
+    /// Store (or log) a finished artifact listing.
+    fn apply_artifacts(
+        &mut self,
+        run_id: RunId,
+        result: Result<Vec<ReplayArtifact>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.artifacts_loading = false;
+        match result {
+            Ok(a) => self.artifacts = a,
+            Err(e) => {
+                tracing::debug!(run_id = %run_id, "artifact list failed: {e}");
+                self.artifacts.clear();
+                self.artifacts_failed.insert(run_id);
+            },
+        }
+        cx.notify();
+    }
+
+    /// Open one artifact's text inline (background load, capped size).
+    fn open_artifact(&mut self, run_id: RunId, artifact: &ReplayArtifact, cx: &mut Context<Self>) {
+        let hash = artifact.content_hash.clone();
+        let name = artifact.name.clone();
+        if self.artifact_loading.as_deref() == Some(hash.as_str()) {
+            return;
+        }
+        self.artifact_loading = Some(hash.clone());
+        self.artifact_view = None;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = crate::replay_link::read_artifact_text(run_id, hash.clone()).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.apply_artifact_text(name, result, cx)
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Store a finished artifact text load.
+    fn apply_artifact_text(
+        &mut self,
+        name: String,
+        result: Result<Option<String>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.artifact_loading = None;
+        match result {
+            Ok(Some(text)) => self.artifact_view = Some((name, text)),
+            Ok(None) => {
+                self.artifact_view = Some((name, "(binary or too large to display)".into()));
+            },
+            Err(e) => self.artifact_view = Some((name, format!("read failed: {e}"))),
+        }
         cx.notify();
     }
 
     /// Rail rows + selected index. Real when any runs exist, else sample.
-    fn rows(&self, cx: &Context<Self>) -> (Vec<RunRow>, usize, bool) {
+    fn rows(&mut self, cx: &Context<Self>) -> (Vec<RunRow>, usize, bool) {
         let state = self.state.read(cx);
         if state.runs.is_empty() {
             let rows = sample_rows();
@@ -329,6 +531,9 @@ impl RunsScreen {
                 let mut row = RunRow::from_run(run);
                 if let Some(stream) = state.run_streams.get(&run.run_id) {
                     row.attach_stream(stream);
+                }
+                if let Some(replay) = self.replays.get(&run.run_id) {
+                    row.attach_replay(replay);
                 }
                 row
             })
@@ -361,10 +566,7 @@ impl RunsScreen {
             // Refresh the run list so the rail reflects the new status.
             if let Ok(summaries) = facade.list_runs().await {
                 let _ = cx.update(|cx| {
-                    state.update(cx, |s, cx| {
-                        s.set_runs_from_summaries(&summaries);
-                        cx.notify();
-                    });
+                    state.update(cx, |s, cx| s.refresh_runs(&summaries, cx));
                 });
             }
             let _ = cx.update(|cx| {
@@ -450,7 +652,7 @@ impl RunsScreen {
                 })
                 .on_click(cx.listener(move |this, _e, _w, cx| {
                     match run_id {
-                        Some(id) => this.selected = Some(id),
+                        Some(id) => this.select_run(id, cx),
                         None => this.sample_selected = i,
                     }
                     this.action_note = None;
@@ -974,6 +1176,128 @@ impl RunsScreen {
             .child(body)
     }
 
+    /// Artifacts strip for the selected run: durable artifact list
+    /// (metadata from `RunReader::artifacts`) with an inline text
+    /// viewer. Hidden when the run has no artifacts.
+    fn render_artifacts(&self, row: &RunRow, cx: &mut Context<Self>) -> Div {
+        let Some(run_id) = row.run_id else {
+            return div();
+        };
+
+        let mut pane = div()
+            .flex_shrink_0()
+            .h_flex()
+            .gap(px(8.0))
+            .items_center()
+            .px(px(20.0))
+            .pb(px(10.0))
+            .child(
+                div()
+                    .text_size(px(9.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme::text_muted())
+                    .child("ARTIFACTS"),
+            );
+
+        if self.artifacts_loading && self.artifacts.is_empty() {
+            pane = pane.child(ui::meta("loading…"));
+            return pane;
+        }
+        if self.artifacts.is_empty() {
+            pane = pane.child(ui::meta("none yet"));
+            return pane;
+        }
+
+        for (i, artifact) in self.artifacts.iter().take(8).enumerate() {
+            let artifact_name = artifact.name.clone();
+            let artifact_size = artifact.size_bytes;
+            let artifact_for_click = artifact.clone();
+            let is_open = self
+                .artifact_view
+                .as_ref()
+                .is_some_and(|(n, _)| *n == artifact.name);
+            pane = pane.child(
+                div()
+                    .id(SharedString::from(format!("runs-artifact-{i}")))
+                    .h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if is_open {
+                        theme::accent().opacity(0.5)
+                    } else {
+                        theme::hairline()
+                    })
+                    .bg(if is_open {
+                        theme::accent().opacity(0.08)
+                    } else {
+                        theme::panel_raised()
+                    })
+                    .cursor_pointer()
+                    .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
+                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                        this.open_artifact(run_id, &artifact_for_click, cx);
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text_primary())
+                            .child(artifact_name),
+                    )
+                    .child(ui::meta(format_artifact_size(artifact_size))),
+            );
+        }
+
+        pane
+    }
+
+    /// Inline artifact text viewer (below the artifacts strip).
+    fn render_artifact_view(&self) -> Option<Stateful<Div>> {
+        let (name, text) = self.artifact_view.as_ref()?;
+        Some(
+            div()
+                .mx(px(20.0))
+                .mb(px(12.0))
+                .flex_1()
+                .min_h_0()
+                .id("runs-artifact-view")
+                .overflow_y_scroll()
+                .v_flex()
+                .gap(px(6.0))
+                .p(px(12.0))
+                .rounded_lg()
+                .bg(theme::panel_deep())
+                .border_1()
+                .border_color(theme::hairline())
+                .child(
+                    div()
+                        .h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme::text_muted())
+                                .child(name.clone()),
+                        )
+                        .child(ui::meta("durable artifact · content-addressed")),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .line_height(px(16.0))
+                        .font_family(crate::ui::MONO)
+                        .text_color(theme::text_primary().opacity(0.85))
+                        .child(text.clone()),
+                ),
+        )
+    }
+
     fn render_steer_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.steer_input.is_none() {
             let input = cx.new(|cx| {
@@ -1035,12 +1359,30 @@ impl Render for RunsScreen {
         let (rows, sel, live) = self.rows(cx);
         let selected = rows.get(sel).cloned();
 
+        // Background fills for the selected run: durable replay (when no
+        // live stream) + artifact listing. Idempotent — guarded by the
+        // in-flight sets inside each `ensure_*`.
+        if let Some(run_id) = selected.as_ref().and_then(|row| row.run_id) {
+            let has_live_stream = self
+                .state
+                .read(cx)
+                .run_streams
+                .get(&run_id)
+                .is_some_and(|s| s.live);
+            if !has_live_stream {
+                self.ensure_replay(run_id, cx);
+            }
+            self.ensure_artifacts(run_id, cx);
+        }
+
         let mut main = div().flex_1().min_w_0().v_flex();
         if let Some(row) = &selected {
             main = main
                 .child(self.render_header(row, live, cx))
                 .child(self.render_kpis(row))
                 .child(self.render_pipeline(row, live))
+                .child(self.render_artifacts(row, cx))
+                .children(self.render_artifact_view())
                 .child(self.render_event_log(row, live));
         } else {
             main = main.child(

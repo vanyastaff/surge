@@ -343,7 +343,8 @@ fn worktrees_screen_renders_populated_state() {
 fn flow_screen_renders() {
     let mut cx = TestAppContext::single();
     init_components(&mut cx);
-    render_screen(&mut cx, |_, cx| FlowScreen::new(cx));
+    let state = cx.new(|_| empty_app_state());
+    render_screen(&mut cx, |_, cx| FlowScreen::new(state, cx));
 }
 
 #[test]

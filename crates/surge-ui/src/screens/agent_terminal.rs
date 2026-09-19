@@ -34,8 +34,6 @@ pub struct ThinkingBlock {
 #[derive(Debug, Clone)]
 pub struct PermissionBlock {
     pub description: String,
-    pub tool_call_id: String,
-    pub options: Vec<String>,
     pub resolved: Option<bool>,
 }
 
@@ -59,6 +57,21 @@ pub enum ChatItem {
 }
 
 // ── Screen ──────────────────────────────────────────────────────────
+
+/// Deliver one live-stream event to the terminal timeline. A free
+/// function so the pump loop's nesting stays inside the lint budget.
+async fn deliver_stream_event(
+    this: &WeakEntity<AgentTerminalScreen>,
+    event: surge_core::SurgeEvent,
+    cx: &mut AsyncApp,
+) {
+    cx.update(|cx| {
+        let _ = this.update(cx, |this: &mut AgentTerminalScreen, cx| {
+            this.on_stream_event(event, cx);
+        });
+    })
+    .ok();
+}
 
 /// Agent Terminal screen — IDE-style chat with streaming responses.
 pub struct AgentTerminalScreen {
@@ -200,173 +213,18 @@ impl AgentTerminalScreen {
         let existing_session = self.session.clone();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let session = if let Some(s) = existing_session {
-                s
-            } else {
-                match pool
-                    .create_session(Some(&agent_name), None, &cwd)
-                    .await
-                {
-                    Ok(s) => {
-                        let s_clone = s.clone();
-                        cx.update(|cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.session = Some(s_clone);
-                                cx.notify();
-                            });
-                        })
-                        .ok();
-                        s
-                    }
-                    Err(e) => {
-                        let err = format!("Session error: {e}");
-                        cx.update(|cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.items.push(ChatItem::System { content: err });
-                                this.is_sending = false;
-                                cx.notify();
-                            });
-                        })
-                        .ok();
-                        return;
-                    }
-                }
+            let session = match existing_session {
+                Some(s) => s,
+                None => match Self::create_session(&pool, &agent_name, &cwd, &this, cx).await {
+                    Ok(s) => s,
+                    Err(()) => return,
+                },
             };
 
             let this_for_events = this.clone();
             let event_task = cx.spawn(async move |cx: &mut AsyncApp| {
                 while let Ok(event) = event_rx.recv().await {
-                    match event {
-                        surge_core::SurgeEvent::AgentMessageChunk { text, .. } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    this.ensure_agent_text().push_str(&text);
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::AgentThoughtChunk { text, .. } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    this.ensure_thinking().text.push_str(&text);
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::ToolCallStarted {
-                            call_id,
-                            title,
-                            kind,
-                            locations,
-                            raw_input,
-                            ..
-                        } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    this.collapsed.insert(call_id.clone(), true);
-                                    this.items.push(ChatItem::ToolCall(ToolCallBlock {
-                                        call_id,
-                                        title,
-                                        kind,
-                                        status: surge_core::ToolCallStatus::InProgress,
-                                        locations,
-                                        raw_input,
-                                        diffs: Vec::new(),
-                                        raw_output: None,
-                                    }));
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::ToolCallUpdated {
-                            call_id,
-                            status,
-                            title,
-                            diffs,
-                            locations,
-                            raw_output,
-                            ..
-                        } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    if let Some(tc) = this.find_tool_call_mut(&call_id) {
-                                        if let Some(s) = status {
-                                            tc.status = s;
-                                        }
-                                        if let Some(t) = title {
-                                            tc.title = t;
-                                        }
-                                        if !diffs.is_empty() {
-                                            tc.diffs.extend(diffs);
-                                        }
-                                        if !locations.is_empty() {
-                                            tc.locations = locations;
-                                        }
-                                        if raw_output.is_some() {
-                                            tc.raw_output = raw_output;
-                                        }
-                                    }
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::PlanUpdated { entries, .. } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    let found = this.items.iter_mut().rev().any(|item| {
-                                        if let ChatItem::Plan {
-                                            entries: existing, ..
-                                        } = item
-                                        {
-                                            *existing = entries.clone();
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                    if !found {
-                                        this.items.push(ChatItem::Plan { entries });
-                                    }
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::PermissionRequested {
-                            description,
-                            tool_call_id,
-                            options,
-                            ..
-                        } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    this.items.push(ChatItem::Permission(PermissionBlock {
-                                        description,
-                                        tool_call_id,
-                                        options,
-                                        resolved: None,
-                                    }));
-                                    this.scroll_handle.scroll_to_bottom();
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        surge_core::SurgeEvent::PermissionResolved { granted, .. } => {
-                            let _ = cx.update(|cx| {
-                                let _ = this_for_events.update(cx, |this, cx| {
-                                    if let Some(p) = this.find_pending_permission_mut() {
-                                        p.resolved = Some(granted);
-                                    }
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        _ => {}
-                    }
+                    deliver_stream_event(&this_for_events, event, cx).await;
                 }
             });
 
@@ -378,25 +236,8 @@ impl AgentTerminalScreen {
             drop(event_task);
 
             cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    match result {
-                        Ok(_) => {
-                            let has_content = this.items.iter().rev().take(20).any(|item| {
-                                matches!(item, ChatItem::AgentText { content } if !content.is_empty())
-                                    || matches!(item, ChatItem::ToolCall(_))
-                            });
-                            if !has_content {
-                                this.items.push(ChatItem::System {
-                                    content: "(Agent completed with no output)".to_string(),
-                                });
-                            }
-                        }
-                        Err(err) => {
-                            this.items.push(ChatItem::System {
-                                content: format!("Error: {err}"),
-                            });
-                        }
-                    }
+                let _ = this.update(cx, |this: &mut Self, cx| {
+                    this.finish_prompt(result);
                     this.is_sending = false;
                     this.scroll_handle.scroll_to_bottom();
                     cx.notify();
@@ -405,6 +246,165 @@ impl AgentTerminalScreen {
             .ok();
         })
         .detach();
+    }
+
+    /// Create an ACP session for the terminal, recording it (or the
+    /// failure) in the screen state. `Err(())` = session could not be
+    /// created; the error item is already on the timeline.
+    async fn create_session(
+        pool: &surge_acp::AgentPool,
+        agent_name: &str,
+        cwd: &std::path::Path,
+        this: &WeakEntity<Self>,
+        cx: &mut AsyncApp,
+    ) -> Result<surge_acp::SessionHandle, ()> {
+        let session = pool
+            .create_session(Some(agent_name), None, cwd)
+            .await
+            .map_err(|e| {
+                let err = format!("Session error: {e}");
+                cx.update(|cx| {
+                    let _ = this.update(cx, |this: &mut Self, cx| {
+                        this.items.push(ChatItem::System { content: err });
+                        this.is_sending = false;
+                        cx.notify();
+                    });
+                })
+                .ok();
+            })?;
+        let s_clone = session.clone();
+        cx.update(|cx| {
+            let _ = this.update(cx, |this: &mut Self, cx| {
+                this.session = Some(s_clone);
+                cx.notify();
+            });
+        })
+        .ok();
+        Ok(session)
+    }
+
+    /// Post-prompt bookkeeping: surface a placeholder when the agent
+    /// finished without producing any visible output, or the error.
+    fn finish_prompt(
+        &mut self,
+        result: Result<agent_client_protocol::PromptResponse, surge_core::SurgeError>,
+    ) {
+        match result {
+            Ok(_) => {
+                let has_content = self.items.iter().rev().take(20).any(|item| {
+                    matches!(item, ChatItem::AgentText { content } if !content.is_empty())
+                        || matches!(item, ChatItem::ToolCall(_))
+                });
+                if !has_content {
+                    self.items.push(ChatItem::System {
+                        content: "(Agent completed with no output)".to_string(),
+                    });
+                }
+            },
+            Err(err) => {
+                self.items.push(ChatItem::System {
+                    content: format!("Error: {err}"),
+                });
+            },
+        }
+    }
+
+    /// One live-stream event delivered to the timeline: fold it, scroll.
+    fn on_stream_event(&mut self, event: surge_core::SurgeEvent, cx: &mut Context<Self>) {
+        self.handle_surge_event(event, cx);
+        self.scroll_handle.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// Fold one live `SurgeEvent` into the conversation timeline.
+    /// Split out of the event-pump task so the async closure stays flat
+    /// (excessive_nesting).
+    fn handle_surge_event(&mut self, event: surge_core::SurgeEvent, cx: &mut Context<Self>) {
+        use surge_core::SurgeEvent;
+        match event {
+            SurgeEvent::AgentMessageChunk { text, .. } => {
+                self.ensure_agent_text().push_str(&text);
+            },
+            SurgeEvent::AgentThoughtChunk { text, .. } => {
+                self.ensure_thinking().text.push_str(&text);
+            },
+            SurgeEvent::ToolCallStarted {
+                call_id,
+                title,
+                kind,
+                locations,
+                raw_input,
+                ..
+            } => {
+                self.collapsed.insert(call_id.clone(), true);
+                self.items.push(ChatItem::ToolCall(ToolCallBlock {
+                    call_id,
+                    title,
+                    kind,
+                    status: surge_core::ToolCallStatus::InProgress,
+                    locations,
+                    raw_input,
+                    diffs: Vec::new(),
+                    raw_output: None,
+                }));
+            },
+            SurgeEvent::ToolCallUpdated {
+                call_id,
+                status,
+                title,
+                diffs,
+                locations,
+                raw_output,
+                ..
+            } => {
+                if let Some(tc) = self.find_tool_call_mut(&call_id) {
+                    if let Some(s) = status {
+                        tc.status = s;
+                    }
+                    if let Some(t) = title {
+                        tc.title = t;
+                    }
+                    if !diffs.is_empty() {
+                        tc.diffs.extend(diffs);
+                    }
+                    if !locations.is_empty() {
+                        tc.locations = locations;
+                    }
+                    if raw_output.is_some() {
+                        tc.raw_output = raw_output;
+                    }
+                }
+            },
+            SurgeEvent::PlanUpdated { entries, .. } => {
+                let found = self.items.iter_mut().rev().any(|item| {
+                    if let ChatItem::Plan {
+                        entries: existing, ..
+                    } = item
+                    {
+                        *existing = entries.clone();
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !found {
+                    self.items.push(ChatItem::Plan { entries });
+                }
+            },
+            SurgeEvent::PermissionRequested { description, .. } => {
+                self.items.push(ChatItem::Permission(PermissionBlock {
+                    description,
+                    resolved: None,
+                }));
+            },
+            SurgeEvent::PermissionResolved { granted, .. } => {
+                if let Some(p) = self.find_pending_permission_mut() {
+                    p.resolved = Some(granted);
+                }
+            },
+            _ => {},
+        }
+        cx.notify();
     }
 
     // ── Rendering ───────────────────────────────────────────────────
@@ -1048,23 +1048,23 @@ fn render_diff(diff: &surge_core::ToolDiff) -> Div {
     );
 
     // Removed lines (red)
-    if let Some(old) = &diff.old_text {
-        if !old.is_empty() {
-            let mut old_block = div().w_full();
-            for line in old.lines() {
-                old_block = old_block.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(1.0))
-                        .bg(hsla(0.0, 0.4, 0.15, 1.0))
-                        .font_family("Consolas")
-                        .text_xs()
-                        .text_color(hsla(0.0, 0.7, 0.7, 1.0))
-                        .child(format!("- {line}")),
-                );
-            }
-            container = container.child(old_block);
+    if let Some(old) = &diff.old_text
+        && !old.is_empty()
+    {
+        let mut old_block = div().w_full();
+        for line in old.lines() {
+            old_block = old_block.child(
+                div()
+                    .px(px(10.0))
+                    .py(px(1.0))
+                    .bg(hsla(0.0, 0.4, 0.15, 1.0))
+                    .font_family("Consolas")
+                    .text_xs()
+                    .text_color(hsla(0.0, 0.7, 0.7, 1.0))
+                    .child(format!("- {line}")),
+            );
         }
+        container = container.child(old_block);
     }
 
     // Added lines (green)

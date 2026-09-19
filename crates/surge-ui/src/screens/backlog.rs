@@ -1,28 +1,31 @@
-//! Backlog — the dispatch queue: Triage → Ready → In flight → Done.
+//! Backlog — the dispatch queue: Queued → Ready → In flight → Done.
 //!
-//! Not a classic kanban (parallel agents move too fast for hand-drag
-//! stages — even kanban-first competitors concede the columns go
-//! stale). Columns here are *derived* from the real [`TaskState`] FSM,
-//! so a card can never disagree with the engine:
+//! The real queue is the registry `task_queue` (mirrored from the
+//! project's `.surge/roadmap.toml`, same file the daemon scheduler and
+//! `surge task` CLI use). Columns here are *derived* from the queue's
+//! `dispatch_state`, so a card can never disagree with the engine:
 //!
-//! - **Triage** — `Draft` (unscoped intake)
-//! - **Ready** — `Planning` / `Planned` (scoped, waiting for capacity)
-//! - **In flight** — `Executing`/`QaReview`/`QaFix`/`HumanReview`/`Merging`
-//! - **Done** — terminal states, labelled truthfully
-//!   (completed / failed / cancelled)
+//! - **Triage** — `Paused` (operator-held) + drafts created in the UI
+//! - **Ready** — `Queued` (mirror says the roadmap carries it)
+//! - **In flight** — `Dispatched` (a run is minted; card links to it)
+//! - **Done** — `Done` / `Failed` terminal rows
+//!
+//! Cards load in the background (`queue_link::load_queue_cards`);
+//! in-memory `TaskEntry` drafts (Spec wizard) render alongside them.
+//! The board shows a labelled sample when there is nothing at all.
 //!
 //! The capacity strip compares installed agents (lanes) against active
-//! daemon runs. "New task" opens the Spec wizard; created drafts land
-//! here in Triage. A labelled sample board renders when the project
-//! has no tasks yet.
+//! daemon runs.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::StyledExt;
+use std::path::PathBuf;
 use surge_core::TaskState;
 use surge_orchestrator::engine::handle::RunStatus;
 
 use crate::app_state::AppState;
+use crate::queue_link::{QueueCard, normalize_project_root};
 use crate::theme;
 use crate::ui;
 
@@ -36,6 +39,8 @@ pub enum BacklogAction {
     /// Dispatch a Ready task as a real bootstrap run (prompt = title +
     /// description).
     Dispatch { prompt: String },
+    /// Open the run cockpit for a dispatched queue row.
+    OpenRun(surge_core::id::RunId),
 }
 
 impl EventEmitter<BacklogAction> for BacklogScreen {}
@@ -60,8 +65,8 @@ impl Column {
 
     fn note(self) -> &'static str {
         match self {
-            Self::Triage => "unscoped",
-            Self::Ready => "scoped",
+            Self::Triage => "held · drafts",
+            Self::Ready => "queued",
             Self::InFlight => "→ Runs",
             Self::Done => "terminal",
         }
@@ -75,7 +80,18 @@ impl Column {
         }
     }
 
-    fn for_state(state: &TaskState) -> Self {
+    /// Column for a registry queue row's dispatch state.
+    fn for_dispatch_state(state: &str) -> Self {
+        match state {
+            "queued" => Self::Ready,
+            "dispatched" => Self::InFlight,
+            "done" | "failed" => Self::Done,
+            // Paused / anything a future schema adds: operator-held.
+            _ => Self::Triage,
+        }
+    }
+
+    fn for_local_state(state: &TaskState) -> Self {
         match state {
             TaskState::Draft => Self::Triage,
             TaskState::Planning | TaskState::Planned { .. } => Self::Ready,
@@ -89,12 +105,13 @@ impl Column {
     }
 }
 
-/// Board card view-model (from a real task or the sample set).
+/// Board card view-model (from the registry queue, a local draft, or
+/// the sample set).
 #[derive(Clone)]
 struct Card {
     /// Real task id (None in sample mode).
     task_id: Option<String>,
-    /// Dispatchable prompt (real Triage/Ready tasks only).
+    /// Dispatchable prompt (drafts only).
     dispatch_prompt: Option<String>,
     id_label: String,
     title: String,
@@ -104,13 +121,78 @@ struct Card {
     meta: String,
     /// Executing progress, when the state carries it.
     progress: Option<(usize, usize)>,
-    /// This card is blocked on the operator (review states).
+    /// Run to open in the cockpit (dispatched registry rows).
+    open_run: Option<surge_core::id::RunId>,
+    /// This card is blocked on the operator or a dependency.
     needs_you: bool,
     column: Column,
 }
 
+/// Human age for an epoch-ms enqueue stamp ("3m", "2h", "5d").
+fn humanize_age(enqueued_at_ms: i64) -> String {
+    let secs = (chrono::Utc::now().timestamp_millis() - enqueued_at_ms) / 1000;
+    match secs {
+        s if s < 0 => String::new(),
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+fn card_from_queue(q: &QueueCard) -> Card {
+    let column = Column::for_dispatch_state(&q.dispatch_state);
+    let pill: (String, Hsla) = match q.dispatch_state.as_str() {
+        "queued" if !q.blocked_by.is_empty() => ("blocked".into(), theme::warning()),
+        "queued" => ("ready".into(), theme::accent()),
+        "dispatched" => match q.run_id {
+            Some(id) => (
+                format!("run r-{}", id.short().to_lowercase()),
+                theme::accent(),
+            ),
+            None => ("dispatched".into(), theme::accent()),
+        },
+        "done" => ("done".into(), theme::success()),
+        "failed" => ("failed".into(), theme::error()),
+        _ => ("held".into(), theme::text_muted()),
+    };
+    let needs_you = !q.blocked_by.is_empty();
+
+    let mut meta = format!(
+        "p{} · {}",
+        q.priority,
+        q.size.clone().unwrap_or_else(|| "unscoped".into())
+    );
+    if q.attempt > 1 {
+        meta.push_str(&format!(" · attempt {}", q.attempt));
+    }
+    if q.skipped_dispatches > 0 {
+        meta.push_str(&format!(" · passed {}×", q.skipped_dispatches));
+    }
+    if !q.depends_on.is_empty() {
+        meta.push_str(&format!(" · deps: {}", q.depends_on.join(", ")));
+    }
+    let age = humanize_age(q.enqueued_at);
+    if !age.is_empty() {
+        meta.push_str(&format!(" · {age}"));
+    }
+
+    Card {
+        task_id: Some(q.task_id.clone()),
+        dispatch_prompt: None,
+        id_label: q.task_id.clone(),
+        title: q.title.clone(),
+        pill,
+        meta,
+        progress: None,
+        needs_you,
+        column,
+        open_run: q.run_id,
+    }
+}
+
 fn card_from_task(task: &crate::app_state::TaskEntry) -> Card {
-    let column = Column::for_state(&task.state);
+    let column = Column::for_local_state(&task.state);
     let (pill, needs_you): ((String, Hsla), bool) = match &task.state {
         TaskState::Draft => (("draft".into(), theme::text_muted()), false),
         TaskState::Planning => (("planning".into(), theme::accent()), false),
@@ -159,28 +241,110 @@ fn card_from_task(task: &crate::app_state::TaskEntry) -> Card {
         pill,
         meta,
         progress,
+        open_run: None,
         needs_you,
         column,
     }
 }
 
-/// Backlog screen — dispatch queue over the real task FSM.
+/// Backlog screen — dispatch queue over the registry task queue.
 pub struct BacklogScreen {
     state: Entity<AppState>,
+    /// Registry queue cards, loaded in the background.
+    queue_cards: Vec<QueueCard>,
+    /// Last queue load error (shown instead of pretending empty).
+    load_error: Option<String>,
+    /// Whether a background load is in flight.
+    loading: bool,
+    /// Project root the current `queue_cards` were loaded for.
+    loaded_for: Option<PathBuf>,
 }
 
 impl BacklogScreen {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_this, _state, cx| cx.notify()).detach();
-        Self { state }
+        let mut this = Self {
+            state,
+            queue_cards: Vec::new(),
+            load_error: None,
+            loading: false,
+            loaded_for: None,
+        };
+        this.refresh_queue(cx);
+        this
     }
 
+    /// Kick a background queue re-mirror + read. The project root is
+    /// canonicalized the same way the queue partition key is spelled.
+    fn refresh_queue(&mut self, cx: &mut Context<Self>) {
+        let root = self
+            .state
+            .read(cx)
+            .project_path
+            .as_ref()
+            .map(|p| normalize_project_root(p));
+        let Some(root) = root else {
+            return;
+        };
+        if self.loading || self.loaded_for.as_ref() == Some(&root) {
+            return;
+        }
+        self.loading = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cards = crate::queue_link::load_queue_cards(root.clone()).await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |screen, cx| {
+                    screen.loading = false;
+                    screen.loaded_for = Some(root);
+                    screen.apply_queue_load(cards, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Apply a finished background queue load. A failure clears the
+    /// cards — the source pill + error strip surface it instead of
+    /// silently showing a stale board.
+    fn apply_queue_load(&mut self, cards: Result<Vec<QueueCard>, String>, cx: &mut Context<Self>) {
+        self.loading = false;
+        match cards {
+            Ok(c) => {
+                self.queue_cards = c;
+                self.load_error = None;
+            },
+            Err(e) => {
+                self.queue_cards.clear();
+                self.load_error = Some(e);
+            },
+        }
+        cx.notify();
+    }
+
+    /// Merge the registry queue with local drafts. Registry rows win on
+    /// id collisions (a mirrored task id is the engine's truth); the
+    /// sample set shows only when both sources are empty.
     fn cards(&self, cx: &Context<Self>) -> (Vec<Card>, bool) {
         let state = self.state.read(cx);
-        if state.tasks.is_empty() {
+
+        let mut cards: Vec<Card> = self.queue_cards.iter().map(card_from_queue).collect();
+        let mirrored: std::collections::HashSet<String> =
+            cards.iter().filter_map(|c| c.task_id.clone()).collect();
+        for task in &state.tasks {
+            let card = card_from_task(task);
+            if card
+                .task_id
+                .as_ref()
+                .is_some_and(|id| mirrored.contains(id))
+            {
+                continue;
+            }
+            cards.push(card);
+        }
+        if cards.is_empty() && self.load_error.is_none() {
             return (sample_cards(), false);
         }
-        (state.tasks.iter().map(card_from_task).collect(), true)
+        (cards, true)
     }
 
     fn render_header(&self, total: usize, live: bool, cx: &mut Context<Self>) -> Div {
@@ -201,9 +365,19 @@ impl BacklogScreen {
             .child(ui::meta(format!("{total} tasks")))
             .when(!live, |el| {
                 el.child(ui::pill(
-                    "sample · create a task to start",
+                    "sample · no queue",
                     theme::text_muted(),
                     theme::panel_raised(),
+                ))
+            })
+            .when(self.loading, |el| {
+                el.child(ui::pill("loading…", theme::accent(), theme::panel_raised()))
+            })
+            .when(self.load_error.is_some(), |el| {
+                el.child(ui::pill(
+                    "queue error",
+                    theme::error(),
+                    theme::error().opacity(0.13),
                 ))
             })
             .child(div().flex_1())
@@ -304,6 +478,7 @@ impl BacklogScreen {
 
     fn render_card(&self, card: &Card, cx: &mut Context<Self>) -> Stateful<Div> {
         let task_id = card.task_id.clone();
+        let open_run = card.open_run;
         let (pill_label, pill_color) = card.pill.clone();
         let is_done = card.column == Column::Done;
 
@@ -324,8 +499,17 @@ impl BacklogScreen {
             .hover(|s: StyleRefinement| s.border_color(theme::accent().opacity(0.5)))
             .when(is_done, |el| el.opacity(0.85))
             .on_click(cx.listener(move |_this, _e, _w, cx| {
-                if let Some(id) = &task_id {
-                    cx.emit(BacklogAction::OpenTask(id.clone()));
+                // Dispatched registry rows open the run cockpit; local
+                // drafts open the task-detail overlay. A queue row has
+                // no TaskEntry — clicking it into that overlay would
+                // render "Task not found".
+                match open_run {
+                    Some(run_id) => cx.emit(BacklogAction::OpenRun(run_id)),
+                    None => {
+                        if let Some(id) = &task_id {
+                            cx.emit(BacklogAction::OpenTask(id.clone()));
+                        }
+                    },
                 }
             }))
             // header row: id + pill
@@ -486,6 +670,22 @@ impl Render for BacklogScreen {
             .v_flex()
             .bg(theme::panel_deep())
             .child(self.render_header(cards.len(), live, cx))
+            .when_some(self.load_error.clone(), |el, err| {
+                el.child(
+                    div()
+                        .mx(px(20.0))
+                        .mb(px(10.0))
+                        .px(px(14.0))
+                        .py(px(9.0))
+                        .rounded_lg()
+                        .bg(theme::error().opacity(0.08))
+                        .border_1()
+                        .border_color(theme::error().opacity(0.3))
+                        .text_size(px(10.5))
+                        .text_color(theme::error().opacity(0.9))
+                        .child(format!("queue unavailable: {err}")),
+                )
+            })
             .child(self.render_capacity(cx))
             .child(
                 // Plain .flex() row — columns must stretch to full
@@ -518,6 +718,7 @@ fn sample_cards() -> Vec<Card> {
                 pill: (pill.0.to_string(), pill.1),
                 meta: meta.to_string(),
                 progress: None,
+                open_run: None,
                 needs_you,
                 column,
             }

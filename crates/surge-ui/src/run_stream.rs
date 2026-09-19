@@ -49,7 +49,6 @@ impl Tone {
 /// One rendered event-log row.
 #[derive(Clone)]
 pub struct RunLogRow {
-    pub seq: u64,
     /// Local receive time (the wire event carries no timestamp).
     pub time: String,
     pub kind: &'static str,
@@ -177,31 +176,46 @@ impl RunStreamState {
     /// Fold one wire event into the view state: log row, stage
     /// pipeline, token/cost counters and the pending-decision set.
     pub fn apply(&mut self, event: &EngineRunEvent) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
         match event {
             EngineRunEvent::Persisted { seq, payload } => {
-                self.last_seq = self.last_seq.max(*seq);
-                self.fold_stages(payload);
-                self.fold_pending(*seq, &now, payload);
-                self.fold_cost(payload);
-                if let Some((kind, tone, text)) = describe(payload) {
-                    self.log.push_back(RunLogRow {
-                        seq: *seq,
-                        time: now,
-                        kind,
-                        tone,
-                        text,
-                    });
-                    while self.log.len() > MAX_LOG_ROWS {
-                        self.log.pop_front();
-                    }
-                }
+                self.apply_event(*seq, payload);
             },
             EngineRunEvent::Terminal { .. } => {
                 // Blocked decisions die with the run.
                 self.pending.clear();
             },
             _ => {},
+        }
+    }
+
+    /// Fold one decoded (seq, payload) pair — the shape a replayed
+    /// durable event carries. Same projection as the live wire path.
+    pub fn apply_event(&mut self, seq: u64, payload: &EventPayload) {
+        self.apply_event_at(
+            seq,
+            payload,
+            chrono::Local::now().format("%H:%M:%S").to_string(),
+        );
+    }
+
+    /// Fold a decoded event with an explicit wall-clock stamp — replay
+    /// passes the timestamp recorded in the log row, so the pane reads
+    /// the run's real timeline, not the moment of the replay.
+    pub fn apply_event_at(&mut self, seq: u64, payload: &EventPayload, time: String) {
+        self.last_seq = self.last_seq.max(seq);
+        self.fold_stages(payload);
+        self.fold_pending(seq, &time, payload);
+        self.fold_cost(payload);
+        if let Some((kind, tone, text)) = describe(payload) {
+            self.log.push_back(RunLogRow {
+                time,
+                kind,
+                tone,
+                text,
+            });
+            while self.log.len() > MAX_LOG_ROWS {
+                self.log.pop_front();
+            }
         }
     }
 
@@ -375,7 +389,7 @@ impl RunStreamState {
 
 /// One-line log description of a payload. `None` = don't log (noise).
 #[allow(clippy::too_many_lines)]
-fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
+pub fn describe(payload: &EventPayload) -> Option<(&'static str, Tone, String)> {
     use EventPayload as P;
     Some(match payload {
         P::RunStarted { initial_prompt, .. } => {
@@ -744,5 +758,50 @@ mod tests {
             },
         });
         assert!(s.pending.is_empty(), "terminal run has nothing to decide");
+    }
+
+    /// The replay path folds the same (seq, payload) pairs the live
+    /// wire carries — both projections must agree on stages and seq.
+    #[test]
+    fn replay_fold_matches_live_fold() {
+        let mut live = RunStreamState::default();
+        live.apply(&persisted(
+            1,
+            EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 1,
+            },
+        ));
+        live.apply(&persisted(
+            2,
+            EventPayload::StageCompleted {
+                node: node("implement"),
+                outcome: surge_core::keys::OutcomeKey::try_from("done").unwrap(),
+            },
+        ));
+
+        let mut replay = RunStreamState::default();
+        replay.apply_event_at(
+            1,
+            &EventPayload::StageEntered {
+                node: node("implement"),
+                attempt: 1,
+            },
+            "14:00:00".into(),
+        );
+        replay.apply_event_at(
+            2,
+            &EventPayload::StageCompleted {
+                node: node("implement"),
+                outcome: surge_core::keys::OutcomeKey::try_from("done").unwrap(),
+            },
+            "14:00:05".into(),
+        );
+
+        assert_eq!(replay.last_seq, live.last_seq);
+        let replay_stage = &replay.stages[0];
+        assert_eq!(replay_stage.phase, StagePhase::Done);
+        // The replay stamp is the log row's timestamp, not "now".
+        assert_eq!(replay.log[0].time, "14:00:00");
     }
 }

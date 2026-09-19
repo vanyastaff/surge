@@ -53,7 +53,9 @@ enum FormatTag {
     Bold,
     Italic,
     Strikethrough,
-    Link(String),
+    /// A link boundary; the rendered text is kept, the URL is not
+    /// (there is no click-out affordance in this renderer yet).
+    Link,
 }
 
 enum ListKind {
@@ -132,7 +134,7 @@ impl MarkdownRenderer {
             return None;
         }
 
-        let spans: Vec<_> = self.inline_buf.drain(..).collect();
+        let spans: Vec<_> = std::mem::take(&mut self.inline_buf);
         let mut line = div().flex().flex_wrap().gap(px(0.0));
 
         for span in spans {
@@ -236,9 +238,8 @@ impl MarkdownRenderer {
             Tag::Strong => self.format_stack.push(FormatTag::Bold),
             Tag::Emphasis => self.format_stack.push(FormatTag::Italic),
             Tag::Strikethrough => self.format_stack.push(FormatTag::Strikethrough),
-            Tag::Link { dest_url, .. } => {
-                self.format_stack
-                    .push(FormatTag::Link(dest_url.to_string()));
+            Tag::Link { .. } => {
+                self.format_stack.push(FormatTag::Link);
             },
             Tag::CodeBlock(kind) => {
                 self.flush_paragraph();
@@ -315,7 +316,7 @@ impl MarkdownRenderer {
                 self.flush_paragraph();
             },
             TagEnd::Heading(level) => {
-                let spans: Vec<_> = self.inline_buf.drain(..).collect();
+                let spans: Vec<_> = std::mem::take(&mut self.inline_buf);
                 let text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
                 let (size, weight) = match level as u8 {
@@ -349,8 +350,7 @@ impl MarkdownRenderer {
                     .retain(|f| !matches!(f, FormatTag::Strikethrough));
             },
             TagEnd::Link => {
-                self.format_stack
-                    .retain(|f| !matches!(f, FormatTag::Link(_)));
+                self.format_stack.retain(|f| !matches!(f, FormatTag::Link));
             },
             TagEnd::CodeBlock => {
                 if let Some(code) = self.code_buf.take() {
@@ -419,10 +419,10 @@ impl MarkdownRenderer {
                 }
             },
             TagEnd::TableRow => {
-                if let Some(t) = &mut self.table {
-                    if !t.in_head {
-                        t.rows.push(t.current_row.clone());
-                    }
+                if let Some(t) = &mut self.table
+                    && !t.in_head
+                {
+                    t.rows.push(t.current_row.clone());
                 }
             },
             TagEnd::TableCell => {

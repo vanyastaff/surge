@@ -26,7 +26,6 @@ pub struct TopBar {
     project_name: String,
     branch_name: String,
     active_screen: Screen,
-    agent_statuses: Vec<(String, bool)>,
     switcher_open: bool,
 }
 
@@ -36,23 +35,12 @@ impl TopBar {
             project_name: project_name.to_string(),
             branch_name: "main".to_string(),
             active_screen,
-            agent_statuses: vec![],
             switcher_open: false,
         }
     }
 
     pub fn set_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.active_screen = screen;
-        cx.notify();
-    }
-
-    pub fn set_project(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.project_name = name.to_string();
-        cx.notify();
-    }
-
-    pub fn set_agents(&mut self, agents: Vec<(String, bool)>, cx: &mut Context<Self>) {
-        self.agent_statuses = agents;
         cx.notify();
     }
 
@@ -78,23 +66,6 @@ impl TopBar {
                     .font_weight(FontWeight::MEDIUM)
                     .child(self.active_screen.label().to_string()),
             )
-    }
-
-    fn render_agent_dots(&self) -> Div {
-        let dots: Vec<Div> = self
-            .agent_statuses
-            .iter()
-            .map(|(_name, connected)| {
-                let color = if *connected {
-                    theme::success()
-                } else {
-                    theme::error()
-                };
-                div().w(px(8.0)).h(px(8.0)).rounded_full().bg(color)
-            })
-            .collect();
-
-        div().h_flex().gap_1().children(dots)
     }
 
     fn render_switcher_dropdown(&self, cx: &mut Context<Self>) -> Div {
@@ -199,7 +170,6 @@ impl TopBar {
 impl Render for TopBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let switcher_open = self.switcher_open;
-        let agents_online = self.agent_statuses.iter().filter(|(_, up)| *up).count();
 
         div()
             .relative()
@@ -257,11 +227,7 @@ impl Render for TopBar {
                     .h_flex()
                     .gap(px(10.0))
                     .items_center()
-                    .child(self.render_agent_dots())
-                    .child(ui::meta(format!(
-                        "{}  ·  {} agents",
-                        self.branch_name, agents_online
-                    )))
+                    .child(ui::meta(self.branch_name.clone()))
                     .child(ui::kbd("⌘K")),
             )
     }

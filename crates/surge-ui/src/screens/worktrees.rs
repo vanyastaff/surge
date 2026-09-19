@@ -10,8 +10,6 @@ use crate::theme;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorktreeStatus {
     Active,
-    Idle,
-    Merging,
     Error,
 }
 
@@ -19,8 +17,6 @@ impl WorktreeStatus {
     fn label(self) -> &'static str {
         match self {
             Self::Active => "Active",
-            Self::Idle => "Idle",
-            Self::Merging => "Merging",
             Self::Error => "Error",
         }
     }
@@ -28,8 +24,6 @@ impl WorktreeStatus {
     fn color(self) -> Hsla {
         match self {
             Self::Active => theme::success(),
-            Self::Idle => theme::text_muted(),
-            Self::Merging => theme::warning(),
             Self::Error => theme::error(),
         }
     }

@@ -74,7 +74,6 @@ pub struct AppState {
 
     // ── Events ──
     pub _event_tx: tokio::sync::broadcast::Sender<SurgeEvent>,
-    pub recent_events: Vec<SurgeEvent>,
 }
 
 /// A task tracked in the UI (in-memory, SQLite later).
@@ -167,8 +166,32 @@ impl AppState {
             runs: Vec::new(),
             run_streams: HashMap::new(),
             _event_tx: event_tx,
-            recent_events: Vec::new(),
         }
+    }
+
+    /// Set the daemon-link connection state and re-render. Small
+    /// helper so the connect task stays flat.
+    pub fn set_daemon_state(&mut self, new_state: ConnectionState, cx: &mut gpui::Context<Self>) {
+        self.daemon_state = new_state;
+        cx.notify();
+    }
+
+    /// Mark a run's folded stream live (or finished) and re-render.
+    /// Small helper so async pump loops can stay one line per update.
+    pub fn set_stream_live(&mut self, run_id: RunId, live: bool, cx: &mut gpui::Context<Self>) {
+        self.run_streams.entry(run_id).or_default().live = live;
+        cx.notify();
+    }
+
+    /// Fold one wire event into the run's stream and re-render.
+    pub fn apply_stream_event(
+        &mut self,
+        run_id: RunId,
+        event: &surge_orchestrator::engine::handle::EngineRunEvent,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.run_streams.entry(run_id).or_default().apply(event);
+        cx.notify();
     }
 
     /// Apply a `GlobalDaemonEvent` to the run list.
@@ -257,6 +280,12 @@ impl AppState {
         }
     }
 
+    /// Replace the run list from a fresh `ListRuns` response and re-render.
+    pub fn refresh_runs(&mut self, summaries: &[RunSummary], cx: &mut gpui::Context<Self>) {
+        self.set_runs_from_summaries(summaries);
+        cx.notify();
+    }
+
     /// Replace the run list from a fresh `ListRuns` response.
     pub fn set_runs_from_summaries(&mut self, summaries: &[RunSummary]) {
         let old_ends: HashMap<RunId, chrono::DateTime<chrono::Utc>> = self
@@ -338,60 +367,7 @@ impl AppState {
         self.current_branch = detect_branch(path).unwrap_or_else(|| "main".to_string());
     }
 
-    /// Update config in-place and save to disk.
-    ///
-    /// Validates + persists BEFORE replacing the in-memory config so a
-    /// validation or IO failure leaves the UI holding the previous,
-    /// known-good state instead of an invalid one that was never
-    /// written. Requires `project_path` to be set — otherwise there is
-    /// no place to save and silently mutating in-memory only would
-    /// diverge from disk.
-    pub fn update_config(&mut self, config: SurgeConfig) -> Result<(), surge_core::SurgeError> {
-        let project_path = self.project_path.as_ref().ok_or_else(|| {
-            surge_core::SurgeError::Config(
-                "No project loaded; cannot save config without project_path".into(),
-            )
-        })?;
-        config.save(&project_path.join("surge.toml"))?;
-        self.config = Some(config);
-        Ok(())
-    }
-
-    /// Handle a SurgeEvent — update state and emit for UI subscribers.
-    pub fn handle_event(&mut self, event: SurgeEvent, cx: &mut gpui::Context<Self>) {
-        // Keep last 100 events for recent activity.
-        self.recent_events.push(event.clone());
-        if self.recent_events.len() > 100 {
-            self.recent_events.remove(0);
-        }
-
-        match &event {
-            SurgeEvent::TaskStateChanged {
-                task_id, new_state, ..
-            } => {
-                if let Some(task) = self.tasks.iter_mut().find(|t| &t.id == task_id) {
-                    task.state = new_state.clone();
-                }
-            },
-            SurgeEvent::AgentConnected { agent_name } => {
-                // Registration only — the fallback tracker is never the
-                // one recording outcomes (see the field's doc). Harmless
-                // to keep registering here even once a pool exists: reads
-                // never consult this tracker while `agent_pool` is set.
-                self.fallback_health.register(agent_name);
-            },
-            _ => {},
-        }
-
-        cx.emit(event);
-    }
-
     // ── Computed accessors ──
-
-    /// Agents that are installed (for Configured tab).
-    pub fn configured_agents(&self) -> &[DetectedAgent] {
-        &self.installed_agents
-    }
 
     /// Registry entries NOT installed (for Available tab).
     pub fn available_agents(&self) -> Vec<&RegistryEntry> {
@@ -430,11 +406,6 @@ impl AppState {
         }
     }
 
-    /// Count tasks by state.
-    pub fn task_count_by_state(&self, state_match: fn(&TaskState) -> bool) -> usize {
-        self.tasks.iter().filter(|t| state_match(&t.state)).count()
-    }
-
     /// All pending operator decisions across live run streams, most
     /// urgent first (kind rank, then age). Powers the Inbox and the
     /// "needs you" counters.
@@ -460,10 +431,10 @@ impl EventEmitter<SurgeEvent> for AppState {}
 /// Detect current git branch name from a path.
 fn detect_branch(path: &std::path::Path) -> Option<String> {
     let head_file = path.join(".git").join("HEAD");
-    if let Ok(content) = std::fs::read_to_string(head_file) {
-        if let Some(ref_str) = content.strip_prefix("ref: refs/heads/") {
-            return Some(ref_str.trim().to_string());
-        }
+    if let Ok(content) = std::fs::read_to_string(head_file)
+        && let Some(ref_str) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(ref_str.trim().to_string());
     }
     None
 }

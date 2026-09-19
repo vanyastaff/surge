@@ -90,6 +90,30 @@ struct EdgeSeg {
     strong: bool,
 }
 
+/// Stroke color for a relation edge (highlighted vs. passive).
+fn edge_style(strong: bool) -> Hsla {
+    if strong {
+        theme::accent().opacity(0.55)
+    } else {
+        theme::graph_line().opacity(0.8)
+    }
+}
+
+/// Stroke width for a relation edge (highlighted vs. passive).
+fn edge_width(strong: bool) -> Pixels {
+    px(if strong { 1.6 } else { 1.0 })
+}
+
+/// Paint one relation edge in canvas (stage) coordinates.
+fn paint_edge(window: &mut gpui::Window, ox: Pixels, oy: Pixels, e: &EdgeSeg) {
+    let mut line = PathBuilder::stroke(edge_width(e.strong));
+    line.move_to(point(ox + px(e.x1), oy + px(e.y1)));
+    line.line_to(point(ox + px(e.x2), oy + px(e.y2)));
+    if let Ok(p) = line.build() {
+        window.paint_path(p, edge_style(e.strong));
+    }
+}
+
 /// Memory screen — project knowledge list · graph · inspector.
 pub struct MemoryScreen {
     nodes: Vec<MemNode>,
@@ -438,17 +462,7 @@ impl MemoryScreen {
                 // relation edges (straight lines); highlighted ones on top
                 for pass in [false, true] {
                     for e in segs.iter().filter(|e| e.strong == pass) {
-                        let color = if e.strong {
-                            theme::accent().opacity(0.55)
-                        } else {
-                            theme::graph_line().opacity(0.8)
-                        };
-                        let mut line = PathBuilder::stroke(px(if e.strong { 1.6 } else { 1.0 }));
-                        line.move_to(point(ox + px(e.x1), oy + px(e.y1)));
-                        line.line_to(point(ox + px(e.x2), oy + px(e.y2)));
-                        if let Ok(p) = line.build() {
-                            window.paint_path(p, color);
-                        }
+                        paint_edge(window, ox, oy, e);
                     }
                 }
             },

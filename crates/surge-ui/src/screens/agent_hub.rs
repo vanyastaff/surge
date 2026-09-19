@@ -1179,24 +1179,6 @@ fn section_card(content: Div) -> Div {
         .overflow_hidden()
 }
 
-fn kv_row(label: &str, value: &str) -> Div {
-    div()
-        .h_flex()
-        .justify_between()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme::text_muted())
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme::text_primary())
-                .child(value.to_string()),
-        )
-}
-
 fn effort_color(level: EffortLevel) -> Hsla {
     match level {
         EffortLevel::High => theme::warning(),
@@ -1225,34 +1207,6 @@ fn effort_row(label: &str, level: EffortLevel) -> Div {
                 .py(px(1.0))
                 .rounded(px(3.0))
                 .bg(color.opacity(0.1))
-                .text_color(color)
-                .child(level.label().to_string()),
-        )
-}
-
-fn effort_card(label: &str, level: EffortLevel) -> Div {
-    let color = effort_color(level);
-    div()
-        .flex_1()
-        .v_flex()
-        .gap(px(3.0))
-        .items_center()
-        .px(px(8.0))
-        .py(px(6.0))
-        .rounded_md()
-        .bg(color.opacity(0.05))
-        .border_1()
-        .border_color(color.opacity(0.1))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme::text_muted().opacity(0.6))
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
                 .text_color(color)
                 .child(level.label().to_string()),
         )
