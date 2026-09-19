@@ -7449,6 +7449,7 @@ dependencies = [
  "serde_json",
  "surge-acp",
  "surge-core",
+ "surge-git",
  "surge-intake",
  "surge-mcp",
  "surge-notify",

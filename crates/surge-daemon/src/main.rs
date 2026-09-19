@@ -324,6 +324,21 @@ fn main() -> std::process::ExitCode {
         let shutdown_for_wake = shutdown.clone();
         tokio::spawn(wake_scheduler.run(shutdown_for_wake));
 
+        // Project task queue dispatcher (ADR-0020): mirrors
+        // `.surge/roadmap.toml` into the registry and turns ready tasks into
+        // ordinary runs, one per free admission slot. Spawned after recovery
+        // for the same reason as the wake scheduler — recovery must finish
+        // before anything new starts dispatching.
+        let task_scheduler = surge_daemon::task_scheduler::TaskScheduler::new(
+            Arc::clone(&storage),
+            Arc::clone(&facade),
+            Arc::clone(&admission),
+            Arc::new(surge_persistence::runs::SystemClock),
+            Arc::clone(&notifier),
+        );
+        let shutdown_for_tasks = shutdown.clone();
+        tokio::spawn(task_scheduler.run(shutdown_for_tasks));
+
         if !sources.is_empty() {
             if let Some((source_map_arc, conn_arc)) = spawn_task_router(
                 sources,

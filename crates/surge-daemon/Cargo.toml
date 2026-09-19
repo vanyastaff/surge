@@ -37,6 +37,8 @@ surge-mcp.workspace = true
 surge-acp.workspace = true
 surge-persistence.workspace = true
 surge-notify.workspace = true
+surge-git.workspace = true
+toml.workspace = true
 notify-rust = { workspace = true }
 surge-intake.workspace = true
 surge-telegram = { path = "../surge-telegram" }
@@ -56,4 +58,3 @@ chrono.workspace = true
 surge-orchestrator.workspace = true
 surge-acp.workspace = true
 surge-persistence.workspace = true
-toml.workspace = true

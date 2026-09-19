@@ -226,6 +226,13 @@ pub struct EngineRunConfig {
     /// makes that exact for every launcher.
     #[serde(default)]
     pub project_layer: Option<surge_core::ProjectLayer>,
+    /// Why this run exists, when it was dispatched for a queued project
+    /// task (ADR-0020). Copied into the persisted
+    /// `surge_core::run_event::RunConfig::origin`, where the daemon's
+    /// reconcile sweep reads it back to settle the queue row against the
+    /// run's own fate. `None` for direct runs (bootstrap, CLI, templates).
+    #[serde(default)]
+    pub origin: Option<surge_core::run_event::RunOrigin>,
 }
 
 /// Stable project context input copied into a run's artifact store.
@@ -332,6 +339,7 @@ impl Default for EngineRunConfig {
             output_spill: None,
             memory_store_path: None,
             project_layer: None,
+            origin: None,
         }
     }
 }
@@ -405,6 +413,7 @@ mod tests {
             output_spill: None,
             memory_store_path: None,
             project_layer: None,
+            origin: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -441,6 +450,7 @@ mod tests {
             output_spill: None,
             memory_store_path: None,
             project_layer: None,
+            origin: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();
@@ -491,6 +501,7 @@ mod tests {
             output_spill: None,
             memory_store_path: None,
             project_layer: None,
+            origin: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: EngineRunConfig = serde_json::from_str(&json).unwrap();

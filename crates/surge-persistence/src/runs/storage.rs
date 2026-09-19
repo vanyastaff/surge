@@ -109,6 +109,21 @@ impl Storage {
         crate::task_queue::TaskQueueStore::new(self.registry_pool.clone())
     }
 
+    /// Read one run summary without the stale-pid reconciliation pass.
+    ///
+    /// [`Storage::get_run`] mutates (same rewrite as `list_runs`); the
+    /// scheduler's reconcile sweep must observe a run's recorded status
+    /// without changing it.
+    ///
+    /// # Errors
+    /// Returns [`StorageError`] when the registry DB cannot be read.
+    pub fn get_run_readonly(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<RunSummary>, crate::runs::error::StorageError> {
+        registry::get_run(&self.registry_pool, run_id)
+    }
+
     /// List run summaries without the stale-pid reconciliation pass.
     ///
     /// [`Storage::list_runs`] mutates: it rewrites a `Running` row whose

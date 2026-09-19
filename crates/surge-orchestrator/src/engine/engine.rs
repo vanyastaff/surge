@@ -576,7 +576,7 @@ impl Engine {
             .map_err(|e| EngineError::Internal(format!("graph serialize: {e}")))?;
         let graph_hash = ContentHash::compute(&graph_bytes);
         let core_run_config = CoreRunConfig {
-            origin: None,
+            origin: run_config.origin.clone(),
             sandbox_default: SandboxMode::WorkspaceWrite,
             approval_default: ApprovalPolicy::OnRequest,
             auto_pr: false,

@@ -447,6 +447,31 @@ impl TaskQueueStore {
         Ok(())
     }
 
+    /// Register a project with the queue (unpaused), creating its
+    /// `project_queue` row if absent.
+    ///
+    /// A project is known to the scheduler through this table even before
+    /// its roadmap has been mirrored — otherwise the first tick would have
+    /// to already know about a task_queue row to discover the project that
+    /// produces it. `surge project start` (T7) calls this; re-registering
+    /// never clears a pause.
+    ///
+    /// # Errors
+    /// Returns [`StorageError`] when the registry DB cannot be written.
+    pub fn register_project(&self, project_root: &Path, now_ms: i64) -> Result<(), StorageError> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| StorageError::Pool(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO project_queue (project_root, paused, updated_at)
+             VALUES (?, 0, ?)
+             ON CONFLICT(project_root) DO UPDATE SET updated_at = excluded.updated_at",
+            params![project_root.to_string_lossy(), now_ms],
+        )?;
+        Ok(())
+    }
+
     /// Whether the project's queue is paused. Absent row = not paused.
     ///
     /// # Errors
@@ -466,9 +491,11 @@ impl TaskQueueStore {
         Ok(paused.unwrap_or(0) != 0)
     }
 
-    /// Projects that have at least one queue row, with their pause flag.
+    /// Projects known to the queue, with their pause flag.
     ///
-    /// The scheduler's outer loop.
+    /// The scheduler's outer loop. A project is known once it is registered
+    /// (or has any `task_queue` row), so the first tick after
+    /// `surge project start` sees it before any task is mirrored.
     ///
     /// # Errors
     /// Returns [`StorageError`] when the registry DB cannot be read.
@@ -478,10 +505,14 @@ impl TaskQueueStore {
             .get()
             .map_err(|e| StorageError::Pool(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT q.project_root, COALESCE(p.paused, 0)
-             FROM (SELECT DISTINCT project_root FROM task_queue) q
-             LEFT JOIN project_queue p ON p.project_root = q.project_root
-             ORDER BY q.project_root",
+            "SELECT roots.project_root, COALESCE(p.paused, 0)
+             FROM (
+                SELECT project_root FROM project_queue
+                UNION
+                SELECT DISTINCT project_root FROM task_queue
+             ) AS roots
+             LEFT JOIN project_queue p ON p.project_root = roots.project_root
+             ORDER BY roots.project_root",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
