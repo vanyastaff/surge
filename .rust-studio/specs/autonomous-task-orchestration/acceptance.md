@@ -37,12 +37,12 @@ Spec: spec.md
 - [ ] G6: a classifier answer `use: bug-fix@1` makes the run's PipelineMaterialized graph equal the template with task bindings filled, with no generator turn
   CHECK: cargo nextest run -p surge-daemon -E 'binary(ato_outer_test) and test(classif)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:06.114Z exit=4 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T03:03:50.016Z exit=4 expect=unmatched
 
 - [ ] G7: a `compose` answer is validated with FlowPurpose::Task (unverified success path and same-runtime verifier rejected and retried) and on success the file exists in `.surge/flows/` with ComposedArtifactInstalled{kind: Flow} after the gate
   CHECK: cargo nextest run -p surge-orchestrator -E 'binary(task_run_select_test)'
   EXPECT: /[1-9][0-9]* passed/
-  EVIDENCE: failed at=2026-09-19T02:34:06.394Z exit=94 expect=unmatched
+  EVIDENCE: failed at=2026-09-19T03:03:50.341Z exit=94 expect=unmatched
 
 - [ ] G8: a composed profile with `authority = true` or a bundled name is rejected at post-processing with a named error
   CHECK: cargo nextest run -E 'test(composed_profile)'
