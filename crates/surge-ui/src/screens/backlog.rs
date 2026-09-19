@@ -292,7 +292,7 @@ impl BacklogScreen {
         self.loading = true;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cards = crate::queue_link::load_queue_cards(root.clone()).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |screen, cx| {
                     screen.loading = false;
                     screen.loaded_for = Some(root);

@@ -69,8 +69,7 @@ async fn deliver_stream_event(
         let _ = this.update(cx, |this: &mut AgentTerminalScreen, cx| {
             this.on_stream_event(event, cx);
         });
-    })
-    .ok();
+    });
 }
 
 /// Agent Terminal screen — IDE-style chat with streaming responses.
@@ -242,8 +241,7 @@ impl AgentTerminalScreen {
                     this.scroll_handle.scroll_to_bottom();
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -269,8 +267,7 @@ impl AgentTerminalScreen {
                         this.is_sending = false;
                         cx.notify();
                     });
-                })
-                .ok();
+                });
             })?;
         let s_clone = session.clone();
         cx.update(|cx| {
@@ -278,8 +275,7 @@ impl AgentTerminalScreen {
                 this.session = Some(s_clone);
                 cx.notify();
             });
-        })
-        .ok();
+        });
         Ok(session)
     }
 

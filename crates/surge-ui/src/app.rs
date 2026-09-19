@@ -16,7 +16,7 @@ use crate::router::Screen;
 /// picker's continuation. A free function so the welcome-event closure
 /// stays inside the nesting budget.
 async fn init_in_background(this: &WeakEntity<SurgeApp>, path: PathBuf, cx: &mut AsyncApp) {
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         let _ = this.update(cx, |this: &mut SurgeApp, cx| this.init_project(path, cx));
     });
 }
@@ -57,7 +57,7 @@ async fn sync_after_list_runs(
     summaries: Vec<surge_orchestrator::engine::handle::RunSummary>,
     cx: &mut AsyncApp,
 ) {
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         let _ = state.update(cx, |s, cx| s.refresh_runs(&summaries, cx));
         let _ = this.update(cx, |this, cx| this.sync_run_subscriptions(cx));
     });
@@ -71,7 +71,7 @@ async fn apply_global(
     event: surge_orchestrator::engine::ipc::GlobalDaemonEvent,
     cx: &mut AsyncApp,
 ) {
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         let _ = state.update(cx, |state, cx| {
             state.apply_global_event(&event);
             cx.notify();
@@ -370,19 +370,19 @@ impl SurgeApp {
             {
                 Ok(handle) => {
                     let mut rx = handle.events;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = state.update(cx, |s, cx| s.set_stream_live(run_id, true, cx));
                         let _ = this.update(cx, |t, cx| t.notify_run_accepted(run_id, cx));
                     });
                     pump_stream(&mut rx, run_id, &state, cx).await;
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = state.update(cx, |s, cx| s.set_stream_live(run_id, false, cx));
                         let _ = this.update(cx, |t, _| t.stream_subscribed.remove(&run_id));
                     });
                 },
                 Err(e) => {
                     tracing::error!("start_run failed: {e}");
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = this.update(cx, |t, cx| t.notify_dispatch_failed(run_id, &e, cx));
                     });
                 },
@@ -454,11 +454,11 @@ impl SurgeApp {
                     },
                 };
                 tracing::info!(run_id = %run_id, "per-run event stream attached");
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| s.set_stream_live(run_id, true, cx));
                 });
                 pump_stream(&mut rx, run_id, &state, cx).await;
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = state.update(cx, |s, cx| s.set_stream_live(run_id, false, cx));
                 });
                 // Channel closed — if the run is somehow still listed as
@@ -514,7 +514,7 @@ impl SurgeApp {
             if let Ok(Ok(Some(paths))) = receiver.await
                 && let Some(path) = paths.first().cloned()
             {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ = this.update(cx, |this: &mut Self, cx| this.open_project(&path, cx));
                 });
             }
@@ -817,7 +817,7 @@ impl SurgeApp {
         let state_for_task = state.downgrade();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             // Set Connecting.
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = state_for_task.update(cx, |state, cx| {
                     state.set_daemon_state(crate::daemon_link::ConnectionState::Connecting, cx);
                 });
@@ -843,7 +843,7 @@ impl SurgeApp {
             let Some(facade) = facade else {
                 tracing::info!("daemon not reachable ({last_err}); UI continues offline");
                 let failed = crate::daemon_link::ConnectionState::Failed(last_err.clone());
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let _ =
                         state_for_task.update(cx, |state, cx| state.set_daemon_state(failed, cx));
                 });
@@ -853,7 +853,7 @@ impl SurgeApp {
             // Connected — flip state, then list runs once.
             let facade_for_state = facade.clone();
             let connected = crate::daemon_link::ConnectionState::Connected(facade_for_state);
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ =
                     state_for_task.update(cx, |state, cx| state.set_daemon_state(connected, cx));
             });
@@ -877,7 +877,7 @@ impl SurgeApp {
                     // status pill is honest.
                     tracing::warn!("daemon subscribe_global failed: {e}");
                     let failed = crate::daemon_link::ConnectionState::Failed(e.to_string());
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let _ = state_for_task
                             .update(cx, |state, cx| state.set_daemon_state(failed, cx));
                     });
@@ -905,7 +905,7 @@ impl SurgeApp {
 
             // Channel closed — flip back to Disconnected so the UI can
             // surface a "reconnect" affordance later.
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = state_for_task.update(cx, |state, cx| {
                     state.set_daemon_state(crate::daemon_link::ConnectionState::Disconnected, cx);
                 });

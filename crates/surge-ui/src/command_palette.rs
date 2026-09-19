@@ -105,7 +105,7 @@ impl CommandPalette {
             },
         )
         .detach();
-        window.focus(&input.focus_handle(cx));
+        window.focus(&input.focus_handle(cx), cx);
         self.input = Some(input.clone());
         input
     }

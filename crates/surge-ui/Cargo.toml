@@ -8,9 +8,14 @@ rust-version.workspace = true
 description = "GUI for Surge — GPUI-based desktop application"
 
 [dependencies]
-gpui = "0.2"
-gpui-component = "0.5"
-gpui-component-assets = "0.5"
+# `gpui-pre` is the published snapshot of zed's gpui that gpui-component
+# 0.6 links as its `gpui` — depending on the same crate (instead of the
+# old gpui 0.2) keeps exactly ONE `gpui` in the graph. `gpui-pre-platform`
+# provides the `application()` entrypoint (windowing + text backends).
+gpui = { version = "0.3.5", package = "gpui-pre", features = ["wayland", "x11"] }
+gpui-platform = { version = "0.3.5", package = "gpui-pre-platform", features = ["wayland", "x11"] }
+gpui-component = "0.6"
+gpui-kit-assets = "0.6"
 
 surge-core = { path = "../surge-core" }
 surge-acp = { path = "../surge-acp" }
@@ -34,4 +39,6 @@ notify-rust = { workspace = true }
 # `test-support` unlocks `TestAppContext`/`add_window_view` for the screen
 # smoke tests (src/screens/smoke_test.rs). Dev-only: it is never active for
 # `cargo build`/`cargo run`, only for `cargo test`/nextest.
-gpui = { version = "0.2", features = ["test-support"] }
+# Same package as the main `gpui` dependency — dev-only features of the
+# same version just re-unify.
+gpui = { version = "0.3.5", package = "gpui-pre", features = ["test-support"] }

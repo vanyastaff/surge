@@ -414,7 +414,7 @@ impl RunsScreen {
         }
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let snap = crate::replay_link::load_replay(run_id).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |screen, cx| screen.apply_replay(run_id, snap, cx));
             });
         })
@@ -451,7 +451,7 @@ impl RunsScreen {
         self.artifacts_loading = true;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = crate::replay_link::load_artifacts(run_id).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |screen, cx| screen.apply_artifacts(run_id, result, cx));
             });
         })
@@ -488,7 +488,7 @@ impl RunsScreen {
         self.artifact_view = None;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = crate::replay_link::read_artifact_text(run_id, hash.clone()).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |screen, cx| {
                     screen.apply_artifact_text(name, result, cx)
                 });
@@ -565,11 +565,11 @@ impl RunsScreen {
             };
             // Refresh the run list so the rail reflects the new status.
             if let Ok(summaries) = facade.list_runs().await {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     state.update(cx, |s, cx| s.refresh_runs(&summaries, cx));
                 });
             }
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |t, cx| {
                     t.action_note = Some(note);
                     cx.notify();
@@ -608,7 +608,7 @@ impl RunsScreen {
                 Ok(steer_id) => format!("steer queued · {steer_id}"),
                 Err(e) => format!("steer failed: {e}"),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |t, cx| {
                     t.action_note = Some(note);
                     cx.notify();

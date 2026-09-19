@@ -289,7 +289,7 @@ impl InboxScreen {
                 Ok(()) => format!("resolved · r-{}", run_id.short().to_lowercase()),
                 Err(e) => format!("resolve failed: {e}"),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let _ = this.update(cx, |t, cx| {
                     t.action_note = Some(note);
                     cx.notify();
@@ -925,7 +925,7 @@ impl Render for InboxScreen {
         // keynav surface takes focus once the user clicks the screen —
         // it never steals focus from an input.
         if window.focused(cx).is_none() {
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
         }
         let keynav = div()
             .id("inbox-keynav")
