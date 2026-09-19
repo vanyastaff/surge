@@ -156,6 +156,6 @@ pub use runtime::{RuntimeKind, RuntimeVersionPolicy, all_version_policies, versi
 pub use sandbox::{SandboxValidationError, validate_custom as validate_sandbox_custom};
 pub use sandbox_matrix::{RuntimeSandboxMatrix, RuntimeSandboxRow, default_matrix};
 pub use validation::{
-    NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind, validate,
-    validate_with_resolver,
+    ErrorLocation, NoOpResolver, ReferenceResolver, Severity, ValidationError, ValidationErrorKind,
+    validate, validate_with_resolver,
 };

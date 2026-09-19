@@ -389,6 +389,11 @@ impl TaskScheduler {
 
     /// The graph a task run executes. T8/T10 replace this with flow-catalog
     /// selection; the named stub keeps every layer measurable until then.
+    ///
+    /// **Not validated as a task flow yet**: the stub `single-task` template
+    /// declares no verifier, so `FlowPurpose::Task` would refuse every
+    /// dispatch. T10 composes real task flows and is the caller that runs
+    /// `validate_for_task` on them (with the run's actual runtime count).
     fn task_graph(&self, _project_root: &Path) -> Result<surge_core::graph::Graph, String> {
         match self.template {
             TaskTemplateSource::BundledSingleTask => {
