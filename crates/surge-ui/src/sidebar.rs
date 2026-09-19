@@ -318,8 +318,19 @@ impl AppSidebar {
 }
 
 impl Render for AppSidebar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = if self.collapsed { px(56.0) } else { px(210.0) };
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Width slides between the two stops instead of snapping —
+        // 180ms ease, keyed so repeated toggles reverse smoothly. The
+        // motion layer collapses this to the final value under
+        // reduce-motion.
+        use gpui_base::motion::{Transition, transition};
+        let width = transition(
+            "sidebar-width",
+            if self.collapsed { px(56.0) } else { px(210.0) },
+            Transition::new(std::time::Duration::from_millis(180)),
+            window,
+            cx,
+        );
 
         let items: Vec<Stateful<Div>> = Screen::sidebar_items()
             .iter()
@@ -329,6 +340,7 @@ impl Render for AppSidebar {
         div()
             .v_flex()
             .w(width)
+            .overflow_x_hidden()
             .h_full()
             .flex_shrink_0()
             .bg(theme::panel())

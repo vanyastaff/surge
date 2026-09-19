@@ -141,6 +141,9 @@ pub struct SurgeApp {
     /// here because the RunsScreen entity is created lazily — calling
     /// select_run before it exists would silently drop the selection.
     pending_run_selection: Option<surge_core::id::RunId>,
+    /// Bumped on every `navigate` — the screen fade's keyed transition
+    /// state so each switch replays the entry animation.
+    navigation_seq: u64,
 }
 
 impl SurgeApp {
@@ -231,6 +234,7 @@ impl SurgeApp {
             pending_notifications: Vec::new(),
             stream_subscribed: HashSet::new(),
             pending_run_selection: None,
+            navigation_seq: 0,
         }
     }
 
@@ -620,6 +624,8 @@ impl SurgeApp {
 
     fn navigate(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.active_screen = screen;
+        // Replay the screen-entry fade on the next render.
+        self.navigation_seq += 1;
         self.sidebar.update(cx, |sb, cx| sb.set_active(screen, cx));
         if let Some(top_bar) = &self.top_bar {
             top_bar.update(cx, |tb, cx| tb.set_screen(screen, cx));
@@ -1028,6 +1034,30 @@ impl SurgeApp {
                 self.dispatch_run(prompt.clone(), "bootstrap", cx);
             },
         }
+    }
+
+    /// The project's screen content, wrapped in an entry fade: a keyed
+    /// 120ms opacity transition that replays on every `navigate`
+    /// (`navigation_seq` bumps the id), so a new screen fades in instead
+    /// of popping. `reduce_motion` collapses it to the final state — the
+    /// Kit's motion layer honours the OS preference by itself.
+    fn render_faded_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_base::motion::{Transition, transition};
+        use std::time::Duration;
+        let seq = self.navigation_seq;
+        let opacity = transition(
+            gpui::ElementId::from(("screen-fade", seq)),
+            1.0_f32,
+            Transition::new(Duration::from_millis(120)),
+            window,
+            cx,
+        );
+        div()
+            .w_full()
+            .h_full()
+            .opacity(opacity)
+            .child(self.render_screen_content(cx))
+            .into_any_element()
     }
 
     fn render_screen_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1582,7 +1612,7 @@ impl Render for SurgeApp {
                                             .h_full()
                                             .min_w_0()
                                             .overflow_hidden()
-                                            .child(self.render_screen_content(cx)),
+                                            .child(self.render_faded_screen(window, cx)),
                                     ),
                             ),
                         )

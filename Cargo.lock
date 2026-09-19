@@ -8322,6 +8322,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "chrono",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",

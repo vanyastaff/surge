@@ -14,6 +14,10 @@ description = "GUI for Surge — GPUI-based desktop application"
 # provides the `application()` entrypoint (windowing + text backends).
 gpui = { version = "0.3.5", package = "gpui-pre", features = ["wayland", "x11"] }
 gpui-platform = { version = "0.3.5", package = "gpui-pre-platform", features = ["wayland", "x11"] }
+# The unstyled motion layer (Transition/transition, Spring, keyframes) the
+# styled gpui-component layers its own motion on — same version pin as the
+# component crate so the two always move together.
+gpui-base = "0.6"
 gpui-component = "0.6"
 gpui-kit-assets = "0.6"
 
